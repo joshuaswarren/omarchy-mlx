@@ -520,12 +520,15 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
     EnvRun r = run_env(e, e.q, e.k, {no_tile, no_flag, no_bf16a}, s);
     EnvRun r_on = run_env(e, e.q, e.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag, no_bf16a}, s);
     EnvRun r_off = run_env(e, e.q, e.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag, no_bf16a}, s);
+    EnvRun r_plain = run_env(e, e.q, e.k, {no_tile, no_flag, no_bf16a, {"MLX_OMARCHY_GDN_PF_WIDE", "0"}}, s);
     std::cout << "[gdn_bf16a_untiled_default] ratio 1: default kernel " << r.kernel << ", " << r.run.dispatches << " dispatches\n";
-    CHECK_EQ(r.kernel, (measured1 || legacy) ? untiled : tiled);
+    CHECK_EQ(r.kernel, measured1 ? kind(K::GatedDeltaDecodeBF16PfWide) : legacy ? untiled : tiled);
     CHECK_EQ(r_on.kernel, tiled);
     CHECK_EQ(r_off.kernel, untiled);
+    CHECK_EQ(r_plain.kernel, (measured1 || legacy) ? untiled : tiled);
     CHECK_EQ(r.run.dispatches, r_on.run.dispatches);
     CHECK_EQ(r_off.run.dispatches, r_on.run.dispatches);
+    CHECK_EQ(r_plain.run.dispatches, r_on.run.dispatches);
   }
 }
 
@@ -605,7 +608,7 @@ TEST_CASE("gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in
 
 // The wide-prefetch untiled kernel (thirty-two state words per round trip) runs the plain prefetch kernel's arithmetic in the same order, so
 // its outputs and final state equal the plain prefetch kernel's bit for bit, at equal head counts and at ratio 3. It is selected only by
-// MLX_OMARCHY_GDN_PF_WIDE=1 with the untiled kernel and Dk a multiple of 32.
+// MLX_OMARCHY_GDN_PF_WIDE=1 with the untiled kernel and Dk a multiple of 32, and by default on G14C at equal head counts (the ratio 1 case above).
 TEST_CASE("gdn raw decode bf16 A_log: the wide prefetch kernel equals the plain prefetch kernel") {
   if (!compute_available()) return;
   Stream s = gpu_stream();

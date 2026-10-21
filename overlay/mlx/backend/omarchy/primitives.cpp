@@ -12888,11 +12888,13 @@ void GatedDeltaUpdate::eval_gpu(
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
-    // MLX_OMARCHY_GDN_PF_WIDE=1 (read live): the untiled prefetch kernel with thirty-two state words in flight per round trip
-    // (default order only, Dk a multiple of 32).
+    // The untiled prefetch kernel with thirty-two state words in flight per round trip (default order only, Dk a multiple of 32).
+    // MLX_OMARCHY_GDN_PF_WIDE (read live): 1 selects it, any other set value selects the plain prefetch kernel; unset, it is the
+    // default where bf16a_untiled_default holds at equal head counts (G14C, Qwen3.8-2B). Other shapes keep the plain kernel.
     const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
-    const bool pf_wide = pf_wide_env != nullptr && pf_wide_env[0] == '1' && pf_wide_env[1] == '\0' && !composed && gdn_pf &&
-        (params.matrix_m % 32u) == 0u;
+    const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
+                                                      : (bf16a_untiled_default && Hk == Hv);
+    const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
     const omarchy::ComputeKernel kernel = decode_tile
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
                     : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa

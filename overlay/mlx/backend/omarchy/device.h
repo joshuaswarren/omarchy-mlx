@@ -515,7 +515,8 @@ inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
 //   G13C (M1 Max): ratio 2 (Qwen3.6-35B-A3B, 16 and 32 heads, about 8 percent) and ratio 3 (Qwen3.8-27B, 16 and 48 heads, 5.8 percent),
 //     receipts/2026-10-19-gdn-bf16a-untiled and receipts/2026-10-20-gdn-bf16a-ratio3;
 //   G14C (M2 Max): ratio 3 (about 6 percent), receipts/2026-10-20-gdn-bf16a-g14c-ratio3, and equal head counts, ratio 1
-//     (Qwen3.8-2B: 16 and 16 heads, about 2.4 percent), receipts/2026-10-21-gdn-bf16a-g14c-ratio1; ratio 2 was not measured there.
+//     (Qwen3.8-2B: 16 and 16 heads, about 2.9 percent; with the wide prefetch kernel, which is the default at equal head counts, about 4.2 percent),
+//     receipts/2026-10-21-gdn-bf16a-g14c-ratio1; ratio 2 was not measured there.
 // Keyed on the device name and the head ratio, so an unmeasured pair keeps the tiled default. Pure.
 inline bool gdn_bf16a_untiled_default(const std::string& device_name, int hk, int hv) {
   if (hk <= 0) return false;
