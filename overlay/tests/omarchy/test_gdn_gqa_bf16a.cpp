@@ -425,10 +425,10 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
 
 // The default route of the bf16 A_log decode with Hv == 2 * Hk or Hv == 3 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads;
 // Qwen3.8-27B: 16 key heads, 48 value heads). The untiled prefetch kernel is the default on G13C at both ratios (about 8 and 5.8 percent
-// faster decode) and on G14C at ratio 3 only (about 6 percent; ratio 2 was not measured there). It is not bit-equal to the tiled kernel,
+// faster decode) and on G14C at ratio 3 (about 6 percent) and at equal head counts (about 2.8 percent with the plain prefetch kernel, 3.7 percent with the wide one); ratio 2 was not measured there. It is not bit-equal to the tiled kernel,
 // so the case does not compare the default with the tiled run. Every other part keeps its previous default. Explicit
-// MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) and equal head counts keep the
-// previous default.
+// MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) keeps the previous default.
+// Equal head counts (Qwen3.8-2B) take the untiled kernel on G14C and keep the previous default elsewhere.
 TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it") {
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 32));
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 48));
@@ -438,11 +438,13 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 48));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 32));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 64));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 24));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 0, 0));
   for (const char* other : {"Apple M1 (G13G B1)", "Apple M1 Ultra (G13D C0)", "llvmpipe (LLVM 15.0.6, 256 bits)"}) {
     CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 32));
     CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 48));
+    CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 16));
   }
   if (!compute_available()) return;
   Stream s = gpu_stream();
@@ -450,6 +452,7 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
   const std::string& device = omarchy::device(0).capabilities().device_name;
   const bool measured2 = omarchy::gdn_bf16a_untiled_default(device, 16, 32);
   const bool measured3 = omarchy::gdn_bf16a_untiled_default(device, 16, 48);
+  const bool measured1 = omarchy::gdn_bf16a_untiled_default(device, 16, 16);
   const bool legacy = device.find("G13") != std::string::npos && device.find("G13C") == std::string::npos;
   using K = omarchy::ComputeKernel;
   const EnvVar no_tile{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr};
@@ -506,7 +509,8 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
     EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
     CHECK_EQ(r.kernel, legacy ? untiled : tiled);
   }
-  // Equal head counts: no GQA, the previous default on every part.
+  // Equal head counts (16 and 16, Qwen3.8-2B): no GQA. The untiled kernel is the default on G14C (measured) and on the legacy G13
+  // parts; every other part keeps the tiled kernel. The switches behave as at the other ratios.
   {
     Shape27 eq;
     eq.Hk = eq.Hv;
@@ -514,7 +518,17 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
     eval(std::vector<array>{e.q, e.k, e.v, e.a, e.b, e.a_log, e.dt_bias, e.h0});
     omarchy::get_command_encoder(s).synchronize("gdn_bf16a_default_inputs_eq");
     EnvRun r = run_env(e, e.q, e.k, {no_tile, no_flag, no_bf16a}, s);
-    CHECK_EQ(r.kernel, legacy ? untiled : tiled);
+    EnvRun r_on = run_env(e, e.q, e.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag, no_bf16a}, s);
+    EnvRun r_off = run_env(e, e.q, e.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag, no_bf16a}, s);
+    EnvRun r_plain = run_env(e, e.q, e.k, {no_tile, no_flag, no_bf16a, {"MLX_OMARCHY_GDN_PF_WIDE", "0"}}, s);
+    std::cout << "[gdn_bf16a_untiled_default] ratio 1: default kernel " << r.kernel << ", " << r.run.dispatches << " dispatches\n";
+    CHECK_EQ(r.kernel, measured1 ? kind(K::GatedDeltaDecodeBF16PfWide) : legacy ? untiled : tiled);
+    CHECK_EQ(r_on.kernel, tiled);
+    CHECK_EQ(r_off.kernel, untiled);
+    CHECK_EQ(r_plain.kernel, (measured1 || legacy) ? untiled : tiled);
+    CHECK_EQ(r.run.dispatches, r_on.run.dispatches);
+    CHECK_EQ(r_off.run.dispatches, r_on.run.dispatches);
+    CHECK_EQ(r_plain.run.dispatches, r_on.run.dispatches);
   }
 }
 
@@ -590,4 +604,35 @@ TEST_CASE("gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in
   CHECK_EQ(opt_in.kernel, kind(K::GatedDeltaDecodeBF16PfComposed));
   CHECK_EQ(opt_in.run.dispatches, untiled.run.dispatches);
   CHECK(same(opt_in.run, untiled.run, s));
+}
+
+// The wide-prefetch untiled kernel (thirty-two state words per round trip) runs the plain prefetch kernel's arithmetic in the same order, so
+// its outputs and final state equal the plain prefetch kernel's bit for bit, at equal head counts and at ratio 3. It is selected only by
+// MLX_OMARCHY_GDN_PF_WIDE=1 with the untiled kernel and Dk a multiple of 32, and by default on G14C at equal head counts (the ratio 1 case above).
+TEST_CASE("gdn raw decode bf16 A_log: the wide prefetch kernel equals the plain prefetch kernel") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_pf_wide");
+  using K = omarchy::ComputeKernel;
+  const EnvVar no_flag{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
+  const EnvVar no_bf16a{"MLX_OMARCHY_GDN_GQA_BF16A", nullptr};
+  const EnvVar off_tile{"MLX_OMARCHY_GDN_DECODE_TILE", "0"};
+  for (int hv : {16, 48}) {
+    Shape27 sh;
+    sh.Hv = hv;
+    Inputs in = make_inputs(sh, /*a_log_f32=*/false, s);
+    eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_pf_wide_inputs");
+    EnvRun plain = run_env(in, in.q, in.k, {off_tile, no_flag, no_bf16a, {"MLX_OMARCHY_GDN_PF_WIDE", nullptr}}, s);
+    EnvRun wide = run_env(in, in.q, in.k, {off_tile, no_flag, no_bf16a, {"MLX_OMARCHY_GDN_PF_WIDE", "1"}}, s);
+    EnvRun off = run_env(in, in.q, in.k, {off_tile, no_flag, no_bf16a, {"MLX_OMARCHY_GDN_PF_WIDE", "0"}}, s);
+    EnvRun tiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag, no_bf16a, {"MLX_OMARCHY_GDN_PF_WIDE", "1"}}, s);
+    std::cout << "[gdn_pf_wide] Hv " << hv << ": plain kernel " << plain.kernel << ", wide kernel " << wide.kernel << "\n";
+    CHECK_EQ(plain.kernel, kind(K::GatedDeltaDecodeBF16Pf));
+    CHECK_EQ(wide.kernel, kind(K::GatedDeltaDecodeBF16PfWide));
+    CHECK_EQ(off.kernel, kind(K::GatedDeltaDecodeBF16Pf));
+    CHECK_EQ(tiled.kernel, kind(K::GatedDeltaDecodeBF16));
+    CHECK(same(wide.run, plain.run, s));
+    CHECK_EQ(wide.run.dispatches, plain.run.dispatches);
+  }
 }

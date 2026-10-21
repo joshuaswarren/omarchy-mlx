@@ -12778,13 +12778,16 @@ void GatedDeltaUpdate::eval_gpu(
   const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
       decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
       gdn_decode_tile_enabled(encoder);
-  // bf16 A_log with Hk != Hv: the untiled prefetch kernel is the default on the (part, head ratio) pairs of
-  // gdn_bf16a_untiled_default (G13C at Hv == 2 * Hk or 3 * Hk, G14C at Hv == 3 * Hk), unless
+  // bf16 A_log: the untiled prefetch kernel is the default on the (part, head ratio) pairs of
+  // gdn_bf16a_untiled_default (G13C at Hv == 2 * Hk or 3 * Hk, G14C at Hv == 3 * Hk or Hv == Hk), unless
   // MLX_OMARCHY_GDN_DECODE_TILE is set (1 keeps the tiled kernel), MLX_OMARCHY_GDN_PF=0
-  // or MLX_OMARCHY_GDN_GQA_BF16A=1 (the tiled native-GQA opt-in). The expansion copies run as on the tiled route.
-  const bool bf16a_untiled_default = decode_shape && raw_gates_mode && Hk != Hv &&
+  // or MLX_OMARCHY_GDN_GQA_BF16A=1 (the tiled native-GQA opt-in). The expansion copies run as on the tiled route
+  // (equal head counts need none).
+  const bool bf16a_untiled_default = decode_shape && raw_gates_mode &&
       A_log.dtype() == bfloat16 && !gqa_bf16a && decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
       omarchy::gdn_bf16a_untiled_default(encoder.device().capabilities().device_name, Hk, Hv);
+  // Equal head counts as the model has them: Hk is set to Hv below once q and k are expanded.
+  const bool equal_heads_default = bf16a_untiled_default && Hk == Hv;
   if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a && !pf_gqa) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
@@ -12887,6 +12890,13 @@ void GatedDeltaUpdate::eval_gpu(
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
+    // The untiled prefetch kernel with thirty-two state words in flight per round trip (default order only, Dk a multiple of 32).
+    // MLX_OMARCHY_GDN_PF_WIDE (read live): 1 selects it, any other set value selects the plain prefetch kernel; unset, it is the
+    // default where bf16a_untiled_default holds at equal head counts (G14C, Qwen3.8-2B). Other shapes keep the plain kernel.
+    const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
+    const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
+                                                      : equal_heads_default;
+    const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
     const omarchy::ComputeKernel kernel = decode_tile
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
                     : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
@@ -12894,7 +12904,8 @@ void GatedDeltaUpdate::eval_gpu(
         : gdn_pf
         ? (composed ? (pf_gqa ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa
                               : omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed)
-                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
+                    : pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide
+                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
         : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled);
     encoder.dispatch_compute(
