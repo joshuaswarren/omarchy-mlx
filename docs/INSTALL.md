@@ -74,29 +74,31 @@ x86_64 dev boxes, plus a `SHA256SUMS` covering every asset. Example for
 v0.7.10:
 
 ```bash
-python3 -m venv ~/.venvs/mlx
+python3.14 -m venv ~/.venvs/mlx
 ~/.venvs/mlx/bin/pip install "https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.7.10/mlx_omarchy-0.32.4.dev202610012048+6cff5ea-cp314-cp314-linux_aarch64.whl"
 ~/.venvs/mlx/bin/pip install --no-deps mlx-lm==0.31.3
+~/.venvs/mlx/bin/pip install "transformers[sentencepiece]==5.16.1" numpy protobuf pyyaml jinja2 huggingface_hub soundfile
 ```
 
 The `--no-deps` on `mlx-lm` matters. It depends on upstream `mlx`,
-which would clobber this wheel. On x86_64 there is no ANE. You need a
-software Vulkan driver plus `MLX_OMARCHY_ALLOW_NON_APPLE=1` to import
-the module.
+which would clobber this wheel. On x86_64 there is no ANE. Use Python
+3.11 for the x86_64 wheel and a Vulkan 1.3 driver. Set
+`MLX_OMARCHY_ALLOW_NON_APPLE=1` before importing the module.
 
-The wheel ships the GPU runtime only. The mlx-lm serve patches (the GDN
-fast routes, the greedy prune, and the rest of the installer's patch set)
-are vendored in this repository, and `mlx_lm.server` runs the stock
-upstream path without them. End the install with the installer's patch
-step:
+The wheel includes the native runtime and aarch64 ANE assets. It does
+not include the mlx-lm serve patches. Those patches (the GDN fast routes,
+the greedy prune, and the rest of the installer's patch set) live in this
+repository. Without them, `mlx_lm.server` runs the stock upstream path.
+End the install with the installer's patch step:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash -s -- --patch-venv ~/.venvs/mlx
 ```
 
 `--patch-venv` downloads the patch series that matches the venv's mlx-lm
-(0.31.3, or 0.32.0 through 0.32.2, the releases tried) into the install prefix and applies it. `mlx-omarchy
-serve` prints one line at launch saying whether the patches are applied.
+(0.31.3, or 0.32.0 through 0.32.2) and applies it. It does not install launchers.
+The full script install also adds `mlx-omarchy-serve`; its `serve` command
+prints the patch status at launch.
 
 The wheels ship GPU kernels, not the driver. The Omarchy package path
 brings the Honeykrisp driver with it (`omarchy-mlx-vulkan`, a private

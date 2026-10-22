@@ -382,9 +382,9 @@ submission file.
   Python without the mlx-omarchy wheel. Test the exact interpreter you
   invoke with `.../bin/python -c "import mlx"`; a wheel installed into
   a different `python3` does not count.
-- `profile` says `available: false` on a released wheel: expected, not
-  a fault. Release wheels compile the profiling harness off and do not
-  ship `mlx-omarchy-info`; see the profile section above.
+- `profile` says `available: false` on a released wheel: release wheels
+  compile the profiling harness off. The installed `mlx-omarchy-info`
+  still reports capabilities; dispatch profiling requires a diagnostics wheel.
 - The upload fails with a route error: you passed the API route in the
   URL. `--submit` and `MLX_OMARCHY_SUBMIT_URL` take the origin only,
   for example

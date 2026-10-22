@@ -41,7 +41,7 @@ mlx-lm, oMLX, mlx-serve, TensorFold, sushi, llama.cpp (Vulkan) and MCDMA have be
   (`download`, `verify`, `transcribe`). `mlx-omarchy-coreml`
   inspects a Core ML package. The aarch64 wheel ships the ANE worker
   and the pinned Parakeet encoder bundles.
-- An opt-in wake word. `mlx-omarchy-assistant --wake-word hey_jarvis`
+- An opt-in wake word. `mlx-omarchy-chat --wake-word hey_jarvis`
   listens through openWakeWord ONNX models on the CPU (SHA-256-pinned
   files, downloaded once on first use) and hands the microphone to the
   chat when it hears the phrase. It is off by default.
@@ -63,7 +63,7 @@ plus Laya, and it needs a 96 GB machine.
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
 
-The install accepts every chip in the M1 class and the M2 Max. They
+The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
 this project measures on. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),

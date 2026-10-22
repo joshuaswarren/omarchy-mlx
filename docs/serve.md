@@ -411,7 +411,7 @@ Sichuan/Beijing dialect when they are used for Chinese text.
 
 ### Wake word (opt-in)
 
-`mlx-omarchy-assistant --wake-word hey_jarvis` starts a CPU listener
+`mlx-omarchy-chat --wake-word hey_jarvis` starts a CPU listener
 (openWakeWord 0.6.0 ONNX models; the three model files are pinned by
 SHA-256 and download once into the assistant home — the flag is the
 download approval). Detections surface in `/api/status` under `wake`;

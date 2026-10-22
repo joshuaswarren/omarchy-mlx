@@ -76,9 +76,10 @@ The engine's int8 path needs the native `mx.fast.int8_matmul` op. Install the wh
 cd /path/to/omarchy-mlx
 WHEEL_URL=https://github.com/joshuaswarren/omarchy-mlx/releases/download/tensorfold-video-wheel-95e7b6f/mlx_omarchy-0.32.4.dev202610090724%2B95e7b6f-cp314-cp314-linux_aarch64.whl
 WHEEL_SHA=4dcae17fc998256018623dc73e65e8e82492865525f542905e3f93f2ddd3d291
-curl -L -o /tmp/omarchy-mlx.whl "$WHEEL_URL"
-echo "$WHEEL_SHA  /tmp/omarchy-mlx.whl" | sha256sum -c -
-pip install --force-reinstall --no-deps /tmp/omarchy-mlx.whl
+WHEEL_FILE=/tmp/mlx_omarchy-0.32.4.dev202610090724+95e7b6f-cp314-cp314-linux_aarch64.whl
+curl -L -o "$WHEEL_FILE" "$WHEEL_URL"
+echo "$WHEEL_SHA  $WHEEL_FILE" | sha256sum -c -
+pip install --force-reinstall --no-deps "$WHEEL_FILE"
 python -c "import mlx.core as mx; assert hasattr(mx.fast, 'int8_matmul'), 'omarchy-mlx wheel was overwritten by PyPI mlx; reinstall with --force-reinstall --no-deps'"
 ```
 
@@ -106,6 +107,7 @@ The render driver is `scripts/tensorfold/h3_generate_rows.py` in this repository
 Before the three render stages, point the driver at the int8 DiT location. The HF bundle ships the int8 shards and the DiT config under `int8-dit/` (the config is `int8-dit/transformer-config.json`); the render driver expects a `transformer/config.json` inside the model directory:
 
 ```bash
+MODEL_DIR=/absolute/path/to/hf-bundle
 mkdir -p "$MODEL_DIR/transformer"
 ln -s "$MODEL_DIR/int8-dit/transformer-config.json" "$MODEL_DIR/transformer/config.json"
 ```

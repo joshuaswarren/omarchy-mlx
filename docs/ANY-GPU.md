@@ -61,7 +61,7 @@ Verification status of the script:
 git clone https://github.com/joshuaswarren/omarchy-mlx.git
 cd omarchy-mlx
 ./scripts/prepare-mlx.sh
-.work/mlx/tools/ci/run-omarchy-runtime.sh
+MLX_OMARCHY_ALLOW_NON_APPLE=1 .work/mlx/tools/ci/run-omarchy-runtime.sh
 ```
 
 The repository root has no `CMakeLists.txt`. `prepare-mlx.sh` downloads
@@ -141,10 +141,10 @@ with:
   (see the decision below); install `vulkan-tools` and rerun.
 - `python3 scripts/collect_deep.py --out FILE` adds correctness and
   benchmark sections, but only where a `mlx` module is importable.
-  Current releases ship aarch64 wheels only, so on x86_64 non-Apple
-  boxes those sections report `available: false` (verified on a GPU-less
-  x86_64 host on 2026-10-11). Export `MLX_OMARCHY_ALLOW_NON_APPLE=1`
-  before running it so a source-built module may start.
+  Releases include Python 3.11 x86_64 wheels and Python 3.14 aarch64
+  wheels. Install the wheel that matches the collector's interpreter,
+  or build from source. Set `MLX_OMARCHY_ALLOW_NON_APPLE=1` before
+  running the collector on a non-Apple GPU.
 
 ## Non-Apple results stay issue-only
 
