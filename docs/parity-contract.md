@@ -10,22 +10,45 @@ Use this document for the engineering comparison below. It does not replace the 
 
 The engineering comparison requires at least five independent runs per arm and cell. The existing release procedure still requires five warmup runs and 30 measured repetitions, plus the 100-request stability gate. A five-run engineering result cannot qualify a release by itself.
 
-This document specifies future acceptance checks. It supplies no new runtime measurement and authorizes no hardware, installation or service change.
+## 2. Source identities and comparison boundaries
 
-## 2. Audited source and candidate boundaries
+Use these immutable source pins to identify each comparison. Freeze the actual parent, candidate and integration commits before capture.
 
-These immutable source pins define the reviewed changes. Revalidate the coverage map whenever a head changes. Later measurements must also name their actual base and integration commits.
-
-| Work | Audited head | Change boundary | Required discriminator |
+| Work | Source pin | Change boundary | Required discriminator |
 | --- | --- | --- | --- |
 | Common implementation base | `94f5ac8ca685173e801ec1023df5de9a17465bc4` | Existing Vulkan backend and model routes | Same-head control and independent numerical oracle |
 | Dense prefill, [PR #257](https://github.com/joshuaswarren/omarchy-mlx/pull/257) | `b07648943a19f8d00c6751ea853cd34b7c39f6b2` | Paired subgroup output drains in `qmm_coopmat.comp`; shared index helpers and shader dependencies | Real cooperative-matrix output, scratch ownership and barriers on the target driver |
-| Dense decode branch | `94f5ac8ca685173e801ec1023df5de9a17465bc4` | No additional decode change at the audited head | A new decode candidate requires a separate source pin, changed-route trace and baseline comparison |
+| Dense decode baseline | `94f5ac8ca685173e801ec1023df5de9a17465bc4` | Quantized projections, attention and recurrent decode routes | Each decode candidate requires its own source pin, changed-route trace and baseline comparison |
 | Sparse MoE, [PR #256](https://github.com/joshuaswarren/omarchy-mlx/pull/256) | `086b85104555bffa14b0e49ccd072c4455e3ab26` | Direct scales, biases and routing buffers for tiled gathered Q4 prefill | Actual `gather_qmm` dispatch, original-buffer offsets/lifetimes and removal of parameter staging |
 
 The upstream MLX numerical reference is version 0.32.3 at `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`, matching [mlx.lock](../mlx.lock). Record a different reference as a new comparison, never as the same baseline. Pin the same mlx-lm source, model code and project patch set on both platforms, except backend selection. Freeze their digests before capture.
 
-### Model identities
+### 2.1 Linux qualification build
+
+Use a CPU-disabled wheel for Linux model qualification and timing. Keep a separate CPU-enabled binary for CPU oracle and test work. A CPU-enabled oracle binary cannot supply qualification timings.
+
+The standard `scripts/build-wheel.sh` sets `MLX_BUILD_CPU=ON` and replaces external `CMAKE_ARGS`. Build the qualification wheel directly from the prepared source instead. Use a clean checkout per arm, an unused work directory, and a provisioned build environment with pinned dependencies:
+
+```sh
+export MLX_OMARCHY_WORK_DIR="$PWD/.work/parity-nocpu-$(git rev-parse --short=7 HEAD)"
+export MLX_OMARCHY_LOCAL_VERSION="nocpu.$(git rev-parse --short=7 HEAD)"
+export DEV_RELEASE=1 CMAKE_BUILD_PARALLEL_LEVEL=2
+scripts/prepare-mlx.sh
+export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=OFF"
+export CMAKE_ARGS="$CMAKE_ARGS -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_BUILD_TESTS=OFF"
+export CMAKE_ARGS="$CMAKE_ARGS -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF"
+export CMAKE_ARGS="$CMAKE_ARGS -DMLX_OMARCHY_GPU_PROFILING=OFF"
+python3 -m pip wheel --no-build-isolation --no-deps \
+  --wheel-dir "$MLX_OMARCHY_WORK_DIR/wheels" "$MLX_OMARCHY_WORK_DIR/mlx"
+```
+
+This recipe selects the pinned upstream `mlx/backend/no_cpu/` tensor implementations through `MLX_BUILD_CPU=OFF`. Preserve its CMake cache, configure/build log and compile commands. Require `no_cpu/primitives.cpp` and `no_cpu/device_info.cpp`, rather than the CPU tensor implementation sources. Host scheduling files such as `backend/cpu/eval.cpp` and `encoder.cpp` remain allowed. Match the built and loaded library hashes and wheel RECORD before running the controls.
+
+Run controls in separate processes using that exact wheel. First, evaluate a nontrivial GPU addition and require the expected values and positive Vulkan dispatch counts. In the CPU negative control, create a new explicit CPU stream with `mx.new_stream(mx.cpu)`, then evaluate `mx.add(x, y, stream=cpu_stream)` on two-element float32 inputs. Require the pinned no-CPU error `Add has no CPU implementation.`; an import error, stream-index error, unrelated exception or successful result fails the control. Use a new stream rather than the default CPU stream, because the no-CPU backend reports zero CPU devices.
+
+Record the CPU-disabled build identity, loaded library identity, exact control commands, output and exit status with P7. GPU-only counters cannot establish CPU exclusion. The implicit-default-device refusal patch cannot replace this explicit CPU control. Keep the GPU profiling build option off for timing; diagnostic captures and CPU-enabled oracle runs retain separate identities. Apply the full packaging gates separately before publishing a release wheel.
+
+### 2.2 Model identities
 
 | Model | Immutable snapshot | Required format |
 | --- | --- | --- |
@@ -36,20 +59,32 @@ Record SHA-256 for every weight shard, configuration, tokenizer file and index f
 
 Retain the original fixed 32-token Qwen compatibility gate separately. Its source plan names a GGUF artifact with SHA-256 `4aa0fb13c431514262f259d420ecc95a8714df58ac2a2384514e20b93983f0ff`. A safetensors snapshot is not that artifact. Bind the legacy oracle through an audited tensor/conversion manifest and its exact prompt IDs; do not replace its expected tokens with the engineering model's output.
 
-## 3. Operation coverage and gaps to close
+## 3. Operation acceptance matrix
 
-A source implementation, a software Vulkan run, a physical-device run and a model result are separate coverage levels. Record each required row at its actual level. Missing, skipped or refused required work cannot pass qualification.
+Record source, software-driver, physical-device and model checks separately. Qualification requires every mandatory check at its specified execution level.
 
-| Required area | Source and existing test anchors | Additional acceptance work |
+| Required area | Source and existing test anchors | Required checks |
 | --- | --- | --- |
 | Dense quantized prefill | `overlay/mlx/backend/omarchy/shaders/qmm_coopmat.comp`; `overlay/tests/omarchy/test_matmul_family.cpp` cooperative-matrix and QMM tile cases; #257 `tests/qmm_drain_check.cpp` | Compile all 40 declared shader variants. Execute every variant admitted by the target's capabilities, including M16/M32, both subgroup scratch regions, partial rows/columns and repeated tiles. Unavailable capabilities must select their documented fallback or named refusal. A CPU index check cannot establish cooperative stores or GPU memory ordering. Verify actual kernel IDs. |
-| Dense decode | `overlay/mlx/backend/omarchy/primitives.cpp` QMM and GDN selectors; `test_matmul_family.cpp`; GDN cases in `overlay/tests/omarchy/` | Capture the routes used by the pinned 2B model. Cover single-token quantized projections, normalization, recurrent state, convolution, attention/KV transitions and compiled/eager boundaries. Do not infer a new decode improvement from an unchanged branch. |
+| Dense decode | `overlay/mlx/backend/omarchy/primitives.cpp` QMM and GDN selectors; `test_matmul_family.cpp`; GDN cases in `overlay/tests/omarchy/` | Capture the routes used by the pinned 2B model. Cover single-token quantized projections, normalization, recurrent state, convolution, attention/KV transitions and compiled/eager boundaries. Bind each improvement claim to a distinct candidate build. |
 | Router and top-k | `primitives.cpp` `ArgPartition::eval_gpu`, `dispatch_sort`; mlx-lm `nemotron_h.py` `group_expert_select` | Test top-six selection from 128 scores, correction bias, normalization, ties, repeated selections and association between each expert ID and its score. The existing full-sort implementation does extra ordering work; measure its cost before choosing a selection optimization. |
 | Quantized expert matrices | `dispatch_gather_qmm`, `GatherQMM::eval_gpu`; `gather_qmm_sub.comp`, `gather_qmm_tile.comp`; gathered-matmul cases in `test_matmul_family.cpp` | Cover both selected expert projections, K/N = 2688/1856 and 1856/2688, bf16/fp16 parameters, all selected expert IDs and captured model activations. Validate packed nibbles and scales/biases against independently dequantized operands. |
-| Tile admission and fallback | #256 `primitives.cpp:3349-3420`; `test_gather_qmm_tile.py` and `test_gather_qmm_tile_standalone.cpp` | Exercise sorted/unsorted routes, non-identity and repeated input indices, absent experts, partial 32-row tiles, offset views and multiple experts in a tile. Check 63/64/65 routed rows and the four-rows-per-expert boundary. Confirm direct admission with seven bindings, per-row fallback below seven bindings and with `DIRECT=0`, and insufficient shared memory. Simulated caps are correctness checks only. |
-| Unquantized expert gather | `GatherMM::eval_gpu` in `primitives.cpp` | Preserve its named refusal above 65,535 routed batches until a separately tested implementation removes that limit. This is not the selected affine-Q4 execution path. |
+| Tile admission and fallback | #256 `primitives.cpp:3349-3420`; `test_gather_qmm_tile.py` and `test_gather_qmm_tile_standalone.cpp` | Exercise sorted/unsorted routes, non-identity and repeated input indices, absent experts, partial 32-row tiles and multiple experts in a tile. Use the isolated admission and offset matrix below. Confirm direct admission with seven bindings, per-row fallback below seven bindings and with `DIRECT=0`, and insufficient shared memory. |
+| Unquantized expert gather | `GatherMM::eval_gpu` in `primitives.cpp` | Require its named refusal above 65,535 routed batches. Apply affine-Q4 expert qualification to `GatherQMM` separately. |
 | Hybrid recurrent execution | mlx-lm `nemotron_h.py`, `ssm.py` and cache implementation; convolution, scan/reduction and compiled-tape tests | Establish convolution and SSM state oracles, prefill/chunk/decode equivalence, fresh-cache reset and state reuse across 128 decode steps. Sparse-matrix coverage alone cannot qualify this hybrid model. |
 | Execution safety | Runtime, error-contract, copy-offset and capability-simulation suites; [differential tools](differential-harness.md) | Prove the trace detector is live, required routes executed, CPU tensor dispatch is impossible, and a new process can reopen the device. Refuse unsupported operations with operation/dtype/shape. |
+
+For tile admission, fix affine Q4/group-64, transposed weights, `m=1`, sorted expert IDs, K/N multiples of 64, seven bindings, direct buffers enabled, and sufficient shared memory. Set each expert count from the leading weight dimensions; routed rows are synthetic gather entries, not token counts. Vary only the boundary under test:
+
+| Expert count | Routed rows | Expected route |
+| --- | --- | --- |
+| 8 | 63 / 64 / 65 | Per-row / direct tile / direct tile |
+| 128 | 63 / 64 / 65 | Per-row / per-row / per-row |
+| 128 | 511 / 512 / 513 | Per-row / direct tile / direct tile |
+
+Assert `GatherQmmTileF16` or `GatherQmmTileBF16` in each admitted cell and the selected per-row kernel in each fallback cell. Repeat across both storage dtypes, with repeated IDs and routing tails. The eight-expert cells isolate the minimum-64-row gate; the 128-expert 511/512/513 cells isolate the four-rows-per-expert gate.
+
+For accepted offset views, use nonzero four-byte-aligned offsets for scales, biases and both index arrays. Verify the exact selected route and output bits. A two-byte scale or bias offset must return the existing compatibility error labeled `name() + " byte offset"` before direct or staged dispatch. Require the operation label, dtype and shape in that error. Record capability simulations separately from physical-device runs.
 
 For the data-movement changes in #256 and #257, compare against their actual parent implementations, not a different arithmetic kernel. In #256, `MLX_OMARCHY_GATHER_QMM_DIRECT=0` also disables the tile. It therefore cannot isolate the old staged tile from the new direct tile. Use separate pinned builds for that comparison. Use `TILE=0` only as a separately labeled per-row correctness/performance control.
 
@@ -72,7 +107,7 @@ The [compiled/eager differential workflow](differential-harness.md) locates stat
 | #256/#257 same-arithmetic data movement | Zero bit differences against the corresponding parent route for identical captured inputs, including output, logits and recurrent/cache state. Require the same routing sequence and raw generated IDs. No numerical tolerance or near-tie waiver applies to a new movement-induced difference. |
 | Primitive oracle | Preserve every existing pinned bound. For gathered tile fixtures, existing relative-L2 limits are 0.01 for bf16 and 0.005 for fp16. These limits do not replace the zero-difference parent comparison above and must not be reused as blanket logit/state tolerances. Require finite values and report maximum absolute and relative-L2 error against the independent reference. |
 | Dense QMM oracle | Retain the existing shape/dtype-specific host-reference bound in `test_matmul_family.cpp`. Do not relax it for the drain rewrite. Record actual storage rounding, K and worst error. |
-| Arithmetic-changing future candidates | Apply [numerics-gate.md](numerics-gate.md): per-op output/state error no worse than the deployed op against the same oracle; teacher-forced top-1 agreement at least baseline within the stated 95% binomial band; PPL deviation within baseline run-to-run noise. Freeze the sample count, interval method and noise calculation before comparison. Report counts, margins, PPL and mean absolute log-probability error. |
+| Arithmetic-changing candidates | Apply [numerics-gate.md](numerics-gate.md): per-op output/state error no worse than the deployed op against the same oracle; teacher-forced top-1 agreement at least baseline within the stated 95% binomial band; PPL deviation within baseline run-to-run noise. Freeze the sample count, interval method and noise calculation before comparison. Report counts, margins, PPL and mean absolute log-probability error. |
 | Native token identity | Preserve every fixture already matching native. Apply [parity-id-policy.md](parity-id-policy.md) and its explicitly named amendments for other fixtures. Keep the legacy 32-token gate exact. |
 | Safety | Zero NaN/Inf, out-of-bounds writes, CPU tensor dispatches, unexpected compatibility errors, GPU resets, device-loss errors or timeouts in required cells. A timeout is not a slow sample to discard. |
 
@@ -116,18 +151,21 @@ Use an explicit greedy sampler, temperature zero and seed zero. Disable EOS-base
 
 ### 6.3 Process and timing rules
 
-Each outer repetition is a new process with a freshly loaded model and fresh prompt/recurrent caches. Loading is excluded from warm throughput and recorded separately. Perform two untimed prompt-plus-eight-token warmups with fresh caches. Synchronize their completion.
+Each warm outer repetition is a new process with a freshly loaded and materialized model and fresh prompt/recurrent caches. Loading is excluded from warm throughput and recorded separately. Perform two untimed prompt-plus-eight-token warmups with fresh caches. Synchronize their completion. Capture cold metrics in the separate processes specified below.
 
 Measure the following with monotonic host time and the same synchronization boundaries on both platforms:
 
 1. **Prefill forward:** start after input construction and synchronization; evaluate the model's fixed prompt output and resulting cache/state before stopping. Use the same output/logit materialization policy on both sides. Rate = input-token count / elapsed time.
 2. **First token:** on a separate fresh cache, start before the generation iterator's first evaluation; stop after the first token is materialized. This is warm time-to-first-token, not pure prefill.
 3. **Decode:** record the completion time of token one and token 128. Rate = `127 / (t128 - t1)`. Record all 128 raw IDs. Include required host scheduling and token synchronization consistently; exclude loading and the first-token interval.
-4. **Cold start:** report model load and cold first-token time in separate fields. Never combine them with warm prefill or steady decode.
 
-One timed forward and one timed generation per process supply that outer repetition's metrics. Optional internal repeats must be declared beforehand and retained individually; five internal forwards in one process are not five independent runs. Do not count warmups as repetitions.
+One timed forward and one timed generation per warm process supply that outer repetition's metrics. Optional internal repeats must be declared beforehand and retained individually; five internal forwards in one process are not five independent runs. Do not count warmups as repetitions.
 
-Keep dispatch tracing/profiling in separate correctness captures. Release-equivalent binaries with CPU tensor evaluation unavailable provide the timing results. Do not time a diagnostic wheel or an instrumented driver and report it as release throughput.
+For each arm and model/length cell, collect five additional fresh-process cold samples, separate from the five warm process pairs. Run no warmup in a cold process. Record monotonic timestamps before importing MLX (`t_start`), after runtime/device initialization (`t_load`), after model loading and full parameter materialization plus synchronization (`t_ready`), and after the first generated token materializes on a fresh cache (`t_first`).
+
+Report initialization as `t_load - t_start`, cold model load as `t_ready - t_load`, cold time-to-first-token as `t_first - t_ready`, and total cold MLX start as `t_first - t_start`. Include file reads, dequantization/materialization and load-time compilation in model load. Include lazy forward compilation and pipeline creation in cold time-to-first-token. Record a fresh in-process pipeline/JIT cache and the declared driver disk-cache policy for every cold sample; keep that disk-cache policy identical across arms. Cold processes supply no warm throughput samples.
+
+Keep dispatch tracing/profiling in separate correctness captures. Use the CPU-disabled qualification build from section 2.1 for Linux timing. Do not substitute the CPU-enabled oracle build, a diagnostic wheel or an instrumented driver.
 
 ### 6.4 Paired schedule and native comparison
 
@@ -141,7 +179,7 @@ Require matching raw free-run IDs before reporting a Linux/macOS free-run speed 
 
 ### 6.5 Throughput acceptance
 
-The following are engineering decision thresholds, not measured gains or statistical-confidence claims:
+Apply these engineering decision thresholds to each required cell:
 
 | Decision | Threshold |
 | --- | --- |
@@ -162,11 +200,22 @@ Publish all rates, paired ratios, medians, spread and sample counts. Use the med
 | P3 | Dense prefill drain matrix | All declared shader variants compile; CPU layout checks preserve one write per element; actual Apple cooperative-matrix output matches the parent bitwise across boundary/offset cases and repeated scratch reuse. Record actual kernel IDs. |
 | P4 | Dense decode and recurrent transitions | Per-step logits, token IDs and recurrent/cache state meet the applicable exact/oracle contract across prefill, chunking, first decode, step 32 and step 128. Native-matching fixtures retain their IDs. |
 | P5 | Sparse routing and expert boundaries | Top-six IDs/scores remain associated; Q4 packing/dequantization, sorted/shuffled routing, tails and both full expert dimensions pass captured-input checks. |
-| P6 | MoE host dispatch, direct buffers and fallbacks | MLX API selects the direct tile in eligible cells, preserves parameter-offset/lifetime semantics and avoids parameter staging. Negative capability/flag cases select the intended per-row kernel and preserve reference accuracy. A raw shader call alone cannot satisfy this row. |
-| P7 | Full hybrid model and no-CPU controls | Both models load real pinned weights and produce validated outputs. Trace positive control emits accelerator work; explicit CPU tensor work fails in the release build. Required model traces contain zero CPU tensor dispatches. |
-| P8 | Five-run engineering matrix | All four model/length cells include five base and five candidate processes, separate phase metrics, native records, raw IDs and valid admission/environment data. Apply section 6.5 per cell. |
-| P9 | Integration and release regression | Recheck a clean integration commit against the same base; individual PR wins do not prove combined behavior. Run the standing chip regression gates before release. One hundred repeated requests cause no resets/timeouts/device loss; final post-warmup memory growth is at most 2% or 16 MiB, whichever is larger, with no positive trend across the final 50 requests. |
+| P6 | MoE host dispatch, direct buffers and fallbacks | The section 3 matrix selects the expected kernel at every 8/128-expert boundary. MLX API dispatch preserves aligned parameter-offset/lifetime semantics and avoids parameter staging in direct cells. Misaligned scale/bias cases return the named error. Capability/flag fallbacks preserve reference accuracy. |
+| P7 | Full hybrid model and no-CPU controls | Both models load pinned weights and produce validated outputs using the section 2.1 CPU-disabled wheel. Its GPU positive control and explicit CPU negative control pass in separate processes. Preserve the build-source and loaded-library records establishing CPU exclusion. |
+| P8 | Five-run engineering matrix | All four model/length cells include five base and five candidate warm processes, separate phase metrics, separate cold samples, native records, raw IDs and valid admission/environment data. Apply section 6.5 per cell. |
+| P9 | Integration and release regression | Recheck a clean integration commit against the same base. Run the standing chip regression gates before release. One hundred repeated requests cause no resets/timeouts/device loss and pass the retained-memory checks below. |
+
+### 7.1 Stability memory measurements
+
+Run stability separately from timing, once per model/length cell. Keep the model, compiled functions and fixed prompt alive. Use the same 128-token greedy request and cache policy for five warmup requests and the 100 measured requests.
+
+1. Give each request a fresh prompt/recurrent cache. After completion, release its iterator, output tensors and cache references. Preserve output digests in the log rather than retaining tensors or request histories. Run Python garbage collection, synchronize all streams, then sample memory. Keep allocator-cache limits fixed and retain allocator/compiled caches throughout the run; do not clear caches or trim the host allocator between samples.
+2. Sample post-warmup baseline `i=0` and every measured request `i=1..100` at that same boundary. Record `active_i = mx.get_active_memory()`, `cache_i = mx.get_cache_memory()` and `M_i = active_i + cache_i`, all in bytes. Record Linux resident memory `R_i` from `/proc/self/statm` resident pages multiplied by the recorded page size. Backend peak memory and process high-water RSS are separate diagnostic fields, not substitutes for these retained-memory series.
+3. For each series `X` in `{M, R}`, require `X_100 - X_0 <= max(X_0 // 50, 16777216)` using integer division. This preserves the 2 percent or 16 MiB final-growth bound for both retained backend memory and process RSS.
+4. For each series, compute the final-window integer numerator `S = 50 * sum(i * X_i) - sum(i) * sum(X_i)` over requests `i=51..100`. Require `S <= 0`. This is the sign of the ordinary least-squares slope; the allowed positive-trend tolerance is zero bytes per request. Preserve every sample, both numerators and both final-growth calculations so two readers obtain the same decision.
+
+### 7.2 Acceptance records
 
 An acceptance record contains the manifest digest, exact commands, start/end times, exit statuses, per-case results, raw output/state paths and byte digests. It also contains traces, kernel/driver diagnostics before and after, thermal/load logs, exclusions, fresh-process device reopen result, and the decision for each gate. Preserve failing and null results alongside successful results.
 
-Do not represent an unrun row, a skip, a source inspection, a compiler pass or a software-driver result as physical-device qualification. An operation changes compatibility status only when its linked record covers every named gate. Neither #256 nor #257 may use the other change's result as its own hardware acceptance.
+Physical-device qualification requires physical-device execution records for every required route. Update compatibility status only when the linked record covers every named gate. Keep each candidate's hardware acceptance record separate from the other candidates' records.
