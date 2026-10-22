@@ -30,8 +30,8 @@ user venv. Use the exact wheel built for the target architecture and
 Python version.
 
 ```sh
-cd ~/src/mlx-omarchy
-python3 packaging/omlx-linux/install.sh \
+cd /path/to/omarchy-mlx
+bash packaging/omlx-linux/install.sh \
   --mlx-wheel /path/to/compatible-mlx-omarchy.whl \
   --home "$HOME/.local/share/omlx-linux"
 ```

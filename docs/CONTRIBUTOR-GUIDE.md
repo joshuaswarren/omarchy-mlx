@@ -235,7 +235,7 @@ issue with the exact error and the wheel commit.
 
 ```sh
 git clone https://github.com/joshuaswarren/omarchy-mlx.git
-cd mlx-omarchy
+cd omarchy-mlx
 ./scripts/prepare-mlx.sh        # fetches mlx.lock's archive, sha-checks it, stages .work/mlx
 ```
 
@@ -258,7 +258,7 @@ front of either command. The "Build the wheel" section of
 `docs/install-omarchy.md` says where to find the bundle.
 
 The release wheel stamps its source commit into the version's local segment
-(`0.32.2.dev<timestamp>+<short7>`). The diagnostics wheel stages
+(`<mlx-version>.dev<timestamp>+<short7>`). The diagnostics wheel stages
 `+diag.<short7>`. Verify both.
 
 ### Self-test the measurement scripts before you trust them
@@ -273,11 +273,12 @@ All three exit 0 on the dev box today (verified 2026-09-04).
 
 ### Run the dev-box battery against llvmpipe (no Apple GPU needed)
 
-The full battery is 24 binaries. See `AGENTS.md` "Test rules" for the build
-flags. Run from `.work/mlx`:
+Configure and build the test tree as shown in [ANY-GPU.md](ANY-GPU.md#build).
+Run from the repository root:
 
 ```sh
-cd .work/mlx && ctest --output-on-failure -j$(nproc)
+MLX_OMARCHY_ALLOW_NON_APPLE=1 \
+  ctest --test-dir .work/mlx/build-omarchy --output-on-failure --parallel 2
 ```
 
 ### Run the dispatch census (no Apple GPU needed)
@@ -286,6 +287,7 @@ Counts and groupings work on llvmpipe. Timing does not. Install the
 diagnostics wheel in a venv first:
 
 ```sh
+export MLX_OMARCHY_ALLOW_NON_APPLE=1
 export MLX_OMARCHY_GPU_PROFILE=$HOME/mlx-profile.jsonl
 ~/venv-mlx-diag/bin/python -m mlx_lm generate \
   --model /path/to/Qwen2.5-0.5B-Instruct-4bit-mlx \
@@ -311,24 +313,24 @@ Full path lives in `CONTRIBUTING.md`.
 
 ### Hardware protocol for an M1-equipped contributor
 
+Create the environment using the [release-wheel install](INSTALL.md#from-a-release-wheel).
+Keep the exact wheel file for the provenance check.
+
 ```sh
-# 1. Confirm core count before you bench
+WHEEL=/absolute/path/to/the-installed.whl
+
+# Confirm core count before the benchmark.
 nproc && cat /sys/devices/system/cpu/present
 
-# 2. Install the wheel into a venv
-python3.14 -m venv ~/.venvs/mlx-collect
-~/.venvs/mlx-collect/bin/pip install \
-  https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.3.5/mlx_omarchy-0.32.2.dev202609040917%2B0535e62-cp314-cp314-linux_aarch64.whl
+# Print the provenance line beside every measurement.
+~/.venvs/mlx/bin/python scripts/mlx_provenance.py
 
-# 3. Print the provenance line beside every measurement
-~/.venvs/mlx-collect/bin/python scripts/mlx_provenance.py
-
-# 4. Run pinned decode (36-token prompt, 64 pinned tokens; take the median of five invocations)
-~/.venvs/mlx-collect/bin/python scripts/bench_decode.py \
+# Run pinned decode; take the median of five invocations.
+~/.venvs/mlx/bin/python scripts/bench_decode.py \
   --model /path/to/Qwen2.5-0.5B-Instruct-bf16-mlx \
   --prompt "What is the capital of France? Answer in one word." \
   --tokens 64 --temp 0 --seed 0 \
-  --wheel <wheel-file-you-just-installed>
+  --wheel "$WHEEL"
 ```
 
 ## Where this lives
