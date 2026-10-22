@@ -4,6 +4,9 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "qmm_drain.h"
 
 // Direct-global-load qmm prefill coopmat: whenever x can feed the
 // matrix unit exactly, the A (x) tiles are coopMatLoad'ed straight
@@ -11,9 +14,7 @@
 // stores/unpack and address arithmetic are deleted. The B (weight)
 // side keeps its shared staging in every build: the data is packed
 // 4-bit nibbles and cannot feed coopMatLoad, so w_s, the dequant
-// stores remain. The output drain
-// reuses the staging scratch (idle past the k loop and large enough
-// for the four 8x8 blocks).
+// stores remain. The output drain reuses the idle weight scratch.
 //
 // X modes:
 // - default (f16 activations): coopMatLoad f16 straight from the x
@@ -218,10 +219,7 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-// One (16- or 64-)x(32- or 36-) f32 weight tile. The output drain
-// uses the staging scratch (w_s here; x_s in the X_BF16 build) as
-// scratch; the drain's flat indices stay far below QMM_W_ROWS *
-// QMM_W_STRIDE in every build.
+// Weight staging also holds two disjoint 256-float subgroup drains.
 #ifdef X_BF16
 shared float x_s[TILE_M * STEP_K];
 #endif
@@ -479,39 +477,22 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #endif
   }
 
-  // One subgroup stores each 8-row block it owns; duplicated column
-  // lanes each drain their four distinct rows of that block.
-  for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
-    if (g_sub_rb == (rb & ~(SUBGROUP_ROW_BLOCKS - 1u))) {
-      for (uint cb = 0u; cb < 4u; ++cb) {
-#ifdef X_BF16
-        coopMatStore(
-            acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], x_s,
-            cb * MAT * MAT, MAT,
-            gl_CooperativeMatrixLayoutRowMajor);
-#else
-        coopMatStore(
-            acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], w_s,
-            cb * MAT * MAT, MAT,
-            gl_CooperativeMatrixLayoutRowMajor);
-#endif
-      }
+  for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+    for (uint cb = 0u; cb < 4u; ++cb) {
+      coopMatStore(
+          acc[rb][cb], w_s,
+          qmm_drain_slot(gl_SubgroupID, cb, 0u, 0u), MAT,
+          gl_CooperativeMatrixLayoutRowMajor);
     }
     barrier();
     if (column_ok) {
-      for (uint pass = 0u; pass < 4u; ++pass) {
-        uint r = 4u * g_wpart + pass;
-        uint row = row_base + rb * MAT + r;
+      for (uint r = 0u; r < MAT; ++r) {
+        uint row = row_base +
+            qmm_drain_row(gl_SubgroupID, rb, SUBGROUP_ROW_BLOCKS) + r;
         if (row < params.matrix_m) {
-#ifdef X_BF16
           output_data.values[out_slice + row * params.matrix_n + column] =
-              OUT_STORE(x_s[(g_wcol / 8u) * MAT * MAT +
-                            r * MAT + (g_wcol % 8u)]);
-#else
-          output_data.values[out_slice + row * params.matrix_n + column] =
-              OUT_STORE(w_s[(g_wcol / 8u) * MAT * MAT +
-                            r * MAT + (g_wcol % 8u)]);
-#endif
+              OUT_STORE(w_s[qmm_drain_slot(
+                  gl_SubgroupID, g_wcol / MAT, r, g_wcol % MAT)]);
         }
       }
     }

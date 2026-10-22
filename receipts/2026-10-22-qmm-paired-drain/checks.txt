@@ -1,0 +1,43 @@
+QMM paired output drain: source checks, unmeasured
+Base commit: 94f5ac8ca685173e801ec1023df5de9a17465bc4
+Native MLX pin: 0.32.3 / 9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8
+
+CPU layout check:
+  g++ -std=c++20 -Wall -Wextra -Werror -fsanitize=undefined -O1 tests/qmm_drain_check.cpp -o /tmp/qmm-drain-check
+  /tmp/qmm-drain-check
+Exit: 0
+Output:
+216 drain layouts: exact output, one write per element, disjoint subgroup scratch
+
+Negative control:
+  Replace qmm_drain_row(subgroup, block, blocks) at test call sites with block * 8u.
+  Keep the accumulator reference rows independent of qmm_drain_row.
+Exit: SIGABRT (-6 from subprocess)
+Output:
+Assertion `output[i] == i + 1u' failed.
+
+Shader checks:
+  For every omarchy_shader(name shaders/qmm_coopmat.comp flags...) declaration:
+  glslc -O --target-env=vulkan1.3 <flags> overlay/mlx/backend/omarchy/shaders/qmm_coopmat.comp -o /tmp/<name>.spv
+  spirv-val --target-env vulkan1.3 /tmp/<name>.spv
+Result: all 40 variants compiled and validated, each exit 0.
+Compiler: glslc shim over glslang 16.6.0, SPIR-V 1.6.
+Validator: SPIRV-Tools v2026.3, vulkan-sdk-1.4.357.0-0-g9a49b08.
+C++ compiler: GCC 12.2.0.
+
+ASan observation:
+The first ASan+UBSan executable crashed during sanitizer startup with repeated
+AddressSanitizer:DEADLYSIGNAL and exit 139. It later completed with
+ASAN_OPTIONS=detect_leaks=0, and under gdb with leak tracing disabled.
+The cause remains unresolved. The final layout check above uses UBSan.
+
+Single-threaded review:
+Checked both subgroup scratch ranges (0..255 and 256..511), the minimum
+512-float weight scratch, M16/M32 accumulator ownership, masked edge stores,
+barriers before scratch reuse, unchanged accumulation and conversion, and
+both shader compiler dependency paths. The CPU check uses the shader's
+index helpers and independent accumulator row identities.
+
+Not exercised: Vulkan execution, device cooperative-matrix stores, GPU
+memory ordering, full MLX build, model output, or prefill throughput.
+No speedup or macOS parity result is claimed. This change remains a draft.
