@@ -447,6 +447,37 @@ python3 -m unittest discover -s tests -p test_mlx_provenance.py
 python3 scripts/bench_matrix.py --self-test
 ```
 
+## Check backend C++ syntax without a GPU
+
+Use the [syntax workflow](.github/workflows/omarchy-syntax.yml) to check C++
+code without a GPU. It builds the shader headers and runs the translator tests
+on Ubuntu 24.04. Copy its setup and build commands for a local run.
+These checks need CPU support to link the tests. Release builds still
+block CPU tensor work.
+
+The jobs cache just the source archive. The prepare step checks its hash
+and applies the current patches and overlay. Each job starts with a fresh
+build directory. No CMake output passes from one job to the other.
+Both jobs use at most two build workers.
+
+Set `CMAKE_EXPORT_COMPILE_COMMANDS=ON` when you configure the build.
+Build `omarchy_shaders`, then run:
+
+```bash
+python3 scripts/ci/omarchy_syntax_check.py .work/build --jobs 2
+```
+
+The checker reads `command` strings or `arguments` arrays.
+It keeps paths with spaces and the flags that set values for the compiler.
+It writes no object or dependency files. Bad C++ code fails the check.
+A build with no backend source files fails too.
+
+Test the checker with Python and a C++ compiler. You do not need to fetch MLX:
+
+```bash
+python3 -m unittest discover -s tests -p test_omarchy_syntax_check.py -v
+```
+
 
 ## Driver changes
 

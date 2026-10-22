@@ -20,7 +20,7 @@ Exit: 0 all translation units pass, 1 any failure / no units found.
 """
 import argparse
 import json
-import re
+import shlex
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -31,10 +31,17 @@ OMARCHY_MARKER = "/mlx/backend/omarchy/"
 
 def syntax_only_command(entry):
     """Rewrite one compile_commands entry into a -fsyntax-only command."""
-    cmd = entry["command"]
-    cmd = re.sub(r" -o \S+", "", cmd)
-    cmd = re.sub(r" -M[DTF] \S+", "", cmd)  # depfile emission flags
-    return cmd + " -fsyntax-only", entry["directory"]
+    arguments = entry.get("arguments")
+    if arguments is None:
+        arguments = shlex.split(entry["command"])
+    cmd = []
+    tokens = iter(arguments)
+    for token in tokens:
+        if token in {"-o", "-MF", "-MT", "-MQ", "-MJ"}:
+            next(tokens)
+        elif token not in {"-c", "-M", "-MM", "-MD", "-MMD", "-MP", "-MG"}:
+            cmd.append(token)
+    return cmd + ["-fsyntax-only"], entry["directory"]
 
 
 def main():
@@ -58,7 +65,7 @@ def main():
 
     def run(job):
         src, cmd, cwd = job
-        p = subprocess.run(cmd, shell=True, cwd=cwd,
+        p = subprocess.run(cmd, cwd=cwd, check=False,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return src, p.returncode, p.stderr.decode("utf-8", "replace")
 

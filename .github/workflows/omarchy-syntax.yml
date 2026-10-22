@@ -13,7 +13,7 @@ name: Omarchy backend syntax gate
 #
 # The translate-tests job below runs the omarchy_custom_kernel_translate_tests
 # unit suite for the MSL->GLSL translator, which the syntax-only gate cannot
-# execute (no link). Same pinned .work cache and toolchain; builds CPU-only
+# execute (no link). Same pinned source archive and toolchain; builds CPU-only
 # libmlx plus the test target and runs the suite. Measured on a 16-core dev
 # box capped at -j4: prepare 3 s, configure 28 s, shaders 29 s, test target
 # 197 s, suite 0.3 s — under the 15-minute mark where the issue would demand
@@ -41,20 +41,25 @@ permissions:
 
 jobs:
   syntax:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
-      - name: Cache pinned MLX work tree
+      - name: Cache pinned MLX source archive
         uses: actions/cache@v4
         with:
-          path: .work
-          key: mlx-work-${{ hashFiles('mlx.lock') }}
+          path: .work/mlx-*.tar.gz
+          key: mlx-archive-${{ hashFiles('mlx.lock') }}
       - name: Install toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build glslang-tools libvulkan-dev \
             libopenblas-dev libblas-dev liblapack-dev liblapacke-dev
+      - name: Test syntax-check command handling
+        run: python3 -m unittest discover -s tests -p test_omarchy_syntax_check.py -v
       - name: Prepare patched MLX tree
         run: bash scripts/prepare-mlx.sh
       - name: Configure (CPU-only, omarchy backend)
@@ -71,17 +76,20 @@ jobs:
       - name: Build embedded shader headers
         run: cmake --build .work/build --target omarchy_shaders
       - name: Syntax-check omarchy translation units
-        run: python3 scripts/ci/omarchy_syntax_check.py .work/build --jobs 4
+        run: python3 scripts/ci/omarchy_syntax_check.py .work/build --jobs 2
 
   translate-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
-      - name: Cache pinned MLX work tree
+      - name: Cache pinned MLX source archive
         uses: actions/cache@v4
         with:
-          path: .work
-          key: mlx-work-${{ hashFiles('mlx.lock') }}
+          path: .work/mlx-*.tar.gz
+          key: mlx-archive-${{ hashFiles('mlx.lock') }}
       - name: Install toolchain
         run: |
           sudo apt-get update
@@ -102,7 +110,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
       - name: Build the translator unit tests (pulls in CPU libmlx)
         run: |
-          cmake --build .work/build --target omarchy_shaders -j4
-          cmake --build .work/build --target omarchy_custom_kernel_translate_tests -j4
+          cmake --build .work/build --target omarchy_shaders
+          cmake --build .work/build --target omarchy_custom_kernel_translate_tests
       - name: Run the translator unit tests
         run: ctest --test-dir .work/build -R omarchy_custom_kernel_translate_tests --output-on-failure
