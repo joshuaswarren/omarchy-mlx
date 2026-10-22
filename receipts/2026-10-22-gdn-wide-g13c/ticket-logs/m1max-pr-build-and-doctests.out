@@ -1,0 +1,35 @@
+IDLE-GUARD-JOB-START 20261022T031725Z lane=<lane> <host> pr build at ba12383: wheel and two doctest binaries of branch w7b/gdn-wide-g13c-equal-heads built with a private work directory, doctests run on the M1 Max GPU, no measurement
+KERNEL-CMDLINE <vendor>-words:  kernel=7.1.12-2-12.6-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=3.61 SETTLE-SKIPPED
+GPU-TIMEOUTS before=0 boot=<id>-e9a5-418b-8d3c-4a930b4937e0
+PRG13 start 2026-10-22T03:17:25Z boot=<id> kernel=7.1.12-2-12.6-sep-ARCH sha ba12383f5c1c44fb2d69692bf79864b271c2d7e9 load1=3.61
+PRG13 wheel mlx_omarchy-0.32.4.dev202610220317+ba12383-cp314-cp314-linux_aarch64.whl sha256 bee78ccda372306672fab0e756f2cce7c77544a752291610455816af38197700
+PRG13 tree libmlx a649ee784c9f61f9
+PRG13 tests built 2026-10-22T03:21:51Z
+PRG13 doctest omarchy_gdn_gqa_bf16a_tests 1740b1665f82c2f3
+[gdn_bf16a_untiled_default] ratio 1: default kernel 638, 1 dispatches
+[provenance] gdn_pf_wide mlx=0.32.4 device="Apple M1 Max (G13C C0)" driver="Mesa 26.3.0-devel (git-f144c7949b)" subgroup_size=32
+[gdn_pf_wide] Hv 16: plain kernel 480, wide kernel 638
+[gdn_pf_wide] Hv 48: plain kernel 480, wide kernel 638
+[doctest] test cases:   9 |   9 passed | 0 failed | 0 skipped
+[doctest] assertions: 151 | 151 passed | 0 failed |
+[doctest] Status: SUCCESS!
+PRG13 doctest omarchy_gdn_gqa_bf16a_tests rc=0
+PRG13 doctest omarchy_runtime_tests be6dff3917f7b2a6
+[doctest] test cases:    59 |    59 passed | 0 failed | 0 skipped
+[doctest] assertions: 27070 | 27070 passed | 0 failed |
+[doctest] Status: SUCCESS!
+PRG13 doctest omarchy_runtime_tests rc=0
+PRG13 end 2026-10-22T03:22:33Z
+GPU-TIMEOUTS after=0 delta=0
+0 failed | 0 skipped
+[doctest] assertions: 151 | 151 passed | 0 failed |
+[doctest] Status: SUCCESS!
+PRG13 doctest omarchy_gdn_gqa_bf16a_tests rc=0
+PRG13 doctest omarchy_runtime_tests be6dff3917f7b2a6
+[doctest] test cases:    59 |    59 passed | 0 failed | 0 skipped
+[doctest] assertions: 27070 | 27070 passed | 0 failed |
+[doctest] Status: SUCCESS!
+PRG13 doctest omarchy_runtime_tests rc=0
+PRG13 end 2026-10-22T03:22:33Z

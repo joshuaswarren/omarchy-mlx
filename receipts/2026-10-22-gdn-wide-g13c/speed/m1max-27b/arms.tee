@@ -1,0 +1,20 @@
+ARMS start 2026-10-22T02:36:51Z boot=<id> kernel=7.1.12-2-12.6-sep-ARCH gov=performance load1=0.36 settle=
+ARMS llmstep 14f21df0d126ef48
+ARMS driver vulkan-f144c7949b model 13b840162b4cb35c mx=0.32.4.dev202610211005+a04423e libmlx=0f9e6d6529dae3a4
+ARMS pr tree libmlx 62cc77d961d3ead6 mx=0.32.4.dev202610220137+aaef3b6
+ARMS round 1 base rc=0 decode 14.20 prefill 86.1 ttft 5145.7 sha 554f1b11e9cab957 load1=0.48
+ARMS round 1 nplain rc=0 decode 14.20 prefill 85.9 ttft 5160.2 sha 554f1b11e9cab957 load1=0.46
+ARMS round 1 nwide rc=0 decode 14.00 prefill 86.1 ttft 5144.9 sha 554f1b11e9cab957 load1=0.50
+ARMS round 2 nplain rc=0 decode 14.20 prefill 86.2 ttft 5140.8 sha 554f1b11e9cab957 load1=0.56
+ARMS round 2 nwide rc=0 decode 14.00 prefill 86.2 ttft 5140.9 sha 554f1b11e9cab957 load1=0.53
+ARMS round 2 base rc=0 decode 14.20 prefill 85.9 ttft 5157.8 sha 554f1b11e9cab957 load1=0.44
+ARMS round 3 nwide rc=0 decode 14.00 prefill 86.1 ttft 5146.4 sha 554f1b11e9cab957 load1=0.50
+ARMS round 3 base rc=0 decode 14.20 prefill 86.2 ttft 5142.7 sha 554f1b11e9cab957 load1=0.50
+ARMS round 3 nplain rc=0 decode 14.20 prefill 86.2 ttft 5139.5 sha 554f1b11e9cab957 load1=0.42
+ARMS round 4 base rc=0 decode 14.20 prefill 86.2 ttft 5142.1 sha 554f1b11e9cab957 load1=0.44
+ARMS round 4 nplain rc=0 decode 14.20 prefill 86.1 ttft 5143.4 sha 554f1b11e9cab957 load1=0.56
+ARMS round 4 nwide rc=0 decode 14.00 prefill 86.1 ttft 5146.2 sha 554f1b11e9cab957 load1=0.47
+ARMS round 5 nplain rc=0 decode 14.20 prefill 86.2 ttft 5141.1 sha 554f1b11e9cab957 load1=0.40
+ARMS round 5 nwide rc=0 decode 14.00 prefill 86.1 ttft 5143.4 sha 554f1b11e9cab957 load1=0.43
+ARMS round 5 base rc=0 decode 14.20 prefill 86.1 ttft 5148.8 sha 554f1b11e9cab957 load1=0.71
+ARMS end 2026-10-22T02:42:13Z

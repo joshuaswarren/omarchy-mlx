@@ -1,0 +1,4 @@
+positions 0-159 tile1: top-1 agreement 312/320 (97.50%), mean abs log-prob error 0.02573
+positions 0-159 wide: top-1 agreement 311/320 (97.19%), mean abs log-prob error 0.02637
+positions 160-599 tile1: top-1 agreement 864/878 (98.41%), mean abs log-prob error 0.02899
+positions 160-599 wide: top-1 agreement 867/878 (98.75%), mean abs log-prob error 0.03067

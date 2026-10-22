@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Same as tfref.py, and also stores the log-sum-exp of the logits per step, so the top logit is top_v[:, 0] + lse.
+S=1 teacher-forced capture: one model forward per token, so the GDN decode kernel runs at every step.
+Writes one npz per text segment: ids, target_lp (log-prob of the next text token), top_i / top_v (top 20 ids and log-probs).
+usage: tfref.py --model DIR --text FILE --device gpu|cpu --dtype native|float32 --nseg N --maxtok T --stride S --budget SEC --out DIR
+A segment stops early when the wall budget is spent; the comparison uses the steps all arms share."""
+import argparse
+import os
+import time
+
+import numpy as np
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--model", required=True)
+ap.add_argument("--text", required=True)
+ap.add_argument("--device", choices=["gpu", "cpu"], default="gpu")
+ap.add_argument("--dtype", choices=["native", "float32"], default="native")
+ap.add_argument("--nseg", type=int, default=4)
+ap.add_argument("--maxtok", type=int, default=160)
+ap.add_argument("--stride", type=int, default=1500)
+ap.add_argument("--budget", type=float, default=1e9)
+ap.add_argument("--out", required=True)
+a = ap.parse_args()
+
+import mlx.core as mx  # noqa: E402
+
+if a.device == "cpu":
+    mx.set_default_device(mx.cpu)
+from mlx_lm import load  # noqa: E402
+from mlx_lm.models.cache import make_prompt_cache  # noqa: E402
+
+model, tok = load(a.model)
+if a.dtype == "float32":
+    model.set_dtype(mx.float32)
+all_ids = tok.encode(open(a.text, encoding="utf-8").read())
+os.makedirs(a.out, exist_ok=True)
+t0 = time.time()
+for s in range(a.nseg):
+    ids = all_ids[s * a.stride : s * a.stride + a.maxtok]
+    if len(ids) < 8 or time.time() - t0 > a.budget:
+        break
+    cache = make_prompt_cache(model)
+    tl, ti, tv, ls = [], [], [], []
+    for i in range(len(ids) - 1):
+        out = model(mx.array([[ids[i]]], dtype=mx.int32), cache=cache)
+        lp = out[0, -1].astype(mx.float32)
+        lse_v = mx.logsumexp(lp)
+        lp = lp - lse_v
+        idx = mx.argpartition(-lp, 19)[:20]
+        v = lp[idx]
+        order = mx.argsort(-v)
+        idx, v = idx[order], v[order]
+        mx.eval(lp[ids[i + 1]], idx, v, lse_v)
+        tl.append(float(lp[ids[i + 1]]))
+        ti.append(np.array(idx))
+        tv.append(np.array(v))
+        ls.append(float(lse_v))
+        if time.time() - t0 > a.budget:
+            break
+    n = len(tl)
+    np.savez(os.path.join(a.out, f"seg{s}.npz"), ids=np.array(ids[: n + 1]), target_lp=np.array(tl),
+             top_i=np.stack(ti), top_v=np.stack(tv), lse=np.array(ls))
+    print(f"TFREF seg {s} steps {n} device {a.device} dtype {a.dtype} elapsed {time.time() - t0:.1f}s", flush=True)
+print(f"TFREF done device {a.device} dtype {a.dtype} mlx {mx.__version__}", flush=True)

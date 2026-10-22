@@ -1,0 +1,25 @@
+ARMS start 2026-10-22T03:43:10Z boot=<id> kernel=7.1.12-2-12.6-sep-ARCH gov=performance load1=0.39 settle=
+ARMS llmstep 14f21df0d126ef48
+ARMS driver vulkan-f144c7949b model b0d5de688567bf4a mx=0.32.4.dev202610211005+a04423e libmlx=0f9e6d6529dae3a4
+ARMS pr tree libmlx a649ee784c9f61f9 mx=0.32.4.dev202610220317+ba12383
+ARMS round 1 base rc=0 decode 98.70 prefill 1306.4 ttft 339.5 sha c4ed7eeb93e2eda6 load1=0.44
+ARMS round 1 prdef rc=0 decode 102.50 prefill 1308.5 ttft 338.9 sha c4ed7eeb93e2eda6 load1=0.41
+ARMS round 1 prplain rc=0 decode 102.00 prefill 1307.2 ttft 339.3 sha c4ed7eeb93e2eda6 load1=0.37
+ARMS round 1 prtile1 rc=0 decode 98.70 prefill 1305.8 ttft 339.6 sha c4ed7eeb93e2eda6 load1=0.37
+ARMS round 2 prdef rc=0 decode 102.40 prefill 1298.5 ttft 341.5 sha c4ed7eeb93e2eda6 load1=1.14
+ARMS round 2 prplain rc=0 decode 101.60 prefill 1306.1 ttft 339.5 sha c4ed7eeb93e2eda6 load1=1.13
+ARMS round 2 prtile1 rc=0 decode 98.70 prefill 1305.8 ttft 339.6 sha c4ed7eeb93e2eda6 load1=1.12
+ARMS round 2 base rc=0 decode 99.00 prefill 1305.4 ttft 339.7 sha c4ed7eeb93e2eda6 load1=1.11
+ARMS round 3 prplain rc=0 decode 101.60 prefill 1304.6 ttft 339.9 sha c4ed7eeb93e2eda6 load1=1.02
+ARMS round 3 prtile1 rc=0 decode 98.70 prefill 1304.0 ttft 340.1 sha c4ed7eeb93e2eda6 load1=1.02
+ARMS round 3 base rc=0 decode 98.50 prefill 1305.4 ttft 339.7 sha c4ed7eeb93e2eda6 load1=0.94
+ARMS round 3 prdef rc=0 decode 102.30 prefill 1307.1 ttft 339.3 sha c4ed7eeb93e2eda6 load1=0.94
+ARMS round 4 prtile1 rc=0 decode 99.00 prefill 1305.1 ttft 339.8 sha c4ed7eeb93e2eda6 load1=0.87
+ARMS round 4 base rc=0 decode 98.80 prefill 1306.6 ttft 339.4 sha c4ed7eeb93e2eda6 load1=0.87
+ARMS round 4 prdef rc=0 decode 102.20 prefill 1305.8 ttft 339.6 sha c4ed7eeb93e2eda6 load1=1.60
+ARMS round 4 prplain rc=0 decode 101.80 prefill 1305.1 ttft 339.8 sha c4ed7eeb93e2eda6 load1=1.55
+ARMS round 5 base rc=0 decode 98.80 prefill 1304.9 ttft 339.8 sha c4ed7eeb93e2eda6 load1=1.51
+ARMS round 5 prdef rc=0 decode 102.40 prefill 1307.2 ttft 339.2 sha c4ed7eeb93e2eda6 load1=1.47
+ARMS round 5 prplain rc=0 decode 101.40 prefill 1307.1 ttft 339.3 sha c4ed7eeb93e2eda6 load1=1.43
+ARMS round 5 prtile1 rc=0 decode 98.90 prefill 1307.7 ttft 339.1 sha c4ed7eeb93e2eda6 load1=1.31
+ARMS end 2026-10-22T03:44:40Z

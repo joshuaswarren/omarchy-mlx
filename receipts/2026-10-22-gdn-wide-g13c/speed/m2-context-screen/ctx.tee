@@ -1,0 +1,35 @@
+CTX start 2026-10-22T02:08:55Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH gov=performance load1=0.20 settle=100
+CTX llmstep 14f21df0d126ef48
+CTX driver vulkan-f144c7949b model b0d5de688567bf4a mx=0.32.4.dev202610211005+a04423e libmlx=0f9e6d6529dae3a4
+CTX new tree libmlx fd536b16c05e08b0 mx=0.32.4.dev202610220201+aaef3b6
+CTX ctx 477 round 1 base rc=0 prompt 443 decode 101.30 prefill 1683.9 ttft 263.4 sha c4ed7eeb93e2eda6 load1=0.27
+CTX ctx 477 round 1 new rc=0 prompt 443 decode 105.00 prefill 1686.6 ttft 263.0 sha c4ed7eeb93e2eda6 load1=0.33
+CTX ctx 477 round 2 new rc=0 prompt 443 decode 105.90 prefill 1697.9 ttft 261.2 sha c4ed7eeb93e2eda6 load1=0.38
+CTX ctx 477 round 2 base rc=0 prompt 443 decode 101.10 prefill 1685.5 ttft 263.1 sha c4ed7eeb93e2eda6 load1=0.35
+CTX ctx 477 round 3 base rc=0 prompt 443 decode 101.60 prefill 1692.6 ttft 262.0 sha c4ed7eeb93e2eda6 load1=0.35
+CTX ctx 477 round 3 new rc=0 prompt 443 decode 105.20 prefill 1692.6 ttft 262.0 sha c4ed7eeb93e2eda6 load1=0.40
+CTX ctx 477 round 4 new rc=0 prompt 443 decode 105.60 prefill 1675.7 ttft 264.7 sha c4ed7eeb93e2eda6 load1=0.45
+CTX ctx 477 round 4 base rc=0 prompt 443 decode 101.90 prefill 1700.0 ttft 260.9 sha c4ed7eeb93e2eda6 load1=0.41
+CTX ctx 477 round 5 base rc=0 prompt 443 decode 101.50 prefill 1688.6 ttft 262.7 sha c4ed7eeb93e2eda6 load1=0.46
+CTX ctx 477 round 5 new rc=0 prompt 443 decode 106.00 prefill 1694.7 ttft 261.7 sha c4ed7eeb93e2eda6 load1=0.46
+CTX ctx 2048 round 1 base rc=0 prompt 1939 decode 75.90 prefill 2034.3 ttft 953.5 sha e79c710552eeb300 load1=0.54
+CTX ctx 2048 round 1 new rc=0 prompt 1939 decode 78.40 prefill 2037.2 ttft 952.1 sha e79c710552eeb300 load1=0.58
+CTX ctx 2048 round 2 new rc=0 prompt 1939 decode 78.20 prefill 2036.3 ttft 952.6 sha e79c710552eeb300 load1=0.61
+CTX ctx 2048 round 2 base rc=0 prompt 1939 decode 75.70 prefill 2035.6 ttft 952.9 sha e79c710552eeb300 load1=0.65
+CTX ctx 2048 round 3 base rc=0 prompt 1939 decode 75.70 prefill 2035.3 ttft 953.0 sha e79c710552eeb300 load1=0.59
+CTX ctx 2048 round 3 new rc=0 prompt 1939 decode 78.30 prefill 2037.6 ttft 952.0 sha e79c710552eeb300 load1=0.55
+CTX ctx 2048 round 4 new rc=0 prompt 1939 decode 78.40 prefill 2037.1 ttft 952.2 sha e79c710552eeb300 load1=0.58
+CTX ctx 2048 round 4 base rc=0 prompt 1939 decode 75.60 prefill 2033.3 ttft 953.9 sha e79c710552eeb300 load1=0.54
+CTX ctx 2048 round 5 base rc=0 prompt 1939 decode 75.70 prefill 2032.9 ttft 954.2 sha e79c710552eeb300 load1=0.49
+CTX ctx 2048 round 5 new rc=0 prompt 1939 decode 78.30 prefill 2034.7 ttft 953.3 sha e79c710552eeb300 load1=0.45
+CTX ctx 4096 round 1 base rc=0 prompt 3877 decode 56.50 prefill 1977.5 ttft 1960.9 sha e79c710552eeb300 load1=0.42
+CTX ctx 4096 round 1 new rc=0 prompt 3877 decode 56.20 prefill 1975.5 ttft 1962.9 sha 84c3cb520710c9d1 load1=0.43
+CTX ctx 4096 round 2 new rc=0 prompt 3877 decode 57.70 prefill 1977.5 ttft 1960.9 sha 84c3cb520710c9d1 load1=0.39
+CTX ctx 4096 round 2 base rc=0 prompt 3877 decode 56.40 prefill 1976.3 ttft 1962.1 sha e79c710552eeb300 load1=0.36
+CTX ctx 4096 round 3 base rc=0 prompt 3877 decode 56.60 prefill 1976.0 ttft 1962.4 sha e79c710552eeb300 load1=0.46
+CTX ctx 4096 round 3 new rc=0 prompt 3877 decode 57.80 prefill 1976.9 ttft 1961.5 sha 84c3cb520710c9d1 load1=0.42
+CTX ctx 4096 round 4 new rc=0 prompt 3877 decode 56.20 prefill 1977.3 ttft 1961.1 sha 84c3cb520710c9d1 load1=0.39
+CTX ctx 4096 round 4 base rc=0 prompt 3877 decode 55.00 prefill 1976.9 ttft 1961.6 sha e79c710552eeb300 load1=1.21
+CTX ctx 4096 round 5 base rc=0 prompt 3877 decode 56.40 prefill 1970.5 ttft 1967.9 sha e79c710552eeb300 load1=1.19
+CTX ctx 4096 round 5 new rc=0 prompt 3877 decode 56.20 prefill 1966.2 ttft 1972.2 sha 84c3cb520710c9d1 load1=1.16
+CTX end 2026-10-22T02:11:38Z

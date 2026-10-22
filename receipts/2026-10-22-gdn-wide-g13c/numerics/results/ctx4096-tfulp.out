@@ -1,0 +1,3 @@
+TFULP tile1: 0 flips, 0 near ties (margin <= 2 ULP), 0 beyond
+TFULP wide: 1 flips, 1 near ties (margin <= 2 ULP), 0 beyond
+  seg 0 step 79: ref top logit 23.874 margin 0.0254 ulp 0.1250 near tie
