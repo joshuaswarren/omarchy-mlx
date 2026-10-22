@@ -152,7 +152,15 @@ A fused route can avoid a composition's intermediate work, but cannot omit a req
 [`CompletionDispatcher::wait`](../overlay/mlx/backend/omarchy/device.cpp#L1851-L1891)
 includes timeline progress, completion handlers, and the drained-value join.
 The [drain](../overlay/mlx/backend/omarchy/device.cpp#L2027-L2085)
-invalidates noncoherent mappings and retires eligible resources before publishing its drained value.
+invalidates noncoherent mappings and releases eligible allocator-quarantine buffers through the previous generation
+before it publishes its drained value.
+Keepalive payloads, including retired descriptor pools
+([encoder.cpp:1201-1205](../overlay/mlx/backend/omarchy/encoder.cpp#L1201-L1205)),
+retire one generation later. The drain moves the previous payload aside, publishes the drained value,
+and frees that payload when the function returns
+([device.cpp:2077-2084](../overlay/mlx/backend/omarchy/device.cpp#L2077-L2084)).
+The current batch's payload stays in `retired_temporaries_`.
+The drained value is therefore not one point at which every resource is gone.
 [`join_last_completion`](../overlay/mlx/backend/omarchy/encoder.cpp#L284-L300)
 also refreshes mappings after its wait.
 The allocator maintains a list of noncoherent allocations; coherent allocations need no Vulkan flush/invalidate range
@@ -185,8 +193,16 @@ GPU counters alone do not count explicit CPU-stream execution.
 The dispatch event's host timer starts after descriptor allocation and update.
 It therefore cannot measure those earlier costs
 ([encoder.cpp:660-721](../overlay/mlx/backend/omarchy/encoder.cpp#L660-L721)).
-Compiled graph preparation and Python scheduling also sit outside that timer.
+In the default path, compiled graph preparation and Python scheduling also sit outside that timer.
 Separate CPU spans are required to attribute those costs.
+
+With wave scheduling on, the timer starts when the node is buffered
+([encoder.cpp:691](../overlay/mlx/backend/omarchy/encoder.cpp#L691))
+and stops when `submit()` emits it
+([encoder.cpp:1036](../overlay/mlx/backend/omarchy/encoder.cpp#L1036)).
+That interval can include later graph preparation, other nodes' descriptor work, wave planning
+and a command-buffer slot wait, and the intervals of several pending nodes can cover the same work.
+Read it as arrival-to-emission latency, not per-dispatch recording cost.
 
 For a comparable result, record source/wheel identity, model hashes, input IDs, request options,
 cache state, device/driver, fusion policy, and materialization boundaries.
