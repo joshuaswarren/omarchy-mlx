@@ -1,0 +1,15 @@
+IDLE-GUARD-JOB-START 20261022T013709Z lane=<lane> <host> main wheel build at aaef3b6: CPU build of the mlx-omarchy wheel of main (wide GDN decode kernel) with the ledger work directory, unpacked into a tree, no GPU kernel runs, no measurement
+KERNEL-CMDLINE <vendor>-words:  kernel=7.1.12-2-12.6-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=2.23 SETTLE-SKIPPED
+GPU-TIMEOUTS before=0 boot=<id>-e9a5-418b-8d3c-4a930b4937e0
+building omarchy-mlx aaef3b6c95832c9cfcfcced3bd37d50b9bdc0c3e start 2026-10-22T01:37:15Z kernel 7.1.12-2-12.6-sep-ARCH boot <id> load1 2.14
+wheel mlx_omarchy-0.32.4.dev202610220137+aaef3b6-cp314-cp314-linux_aarch64.whl sha256 33baee59d0e1d3732d68d37607a628ec9b07a7bdd764ea38f06e6b17968c163a
+tree libmlx 62cc77d961d3ead6
+PF_WIDE strings 1
+done 2026-10-22T01:38:50Z wheel rc 0
+GPU-TIMEOUTS after=0 delta=0
+628ec9b07a7bdd764ea38f06e6b17968c163a
+tree libmlx 62cc77d961d3ead6
+PF_WIDE strings 1
+done 2026-10-22T01:38:50Z wheel rc 0

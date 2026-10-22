@@ -12786,8 +12786,9 @@ void GatedDeltaUpdate::eval_gpu(
   const bool bf16a_untiled_default = decode_shape && raw_gates_mode &&
       A_log.dtype() == bfloat16 && !gqa_bf16a && decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
       omarchy::gdn_bf16a_untiled_default(encoder.device().capabilities().device_name, Hk, Hv);
-  // Equal head counts as the model has them: Hk is set to Hv below once q and k are expanded.
-  const bool equal_heads_default = bf16a_untiled_default && Hk == Hv;
+  // Read before the q and k expansion below, which sets Hk to Hv: the wide default is keyed on the model's own head counts.
+  const bool wide_default = bf16a_untiled_default &&
+      omarchy::gdn_pf_wide_default(encoder.device().capabilities().device_name, Hk, Hv);
   if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a && !pf_gqa) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
@@ -12892,10 +12893,10 @@ void GatedDeltaUpdate::eval_gpu(
     const bool composed = (params.flags & 512u) != 0u;
     // The untiled prefetch kernel with thirty-two state words in flight per round trip (default order only, Dk a multiple of 32).
     // MLX_OMARCHY_GDN_PF_WIDE (read live): 1 selects it, any other set value selects the plain prefetch kernel; unset, it is the
-    // default where bf16a_untiled_default holds at equal head counts (G14C, Qwen3.8-2B). Other shapes keep the plain kernel.
+    // default on the (part, head ratio) pairs of gdn_pf_wide_default (equal head counts on G14C and G13C). Other shapes keep the plain kernel.
     const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
     const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
-                                                      : equal_heads_default;
+                                                      : wide_default;
     const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
     const omarchy::ComputeKernel kernel = decode_tile
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed

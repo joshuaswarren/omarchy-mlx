@@ -1,0 +1,9 @@
+G16 start 2026-10-22T02:44:31Z boot=<id> kernel=7.1.12-2-12.6-sep-ARCH governor=performance load1=2.23
+G16 tfref 96ba38759d169339 text 3972dc9744f6499f model b0d5de688567bf4a new libmlx 62cc77d961d3ead6 old libmlx 0f9e6d6529dae3a4
+G16 arm tile1-short rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 4
+G16 arm wide-short rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610220137+aaef3b6 files 4
+G16 arm plain-short rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610220137+aaef3b6 files 4
+G16 arm tile1-long rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 2
+G16 arm wide-long rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610220137+aaef3b6 files 2
+G16 arm plain-long rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610220137+aaef3b6 files 2
+G16 end 2026-10-22T02:46:06Z

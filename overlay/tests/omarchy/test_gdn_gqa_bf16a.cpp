@@ -428,12 +428,13 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
 // faster decode) and on G14C at ratio 3 (about 6 percent) and at equal head counts (about 2.8 percent with the plain prefetch kernel, 3.7 percent with the wide one); ratio 2 was not measured there. It is not bit-equal to the tiled kernel,
 // so the case does not compare the default with the tiled run. Every other part keeps its previous default. Explicit
 // MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) keeps the previous default.
-// Equal head counts (Qwen3.8-2B) take the untiled kernel on G14C and keep the previous default elsewhere.
+// Equal head counts (Qwen3.8-2B) take the untiled kernel on G14C and G13C (the wide one) and keep the previous default elsewhere.
 TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it") {
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 32));
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 48));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 64));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 16));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 24));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 0, 0));
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 48));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 32));
@@ -441,6 +442,14 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 16));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 24));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 0, 0));
+  // The wide prefetch kernel is the default only at equal head counts, on the two parts it was measured on.
+  CHECK(omarchy::gdn_pf_wide_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M2 Max (G14C B1)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 (G13G B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 0, 0));
   for (const char* other : {"Apple M1 (G13G B1)", "Apple M1 Ultra (G13D C0)", "llvmpipe (LLVM 15.0.6, 256 bits)"}) {
     CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 32));
     CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 48));
@@ -509,7 +518,7 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
     EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
     CHECK_EQ(r.kernel, legacy ? untiled : tiled);
   }
-  // Equal head counts (16 and 16, Qwen3.8-2B): no GQA. The untiled kernel is the default on G14C (measured) and on the legacy G13
+  // Equal head counts (16 and 16, Qwen3.8-2B): no GQA. The untiled kernel is the default on G14C and G13C (measured, the wide kernel) and on the legacy G13
   // parts; every other part keeps the tiled kernel. The switches behave as at the other ratios.
   {
     Shape27 eq;

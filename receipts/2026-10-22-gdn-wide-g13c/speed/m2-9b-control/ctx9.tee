@@ -1,0 +1,25 @@
+CTX9 start 2026-10-22T02:12:46Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH gov=performance load1=0.39 settle=100
+CTX9 llmstep 14f21df0d126ef48
+CTX9 driver vulkan-f144c7949b model dd023913fb87cfda mx=0.32.4.dev202610211005+a04423e libmlx=0f9e6d6529dae3a4
+CTX9 new tree libmlx fd536b16c05e08b0 mx=0.32.4.dev202610220201+aaef3b6
+CTX9 ctx 477 round 1 base rc=0 prompt 443 decode 41.50 prefill 437.7 ttft 1012.4 sha 9a142db605d5939d load1=0.41
+CTX9 ctx 477 round 1 new rc=0 prompt 443 decode 41.50 prefill 436.8 ttft 1014.7 sha 9a142db605d5939d load1=0.45
+CTX9 ctx 477 round 2 new rc=0 prompt 443 decode 41.60 prefill 437.3 ttft 1013.5 sha 9a142db605d5939d load1=1.35
+CTX9 ctx 477 round 2 base rc=0 prompt 443 decode 41.80 prefill 438.3 ttft 1011.2 sha 9a142db605d5939d load1=1.24
+CTX9 ctx 477 round 3 base rc=0 prompt 443 decode 41.50 prefill 437.1 ttft 1013.9 sha 9a142db605d5939d load1=1.93
+CTX9 ctx 477 round 3 new rc=0 prompt 443 decode 41.80 prefill 437.2 ttft 1013.6 sha 9a142db605d5939d load1=1.86
+CTX9 ctx 477 round 4 new rc=0 prompt 443 decode 41.60 prefill 436.6 ttft 1015.1 sha 9a142db605d5939d load1=2.61
+CTX9 ctx 477 round 4 base rc=0 prompt 443 decode 41.70 prefill 438.1 ttft 1011.5 sha 9a142db605d5939d load1=2.36
+CTX9 ctx 477 round 5 base rc=0 prompt 443 decode 41.50 prefill 437.3 ttft 1013.3 sha 9a142db605d5939d load1=2.17
+CTX9 ctx 477 round 5 new rc=0 prompt 443 decode 41.70 prefill 436.5 ttft 1015.4 sha 9a142db605d5939d load1=1.99
+CTX9 ctx 2048 round 1 base rc=0 prompt 1939 decode 34.50 prefill 419.0 ttft 4628.6 sha 9a142db605d5939d load1=1.77
+CTX9 ctx 2048 round 1 new rc=0 prompt 1939 decode 34.50 prefill 413.1 ttft 4694.4 sha 9a142db605d5939d load1=1.93
+CTX9 ctx 2048 round 2 new rc=0 prompt 1939 decode 34.50 prefill 417.5 ttft 4644.3 sha 9a142db605d5939d load1=1.79
+CTX9 ctx 2048 round 2 base rc=0 prompt 1939 decode 34.50 prefill 422.7 ttft 4587.3 sha 9a142db605d5939d load1=1.67
+CTX9 ctx 2048 round 3 base rc=0 prompt 1939 decode 34.60 prefill 433.3 ttft 4475.9 sha 9a142db605d5939d load1=1.45
+CTX9 ctx 2048 round 3 new rc=0 prompt 1939 decode 34.60 prefill 443.1 ttft 4376.6 sha 9a142db605d5939d load1=1.38
+CTX9 ctx 2048 round 4 new rc=0 prompt 1939 decode 34.60 prefill 447.8 ttft 4330.6 sha 9a142db605d5939d load1=1.24
+CTX9 ctx 2048 round 4 base rc=0 prompt 1939 decode 34.50 prefill 451.4 ttft 4295.7 sha 9a142db605d5939d load1=1.03
+CTX9 ctx 2048 round 5 base rc=0 prompt 1939 decode 34.60 prefill 454.1 ttft 4270.8 sha 9a142db605d5939d load1=0.87
+CTX9 ctx 2048 round 5 new rc=0 prompt 1939 decode 34.50 prefill 454.2 ttft 4269.6 sha 9a142db605d5939d load1=0.81
+CTX9 end 2026-10-22T02:16:01Z
