@@ -26,8 +26,7 @@ struct Counters {
   std::atomic<uint64_t> vk_buffer_fills{0};
   // Number of recorded Vulkan compute dispatches.
   std::atomic<uint64_t> vk_compute_dispatches{0};
-  // Descriptor write counts from dispatch ComputeBinding updates (one
-  // write per binding). Structural: moves with vk_compute_dispatches.
+  // Descriptor writes from compute dispatches; one spans all bound buffers.
   std::atomic<uint64_t> vk_descriptor_update_writes{0};
   // Dependency-barrier decisions (MLX_OMARCHY_GATED_BARRIERS accounting;
   // the default unconditional path counts every pre+post dispatch
