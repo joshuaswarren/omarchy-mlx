@@ -67,7 +67,7 @@ Clone this repository first; both scripts live in `scripts/`:
 
 ```bash
 git clone https://github.com/joshuaswarren/omarchy-mlx.git
-cd mlx-omarchy
+cd omarchy-mlx
 ```
 
 Two paths exist. Both support Linux and macOS. They need different setups.
