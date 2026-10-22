@@ -73,6 +73,9 @@ The backend must implement MLX storage and arithmetic semantics with Vulkan pack
 A missing native format does not permit CPU fallback.
 Each storage-buffer binding covers its array's bytes, not the binned allocation behind it (up to 12.5% larger), and a binding past the device's `maxStorageBufferRange` (2 GiB - 1 on Honeykrisp) is refused by name before the driver sees it.
 
+The [Vulkan decode execution guide](decode-execution.md) maps graph evaluation,
+descriptor updates, submission, synchronization, and host costs to their source paths.
+
 ## ANE integration
 
 ANE integration starts after the `v0.5.0` Vulkan compatibility release.
