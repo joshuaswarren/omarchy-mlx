@@ -28,7 +28,7 @@ This change, `MLX_OMARCHY_GDN_DECODE_TILE=0 MLX_OMARCHY_GDN_PF_WIDE=0` (plain ke
 
 This change, `MLX_OMARCHY_GDN_DECODE_TILE=1` (tiled kernel): 98.7 tok/s, +0.1%, rounds 0.0 -0.3 +0.2 +0.2 +0.1.
 
-The change is the median of the per-round paired changes against main, as in PR 252. The tiled arm equals main, so the PR wheel and the main wheel do not differ by build. The script gates the load only at its start. The load average read 0.37 to 1.1 in rounds 1 to 3 and 0.87 to 1.6 in rounds 4 and 5. The median of rounds 1 to 3 alone is +3.85%, so the late load does not raise the result. `speed/summarize-arms.py arms.tee` prints this list from the log.
+The change is the median of the per-round paired changes against main, as in PR 252. The tiled arm equals main, so the PR wheel and the main wheel do not differ by build. The script gates the load only at its start. The load average read 0.37 to 1.14 in rounds 1 to 3 and 0.87 to 1.6 in rounds 4 and 5. The median of rounds 1 to 3 alone is +3.85%, so the late load does not raise the result. `speed/summarize-arms.py arms.tee` prints this list from the log.
 
 ## Earlier screen on the main wheel (speed/m1max-first-screen/)
 
