@@ -1,7 +1,8 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// Split-K bf16 single-query decode SDPA (sdpa_decode_split_p1.comp + sdpa_decode_split_p2.comp, routed by MLX_OMARCHY_SDPA_DECODE_SPLIT=1). The route
+// Split-K bf16 single-query decode SDPA (sdpa_decode_split_p1.comp + sdpa_decode_split_p2.comp, routed by MLX_OMARCHY_SDPA_DECODE_SPLIT=1 and by default on the
+// parts of omarchy::sdpa_split_min_keys). The route
 // computes in float32 in a different order from the fused kernel, so it is gated against a float64 reference, not against the fused kernel's bits:
 // the maximum error of the split route against float64 must be no larger than the fused route's maximum error plus two half steps of the largest
 // reference value (one bf16 rounding step, ref * 2^-8), the mean error no larger than the fused mean plus a quarter of that half step pair, and
@@ -242,7 +243,7 @@ TEST_CASE("split-K decode SDPA: one-hot values and uniform scores expose a dropp
   }
 }
 
-TEST_CASE("split-K decode SDPA: misaligned K views and the unset flag keep the fused route") {
+TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the unset flag follows the part rule") {
   if (!compute_available()) {
     return;
   }
@@ -263,17 +264,39 @@ TEST_CASE("split-K decode SDPA: misaligned K views and the unset flag keep the f
     CHECK(on.launched == off.launched);
     CHECK(on.out == off.out);
   }
-  // Flag unset: the default rule is off, so the fused route runs with the fused bits and dispatch count.
-  Stored k_full = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * 128, 6, 1.0f), Shape{1, kv_heads, keys, 128}, stream);
-  Run off = run_attention(q.x, k_full.x, v.x, scale, "0", stream);
+  // Flag unset: the route follows the part rule of this device at 300 keys and at 1000 keys, with the bits and dispatch count of the route it names.
+  const std::string part = omarchy::device(0).capabilities().device_name;
+  for (int n : {300, 1000}) {
+    Stored kn = make_bf16(pattern(static_cast<size_t>(kv_heads) * n * 128, 6, 1.0f), Shape{1, kv_heads, n, 128}, stream);
+    Stored vn = make_bf16(pattern(static_cast<size_t>(kv_heads) * n * 128, 7, 1.0f), Shape{1, kv_heads, n, 128}, stream);
+    Run fused = run_attention(q.x, kn.x, vn.x, scale, "0", stream);
+    Run split = run_attention(q.x, kn.x, vn.x, scale, "1", stream);
+    const bool want_split = split_device_ready() && omarchy::sdpa_split_default(part, static_cast<uint32_t>(n));
+    unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+    uint64_t before = dispatches();
+    array r = fast::scaled_dot_product_attention(q.x, kn.x, vn.x, scale, "", {}, std::nullopt, false, stream);
+    r.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    CHECK(dispatches() - before == (want_split ? split.launched : fused.launched));
+    CHECK(flat(r, stream) == (want_split ? split.out : fused.out));
+  }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
-  uint64_t before = dispatches();
-  array r = fast::scaled_dot_product_attention(q.x, k_full.x, v.x, scale, "", {}, std::nullopt, false, stream);
-  r.eval();
-  omarchy::get_command_encoder(stream).synchronize();
-  CHECK(dispatches() - before == off.launched);
-  CHECK(flat(r, stream) == off.out);
-  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}
+
+TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
+  CHECK(omarchy::sdpa_split_min_keys("Apple M1 (G13G B1)") == 128);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M1 Max (G13C C0)") == 320);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Max (G14C B1)") == 448);
+  CHECK(omarchy::sdpa_split_min_keys("") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 0);
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 447));
+  CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 448));
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 319));
+  CHECK(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 320));
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 127));
+  CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 128));
+  CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 1048576));
+  CHECK_FALSE(omarchy::sdpa_split_default("", 4096));
 }
 
 TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {
