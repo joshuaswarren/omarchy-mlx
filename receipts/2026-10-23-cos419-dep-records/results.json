@@ -1,5 +1,5 @@
 {
-  "status": "not accepted as a performance speedup; candidate remains draft",
+  "status": "not accepted as a performance speedup; candidate reverted, receipt only",
   "hardware": {
     "gpu": "Apple M1 Max G13C",
     "gpu_cores": 32,
