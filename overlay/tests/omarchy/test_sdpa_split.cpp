@@ -3,9 +3,11 @@
 
 // Split-K bf16 single-query decode SDPA (sdpa_decode_split_p1.comp + sdpa_decode_split_p2.comp, routed by MLX_OMARCHY_SDPA_DECODE_SPLIT=1). The route
 // computes in float32 in a different order from the fused kernel, so it is gated against a float64 reference, not against the fused kernel's bits:
-// the error of the split route against float64 must be no larger than the fused route's error plus one bf16 rounding step, at every cache length
-// and group size; it must be exactly two dispatches; and shapes it does not cover must keep their previous dispatch count. The route assertions run
-// only when the device has 32-lane subgroup arithmetic (the guard of the route), so software drivers skip them by name.
+// the maximum error of the split route against float64 must be no larger than the fused route's maximum error plus two half steps of the largest
+// reference value (one bf16 rounding step, ref * 2^-8), the mean error no larger than the fused mean plus a quarter of that half step pair, and
+// the maximum error at most three steps; it must be exactly two dispatches; and shapes it does not cover must keep their previous dispatch count
+// and bits. A one-hot value pattern with uniform scores makes a dropped or doubled key visible. The route assertions run only when the device has
+// 32-lane subgroup arithmetic (the guard of the route); otherwise the cases print Skipping.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
@@ -157,13 +159,23 @@ Errors error_against(const std::vector<float>& out, const std::vector<double>& r
   return {sum / static_cast<double>(ref.size()), worst};
 }
 
-// One decode shape: heads, kv heads, cache keys, capacity of the cache buffer, first key of the view.
-void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start, float amplitude) {
+// One decode shape: heads, kv heads, cache keys, capacity of the cache buffer, first key of the view. With one_hot the scores are uniform (K = 0)
+// and the values are one-hot rows: output d is the share of keys whose index modulo the width is d, so a dropped or doubled key moves it.
+void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start, float amplitude, bool one_hot = false) {
   const int width = 128;
   Stream stream = gpu_stream();
   Stored q = make_bf16(pattern(static_cast<size_t>(heads) * width, 11, amplitude), Shape{1, heads, 1, width}, stream);
-  Stored kfull = make_bf16(pattern(static_cast<size_t>(kv_heads) * capacity * width, 23, amplitude), Shape{1, kv_heads, capacity, width}, stream);
-  Stored vfull = make_bf16(pattern(static_cast<size_t>(kv_heads) * capacity * width, 37, 1.0f), Shape{1, kv_heads, capacity, width}, stream);
+  std::vector<float> k_host = pattern(static_cast<size_t>(kv_heads) * capacity * width, 23, amplitude);
+  std::vector<float> v_host = pattern(static_cast<size_t>(kv_heads) * capacity * width, 37, 1.0f);
+  if (one_hot) {
+    std::fill(k_host.begin(), k_host.end(), 0.0f);
+    for (size_t i = 0; i != v_host.size(); ++i) {
+      size_t key = (i / width) % capacity;
+      v_host[i] = (i % width) == (key % width) ? 1.0f : 0.0f;
+    }
+  }
+  Stored kfull = make_bf16(k_host, Shape{1, kv_heads, capacity, width}, stream);
+  Stored vfull = make_bf16(v_host, Shape{1, kv_heads, capacity, width}, stream);
   array k = slice(kfull.x, Shape{0, 0, key_start, 0}, Shape{1, kv_heads, key_start + keys, width}, stream);
   array v = slice(vfull.x, Shape{0, 0, key_start, 0}, Shape{1, kv_heads, key_start + keys, width}, stream);
   const float scale = 1.0f / std::sqrt(static_cast<float>(width));
@@ -175,6 +187,8 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   INFO("heads " << heads << " kv " << kv_heads << " keys " << keys << " start " << key_start << " split launches " << split.launched);
   if (split_device_ready()) {
     CHECK(split.launched == 2);
+  } else {
+    printf("Skipping: split route not available on this device\n");
   }
   // The output is bf16: one rounding step of the largest reference magnitude bounds the representable difference.
   double rounding = 0.0;
@@ -215,6 +229,51 @@ TEST_CASE("split-K decode SDPA: strided cache views") {
   check_shape(32, 8, 500, 640, 0, 1.0f);
   check_shape(32, 8, 333, 640, 24, 1.0f);
   check_shape(32, 8, 130, 640, 5, 1.0f);
+}
+
+TEST_CASE("split-K decode SDPA: one-hot values and uniform scores expose a dropped or doubled key") {
+  if (!compute_available()) {
+    return;
+  }
+  for (int keys : {127, 128, 129, 255, 256, 257, 500}) {
+    for (int kv_heads : {8, 4, 2, 1}) {
+      check_shape(32, kv_heads, keys, keys, 0, 1.0f, true);
+    }
+  }
+}
+
+TEST_CASE("split-K decode SDPA: misaligned K views and the unset flag keep the fused route") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int heads = 32;
+  const int kv_heads = 8;
+  const int keys = 300;
+  const int stored_width = 130;
+  Stored q = make_bf16(pattern(static_cast<size_t>(heads) * 128, 3, 1.0f), Shape{1, heads, 1, 128}, stream);
+  Stored kw = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * stored_width, 4, 1.0f), Shape{1, kv_heads, keys, stored_width}, stream);
+  Stored v = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * 128, 5, 1.0f), Shape{1, kv_heads, keys, 128}, stream);
+  const float scale = 1.0f / std::sqrt(128.0f);
+  // Key stride 130 (not a multiple of 8), then the same with a one-element start offset: both fall back to the previous route, bits and dispatches.
+  for (int start : {0, 1}) {
+    array k = slice(kw.x, Shape{0, 0, 0, start}, Shape{1, kv_heads, keys, start + 128}, stream);
+    Run off = run_attention(q.x, k, v.x, scale, "0", stream);
+    Run on = run_attention(q.x, k, v.x, scale, "1", stream);
+    CHECK(on.launched == off.launched);
+    CHECK(on.out == off.out);
+  }
+  // Flag unset: the default rule is off, so the fused route runs with the fused bits and dispatch count.
+  Stored k_full = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * 128, 6, 1.0f), Shape{1, kv_heads, keys, 128}, stream);
+  Run off = run_attention(q.x, k_full.x, v.x, scale, "0", stream);
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+  uint64_t before = dispatches();
+  array r = fast::scaled_dot_product_attention(q.x, k_full.x, v.x, scale, "", {}, std::nullopt, false, stream);
+  r.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  CHECK(dispatches() - before == off.launched);
+  CHECK(flat(r, stream) == off.out);
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
 
 TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {
