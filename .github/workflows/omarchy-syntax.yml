@@ -95,7 +95,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build glslang-tools libvulkan-dev \
-            libopenblas-dev libblas-dev liblapack-dev liblapacke-dev
+            libopenblas-dev libblas-dev liblapack-dev liblapacke-dev mesa-vulkan-drivers
       - name: Prepare patched MLX tree
         run: bash scripts/prepare-mlx.sh
       - name: Configure (CPU-only, omarchy backend, unit tests)
@@ -108,9 +108,19 @@ jobs:
             -DMLX_BUILD_TESTS=ON -DMLX_BUILD_EXAMPLES=OFF \
             -DMLX_BUILD_BENCHMARKS=OFF -DMLX_BUILD_PYTHON_BINDINGS=OFF \
             -DCMAKE_BUILD_TYPE=Release
-      - name: Build the translator unit tests (pulls in CPU libmlx)
+      - name: Build translator and vocabulary-tail unit tests
         run: |
           cmake --build .work/build --target omarchy_shaders
-          cmake --build .work/build --target omarchy_custom_kernel_translate_tests
+          cmake --build .work/build --target omarchy_custom_kernel_translate_tests omarchy_vocab_tail_tests
       - name: Run the translator unit tests
         run: ctest --test-dir .work/build -R omarchy_custom_kernel_translate_tests --output-on-failure
+      - name: Run vocabulary-tail parity tests (software Vulkan)
+        env:
+          MLX_OMARCHY_ALLOW_NON_APPLE: "1"
+        run: |
+          set -o pipefail
+          icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+          [[ ${#icds[@]} -eq 1 && -f ${icds[0]} ]]
+          export VK_DRIVER_FILES="${icds[0]}"
+          .work/build/tests/omarchy/omarchy_vocab_tail_tests | tee .work/vocab-tail.out
+          ! grep -q 'Skipping:' .work/vocab-tail.out
