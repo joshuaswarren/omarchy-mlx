@@ -1,4 +1,4 @@
-87be304230c86b93d0ed40e03e8c9686035da562dcad93701342d5ded30f0f45  ./README.md
+300c891341a8bf11c96c53ca5d9f1cf2ae6af4699d0195cbb24eb6c1cd85db56  ./README.md
 900607bb04cc746f47ae960f5a1f7ae45549b20d191c1f5983bbb2a2aeead47a  ./numerics/apple-m1-gdiv/run.log
 53bae29f9c2b288264f3f3ebb40a533de54d83908588df8b0f0ccbd15b95545e  ./numerics/apple-m1-max-short/run.log
 6041be7bac4f94e44c9b0fcbe04de6aa44199805230dcc99114da4fb5d789c0f  ./numerics/apple-m1-ref/run.log
@@ -24,6 +24,9 @@ c7ccfbeacf852a5719efaf40e6bb669143c7a9d8ed46dd70ec61faf0054549a1  ./numerics/app
 afa9249f732fc8ed5934a8165c95a3bdc7eb913204e2fc7cc1676592e68fd5f7  ./numerics/bias-apple-m1-max/run.log
 2a5937183c6f2b624b166619494a28961c427fdb569fc634f618d0f377406c6c  ./numerics/bias-apple-m1/run.log
 d2813f11d532785ac354d80ff840da83aeb6e8e32bfac8c2d16c21fab232a83c  ./prereg.txt
+b92249201378342588a891e497f61df77ef3e27253fc6b445f756c7a6203bfce  ./provenance/apple-m1-max.txt
+b92249201378342588a891e497f61df77ef3e27253fc6b445f756c7a6203bfce  ./provenance/apple-m1.txt
+b92249201378342588a891e497f61df77ef3e27253fc6b445f756c7a6203bfce  ./provenance/apple-m2-max.txt
 690d341c72e808e789f1adfa2f53ee80c9c5747263cd447131abd532b370b847  ./run-logs/doctest-apple-m1-max.log
 63823ee1ddd2793fbc720f488b980be30afde509738590d352ab99d12bd093a2  ./run-logs/doctest-apple-m1.log
 4fb735fc0f185f7e63528255078f95e49cceb3cb8960ebbb5feb50c1bde862cf  ./run-logs/doctest-binaries-apple-m2-max.sha256
@@ -84,6 +87,6 @@ d70a503c3f5bb3bf41228c99cbd3bfd0f27d194f996112eeb807d7d95236730b  ./sweeps/sd4-a
 0d2a6a64283594c864d487eabe57a6773bb5caff1089e8d2535ad227ba5a075d  ./tables/long-cache-chain-us.tsv
 ce94709748cc8eefa25cb79fc9e20cd4ee09fcf06ec2b6c8dc658b3c222ab1a7  ./tables/numerics-long-7600-steps.tsv
 73f1cd968e691c40d20861ddb015d79c6645a822cd47121ba4d0e1e7a4925685  ./tables/numerics-short-636-steps.tsv
-35fd1387c3ca79735a5f728159414c21c8ddc54bf51b6d36f49fbd75a9e9b623  ./tables/order-controls-7600-steps.tsv
+2268d25b43b072b85e50b064959c6e6520b5e78f5866e4f781b70060aba57718  ./tables/order-controls-7600-steps.tsv
 1be23eda307c13fb8045ec1c5b875c8c39554ac03a90cced37442d5c8775e41b  ./tables/speed-1888-tokens.tsv
 482633f45e9612c2e88488ca14c462c453dcc2190a32951af822d616120a3864  ./tables/speed-477-tokens.tsv

@@ -22,13 +22,15 @@ Kernel strings are named with every number. "Stock" is 7.1.12-2-20261013.18-sep-
 
 Two trees were built from the branch and unpacked from their wheels. The break-even sweeps and the first decode screens ran on commit 01e82560 (mlx_omarchy 0.32.4.dev202610230958+01e8256, libmlx prefix `031d1d1063630006`). The final speed, long-cache, numerics and divergence runs ran on commit 6943e37a (0.32.4.dev202610231240+6943e37, libmlx prefix `8533393455ca0f8c`). Both commits have the same kernels and routing. The later one adds the per-part default, its tests and the docs text.
 
-The ledger arm of every screen is the installed wheel mlx_omarchy 0.32.4.dev202610231001+48908ca (libmlx `a9738db49ca96906`). That wheel already has the chunked vocabulary-tail default on G14C. The model is Qwen3-4B 4-bit from mlx-community (index sha256 prefix `f7825defe5865d17`), with 36 layers and 32 query heads over 8 key-value heads of width 128.
+The ledger arm of every screen is the installed wheel mlx_omarchy 0.32.4.dev202610231001+48908ca (libmlx `a9738db49ca96906`). That wheel already has the chunked vocabulary-tail default on G14C. `provenance/<chip>.txt` holds the output of `scripts/mlx_provenance.py` for the final tree on each chip. The loaded `mlx.core` extension and `libmlx.so` hash to the wheel RECORD, and the compiled version equals the distribution version. Every run on the final commit used this unpacked tree.
+
+The model is Qwen3-4B 4-bit from mlx-community (index sha256 prefix `f7825defe5865d17`), with 36 layers and 32 query heads over 8 key-value heads of width 128.
 
 ## Break-even sweep
 
 Files: `sweeps/sd3-*.tee`, table `tables/break-even-chain-us.tsv`. The sweep times single-query grouped-query attention at cache lengths 128 to 1024. Each point is the median of 7 repetitions. Two shapes of work run: 36 independent calls on distinct caches, and a 36-call chain where each output is the next query. The chain is the shape of a decode step.
 
-The split route costs a flat 79 to 90 microseconds per call because it takes two dispatches. The fused kernel walks the keys serially and costs about 0.7 microseconds per key on the Apple M1. The thresholds are the smallest measured length where the split route is faster in both shapes of work. On independent calls the Apple M1 reads 76.8 against 76.1 microseconds at 128 keys. The Apple M1 Max reads 84.0 against 78.2 at 320 keys. The Apple M2 Max reads 79.4 against 78.6 at 448 keys. The first sweep (`sweeps/sd2-*.tee`) shows the same crossover near 256 and 500 keys.
+The split route costs 79 to 90 microseconds per call up to 512 keys because it takes two dispatches. The cost reaches 89 to 113 microseconds at 1024 keys. The fused kernel walks the keys serially and costs about 0.7 microseconds per key on the Apple M1. The thresholds are the smallest measured length where the split route is faster in both shapes of work. On independent calls the Apple M1 reads 76.8 against 76.1 microseconds at 128 keys. The Apple M1 Max reads 84.0 against 78.2 at 320 keys. The Apple M2 Max reads 79.4 against 78.6 at 448 keys. The first sweep (`sweeps/sd2-*.tee`) shows the same crossover near 256 and 500 keys.
 
 ## Long cache
 
@@ -90,11 +92,11 @@ Four more bf16 arms differ from the old route only in how the single-query atten
 
 The plain arm sums over the keys in cache order. It equals the old route bit for bit at 7599 of 7599 steps. The fused kernel is documented as bit-identical to this composition, and the per-op test below confirms it. So the plain arm duplicates the old route by construction.
 
-The `blk` arm runs the split-K algorithm in float32 stock ops. It uses blocks of 128 keys, a block maximum, exp, a block sum, weighted values, a global-maximum rescale and a fold. Its NLL is 1.39807, which is +0.00336 against the reference. The `perm` arm sums over a random permutation of the keys, drawn anew at every step. Its NLL is 1.39845 (+0.00373). The `rev` arm reverses the key axis. Its NLL is 1.40152 (+0.00681).
+The `blk` arm runs the split-K algorithm in float32 stock ops. It uses blocks of 128 keys, a block maximum, exp, a block sum, weighted values, a global-maximum rescale and a fold. Its NLL is 1.39807, which is +0.00336 against the reference. The `perm` arm sums over a random permutation of the keys. The permutation is seeded by the cache length, so it is new at every step. Its NLL is 1.39845 (+0.00373). The `rev` arm reverses the key axis. Its NLL is 1.40152 (+0.00681).
 
 The old route is +0.00350. The split kernel is +0.00617. Paired against the old route, `blk` reads -0.00014 (interval -0.00229 to +0.00201), `perm` +0.00024, the split kernel +0.00268 and `rev` +0.00331 (interval +0.00107 to +0.00540). Split minus `rev` is -0.00063 (interval -0.00245 to +0.00139). Split minus `blk` is +0.00281 (interval +0.00082 to +0.00491).
 
-Three arms lie within 0.0004 of each other: the old route, `blk` and `perm`. The split kernel and `rev` lie 0.003 higher, within 0.0006 of each other. The five values are not a smooth spread. A summation order that differs from the old route by float32 rounding alone can move the long-context NLL by this much. One stock-op arm moves it by more than the split kernel does.
+Three arms lie within 0.0004 of each other: the old route, `blk` and `perm`. The split kernel and `rev` lie 0.003 higher, within 0.0007 of each other. The five values are not a smooth spread. A summation order that differs from the old route by float32 rounding alone can move the long-context NLL by this much. One stock-op arm moves it by more than the split kernel does.
 
 A second float32 reference with the reversed key order has the same mean NLL as the first (1.39471). Its per-step difference from the first reference is at most 3.4e-4 nats and 1.1e-5 on average. So the float32 model does not depend on the order. The gap of the old route is not an artifact of sharing a summation order with the reference. Against the second reference the gaps are +0.2506, +0.4425 and +0.4880 percent for the old route, the split kernel and `rev`.
 
