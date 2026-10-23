@@ -15678,7 +15678,7 @@ void ScaledDotProductAttention::eval_gpu(
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
   // fused kernel above is one 1024-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
   // blocks and reads each K and V row once per group. Float32 arithmetic in a different order, so the result is not bit-equal to the
-  // fused kernel (gated against a float64 reference in test_sdpa_split.cpp). MLX_OMARCHY_SDPA_DECODE_SPLIT: "1" on, "0" off, unset
+  // fused kernel (gated against a float64 reference in test_sdpa_split.cpp). MLX_OMARCHY_SDPA_DECODE_SPLIT: any non-empty value other than "0" forces the route, "0" disables it, unset or empty
   // follows omarchy::sdpa_split_default. Needs 16-byte K rows (element offset and strides multiples of 8) and even V offset and strides.
   {
     const int split_env = decode_path_override("MLX_OMARCHY_SDPA_DECODE_SPLIT");

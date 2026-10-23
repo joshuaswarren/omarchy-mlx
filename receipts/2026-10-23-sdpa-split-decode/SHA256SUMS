@@ -1,4 +1,4 @@
-300c891341a8bf11c96c53ca5d9f1cf2ae6af4699d0195cbb24eb6c1cd85db56  ./README.md
+ad831055721a5d0ac35f2065cc5b6ed559f7007bd9b414d0ad9742813e84d096  ./README.md
 900607bb04cc746f47ae960f5a1f7ae45549b20d191c1f5983bbb2a2aeead47a  ./numerics/apple-m1-gdiv/run.log
 53bae29f9c2b288264f3f3ebb40a533de54d83908588df8b0f0ccbd15b95545e  ./numerics/apple-m1-max-short/run.log
 6041be7bac4f94e44c9b0fcbe04de6aa44199805230dcc99114da4fb5d789c0f  ./numerics/apple-m1-ref/run.log
@@ -14,6 +14,7 @@ c95e3e6bebd8e0c3d574cdd3914e37a919bc1c0614f880121c5e2384de1b6fee  ./numerics/app
 aeaf1667e983f9d9b434eb2f962dbf7558ed25a44de46aa13419424ba6f372bd  ./numerics/apple-m2-max-long/captures/ref32rev/seg0.npz
 f0ca43bb0d116092b4460558c980c6644ca04aa852f0ada6885ee4cebc611fd5  ./numerics/apple-m2-max-long/captures/rev/seg0.npz
 8a1cc6f973e0780ec197acaeb38222021042d6d84a1b9797fcfeb9b2d03b5133  ./numerics/apple-m2-max-long/captures/split/seg0.npz
+e134589a08a9da6d9545b8cb3a556b3e419244365060f39e28501663143fb7ca  ./numerics/apple-m2-max-long/paired.txt
 46b073d8424ccd01c24e8c980e667d7d043f2b04d573a7e25c4c2029bee422dc  ./numerics/apple-m2-max-long/perm-run.log
 2cbceb8818e31153cf1a690ce8e9377e8fd4b6926287227e9ff21f87dcbf0aa2  ./numerics/apple-m2-max-long/ref32rev-run.log
 66fdcbc796f6c0ddac0d91d4cc12f9e55b6dfc2883c6228fcc400a5517881436  ./numerics/apple-m2-max-long/reflong-run.log
@@ -48,6 +49,7 @@ ce64e6da26866b17681009fdfa3d94ede5461c767a8feb4eac28b30e69bf6e27  ./scripts/gen-
 9f3adc4def3b3a721d7ddadf78a9d5035518a51d5f5d206fc84bad57d44e502a  ./scripts/gen_tokens.py
 7ac986bb26249e7077e9f9238ab6e8e7d6c54ad1d0627a4333e32e6d684fe0d6  ./scripts/gencmp.py
 14f21df0d126ef48a39fd2b5e5786512f5ff2582e8f8493b4e0bae557a16f770  ./scripts/llmstep.py
+3399e332c10d46b89acf6cdccfaea6948e7bd421622b5577921163f01b9cbaaf  ./scripts/paired-controls.py
 53f4fb2e58b0bfee8744457f4ac19c02de8548384cb2acbbc99945e60037430f  ./scripts/sdpa-attn32.sh
 ff6254c8879b5046bfa3deed0605573eb855e48e935dddc22dc3f611c0c24a79  ./scripts/sdpa-attn32p.sh
 8cf269cbf9a8d1afe72d2ff71b543e0d2d524f35b354e755c8bf57138ab6b10e  ./scripts/sdpa-attn32v.sh

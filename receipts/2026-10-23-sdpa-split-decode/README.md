@@ -76,9 +76,9 @@ The limits were written before the run. The split mean difference must be at mos
 
 ### Long context
 
-Files: `numerics/apple-m2-max-long/`, tables `tables/numerics-long-7600-steps.tsv` and `tables/order-controls-7600-steps.tsv`. One segment of 7600 tokens runs on the Apple M2 Max. It is the 35 KB text three times, so positions above about 2500 repeat earlier text. Cache lengths run to 7600. The old route is the fused kernel up to 7168 keys and the composition above. The split route runs at every length.
+Files: `numerics/apple-m2-max-long/` (`paired.txt`, `analysis.txt`, run logs, captures), tables `tables/numerics-long-7600-steps.tsv` and `tables/order-controls-7600-steps.tsv`. One segment of 7600 tokens runs on the Apple M2 Max. It is the 35 KB text three times, so positions above about 2500 repeat earlier text. Cache lengths run to 7600. The old route is the fused kernel up to 7168 keys and the composition above. The split route runs at every length.
 
-The old-route and split captures and the first reference ran on stock boots `1ccc1761` and `9d04f8ab`. The control arms ran on the egpu boot `87f94587`, apart from one on `465bd02d`. Capture hashes are in the run logs.
+The old-route and split captures and the first reference ran on two stock boots. The control arms ran on two egpu boots. The run logs carry the boot ids. Capture hashes are in the run logs.
 
 The reference NLL is 1.39471. The old route reaches 1.39821 (7488 of 7599 top-1, 111 flips, +0.2507 percent). The split route reaches 1.40089 (7498 of 7599, 101 flips, +0.4426 percent).
 
@@ -94,11 +94,11 @@ The plain arm sums over the keys in cache order. It equals the old route bit for
 
 The `blk` arm runs the split-K algorithm in float32 stock ops. It uses blocks of 128 keys, a block maximum, exp, a block sum, weighted values, a global-maximum rescale and a fold. Its NLL is 1.39807, which is +0.00336 against the reference. The `perm` arm sums over a random permutation of the keys. The permutation is seeded by the cache length, so it is new at every step. Its NLL is 1.39845 (+0.00373). The `rev` arm reverses the key axis. Its NLL is 1.40152 (+0.00681).
 
-The old route is +0.00350. The split kernel is +0.00617. Paired against the old route, `blk` reads -0.00014 (interval -0.00229 to +0.00201), `perm` +0.00024, the split kernel +0.00268 and `rev` +0.00331 (interval +0.00107 to +0.00540). Split minus `rev` is -0.00063 (interval -0.00245 to +0.00139). Split minus `blk` is +0.00281 (interval +0.00082 to +0.00491).
+The old route is +0.00350. The split kernel is +0.00617. Paired against the old route, `blk` reads -0.00014 (interval -0.00229 to +0.00201), `perm` +0.00024, the split kernel +0.00268 and `rev` +0.00331 (interval +0.00107 to +0.00540). `rev` minus split is +0.00063 (interval -0.00139 to +0.00245). `blk` minus split is -0.00281 (interval -0.00491 to -0.00082). `numerics/apple-m2-max-long/paired.txt` lists every paired difference with its interval. `scripts/paired-controls.py` produces it from the seven captures.
 
 Three arms lie within 0.0004 of each other: the old route, `blk` and `perm`. The split kernel and `rev` lie 0.003 higher, within 0.0007 of each other. The five values are not a smooth spread. A summation order that differs from the old route by float32 rounding alone can move the long-context NLL by this much. One stock-op arm moves it by more than the split kernel does.
 
-A second float32 reference with the reversed key order has the same mean NLL as the first (1.39471). Its per-step difference from the first reference is at most 3.4e-4 nats and 1.1e-5 on average. So the float32 model does not depend on the order. The gap of the old route is not an artifact of sharing a summation order with the reference. Against the second reference the gaps are +0.2506, +0.4425 and +0.4880 percent for the old route, the split kernel and `rev`.
+A second float32 reference with the reversed key order has the same mean NLL as the first (1.39471). Its per-step difference from the first reference is at most 3.4e-4 nats and 1.1e-5 on average (last line of `paired.txt`). So the float32 model does not depend on the order. The gap of the old route is not an artifact of sharing a summation order with the reference. Against the second reference the gaps are +0.2506, +0.4425 and +0.4880 percent for the old route, the split kernel and `rev`.
 
 The reading rules for these arms were written before each run (`prereg.txt`). The rule for the second reference expected `rev` to become the close arm. That did not happen. The `blk` outcome also differed from the rule: it equals the old route and not the split kernel.
 
