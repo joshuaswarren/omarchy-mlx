@@ -10,7 +10,7 @@ The rule is the pure function `vocab_tail_chunked_default(device_name)` in `devi
 
 16-inch M1 Max (G13C, T6001) and 13-inch M1 (G13G, T8103) with the same Mesa build.
 
-Kernel and settle value differ between the runs and are named next to every number. "Stock" is 7.1.12-2-20261013.18-sep-ARCH, "egpu" is 7.1.12-2-20261013.18-egpu-ARCH. The speed runs on the M2 used `call_settle_us` 100. The census and the doctest ran at 20, the numerics capture at 20. A number is only compared with numbers from the same run.
+Kernel and settle value differ between the runs and are named next to every number. "Stock" is 7.1.12-2-20261013.18-sep-ARCH, "egpu" is 7.1.12-2-20261013.18-egpu-ARCH. The speed runs on the M2 and the census used `call_settle_us` 100 (the census ran on the boot of the egpu 9B speed run, whose header prints 100). The numerics capture and the doctest ran at 20. A number is only compared with numbers from the same run.
 
 ## Stack
 
@@ -49,7 +49,7 @@ Qwen3.5-9B on the Apple M2 Max (G14C, egpu kernel, `numerics/m2-9b/`): the ArgMa
 
 Qwen3.8-2B on the Apple M1 Max (G13C, egpu kernel, `numerics/m1max-2b/`) and the Apple M1 (G13G, stock kernel, `numerics/m1-2b/`): the same checks pass with the same figures on both: indices equal 636 of 636 in every arm, bf16 LogSumExp bit-equal 636 of 636, float32 LogSumExp error base mean 2.268e-06 max 6.786e-06 against 5.097e-07 and 1.775e-06 with the chunked route, bit-equal to base at 206 of 636 steps. The two chips print the same figures on these captures, and the capture files of the Apple M1 Max (G13C) and the Apple M1 (G13G) are byte-identical for every arm and segment (`sha256sum numerics/m1max-2b/captures/*/* numerics/m1-2b/captures/*/*` pairs them). The run headers do not print the device. The M1 Max ran on the 16-inch machine and the M1 on the 13-inch machine, each with the Apple GPU through the honeykrisp driver.
 
-The bf16 LogSumExp error against float64 (`scripts/tailhist.py`, `numerics/*/tailhist.out`) is at most half a bf16 step of the result plus 1e-5 at 636 of 636 steps in every arm on all three captures (the step is 0.0625 for a value from 8 to 16 and 0.125 from 16 to 32). The mean error is 0.19 half-steps on the 9B and 0.42 on the 2B, equal in every arm. So the bf16 outputs differ from the correctly rounded value only by the output rounding, and the arms are indistinguishable there. The one gate not run is the full float32 CPU forward of the model: the change touches only the final reduction, and the per-op check above bounds its error against float64.
+The bf16 LogSumExp error against float64 (`scripts/tailhist.py`, `numerics/*/tailhist.out`) is at most half a bf16 step of the result plus 1e-5 at 636 of 636 steps in every arm on all three captures (the step is 0.0625 for a value from 8 to 16, 0.125 from 16 to 32 and 0.25 above 32). The mean error is 0.19 half-steps on the 9B and 0.42 on the 2B, equal in every arm. So the bf16 outputs differ from the correctly rounded value only by the output rounding, and the arms are indistinguishable there. A full float32 CPU forward of the model is out of scope here. The change touches only the final reduction, and the per-op check above bounds its error against float64.
 
 ## Doctest (run-logs/)
 
@@ -61,7 +61,11 @@ One text and one prompt of 477 tokens, one chip per part, one boot per run, thre
 
 ## Timing and thermal procedure
 
-Every timed run is one queue job with no other GPU or ANE job running, and the load average is read at the start. The script aborts above a load of 1.3 and settles 100 seconds before the first sample. The governor is performance. Samples run as one process each, the arms interleave, and the order rotates. The numerics and census runs are not timed and ran as normal queue jobs.
+Every timed run is one queue job with no other GPU or ANE job running, and the load average is read at the start. The script aborts above a load of 1.3 at its start and prints the load at every sample. No temperature reading was taken. The governor is performance. Samples run as one process each, the arms interleave, and the order rotates. The numerics and census runs are not timed and ran as normal queue jobs.
+
+## Commands
+
+Speed, on each machine and model: `bash scripts/swscreen2.sh OUT 5 MODELDIR tail`, with the ledger wheel (venv-main), the mlx-lm series main and driver vulkan-f144c7949b selected inside the script. Arms `base`, `argc`, `lsec`, `both` are the switch settings of the `tail` set. Census: `bash scripts/census-tail.sh OUT MODELDIR`. Numerics: `bash scripts/tail-num.sh OUT MODELDIR`, then `python3 scripts/tailhist.py ARM=DIR ...`. Doctest: `bash scripts/m2-vtail-doctest.sh build` and `run OUT`.
 
 ## Reopen
 
