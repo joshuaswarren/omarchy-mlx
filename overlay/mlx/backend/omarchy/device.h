@@ -545,4 +545,12 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// Split-K bf16 decode attention (MLX_OMARCHY_SDPA_DECODE_SPLIT unset): the parts and cache lengths where it is the default. None yet: the route is
+// opt-in until its measurements and numerics are in. Pure.
+inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len) {
+  (void)device_name;
+  (void)k_len;
+  return false;
+}
+
 } // namespace mlx::core::omarchy
