@@ -134,27 +134,6 @@ bool CommandEncoder::wave_diag() {
   return on;
 }
 
-bool CommandEncoder::export_dep_masks() {
-  // MLX_OMARCHY_EXPORT_DEP_MASKS (design 22b395d phase 1): default ON
-  // for the phase-1 branch — the computation reuses tracker state and
-  // is provably inert (records are stored, never consumed).
-  static const bool on = !env_flag("MLX_OMARCHY_NO_EXPORT_DEP_MASKS");
-  return on;
-}
-bool CommandEncoder::dep_dump() {
-  static const int n = []() {
-    const char *v = getenv("MLX_OMARCHY_DEP_DUMP");
-    return v ? atoi(v) : 0;
-  }();
-  return n > 0;
-}
-int CommandEncoder::dep_dump_n() {
-  static const int n = []() {
-    const char *v = getenv("MLX_OMARCHY_DEP_DUMP");
-    return v ? atoi(v) : 0;
-  }();
-  return n;
-}
 bool CommandEncoder::gated_barriers() {
   // MLX_OMARCHY_GATED_BARRIERS (docs/install-omarchy.md): default ON since
   // 2026-09-29 (set 0 to restore the unconditional pre+post barriers).
@@ -779,26 +758,6 @@ void CommandEncoder::dispatch_compute_pipeline(
     for (size_t i = 0; i < nw; ++i) {
       tracked_writes_.push_back(wr[i]);
     }
-    if (export_dep_masks()) {
-      // Compute the two exported signals (design 22b395d): (a) whether
-      // this dispatch's ranges are provably disjoint from everything
-      // since the last explicit dependency (same proof
-      // batch_needs_barrier just ran, inverted); (b) whether the launch
-      // reuses the previous dispatch's binding-layout signature (the
-      // mlx-level analogue of the driver's USC register configuration).
-      uint32_t usc_signature = 0;
-      for (size_t i = 0; i < bindings.size(); ++i) {
-        usc_signature = usc_signature * 31 +
-                        uint32_t((uintptr_t)ranges[i].buffer ^ ranges[i].offset ^
-                                 ranges[i].end);
-      }
-      uint32_t usc_changed =
-          (dep_have_prev_ && usc_signature != dep_prev_signature_) ? 1 : 0;
-      dep_records_.push_back({static_cast<uint32_t>(barrier_recorded ? 0 : 1),
-                              usc_changed, ++dep_seq_});
-      dep_prev_signature_ = usc_signature;
-      dep_have_prev_ = 1;
-    }
   } else {
     VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     before.srcAccessMask =
@@ -1036,28 +995,6 @@ void CommandEncoder::emit_pending() {
             node.host_t0 != 0 ? prof::host_ns() - node.host_t0 : 0,
             node.tape);
         trace::current_prim() = submit_prim;
-        if (export_dep_masks()) {
-          // A node that rode its wave's barrier is provably disjoint from
-          // everything since that barrier (the level assignment proved no
-          // hazard against any earlier node); a wave-head node recorded
-          // the barrier itself.
-          uint32_t usc_signature = 0;
-          for (uint32_t b = 0; b < node.nr + node.nw; ++b) {
-            const TrackedRange& r =
-                b < node.nr ? node.rd[b] : node.wr[b - node.nr];
-            usc_signature = usc_signature * 31 +
-                uint32_t((uintptr_t)r.buffer ^ r.offset ^ r.end);
-          }
-          dep_records_.push_back(
-              {static_cast<uint32_t>(preceded_by_barrier ? 0 : 1),
-               static_cast<uint32_t>(
-                   (dep_have_prev_ && usc_signature != dep_prev_signature_)
-                       ? 1
-                       : 0),
-               ++dep_seq_});
-          dep_prev_signature_ = usc_signature;
-          dep_have_prev_ = 1;
-        }
       } else if (node.kind == PendingNode::Kind::Copy) {
         VkBufferCopy region{};
         region.srcOffset = node.src_offset;
