@@ -116,9 +116,11 @@ jobs:
         run: ctest --test-dir .work/build -R omarchy_custom_kernel_translate_tests --output-on-failure
       - name: Run vocabulary-tail parity tests (software Vulkan)
         env:
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           MLX_OMARCHY_ALLOW_NON_APPLE: "1"
         run: |
           set -o pipefail
+          icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+          [[ ${#icds[@]} -eq 1 && -f ${icds[0]} ]]
+          export VK_DRIVER_FILES="${icds[0]}"
           .work/build/tests/omarchy/omarchy_vocab_tail_tests | tee .work/vocab-tail.out
           ! grep -q 'Skipping:' .work/vocab-tail.out
