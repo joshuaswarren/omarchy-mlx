@@ -26,7 +26,7 @@ Both native Release wheels were built from separate clean source/build directori
 
 ## Hardware, model and command
 
-Same physical 16-inch Apple M1 Max, 32 GPU cores, 64 GB memory; Vulkan device `Apple M1 Max (G13C C0)`. Linux kernel `7.1.12-2-12.6-sep-ARCH`; Honeykrisp Mesa `26.3.0-devel (git-69bde15340)`, Vulkan API 1.4.362. Driver-library SHA-256 `40282811c6e14ef991f72936bb675008cb4d6b3199b1785bc34c7976ab89c425`. All CPU policies used `performance`; neither governors nor services were changed.
+Same physical 16-inch Apple M1 Max, 32 GPU cores, 64 GB memory; Vulkan device `Apple M1 Max (G13C C0)`. The pre-run hardware capture recorded Linux kernel `7.1.12-2-12.6-sep-ARCH`; Honeykrisp Mesa `26.3.0-devel (git-69bde15340)`, Vulkan API 1.4.362. Driver-library SHA-256 `40282811c6e14ef991f72936bb675008cb4d6b3199b1785bc34c7976ab89c425`. All CPU policies used `performance`; this session changed neither governors nor services.
 
 Model: `mlx-community/Qwen3.5-9B-MLX-4bit`, snapshot `938d8919941c6e7efd3c7150eff7fe9d12afa631`, affine 4-bit/group-64. Shard SHA-256 values: `a68b87558c6ef43f74c2bd63ce7e9092ceddc3101f3def0030774bae5f42aadd` and `b0a770bf8469c7f3f18756a0e0283f1c1174344a83e059a4e483f6af4907352d`. Index SHA-256 `dd023913fb87cfdae27fb11dcf695117c925833796ccac3c64117d6652d8ff1e`.
 
@@ -43,6 +43,8 @@ timeout 600 "$RUN_ROOT/venv/bin/python" "$RUN_ROOT/llmstep.py" "$MODEL" 477 128
 Before ran at 13:52:58–13:53:07Z; after at 14:12:41–14:12:49Z on 2026-10-23. Each held the nonblocking `/tmp/m1-gpu.lock`. Read-only process/load and GPU-client inspections preceded the pair; no other GPU benchmark client was observed. Two earlier load-gate refusals launched no model process. Initial load limit was 1.3. Start loads were 1.19 and 1.16. A CPU/ANE benchmark was active during the before run and had ended before the after run: these are different competing-load conditions, so the pair is not an isolated causal comparison. No process, session or service was stopped or changed. The single-run protocol precludes another baseline or sweep.
 
 `thermal_zone0` read 29.9°C before and 29.5°C after; its sensor identity is unknown, so these are not GPU-temperature measurements. The successful fresh model processes reopen the Vulkan device. Both no-CPU wheel builds completed; both numerical token digests match. Receipt arithmetic, links, provenance, model/prompt/generation equality and checksums are checked separately. The failed performance candidate does not qualify a default change.
+
+The 14:21:51Z post-pair capture found a different boot and kernel `7.1.12-2-20261013.18-egpu-ARCH`. This session issued no reboot or kernel change. Kernel and boot identity were not captured inside each measured process, so their equality across the pair is unverified. The post-state kernel logs cannot be differenced against the earlier boot as though they were one boot. Together with the changed ANE load, this precludes an isolated performance conclusion.
 
 All authored changes remained in the assigned worktree. Native build artifacts used its assigned pathname on the target, not another checkout. The initial x86-only preflight was superseded by the authorized Apple Silicon execution route. No other worktree or installed/shared runtime was edited.
 

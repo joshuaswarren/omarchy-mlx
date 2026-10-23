@@ -207,6 +207,7 @@
     "thermal_zone0_millicelsius": 29500,
     "thermal_sensor_identity": "unknown",
     "competing_ane_job": false,
-    "gpu_benchmark_clients_observed": 0
+    "gpu_benchmark_clients_observed": 0,
+    "per_run_kernel_and_boot_identity": "not captured"
   }
 }
