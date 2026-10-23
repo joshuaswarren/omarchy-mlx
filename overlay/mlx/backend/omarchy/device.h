@@ -566,4 +566,10 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len) {
   return min_keys != 0 && k_len >= min_keys;
 }
 
+// Value-phase variant of the split-K pass 1 (MLX_OMARCHY_SDPA_SPLIT_PV unset): none yet, the variant is opt-in until its measurements are in. Pure.
+inline bool sdpa_split_pv_default(const std::string& device_name) {
+  (void)device_name;
+  return false;
+}
+
 } // namespace mlx::core::omarchy

@@ -1,0 +1,215 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Split-K pass 1, value-phase variant (selected by MLX_OMARCHY_SDPA_SPLIT_PV; same scratch layout and pass 2 as sdpa_decode_split_p1.comp). Phases 1 and 2 are the same; the weighted value sum uses 8-byte value loads:
+// 32 lanes cover the 128 dimensions in groups of four and the four subgroups each walk 32 of the 128 keys, so the serial chain of dependent loads is 32 keys long instead of 128;
+// the four partial sums of a dimension are added in a fixed order through shared memory. Needs V element offset, head stride and key stride multiples of 4.
+//
+// Split-K pass 1 of the bf16 single-query decode SDPA, head width 128. One workgroup per (key-value head, block of 128 keys)
+// computes, for the SPLIT_R query heads that share the key-value head, the block's scores, the block softmax numerators and the
+// block-weighted value sum, and stores (block max, block exp sum, 128 weighted-value floats) per (query head, block) for pass 2
+// (sdpa_decode_split_p2.comp). The fused kernel (sdpa_decode_native.comp, BF16_IO arm) keeps one 1024-thread workgroup per query
+// head, so a 500-key decode step is a 32-workgroup serial chain: one thread per key with 2-byte loads along its row, then 128
+// threads each walking every key. This pair spreads the keys over blocks, loads each key row with sixteen 16-byte loads and
+// reads every K and V row once for all SPLIT_R query heads of its group.
+//
+// Arithmetic is float32 throughout (scores, exp, sums, accumulation); only the final store rounds to bf16. The order differs from
+// the fused kernel's composition order, so the result is not bit-equal to it; test_sdpa_split.cpp gates the error against a float64
+// reference. Host guards (primitives.cpp): batch 1, q_len 1, bf16, head width 128, heads / kv heads == SPLIT_R, subgroup size 32,
+// K element offset, head stride and key stride multiples of 8 (16-byte loads), V element offset and strides even.
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+#ifndef SPLIT_R
+#define SPLIT_R 4
+#endif
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Query {
+  uint16_t values[];
+} query_data;
+layout(set = 0, binding = 1, std430) readonly buffer Key {
+  uvec4 values[];
+} key_data;
+layout(set = 0, binding = 2, std430) readonly buffer Value {
+  uvec2 values[];
+} value_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Scratch {
+  float values[];
+} scratch_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const uint D = 128u;
+const uint BK = 128u;
+const uint SUBGROUPS = 4u;
+
+shared float s_q[SPLIT_R * D];
+shared float s_p[SPLIT_R * BK];
+shared float s_max[SPLIT_R * SUBGROUPS];
+shared float s_sum[SPLIT_R * SUBGROUPS];
+shared float s_o[4u * SPLIT_R * D];
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+void main() {
+  uint t = gl_LocalInvocationID.x;
+  uint kv_head = gl_WorkGroupID.x;
+  uint block = gl_WorkGroupID.y;
+  uint k_len = params.matrix_k;
+  uint nblocks = (k_len + BK - 1u) / BK;
+  uint sg = gl_SubgroupID;
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    s_q[r * D + t] = params.alpha * bf16_load(
+        query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
+  }
+  barrier();
+
+  uint key = block * BK + t;
+  bool valid = key < k_len;
+  float score[SPLIT_R];
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    score[r] = 0.0;
+  }
+  if (valid) {
+    uint k_base = (params.rhs_offset + kv_head * params.shape[1] + key * params.shape[2]) >> 3u;
+    for (uint c = 0u; c < D / 8u; ++c) {
+      uvec4 w = key_data.values[k_base + c];
+      float kf[8];
+      kf[0] = uintBitsToFloat(w.x << 16u);
+      kf[1] = uintBitsToFloat(w.x & 0xffff0000u);
+      kf[2] = uintBitsToFloat(w.y << 16u);
+      kf[3] = uintBitsToFloat(w.y & 0xffff0000u);
+      kf[4] = uintBitsToFloat(w.z << 16u);
+      kf[5] = uintBitsToFloat(w.z & 0xffff0000u);
+      kf[6] = uintBitsToFloat(w.w << 16u);
+      kf[7] = uintBitsToFloat(w.w & 0xffff0000u);
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        for (uint i = 0u; i < 8u; ++i) {
+          score[r] += s_q[r * D + c * 8u + i] * kf[i];
+        }
+      }
+    }
+  } else {
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      score[r] = uintBitsToFloat(0xff800000u);
+    }
+  }
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    float m = subgroupMax(score[r]);
+    if (gl_SubgroupInvocationID == 0u) {
+      s_max[r * SUBGROUPS + sg] = m;
+    }
+  }
+  barrier();
+  float block_max[SPLIT_R];
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    float m = max(max(s_max[r * SUBGROUPS], s_max[r * SUBGROUPS + 1u]),
+        max(s_max[r * SUBGROUPS + 2u], s_max[r * SUBGROUPS + 3u]));
+    block_max[r] = m;
+    float p = valid ? exp(score[r] - m) : 0.0;
+    s_p[r * BK + t] = p;
+    float ps = subgroupAdd(p);
+    if (gl_SubgroupInvocationID == 0u) {
+      s_sum[r * SUBGROUPS + sg] = ps;
+    }
+  }
+  barrier();
+
+  uint nk = min(BK, k_len - block * BK);
+  uint v_stride = params.in_strides[2];
+  uint dg = t & 31u;
+  uint part = t >> 5u;
+  uint kstart = part * 32u;
+  uint kend = min(nk, kstart + 32u);
+  uint v_row0 = params.aux_offset + kv_head * params.in_strides[1] + block * BK * v_stride + dg * 4u;
+  float o[SPLIT_R * 4];
+  for (uint i = 0u; i < SPLIT_R * 4u; ++i) {
+    o[i] = 0.0;
+  }
+  uint key0 = kstart;
+  for (; key0 + 8u <= kend; key0 += 8u) {
+    uvec2 w[8];
+    for (uint i = 0u; i < 8u; ++i) {
+      w[i] = value_data.values[(v_row0 + (key0 + i) * v_stride) >> 2u];
+    }
+    for (uint i = 0u; i < 8u; ++i) {
+      float v0 = uintBitsToFloat(w[i].x << 16u);
+      float v1 = uintBitsToFloat(w[i].x & 0xffff0000u);
+      float v2 = uintBitsToFloat(w[i].y << 16u);
+      float v3 = uintBitsToFloat(w[i].y & 0xffff0000u);
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        float p = s_p[r * BK + key0 + i];
+        o[r * 4u + 0u] += p * v0;
+        o[r * 4u + 1u] += p * v1;
+        o[r * 4u + 2u] += p * v2;
+        o[r * 4u + 3u] += p * v3;
+      }
+    }
+  }
+  for (; key0 < kend; ++key0) {
+    uvec2 w = value_data.values[(v_row0 + key0 * v_stride) >> 2u];
+    float v0 = uintBitsToFloat(w.x << 16u);
+    float v1 = uintBitsToFloat(w.x & 0xffff0000u);
+    float v2 = uintBitsToFloat(w.y << 16u);
+    float v3 = uintBitsToFloat(w.y & 0xffff0000u);
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      float p = s_p[r * BK + key0];
+      o[r * 4u + 0u] += p * v0;
+      o[r * 4u + 1u] += p * v1;
+      o[r * 4u + 2u] += p * v2;
+      o[r * 4u + 3u] += p * v3;
+    }
+  }
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    for (uint i = 0u; i < 4u; ++i) {
+      s_o[(part * SPLIT_R + r) * D + dg * 4u + i] = o[r * 4u + i];
+    }
+  }
+  barrier();
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    uint base = (head * nblocks + block) * (D + 2u);
+    if (t == 0u) {
+      scratch_data.values[base] = block_max[r];
+      scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u] +
+          s_sum[r * SUBGROUPS + 2u] + s_sum[r * SUBGROUPS + 3u];
+    }
+    float total = s_o[r * D + t] + s_o[(SPLIT_R + r) * D + t] + s_o[(2u * SPLIT_R + r) * D + t] + s_o[(3u * SPLIT_R + r) * D + t];
+    scratch_data.values[base + 2u + t] = total;
+  }
+}
