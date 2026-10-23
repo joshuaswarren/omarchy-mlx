@@ -455,7 +455,7 @@ TEST_CASE("chunked logsumexp: route gate and fallback bytes") {
 
 TEST_CASE("vocab tail default: the part rule") {
   CHECK(omarchy::vocab_tail_chunked_default("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::vocab_tail_chunked_default("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::vocab_tail_chunked_default(""));
 }
