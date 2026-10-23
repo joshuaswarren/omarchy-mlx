@@ -26,6 +26,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -72,9 +73,14 @@ std::vector<Dtype> dtypes() {
   return out;
 }
 
-void set_flags(bool chunked) {
-  setenv("MLX_OMARCHY_ARGREDUCE_CHUNKED", chunked ? "1" : "0", 1);
-  setenv("MLX_OMARCHY_LSE_CHUNKED", chunked ? "1" : "0", 1);
+void set_flags(std::optional<bool> chunked) {
+  if (!chunked.has_value()) {
+    unsetenv("MLX_OMARCHY_ARGREDUCE_CHUNKED");
+    unsetenv("MLX_OMARCHY_LSE_CHUNKED");
+    return;
+  }
+  setenv("MLX_OMARCHY_ARGREDUCE_CHUNKED", *chunked ? "1" : "0", 1);
+  setenv("MLX_OMARCHY_LSE_CHUNKED", *chunked ? "1" : "0", 1);
 }
 
 uint64_t dispatches() {
@@ -125,7 +131,7 @@ struct ArgRun {
   uint64_t launched;
 };
 
-ArgRun run_arg(const array& x, bool is_max, bool chunked, const Stream& stream) {
+ArgRun run_arg(const array& x, bool is_max, std::optional<bool> chunked, const Stream& stream) {
   set_flags(chunked);
   uint64_t before = dispatches();
   array r = is_max ? argmax(x, -1, false, stream) : argmin(x, -1, false, stream);
@@ -310,8 +316,8 @@ double ref_lse(const float* row, int cols) {
   return m + std::log(s);
 }
 
-std::vector<float> run_lse(const array& x, bool chunked, uint64_t* launched,
-                           const Stream& stream) {
+std::vector<float> run_lse(const array& x, std::optional<bool> chunked,
+                           uint64_t* launched, const Stream& stream) {
   set_flags(chunked);
   uint64_t before = dispatches();
   array r = logsumexp(x, std::vector<int>{-1}, false, stream);
@@ -485,7 +491,41 @@ TEST_CASE("vocab tail default: unset flags follow the part, a set flag wins") {
     CHECK(tail_launches(in.x, arg, stream) == 1);
     setenv(name, "1", 1);
     CHECK(tail_launches(in.x, arg, stream) == 2);
+    setenv(name, "true", 1);
+    CHECK(tail_launches(in.x, arg, stream) == 1);
   }
   unsetenv("MLX_OMARCHY_ARGREDUCE_CHUNKED");
   unsetenv("MLX_OMARCHY_LSE_CHUNKED");
+}
+
+TEST_CASE("vocab tail default: bf16 logits preserve serial parity") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  constexpr int cols = 248320;
+  bool on = omarchy::vocab_tail_chunked_default(
+      omarchy::device(0).capabilities().device_name);
+  Input in = make_input(pattern(2, cols, 17), 1, cols, bfloat16, stream);
+  for (bool is_max : {true, false}) {
+    auto serial = run_arg(in.x, is_max, false, stream);
+    auto selected = run_arg(in.x, is_max, std::nullopt, stream);
+    CHECK(selected.launched == (on ? 2u : 1u));
+    CHECK(selected.index == serial.index);
+    CHECK(selected.index[0] == ref_arg(in.stored.data(), cols, is_max));
+  }
+
+  Input logits = make_input(lse_pattern(0, cols, 19), 1, cols, bfloat16, stream);
+  auto serial = run_lse(logits.x, false, nullptr, stream);
+  uint64_t launched = 0;
+  auto selected = run_lse(logits.x, std::nullopt, &launched, stream);
+  CHECK(launched == (on ? 2u : 1u));
+  double ref = ref_lse(logits.stored.data(), cols);
+  double old_err = std::fabs(serial[0] - ref);
+  double new_err = std::fabs(selected[0] - ref);
+  constexpr double unit = 0x1p-7;
+  double slack = 2.0 * unit * std::max(std::fabs(ref), 1.0) * 0.5;
+  CHECK(new_err <= old_err + slack);
+  CHECK(new_err <= 4.0 * unit * std::max(std::fabs(ref), 1.0));
+  set_flags(std::nullopt);
 }
