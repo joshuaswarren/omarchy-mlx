@@ -236,8 +236,8 @@ TEST_CASE("split-K decode SDPA: one-hot values and uniform scores expose a dropp
     return;
   }
   for (int keys : {127, 128, 129, 255, 256, 257, 500}) {
-    for (int kv_heads : {8, 4, 2, 1}) {
-      check_shape(32, kv_heads, keys, keys, 0, 1.0f, true);
+    for (int heads : {8, 16, 32, 64}) {
+      check_shape(heads, 8, keys, keys, 0, 1.0f, true);
     }
   }
 }
