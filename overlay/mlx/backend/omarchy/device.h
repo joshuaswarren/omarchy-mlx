@@ -545,4 +545,25 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// Split-K bf16 decode attention (MLX_OMARCHY_SDPA_DECODE_SPLIT unset): the smallest cache length, in keys, from which the route is the default on a part.
+// 0 means the fused kernel stays the default. The route costs 79 to 90 microseconds per call up to 512 keys (two dispatches) and 89 to 113 at 1024 keys, and it wins by more as the cache grows,
+// so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent
+// calls, default against split on one tree, receipts/2026-10-23-sdpa-split-decode) where the split route is faster in both shapes of work:
+//   G13G (Apple M1): 128 keys (chain 91.5 against 78.6 microseconds; the shortest length measured);
+//   G13C (Apple M1 Max): 320 keys (chain 107.3 against 82.5, independent 84.0 against 78.2);
+//   G14C (Apple M2 Max): 448 keys (chain 127.2 against 86.8, independent 79.4 against 78.6).
+// Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated: +21.9 percent (G13G), +19.5 percent (G13C), +12.8 percent (G14C). An unmeasured part keeps the
+// fused kernel. Pure.
+inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) return 128;
+  if (device_name.find("G13C") != std::string::npos) return 320;
+  if (device_name.find("G14C") != std::string::npos) return 448;
+  return 0;
+}
+
+inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t min_keys = sdpa_split_min_keys(device_name);
+  return min_keys != 0 && k_len >= min_keys;
+}
+
 } // namespace mlx::core::omarchy

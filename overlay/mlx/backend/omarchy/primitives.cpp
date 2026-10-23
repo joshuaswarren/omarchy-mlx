@@ -15674,6 +15674,73 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
+  // Split-K decode route (bf16, head width 128, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
+  // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
+  // fused kernel above is one 1024-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
+  // blocks and reads each K and V row once per group. Float32 arithmetic in a different order, so the result is not bit-equal to the
+  // fused kernel (gated against a float64 reference in test_sdpa_split.cpp). MLX_OMARCHY_SDPA_DECODE_SPLIT: any non-empty value other than "0" forces the route, "0" disables it, unset or empty
+  // follows omarchy::sdpa_split_default. Needs 16-byte K rows (element offset and strides multiples of 8) and even V offset and strides.
+  {
+    const int split_env = decode_path_override("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+    const uint32_t split_group = (kv_heads > 0 && heads % kv_heads == 0) ? static_cast<uint32_t>(heads / kv_heads) : 0u;
+    constexpr VkSubgroupFeatureFlags kSplitSubgroupFeatures =
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+    const bool split_device_ready = decode_caps.subgroup_size == 32u &&
+        decode_caps.max_compute_work_group_invocations >= 128u &&
+        decode_caps.max_compute_work_group_size[0] >= 128u &&
+        (decode_caps.subgroup_operations & kSplitSubgroupFeatures) == kSplitSubgroupFeatures;
+    const bool split_wanted = split_env > 0 ||
+        (split_env < 0 && omarchy::sdpa_split_default(decode_caps.device_name, static_cast<uint32_t>(k_len)));
+    if (split_wanted && split_device_ready &&
+        (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
+        q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
+        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && q_len == 1 &&
+        head_dim == 128 && v_dim == 128 && k_len > 0 && 1048577 > k_len &&
+        (split_group == 1u || split_group == 2u || split_group == 4u || split_group == 8u) &&
+        q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
+        k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 && v.strides()[1] % 2 == 0 && v.strides()[2] % 2 == 0) {
+      omarchy::ComputeParams split_params;
+      split_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+      split_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+      if (split_params.rhs_offset % 8u == 0u && split_params.aux_offset % 2u == 0u) {
+        out.set_data(allocate_omarchy(out.nbytes()));
+        split_params.count = checked_u32(out.size(), tag, out);
+        split_params.matrix_m = checked_u32(heads, tag, out);
+        split_params.matrix_n = checked_u32(kv_heads, tag, out);
+        split_params.matrix_k = checked_u32(k_len, tag, out);
+        split_params.alpha = scale_;
+        split_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+        split_params.output_offset = checked_item_offset(out, out.size(), tag, out);
+        split_params.shape[0] = checked_u32(q.strides()[1], tag, out);
+        split_params.shape[1] = checked_u32(k.strides()[1], tag, out);
+        split_params.shape[2] = checked_u32(k.strides()[2], tag, out);
+        split_params.shape[3] = checked_u32(q.strides()[3], tag, out);
+        split_params.in_strides[0] = checked_u32(k.strides()[3], tag, out);
+        split_params.in_strides[1] = checked_u32(v.strides()[1], tag, out);
+        split_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
+        split_params.in_strides[3] = checked_u32(v.strides()[3], tag, out);
+        const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + 127u) / 128u;
+        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * 130u;
+        array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
+        scratch.set_data(allocate_omarchy(scratch.nbytes()));
+        encoder.add_temporary(scratch);
+        std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+        omarchy::ComputeKernel split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
+        if (split_group == 1u) {
+          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;
+        } else if (split_group == 2u) {
+          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128;
+        } else if (split_group == 8u) {
+          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
+        }
+        encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
+        std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128, split_pass2, split_params, split_params.matrix_m);
+        return;
+      }
+    }
+  }
   if ((decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
       decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
       !output_logsumexp_ && decode_batch_ok &&

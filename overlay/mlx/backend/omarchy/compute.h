@@ -1056,6 +1056,12 @@ enum class ComputeKernel : uint16_t {
   GatedDeltaDecodeBF16PfComposedGqa,
   // Untiled prefetch GDN decode with thirty-two state words in flight per round trip (gated_delta_decode_perrow_pf.comp -DGDN_PF_WIDE), default order, bf16 A_log; Dk a multiple of 32. Appended so earlier ids do not move.
   GatedDeltaDecodeBF16PfWide,
+  // Split-K bf16 single-query decode SDPA, head width 128: pass 1 per (key-value head, block of 128 keys) for 1, 2, 4 or 8 query heads per key-value head (sdpa_decode_split_p1.comp -DSPLIT_R=N), pass 2 per query head (sdpa_decode_split_p2.comp). Appended so earlier ids do not move.
+  SdpaDecodeSplitP1R1BF16Hd128,
+  SdpaDecodeSplitP1R2BF16Hd128,
+  SdpaDecodeSplitP1R4BF16Hd128,
+  SdpaDecodeSplitP1R8BF16Hd128,
+  SdpaDecodeSplitP2BF16Hd128,
   Count,
 };
 

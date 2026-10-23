@@ -1,0 +1,16 @@
+SDPA-RUN start 2026-10-23T13:13:41Z mode timed boot=1549278c kernel=7.1.12-2-20261013.18-sep-ARCH gov=performance load1=0.42 settle=na
+SDPA-RUN tree libmlx 8533393455ca0f8c
+SDPA-RUN sdpa_bench_far.py a5bb36d730c3a4d0 driver vulkan-f144c7949b mx=0.32.4.dev202610231001+48908ca libmlx=a9738db49ca96906
+SDPA-RUN arm default (MLX_AB_UNUSED=1)
+SDPA mlx 0.32.4.dev202610231240+6943e37 device Device(gpu, 0)
+SDPA kv 8192: independent 709.4 us per call (47.3 GB/s of K+V, best 701.1 us); chain 738.5 us per call (best 735.6)
+SDPA kv 16384: independent 1339.1 us per call (50.1 GB/s of K+V, best 1307.2 us); chain 1384.7 us per call (best 1364.6)
+SDPA kv 32768: independent 2484.5 us per call (54.0 GB/s of K+V, best 2470.0 us); chain 2571.0 us per call (best 2555.7)
+SDPA done
+SDPA-RUN arm split0 (MLX_OMARCHY_SDPA_DECODE_SPLIT=0)
+SDPA mlx 0.32.4.dev202610231240+6943e37 device Device(gpu, 0)
+SDPA kv 8192: independent 11349.7 us per call (3.0 GB/s of K+V, best 11327.6 us); chain 11263.8 us per call (best 11254.1)
+SDPA kv 16384: independent 22353.9 us per call (3.0 GB/s of K+V, best 22345.6 us); chain 22353.7 us per call (best 22344.1)
+SDPA kv 32768: independent 45283.5 us per call (3.0 GB/s of K+V, best 44537.1 us); chain 44494.4 us per call (best 44487.1)
+SDPA done
+SDPA-RUN end 2026-10-23T13:14:07Z load1=0.40

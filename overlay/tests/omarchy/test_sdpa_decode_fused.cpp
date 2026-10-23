@@ -9,12 +9,14 @@
 // by the host-side dispatch counter (valid on any Vulkan device); the
 // fused-route assertions only run when the capability probe shows the f16
 // sentinel engaging, so software drivers skip them by name instead of
-// testing the composition twice.
+// testing the composition twice. The split-K route (test_sdpa_split.cpp) is the default for bf16 head width 128 decode on some parts, so
+// every assertion here runs with it switched off: they judge the fused kernel.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +35,8 @@
 using namespace mlx::core;
 
 namespace {
+
+[[maybe_unused]] const int kPinFusedRoute = setenv("MLX_OMARCHY_SDPA_DECODE_SPLIT", "0", 1);
 
 // Qwen2.5-0.5B decode attention shape.
 constexpr int kHeads = 14;
