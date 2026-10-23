@@ -1,0 +1,12 @@
+steps 7599 mean NLL base 1.39821 split 1.40089 ref 1.39471
+split - base: mean +0.00268 nats, 95% interval [+0.00055, +0.00486]
+split - ref: mean +0.00617 nats, 95% interval [+0.00429, +0.00800]
+base - ref: mean +0.00350 nats, 95% interval [+0.00174, +0.00531]
+positions 0-950: base-ref +0.00094 split-ref +0.00141 split-base +0.00047
+positions 950-1900: base-ref +0.00434 split-ref +0.01088 split-base +0.00654
+positions 1900-2850: base-ref +0.00277 split-ref +0.00683 split-base +0.00406
+positions 2850-3800: base-ref +0.01305 split-ref +0.01049 split-base -0.00256
+positions 3800-4750: base-ref +0.00231 split-ref +0.00680 split-base +0.00449
+positions 4750-5700: base-ref +0.00193 split-ref +0.00449 split-base +0.00256
+positions 5700-6650: base-ref -0.00059 split-ref +0.00160 split-base +0.00219
+positions 6650-7599: base-ref +0.00321 split-ref +0.00687 split-base +0.00365

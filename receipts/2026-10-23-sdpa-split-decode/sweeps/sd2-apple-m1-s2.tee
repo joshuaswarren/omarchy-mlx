@@ -1,0 +1,34 @@
+SDPA-RUN start 2026-10-23T10:28:44Z mode timed boot=1549278c kernel=7.1.12-2-20261013.18-sep-ARCH gov=performance load1=0.34 settle=na
+SDPA-RUN tree libmlx 031d1d1063630006
+SDPA-RUN sdpa_bench.py bb92f74de1a744e7 driver vulkan-f144c7949b mx=0.32.4.dev202610231001+48908ca libmlx=a9738db49ca96906
+SDPA-RUN arm default (MLX_AB_UNUSED=1)
+SDPA mlx 0.32.4.dev202610230958+01e8256 device Device(gpu, 0)
+SDPA kv 128: independent 76.3 us per call (6.9 GB/s of K+V, best 76.1 us); chain 91.5 us per call (best 91.2)
+SDPA kv 256: independent 123.9 us per call (8.5 GB/s of K+V, best 123.5 us); chain 140.2 us per call (best 139.7)
+SDPA kv 500: independent 368.2 us per call (5.6 GB/s of K+V, best 366.3 us); chain 390.4 us per call (best 382.3)
+SDPA kv 1024: independent 716.8 us per call (5.9 GB/s of K+V, best 715.8 us); chain 747.7 us per call (best 735.6)
+SDPA kv 2048: independent 1402.9 us per call (6.0 GB/s of K+V, best 1395.3 us); chain 1438.5 us per call (best 1437.8)
+SDPA kv 4096: independent 2790.5 us per call (6.0 GB/s of K+V, best 2786.3 us); chain 2843.5 us per call (best 2840.5)
+SDPA kv 8192: independent 11332.0 us per call (3.0 GB/s of K+V, best 11271.1 us); chain 11262.2 us per call (best 11256.3)
+SDPA done
+SDPA-RUN arm split (MLX_OMARCHY_SDPA_DECODE_SPLIT=1)
+SDPA mlx 0.32.4.dev202610230958+01e8256 device Device(gpu, 0)
+SDPA kv 128: independent 75.7 us per call (6.9 GB/s of K+V, best 75.2 us); chain 78.6 us per call (best 78.1)
+SDPA kv 256: independent 77.6 us per call (13.5 GB/s of K+V, best 77.1 us); chain 80.6 us per call (best 80.4)
+SDPA kv 500: independent 82.3 us per call (24.9 GB/s of K+V, best 82.1 us); chain 87.7 us per call (best 87.0)
+SDPA kv 1024: independent 106.2 us per call (39.5 GB/s of K+V, best 105.8 us); chain 112.6 us per call (best 112.5)
+SDPA kv 2048: independent 221.2 us per call (37.9 GB/s of K+V, best 219.3 us); chain 233.9 us per call (best 232.4)
+SDPA kv 4096: independent 425.2 us per call (39.5 GB/s of K+V, best 417.7 us); chain 455.7 us per call (best 453.4)
+SDPA kv 8192: independent 711.8 us per call (47.1 GB/s of K+V, best 699.4 us); chain 739.6 us per call (best 733.5)
+SDPA done
+SDPA-RUN arm native0 (MLX_OMARCHY_SDPA_DECODE_NATIVE=0)
+SDPA mlx 0.32.4.dev202610230958+01e8256 device Device(gpu, 0)
+SDPA kv 128: independent 262.4 us per call (2.0 GB/s of K+V, best 261.2 us); chain 265.1 us per call (best 258.7)
+SDPA kv 256: independent 451.0 us per call (2.3 GB/s of K+V, best 448.0 us); chain 451.2 us per call (best 448.5)
+SDPA kv 500: independent 820.7 us per call (2.5 GB/s of K+V, best 816.9 us); chain 815.0 us per call (best 813.0)
+SDPA kv 1024: independent 1587.1 us per call (2.6 GB/s of K+V, best 1586.7 us); chain 1585.6 us per call (best 1582.6)
+SDPA kv 2048: independent 2976.8 us per call (2.8 GB/s of K+V, best 2972.0 us); chain 2976.9 us per call (best 2968.6)
+SDPA kv 4096: independent 5725.6 us per call (2.9 GB/s of K+V, best 5720.6 us); chain 5724.5 us per call (best 5713.4)
+SDPA kv 8192: independent 11269.1 us per call (3.0 GB/s of K+V, best 11264.9 us); chain 11269.5 us per call (best 11264.0)
+SDPA done
+SDPA-RUN end 2026-10-23T10:29:22Z load1=0.38

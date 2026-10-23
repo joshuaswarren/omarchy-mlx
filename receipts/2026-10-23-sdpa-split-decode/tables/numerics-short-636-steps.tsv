@@ -1,0 +1,4 @@
+Arm	Agreement	Flips	NLL	NLL against reference	mean dlp
+reference (float32)			1.56809		
+base (old route)	631 of 636	5	1.57184	+0.2396%	0.03823
+split	629 of 636	7	1.57197	+0.2474%	0.03607

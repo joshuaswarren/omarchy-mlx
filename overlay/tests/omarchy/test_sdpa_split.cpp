@@ -264,7 +264,8 @@ TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the 
     CHECK(on.launched == off.launched);
     CHECK(on.out == off.out);
   }
-  // Flag unset: the route follows the part rule of this device at 300 keys and at 1000 keys, with the bits and dispatch count of the route it names.
+  // Flag unset: the route follows the part rule of this device at 300 keys and at 1000 keys (one shape, 32 query heads and 8 key-value heads), with the bits and
+  // dispatch count of the route it names.
   const std::string part = omarchy::device(0).capabilities().device_name;
   for (int n : {300, 1000}) {
     Stored kn = make_bf16(pattern(static_cast<size_t>(kv_heads) * n * 128, 6, 1.0f), Shape{1, kv_heads, n, 128}, stream);

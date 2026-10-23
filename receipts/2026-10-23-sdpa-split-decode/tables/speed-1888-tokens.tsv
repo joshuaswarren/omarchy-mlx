@@ -1,0 +1,4 @@
+Chip, kernel	default	split0	Change	Rounds	Digest default	Digest split0
+Apple M1, stock	16.5 tok/s	9.8	+68.37%	+68.37 +69.39 +69.39 +68.37 +68.37	4232861db0522fd8	8e68ea1ec2d62fcc
+Apple M1 Max, 12.6 stock	55.5	28.2	+96.81%	+96.81 +94.33 +96.81 +96.44 +96.81	4232861db0522fd8	8e68ea1ec2d62fcc
+Apple M2 Max, stock	58.1	32.5	+78.77%	+75.00 +74.77 +79.69 +78.77 +79.14	4232861db0522fd8	8e68ea1ec2d62fcc

@@ -1,0 +1,6 @@
+Keys	Apple M1 chain	Apple M1 Max chain	Apple M2 Max chain
+128	91.5 against 78.6	40.9 against 78.9	46.6 against 86.6
+256	139.8 against 81.3	63.9 against 81.7	66.2 against 87.1
+320	236.1 against 83.3	107.3 against 82.5	89.1 against 86.1
+448	344.3 against 86.4	151.0 against 84.3	127.2 against 86.8
+1024	745.8 against 113.2	316.4 against 89.4	257.8 against 94.0

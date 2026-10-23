@@ -1,0 +1,18 @@
+stage run boot 45a04bcb kernel 7.1.12-2-20261013.18-egpu-ARCH driver 40282811c6e14ef9 start 2026-10-23T13:06:40Z load1 2.05
+f11e9552c6a13b0c3b4d7baa16611acf7e2934aee0857550e74b38a83f3ae11f  omarchy_sdpa_split_tests-6943e37a
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   7 |   7 passed | 0 failed | 0 skipped
+[doctest] assertions: 217 | 217 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_sdpa_split_tests rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: omarchy_sdpa_split_tests [doctest] assertions: 217 | 217 passed | 0 failed |
+825528a0a3dba269870f83a339b158f3ecfc55601e5fccb18d5538121a79099d  omarchy_sdpa_decode_fused_tests-6943e37a
+
+===============================================================================
+[doctest] test cases:      7 |      7 passed | 0 failed | 0 skipped
+[doctest] assertions: 100490 | 100490 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_sdpa_decode_fused_tests rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: omarchy_sdpa_decode_fused_tests [doctest] assertions: 100490 | 100490 passed | 0 failed |
+done 2026-10-23T13:06:41Z rc 0
