@@ -11,7 +11,7 @@ export VK_DRIVER_FILES=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
 echo "stage $stage boot $(cut -c1-8 /proc/sys/kernel/random/boot_id) kernel $(uname -r) sha $sha start $(date -u +%FT%TZ) load1 $(cut -d' ' -f1 /proc/loadavg)"
 if [ "$stage" = build ]; then
   [ -d "$src/.git" ] || git clone -q --filter=blob:none https://github.com/joshuaswarren/omarchy-mlx "$src"
-  git -C "$src" fetch -q origin vocab-tail-g14c
+  git -C "$src" fetch -q origin pull/269/head
   git -C "$src" reset -q --hard "$sha"
   [ "$(git -C "$src" rev-parse HEAD)" = "$sha" ] || { echo "HEAD is not $sha"; exit 1; }
   cd "$src"
