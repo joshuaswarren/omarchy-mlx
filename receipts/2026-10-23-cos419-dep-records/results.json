@@ -1,0 +1,93 @@
+{
+  "status": "not accepted as a performance speedup; candidate reverted, receipt only",
+  "hardware": {
+    "gpu": "Apple M1 Max G13C",
+    "gpu_cores": 32,
+    "kernel": "7.1.12-2-20261013.18-egpu-ARCH",
+    "driver_sha256": "40282811c6e14ef991f72936bb675008cb4d6b3199b1785bc34c7976ab89c425"
+  },
+  "model": {
+    "name": "Qwen3.5-9B-MLX-4bit",
+    "snapshot": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+    "model_library_sha256": "5b077a35686d98cd14caa3ac0063da1e8870985c96e7bda1a86802d50e604188",
+    "harness_arguments": [
+      477,
+      128
+    ],
+    "warmup_tokens_per_process": 8
+  },
+  "before": {
+    "model": "Qwen3.5-9B-MLX-4bit",
+    "arch": "qwen3_5",
+    "load_s": 2.84,
+    "prompt_tokens": 443,
+    "prefill_tok_s": 303.4,
+    "ttft_ms": 1460.4,
+    "gen_tokens": 128,
+    "decode_tok_s": 39.9,
+    "peak_mem_gb": 5.39,
+    "weights_gb": 5.95,
+    "tokens_sha": "9a142db605d5939d"
+  },
+  "after": {
+    "model": "Qwen3.5-9B-MLX-4bit",
+    "arch": "qwen3_5",
+    "load_s": 2.14,
+    "prompt_tokens": 443,
+    "prefill_tok_s": 303.8,
+    "ttft_ms": 1458.5,
+    "gen_tokens": 128,
+    "decode_tok_s": 39.8,
+    "peak_mem_gb": 5.39,
+    "weights_gb": 5.95,
+    "tokens_sha": "9a142db605d5939d"
+  },
+  "point_changes_pct": {
+    "decode_change_pct": -0.25062656641604564,
+    "prefill_change_pct": 0.13183915622940745,
+    "ttft_change_pct": -0.13010134209806568
+  },
+  "provenance": {
+    "before": {
+      "wheel_version": "0.32.4.dev202610231341+7337e3f",
+      "native_library_sha256": "1dc9b5913c96151de909583b89b0caf6aca69e4e25907c75d8036f701808e7f9",
+      "record_hashes_match": true,
+      "initial_load1": 0.4833984375
+    },
+    "after": {
+      "wheel_version": "0.32.4.dev202610231438+018f80f",
+      "native_library_sha256": "2779cc0f94ca5b95e5ce234ff310d2d62ee3fb927ab556ca41cb3ccdb69406aa",
+      "record_hashes_match": true,
+      "initial_load1": 0.4443359375
+    }
+  },
+  "protocol": {
+    "before_processes": 1,
+    "after_processes": 1,
+    "repeated_baselines": 0,
+    "measurement_admissions": 2,
+    "same_boot_kernel_driver_governors_model_library": true,
+    "ane_clients_at_both_preflights": 0,
+    "single_admission_requirement_met": false,
+    "deviation": "BEFORE completed; immediate AFTER CPU-idle preflight rejected. AFTER-only resumed under a new scheduler grant. No whole-pair rerun.",
+    "interpretation": "No useful performance gain established: decode point estimate fell 0.25%; prefill/TTFT differences about 0.13%. Split admissions also violate the preregistered single-window acceptance."
+  },
+  "correctness": {
+    "token_digest_prefix_equal": true,
+    "digest_format": "unchanged harness tokens_sha prefix, not a full SHA256 digest",
+    "hazards_wave_0": {
+      "selected_cases_passed": 1,
+      "assertions_passed": 22,
+      "failed": 0,
+      "other_cases_filtered_out": 58,
+      "capability_skip_messages": 0
+    },
+    "hazards_wave_1": {
+      "selected_cases_passed": 1,
+      "assertions_passed": 22,
+      "failed": 0,
+      "other_cases_filtered_out": 58,
+      "capability_skip_messages": 0
+    }
+  }
+}
