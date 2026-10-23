@@ -92,9 +92,13 @@ Independent reads can avoid that barrier
 ([encoder.cpp:158-227](../overlay/mlx/backend/omarchy/encoder.cpp#L158-L227),
 [encoder.cpp:741-801](../overlay/mlx/backend/omarchy/encoder.cpp#L741-L801)).
 
-Dispatches retain the byte-range tracker that enforces GPU ordering.
-The earlier phase-1 host dependency-export records had no consumer; their
-per-dispatch signature hashing and unbounded record vector have been removed.
+The default dependency-export path also hashes binding signatures and appends a host-side `DepRecord` per compute dispatch.
+Those records have no reader or clear operation in this implementation.
+Their vector stays with the encoder
+([encoder.cpp:137-143](../overlay/mlx/backend/omarchy/encoder.cpp#L137-L143),
+[encoder.cpp:782-801](../overlay/mlx/backend/omarchy/encoder.cpp#L782-L801),
+[encoder.h:567-581](../overlay/mlx/backend/omarchy/encoder.h#L567-L581)).
+These records are separate from the range tracker that enforces GPU ordering.
 
 Wave scheduling is a separate, opt-in path.
 It buffers commands and orders them into dependency waves at submission.
