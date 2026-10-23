@@ -47,21 +47,21 @@ Parts where the default stays off:
 
 Qwen3.5-9B on the Apple M2 Max (G14C, egpu kernel, `numerics/m2-9b/`): the ArgMax and ArgMin index of every arm equals the base index and the numpy float64 index at 636 of 636 steps, for the float32 log-probability row and for the bf16 row. Top-1 agreement 636 of 636 in every arm. The bf16 LogSumExp is bit-equal to base at 636 of 636 steps. The float32 LogSumExp error against float64: base mean 1.053e-06, max 8.030e-06. With the chunked route: mean 5.645e-07, max 2.073e-06. The next-token log-probability differs from base by at most 8e-06 and equals base bit for bit at 481 of 636 steps. Mean negative log-likelihood +0.0001 percent. `argc` equals base bit for bit at all 636 steps.
 
-Qwen3.8-2B on the Apple M1 Max (G13C, egpu kernel, `numerics/m1max-2b/`) and the Apple M1 (G13G, stock kernel, `numerics/m1-2b/`): the same checks pass with the same figures on both: indices equal 636 of 636 in every arm, bf16 LogSumExp bit-equal 636 of 636, float32 LogSumExp error base mean 2.268e-06 max 6.786e-06 against 5.097e-07 and 1.775e-06 with the chunked route, bit-equal to base at 206 of 636 steps. The two chips print the same figures on these captures.
+Qwen3.8-2B on the Apple M1 Max (G13C, egpu kernel, `numerics/m1max-2b/`) and the Apple M1 (G13G, stock kernel, `numerics/m1-2b/`): the same checks pass with the same figures on both: indices equal 636 of 636 in every arm, bf16 LogSumExp bit-equal 636 of 636, float32 LogSumExp error base mean 2.268e-06 max 6.786e-06 against 5.097e-07 and 1.775e-06 with the chunked route, bit-equal to base at 206 of 636 steps. The two chips print the same figures on these captures, and the capture files of the Apple M1 Max (G13C) and the Apple M1 (G13G) are byte-identical for every arm and segment (`sha256sum numerics/m1max-2b/captures/*/* numerics/m1-2b/captures/*/*` pairs them). The run headers do not print the device. The M1 Max ran on the 16-inch machine and the M1 on the 13-inch machine, each with the Apple GPU through the honeykrisp driver.
 
 The bf16 LogSumExp error against float64 (`scripts/tailhist.py`, `numerics/*/tailhist.out`) is at most half a bf16 step of the result plus 1e-5 at 636 of 636 steps in every arm on all three captures (the step is 0.0625 for a value from 8 to 16 and 0.125 from 16 to 32). The mean error is 0.19 half-steps on the 9B and 0.42 on the 2B, equal in every arm. So the bf16 outputs differ from the correctly rounded value only by the output rounding, and the arms are indistinguishable there. The one gate not run is the full float32 CPU forward of the model: the change touches only the final reduction, and the per-op check above bounds its error against float64.
 
-## Doctest (ticket-logs/)
+## Doctest (run-logs/)
 
 `doctest-vocab-tail-run.out`: `omarchy_vocab_tail_tests` built at 3acfb9f2 passes 6 of 6 test cases and 6952 of 6952 assertions on the Apple M2 Max, no case skipped, exit code 0. The cases check the chunked ArgMax and ArgMin index against the single-workgroup kernel and a host reference for float32, bf16 and float16 at widths 8192 to 1048576 with ties, NaN, infinities and signed zeros, the LogSumExp error against float64, the route gates (rows of 8191 and 1048577 columns and integer rows keep one dispatch), and the two new cases: the part rule, and the launch count with flags unset (2 on G14C, 1 elsewhere), `0` (1) and `1` (2). `doctest-vocab-tail-build.out` is the build. The run is a GPU run on the M2; the default test reads the device name it runs on.
 
 ## Limits
 
-One text, one chip per part, one boot per run, three models. The default also applies to every unmeasured model on G14C with a vocabulary row from 8192 to 1048576 columns. The Qwen3-4B gain of 2.74 percent is below 3 percent. The 2B is neutral. The M1 Max and M1 rows show no gain, and the rule leaves them off. LogSumExp bits change on G14C for every caller, within the error shown above.
+One text and one prompt of 477 tokens, one chip per part, one boot per run, three models. The default also applies to every unmeasured model on G14C with a vocabulary row from 8192 to 1048576 columns. The Qwen3-4B gain of 2.74 percent is below 3 percent. The 2B is neutral. The M1 Max and M1 rows show no gain, and the rule leaves them off. LogSumExp bits change on G14C for every caller, within the error shown above.
 
 ## Timing and thermal procedure
 
-Every timed run is one ticket in a solo window: no other GPU or ANE job, and the load average read at the start. The script aborts above a load of 1.3 and settles 100 seconds before the first sample. The governor is performance. Samples run as one process each, the arms interleave, and the order rotates. The numerics and census runs are not timed and ran as normal queue tickets.
+Every timed run is one queue job with no other GPU or ANE job running, and the load average is read at the start. The script aborts above a load of 1.3 and settles 100 seconds before the first sample. The governor is performance. Samples run as one process each, the arms interleave, and the order rotates. The numerics and census runs are not timed and ran as normal queue jobs.
 
 ## Reopen
 
