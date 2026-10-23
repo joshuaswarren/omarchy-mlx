@@ -915,6 +915,89 @@ TEST_CASE(
   check_close(actual, expected, stream, 1e-5);
 }
 
+// The conv tests above feed contiguous arrays. Real graphs hand conv a
+// slice of a larger activation: here the origin {0, 1, 2, 0} leaves a
+// nonzero buffer offset and the step-2 height walk leaves a
+// non-row-contiguous layout, so the conv materializes the operand from
+// its strided storage before dispatch. Nonunit stride {2, 3} and kernel
+// dilation {2, 2} then scatter every tap: a lost view offset or a wrong
+// stride shows up as shifted rows or garbage columns, and a wrong tap
+// arithmetic shows up against the host reference. The parent is larger
+// than the view on every spatial axis so a misread touches filler data,
+// not just shifted-but-valid samples.
+TEST_CASE(
+    "[conv-gaps] noncontiguous offset-view Convolution with kernel dilation matches host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Shape parent_shape{1, 13, 11, 3};
+  Shape in_shape{1, 6, 9, 3};
+  Shape wt_shape{4, 3, 3, 3};
+  auto parent_value = [](int h, int w, int c) {
+    return 0.2f * static_cast<float>(((h * 37 + w * 91 + c * 17) % 23) - 11);
+  };
+  auto wt_value = [](int o, int ky, int kx, int c) {
+    return 0.25f *
+        static_cast<float>(((o * 53 + ky * 29 + kx * 71 + c * 13) % 19) - 9);
+  };
+  std::vector<float> parent(1 * 13 * 11 * 3);
+  std::vector<float> wt(4 * 3 * 3 * 3);
+  for (int h = 0; h < 13; ++h) {
+    for (int w = 0; w < 11; ++w) {
+      for (int c = 0; c < 3; ++c) {
+        parent[(h * 11 + w) * 3 + c] = parent_value(h, w, c);
+      }
+    }
+  }
+  for (int o = 0; o < 4; ++o) {
+    for (int ky = 0; ky < 3; ++ky) {
+      for (int kx = 0; kx < 3; ++kx) {
+        for (int c = 0; c < 3; ++c) {
+          wt[((o * 3 + ky) * 3 + kx) * 3 + c] = wt_value(o, ky, kx, c);
+        }
+      }
+    }
+  }
+  std::vector<float> in(1 * 6 * 9 * 3);
+  for (int h = 0; h < 6; ++h) {
+    for (int w = 0; w < 9; ++w) {
+      for (int c = 0; c < 3; ++c) {
+        in[(h * 9 + w) * 3 + c] = parent_value(1 + 2 * h, 2 + w, c);
+      }
+    }
+  }
+  array in_view = slice(
+      array(parent.begin(), parent_shape, float32),
+      {0, 1, 2, 0},
+      {1, 13, 11, 3},
+      {1, 2, 1, 1},
+      stream);
+  REQUIRE_EQ(in_view.shape(), in_shape);
+  in_view.eval();
+  sync_stream(stream);
+  Conv2DSpec spec;
+  spec.stride_h = 2;
+  spec.stride_w = 3;
+  spec.pad_lo_h = 1;
+  spec.pad_lo_w = 1;
+  spec.pad_hi_h = 1;
+  spec.pad_hi_w = 1;
+  spec.kernel_dilation_h = 2;
+  spec.kernel_dilation_w = 2;
+  auto expected = host_conv2d_general(in, wt, in_shape, wt_shape, spec);
+  auto actual = conv2d(
+      in_view,
+      array(wt.begin(), wt_shape, float32),
+      {spec.stride_h, spec.stride_w},
+      {spec.pad_lo_h, spec.pad_lo_w},
+      {spec.kernel_dilation_h, spec.kernel_dilation_w},
+      1,
+      stream);
+  REQUIRE_EQ(actual.shape(), (Shape{1, 2, 3, 4}));
+  check_close(actual, expected, stream, 1e-5);
+}
+
 TEST_CASE(
     "[conv-gaps] FP16 grouped 2-D Convolution matches host reference") {
   if (!compute_available()) {

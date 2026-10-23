@@ -15,6 +15,8 @@
 // reduce_size-element chunks, passes the chunks-per-row count in
 // rhs_size, and sorts each chunk with the block-parity direction the
 // k <= 1024 network stages leave behind.
+// Small rows use stable ranks to avoid a barrier at every bitonic stage.
+// The rank loop is bounded to 128 elements; larger rows retain the network.
 
 #version 460
 
@@ -237,34 +239,44 @@ void main() {
       row_indices[index] = index_base(row, index);
     }
     barrier();
-    for (uint k = 2u; k <= padded; k <<= 1u) {
-      for (uint j = k >> 1u; j > 0u; j >>= 1u) {
-        barrier();
-        for (uint index = thread; index < padded; index += 256u) {
-          uint partner = index ^ j;
-          if (partner > index) {
-            KEY_TYPE key = row_keys[index];
-            uint index_key = row_indices[index];
-            KEY_TYPE partner_key = row_keys[partner];
-            uint partner_index_key = row_indices[partner];
-            // Row mode runs the full bitonic network, so the direction
-            // flips with each k-block: (index & k) == 0. Chunk mode runs
-            // the same local network, but its final stage (k == padded)
-            // must leave the chunk in the direction the global merge
-            // network's first stages produce: even chunks ascending,
-            // odd chunks descending.
-            bool ascending = (index & k) == 0u;
-            if (params.rhs_size != 0u && k == padded) {
-              ascending = (row & 1u) == 0u;
-            }
-            bool swap = ascending
-                ? key_less(partner_key, partner_index_key, key, index_key)
-                : key_less(key, index_key, partner_key, partner_index_key);
-            if (swap) {
-              row_keys[index] = partner_key;
-              row_indices[index] = partner_index_key;
-              row_keys[partner] = key;
-              row_indices[partner] = index_key;
+    if (params.rhs_size == 0u && row_length <= 128u) {
+      KEY_TYPE key = PAD_KEY;
+      uint rank = 0u;
+      if (thread < row_length) {
+        key = row_keys[thread];
+        for (uint other = 0u; other < row_length; ++other) {
+          rank += uint(key_less(row_keys[other], other, key, thread));
+        }
+      }
+      barrier();
+      if (thread < row_length) {
+        row_keys[rank] = key;
+        row_indices[rank] = thread;
+      }
+    } else {
+      for (uint k = 2u; k <= padded; k <<= 1u) {
+        for (uint j = k >> 1u; j > 0u; j >>= 1u) {
+          barrier();
+          for (uint index = thread; index < padded; index += 256u) {
+            uint partner = index ^ j;
+            if (partner > index) {
+              KEY_TYPE key = row_keys[index];
+              uint index_key = row_indices[index];
+              KEY_TYPE partner_key = row_keys[partner];
+              uint partner_index_key = row_indices[partner];
+              bool ascending = (index & k) == 0u;
+              if (params.rhs_size != 0u && k == padded) {
+                ascending = (row & 1u) == 0u;
+              }
+              bool swap = ascending
+                  ? key_less(partner_key, partner_index_key, key, index_key)
+                  : key_less(key, index_key, partner_key, partner_index_key);
+              if (swap) {
+                row_keys[index] = partner_key;
+                row_indices[index] = partner_index_key;
+                row_keys[partner] = key;
+                row_indices[partner] = index_key;
+              }
             }
           }
         }

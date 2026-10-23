@@ -4052,6 +4052,65 @@ TEST_CASE("sort and argsort order last-axis rows through Vulkan compute") {
   check_indices(argsort(flat, 0, stream), {1, 3, 0, 2}, stream);
 }
 
+TEST_CASE("small router rows preserve stable score and index association") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (Dtype dtype : {float32, float16, bfloat16}) {
+    for (int length : {16, 31, 32, 64, 127, 128, 129}) {
+      CAPTURE(dtype);
+      CAPTURE(length);
+      std::vector<float> values(3 * length);
+      for (int row = 0; row < 3; ++row) {
+        for (int i = 0; i < length; ++i) {
+          values[row * length + i] = ((i * 37 + row * 13) % 23) - 11;
+        }
+        values[row * length + 1] = -0.0f;
+        values[row * length + 2] = 0.0f;
+        values[row * length + 3] = std::numeric_limits<float>::infinity();
+        values[row * length + 4] = -std::numeric_limits<float>::infinity();
+        values[row * length + 5] = std::numeric_limits<float>::quiet_NaN();
+        values[row * length + 6] = std::numeric_limits<float>::quiet_NaN();
+      }
+      array backing(values.begin(), Shape{3, length}, dtype);
+      array input = slice(backing, {1, 0}, {3, length}, stream);
+      std::vector<uint32_t> expected;
+      for (int row = 1; row < 3; ++row) {
+        std::vector<uint32_t> order(length);
+        std::iota(order.begin(), order.end(), 0u);
+        std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+          float lhs = values[row * length + a];
+          float rhs = values[row * length + b];
+          if (std::isnan(lhs) != std::isnan(rhs)) {
+            return std::isnan(rhs);
+          }
+          return !std::isnan(lhs) && lhs < rhs;
+        });
+        expected.insert(expected.end(), order.begin(), order.end());
+      }
+      check_indices(argsort(input, -1, stream), expected, stream);
+      array sorted = astype(sort(input, -1, stream), float32, stream);
+      sorted.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const float* got = sorted.data<float>();
+      for (int row = 0; row < 2; ++row) {
+        for (int i = 0; i < length; ++i) {
+          float want = values[(row + 1) * length + expected[row * length + i]];
+          if (std::isnan(want)) {
+            CHECK(std::isnan(got[row * length + i]));
+          } else {
+            CHECK_EQ(got[row * length + i], want);
+            if (want == 0.0f) {
+              CHECK_EQ(std::signbit(got[row * length + i]), std::signbit(want));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST_CASE("sort places NaN after every number through Vulkan compute") {
   if (!compute_available()) {
     return;
