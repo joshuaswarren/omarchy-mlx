@@ -1,0 +1,17 @@
+stage run boot <id> kernel 7.1.12-2-20261013.18-egpu-ARCH sha 3acfb9f2b1f1558206b556c55bb094a18098cdaa start 2026-10-23T05:34:53Z load1 1.16
+c5af0f0aa9e73fb959f56612e0eb207ee22488206810f503f9a38b1b1495e2ee  $HOME/work/src-vtail/.work/build/tests/omarchy/omarchy_vocab_tail_tests
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:    6 |    6 passed | 0 failed | 0 skipped
+[doctest] assertions: 6952 | 6952 passed | 0 failed |
+[doctest] Status: SUCCESS!
+doctest rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: [doctest] assertions: 6952 | 6952 passed | 0 failed |
+done 2026-10-23T05:34:55Z rc 0
+est cases:    6 |    6 passed | 0 failed | 0 skipped
+[doctest] assertions: 6952 | 6952 passed | 0 failed |
+[doctest] Status: SUCCESS!
+doctest rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: [doctest] assertions: 6952 | 6952 passed | 0 failed |
+done 2026-10-23T05:34:55Z rc 0

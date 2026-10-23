@@ -1,0 +1,29 @@
+TNUM start 2026-10-23T05:35:01Z boot=<id> kernel=7.1.12-2-20261013.18-egpu-ARCH governor=performance load1=1.14
+TNUM tfref-tail 2b30fdc3b67610cd tfcmp 9a38455f19f9eb86 tailchk 91718c4008c11102 text 3972dc9744f6499f model index dd023913fb87cfda libmlx 60c698ba4827a2a4
+TNUM arm base rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610221002+94f5ac8 files 4
+TNUM arm argc rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610221002+94f5ac8 files 4
+TNUM arm lsec rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610221002+94f5ac8 files 4
+TNUM arm both rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610221002+94f5ac8 files 4
+TNUM arm base2 rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610221002+94f5ac8 files 4
+TFCMP segments [0, 1, 2, 3] steps per segment {0: 159, 1: 159, 2: 159, 3: 159} total 636
+TFCMP reference mean NLL 0.59344
+base2 | 636/636 = 100.00% | 0 | 0.59344 | +0.0000 | 0.00000 | 0.00000 | 0.0000
+argc | 636/636 = 100.00% | 0 | 0.59344 | +0.0000 | 0.00000 | 0.00000 | 0.0000
+lsec | 636/636 = 100.00% | 0 | 0.59344 | +0.0001 | 0.00000 | 0.00000 | 0.0000
+both | 636/636 = 100.00% | 0 | 0.59344 | +0.0001 | 0.00000 | 0.00000 | 0.0000
+TFCMP base2 vs argc: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00000, bit-equal steps 636/636
+TFCMP base2 vs lsec: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00001, bit-equal steps 481/636
+TFCMP base2 vs both: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00001, bit-equal steps 481/636
+TFCMP argc vs lsec: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00001, bit-equal steps 481/636
+TFCMP argc vs both: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00001, bit-equal steps 481/636
+TFCMP lsec vs both: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00000, bit-equal steps 636/636
+TAILCHK base2: steps 636, argmax index equal 636/636, argmin index equal 636/636, argmax = own top-1 636/636, max |d log-prob| 0.000000; model-dtype row: argmax index equal 636/636, argmin index equal 636/636, LogSumExp bit-equal 636/636, max |d LogSumExp| 0.000000
+TAILCHK base2 against float64 on the captured row: bf16 LogSumExp error mean 0.011966 max 0.062424; float32 LogSumExp error mean 1.053e-06 max 8.030e-06; model-dtype row index equals the host float64 numpy index: argmax 636/636, argmin 636/636
+TAILCHK argc: steps 636, argmax index equal 636/636, argmin index equal 636/636, argmax = own top-1 636/636, max |d log-prob| 0.000000; model-dtype row: argmax index equal 636/636, argmin index equal 636/636, LogSumExp bit-equal 636/636, max |d LogSumExp| 0.000000
+TAILCHK argc against float64 on the captured row: bf16 LogSumExp error mean 0.011966 max 0.062424; float32 LogSumExp error mean 1.053e-06 max 8.030e-06; model-dtype row index equals the host float64 numpy index: argmax 636/636, argmin 636/636
+TAILCHK lsec: steps 636, argmax index equal 636/636, argmin index equal 636/636, argmax = own top-1 636/636, max |d log-prob| 0.000008; model-dtype row: argmax index equal 636/636, argmin index equal 636/636, LogSumExp bit-equal 636/636, max |d LogSumExp| 0.000000
+TAILCHK lsec against float64 on the captured row: bf16 LogSumExp error mean 0.011966 max 0.062424; float32 LogSumExp error mean 5.645e-07 max 2.073e-06; model-dtype row index equals the host float64 numpy index: argmax 636/636, argmin 636/636
+TAILCHK both: steps 636, argmax index equal 636/636, argmin index equal 636/636, argmax = own top-1 636/636, max |d log-prob| 0.000008; model-dtype row: argmax index equal 636/636, argmin index equal 636/636, LogSumExp bit-equal 636/636, max |d LogSumExp| 0.000000
+TAILCHK both against float64 on the captured row: bf16 LogSumExp error mean 0.011966 max 0.062424; float32 LogSumExp error mean 5.645e-07 max 2.073e-06; model-dtype row index equals the host float64 numpy index: argmax 636/636, argmin 636/636
+TNUM tailchk rc=0
+TNUM end 2026-10-23T05:37:03Z

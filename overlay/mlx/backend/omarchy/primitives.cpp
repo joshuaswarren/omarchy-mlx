@@ -4025,15 +4025,18 @@ static bool walk_prefetch_enabled(omarchy::CommandEncoder& encoder) {
 // Chunked routes for long rows (argreduce_chunk.comp + argreduce_combine.comp,
 // logsumexp_chunk.comp + logsumexp_combine.comp): the row is cut into
 // kChunkedRowChunk-element chunks, one workgroup each, and a second dispatch
-// merges the per-chunk pairs. Both routes are off unless their flag is "1",
-// read live on every call.
+// merges the per-chunk pairs. Each route follows its flag when the flag is set ("1" on, any other value off) and the part's default
+// (vocab_tail_chunked_default) when it is unset; the flag is read live on every call.
 static constexpr size_t kChunkedRowChunk = 4096;
 static constexpr size_t kChunkedRowMin = 8192;
 static constexpr size_t kChunkedRowMaxChunks = 256;
 
-static bool chunked_flag_enabled(const char* name) {
+static bool chunked_flag_enabled(const char* name, bool default_on) {
   const char* value = std::getenv(name);
-  return value != nullptr && std::string(value) == "1";
+  if (value == nullptr) {
+    return default_on;
+  }
+  return std::string(value) == "1";
 }
 
 // Chunks per row for the chunked routes, or 0 when the row keeps the
@@ -4077,7 +4080,9 @@ void dispatch_arg_reduce_suffix(
   bool float_row = src.dtype() == float32 || src.dtype() == float16 ||
       src.dtype() == bfloat16;
   uint32_t chunks = float_row &&
-          chunked_flag_enabled("MLX_OMARCHY_ARGREDUCE_CHUNKED")
+          chunked_flag_enabled(
+              "MLX_OMARCHY_ARGREDUCE_CHUNKED",
+              omarchy::vocab_tail_chunked_default(encoder.device().capabilities().device_name))
       ? chunked_row_chunks(row_length, rows)
       : 0;
   if (chunks != 0) {
@@ -7371,7 +7376,9 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (!walk_prefetch_enabled(encoder)) {
     params.flags |= kWalkLegacyFlag;
   }
-  uint32_t chunks = chunked_flag_enabled("MLX_OMARCHY_LSE_CHUNKED")
+  uint32_t chunks = chunked_flag_enabled(
+                        "MLX_OMARCHY_LSE_CHUNKED",
+                        omarchy::vocab_tail_chunked_default(encoder.device().capabilities().device_name))
       ? chunked_row_chunks(row_length, rows)
       : 0;
   if (chunks != 0) {

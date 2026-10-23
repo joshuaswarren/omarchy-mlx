@@ -452,3 +452,40 @@ TEST_CASE("chunked logsumexp: route gate and fallback bytes") {
   run_lse(in.x, false, &launched, stream);
   CHECK(launched == 1);
 }
+
+TEST_CASE("vocab tail default: the part rule") {
+  CHECK(omarchy::vocab_tail_chunked_default("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::vocab_tail_chunked_default(""));
+}
+
+// Launches of one ArgMax or one LogSumExp over the row with the flags as the environment holds them.
+static uint64_t tail_launches(const array& x, bool arg, const Stream& stream) {
+  uint64_t before = dispatches();
+  array r = arg ? argmax(x, -1, false, stream) : logsumexp(x, std::vector<int>{-1}, false, stream);
+  r.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  return dispatches() - before;
+}
+
+TEST_CASE("vocab tail default: unset flags follow the part, a set flag wins") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Input in = make_input(pattern(0, 20000, 5), 1, 20000, float32, stream);
+  bool on = omarchy::vocab_tail_chunked_default(omarchy::device(0).capabilities().device_name);
+  for (bool arg : {true, false}) {
+    const char* name = arg ? "MLX_OMARCHY_ARGREDUCE_CHUNKED" : "MLX_OMARCHY_LSE_CHUNKED";
+    unsetenv("MLX_OMARCHY_ARGREDUCE_CHUNKED");
+    unsetenv("MLX_OMARCHY_LSE_CHUNKED");
+    CHECK(tail_launches(in.x, arg, stream) == (on ? 2u : 1u));
+    setenv(name, "0", 1);
+    CHECK(tail_launches(in.x, arg, stream) == 1);
+    setenv(name, "1", 1);
+    CHECK(tail_launches(in.x, arg, stream) == 2);
+  }
+  unsetenv("MLX_OMARCHY_ARGREDUCE_CHUNKED");
+  unsetenv("MLX_OMARCHY_LSE_CHUNKED");
+}
