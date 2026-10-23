@@ -94,6 +94,12 @@ namespace {
 // composed fallback chain always pick the same row-reduction order and
 // stay bit-identical at every shape.
 bool apple_norm_shape_selected(size_t row_length, size_t rows) {
+  if (row_length == 4096u) {
+    // 4096-wide rows (Qwen3.5-9B hidden size): on unless MLX_OMARCHY_NORM_APPLE_4096 is set to a false value, read live.
+    return rows <= 64u &&
+        (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") == nullptr ||
+         omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096"));
+  }
   if (row_length != 256u && row_length != 2048u) {
     return false;
   }
