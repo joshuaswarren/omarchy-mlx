@@ -1,0 +1,5 @@
+TAILHIST base: steps 636; bf16 LogSumExp error against float64 at most half a bf16 step + 1e-5: 636/636; error 0: 0/636; error in half-steps mean 0.194 max 0.999; float32 LogSumExp error mean 1.053e-06 max 8.030e-06
+TAILHIST base2: steps 636; bf16 LogSumExp error against float64 at most half a bf16 step + 1e-5: 636/636; error 0: 0/636; error in half-steps mean 0.194 max 0.999; float32 LogSumExp error mean 1.053e-06 max 8.030e-06
+TAILHIST argc: steps 636; bf16 LogSumExp error against float64 at most half a bf16 step + 1e-5: 636/636; error 0: 0/636; error in half-steps mean 0.194 max 0.999; float32 LogSumExp error mean 1.053e-06 max 8.030e-06
+TAILHIST lsec: steps 636; bf16 LogSumExp error against float64 at most half a bf16 step + 1e-5: 636/636; error 0: 0/636; error in half-steps mean 0.194 max 0.999; float32 LogSumExp error mean 5.645e-07 max 2.073e-06
+TAILHIST both: steps 636; bf16 LogSumExp error against float64 at most half a bf16 step + 1e-5: 636/636; error 0: 0/636; error in half-steps mean 0.194 max 0.999; float32 LogSumExp error mean 5.645e-07 max 2.073e-06
