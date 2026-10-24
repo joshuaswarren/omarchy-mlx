@@ -17,8 +17,12 @@ register() installs this class as mlx_lm.models.muse_spark, also when the instal
 reads the native checkpoint layout and imports the eight fused Metal kernels, so it does not load the community checkpoints on a Vulkan backend. Set
 MLX_OMARCHY_MUSE_UPSTREAM=1 to keep the mlx-lm module instead; register() then does nothing.
 This package changes no mlx-lm file. It does not change the memory a model needs: the 3bit file is 359 GB.
+MLX_OMARCHY_MUSE_FUSE_GATE_UP=1 (off by default) fuses the routed experts' gate and up projections after the weights load (fuse_gate_up). It is bit-identical to the
+separate calls on the CPU test shapes; its speed on the Vulkan backend is not measured, and it needs one layer's expert weights of extra memory while it runs.
+It does nothing in a ring run (MLX_RANK or MLX_HOSTFILE set): pipeline ranks load unfused until a hook exists that fuses after the layers are pruned.
 """
 
+import copy
 import importlib
 import importlib.util
 import os
@@ -32,6 +36,7 @@ MODEL_NAME = "mlx_lm.models.muse_spark"
 MODEL_PATH = Path(__file__).with_name("muse_spark.py")
 SOURCE_SHA256 = "9b507590febd23224368b794d73baf0b2f2003e9b78cabf9200a781f7f1dc749"
 PRUNE_ENV = "MLX_OMARCHY_PIPELINE_PRUNE"
+FUSE_ENV = "MLX_OMARCHY_MUSE_FUSE_GATE_UP"
 
 
 def _install_prune(module) -> None:
@@ -84,6 +89,74 @@ def _install_prune(module) -> None:
     module.MuseSparkModel.pipeline = pipeline
 
 
+def fuse_gate_up(model) -> int:
+    """Fuse the routed experts' gate and up projections into one gather_qmm per MoE layer. Return the number of layers fused.
+
+    Affine quantization packs every output row on its own, so concatenating the up and gate expert weights along the output axis and
+    running one gather_qmm over [E, 2 x intermediate, hidden] computes the same per-column sums as two calls and removes one launch per MoE layer
+    per token. The idea is oMLX's gate+up fusion (jundot/omlx pull request 4573); the code here is ours and uses only mx operations.
+    Only quantized experts with equal bits, group size and mode and no bias are fused; a layer that is not (or is not owned by this pipeline
+    rank) is left alone. The fused weights are a copy: free the originals with the references this function drops, and expect one layer's expert
+    weights of extra memory while it runs."""
+    import mlx.core as mx
+
+    switch = sys.modules["mlx_lm.models.switch_layers"]
+
+    class FusedGateUpSwitchGLU(switch.SwitchGLU):
+        def __call__(self, x, indices):
+            x = mx.expand_dims(x, (-2, -3))
+            indices = mx.stop_gradient(indices)
+            do_sort = indices.size >= 64
+            idx = indices
+            inv_order = None
+            if do_sort:
+                x, idx, inv_order = switch._gather_sort(x, indices)
+            up, gate = mx.split(self.gate_up_proj(x, idx, sorted_indices=do_sort), 2, axis=-1)
+            x = self.down_proj(self.activation(up, gate), idx, sorted_indices=do_sort)
+            if do_sort:
+                x = switch._scatter_unsort(x, inv_order, indices.shape)
+            return x.squeeze(-2)
+
+    fused_layers = 0
+    for layer in model.model.layers:
+        mlp = getattr(layer, "mlp", None)
+        glu = getattr(mlp, "switch_mlp", None)
+        if glu is None or "gate_proj" not in glu or "up_proj" not in glu:
+            continue
+        gate, up = glu.gate_proj, glu.up_proj
+        if not (isinstance(gate, switch.QuantizedSwitchLinear) and isinstance(up, switch.QuantizedSwitchLinear)):
+            continue
+        if (gate.bits, gate.group_size, gate.mode) != (up.bits, up.group_size, up.mode) or "bias" in gate or "bias" in up:
+            continue
+        if (gate.get("biases") is None) != (up.get("biases") is None):
+            continue
+        fused = copy.copy(gate)
+        fused.weight = mx.concatenate([up.weight, gate.weight], axis=1)
+        fused.scales = mx.concatenate([up.scales, gate.scales], axis=1)
+        if gate.get("biases") is not None:
+            fused.biases = mx.concatenate([up.biases, gate.biases], axis=1)
+        mx.eval(fused.parameters())
+        glu.gate_up_proj = fused
+        del glu["gate_proj"], glu["up_proj"]
+        glu.__class__ = FusedGateUpSwitchGLU
+        fused_layers += 1
+    return fused_layers
+
+
+def _install_fuse(module) -> None:
+    """Opt in with MLX_OMARCHY_MUSE_FUSE_GATE_UP=1: fuse_gate_up runs once after the weights are loaded.
+
+    Not in a ring run (MLX_RANK or MLX_HOSTFILE set): mlx-lm's sharded_load calls load_weights on the whole lazy model BEFORE it prunes the layers this rank does
+    not own, so fusing there would read every layer's experts from disk, and its later load_weights would find no gate_proj to fill. Those ranks run unfused."""
+    load_weights = module.Model.load_weights
+
+    def load_and_fuse(self, file_or_weights, strict=True):
+        result = load_weights(self, file_or_weights, strict=strict)
+        if "MLX_RANK" not in os.environ and "MLX_HOSTFILE" not in os.environ:
+            fuse_gate_up(self)
+        return result
+
+    module.Model.load_weights = load_and_fuse
 
 
 def is_registered() -> bool:
@@ -111,8 +184,10 @@ def register() -> bool:
         raise
     if os.environ.get(PRUNE_ENV) == "1":
         _install_prune(module)
+    if os.environ.get(FUSE_ENV) == "1":
+        _install_fuse(module)
     setattr(importlib.import_module("mlx_lm.models"), "muse_spark", module)
     return True
 
 
-__all__ = ["MODEL_NAME", "MODEL_PATH", "SOURCE_SHA256", "is_registered", "register"]
+__all__ = ["MODEL_NAME", "MODEL_PATH", "SOURCE_SHA256", "fuse_gate_up", "is_registered", "register"]
