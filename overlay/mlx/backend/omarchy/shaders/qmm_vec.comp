@@ -100,9 +100,6 @@ uint16_t bf16_store(float value) {
 #ifndef ROWS_PER_SLOT
 #define ROWS_PER_SLOT 1
 #endif
-#ifndef SLOTS_PER_GROUP
-#define SLOTS_PER_GROUP 8
-#endif
 #if ROWS_PER_SLOT != 1 && !defined(QMM_VEC_TOKENS) && \
     (!defined(USE_SUBGROUP) || !(defined(USE_FP16) || defined(USE_BF16)))
 #error "ROWS_PER_SLOT > 1 needs USE_SUBGROUP and a packed x view"
@@ -110,6 +107,12 @@ uint16_t bf16_store(float value) {
 #if defined(QMM_VEC_TOKENS) && \
     (ROWS_PER_SLOT != 2 || !defined(USE_BF16) || !defined(QMM_VEC_Q4_WORD))
 #error "QMM_VEC_TOKENS builds on the bf16 packed-x multi column"
+#endif
+#ifndef SLOTS_PER_GROUP
+#define SLOTS_PER_GROUP 8
+#endif
+#if defined(QMM_VEC_RMSNORM) && SLOTS_PER_GROUP != 8
+#error "QMM_VEC_RMSNORM requires 256 workgroup threads"
 #endif
 #if defined(QMM_VEC_BATCH) && \
     (ROWS_PER_SLOT != 2 || !defined(USE_BF16) || !defined(QMM_VEC_Q4_WORD) || \
@@ -119,11 +122,12 @@ uint16_t bf16_store(float value) {
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
 #endif
-// The x fetch inside Q4_WORD / Q4_ROWS: the out-gate prologue variant
-// (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors
-// instead of reading the product; every other variant reads input_x.
+// The x fetch inside Q4_WORD / Q4_ROWS transforms packed x for the
+// single-prologue variants; every other variant reads input_x directly.
 #if defined(QMM_VEC_OUTGATE)
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#elif defined(QMM_VEC_RMSNORM)
+#define OUTGATE_XWORDS(x_base) rmsnorm_quad((x_base) / 8u)
 #else
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
@@ -182,6 +186,69 @@ QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#if defined(QMM_VEC_RMSNORM)
+layout(set = 0, binding = 28, std430) readonly buffer RmsNormWeight {
+  uvec4 values[];
+} rmsnorm_weight;
+layout(set = 0, binding = 29, std430) writeonly buffer RmsNormOutput {
+  uvec4 values[];
+} rmsnorm_output;
+shared float rmsnorm_block_values[256];
+shared float rmsnorm_inverse;
+shared uint rmsnorm_write_output;
+float rmsnorm_value(uint index) {
+  uvec4 packed = input_x.values[index / 8u];
+  uint word = packed[(index / 2u) & 3u];
+  uint half_bits = (index & 1u) == 0u ? word & 0xFFFFu : word >> 16u;
+  return uintBitsToFloat(half_bits << 16u);
+}
+void rmsnorm_prologue(uint row_length, uint row_start, float epsilon,
+                      uint flags) {
+  uint thread = gl_LocalInvocationID.x;
+  float local_sq = 0.0;
+  for (uint index = thread; index < row_length; index += 256u) {
+    float value = rmsnorm_value(row_start + index);
+    local_sq += value * value;
+  }
+  rmsnorm_block_values[thread] = local_sq;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) {
+      rmsnorm_block_values[thread] += rmsnorm_block_values[thread + stride];
+    }
+    barrier();
+  }
+  if (thread == 0u) {
+    float mean_square = rmsnorm_block_values[0] / float(row_length);
+    rmsnorm_inverse = inversesqrt(mean_square + epsilon);
+    rmsnorm_write_output = (flags & 524288u) != 0u ? 1u : 0u;
+  }
+  barrier();
+}
+uint rmsnorm_word(uint input_bits, uint weight_bits) {
+  float value = uintBitsToFloat(input_bits << 16u);
+  float weight = uintBitsToFloat(weight_bits << 16u);
+  return uint(bf16_store(value * rmsnorm_inverse * weight));
+}
+uvec4 rmsnorm_quad(uint quad_index) {
+  uvec4 packed_x = input_x.values[quad_index];
+  uvec4 weights = rmsnorm_weight.values[quad_index];
+  uvec4 normalized = {
+    rmsnorm_word(packed_x.x & 0xFFFFu, weights.x & 0xFFFFu) |
+        (rmsnorm_word(packed_x.x >> 16u, weights.x >> 16u) << 16u),
+    rmsnorm_word(packed_x.y & 0xFFFFu, weights.y & 0xFFFFu) |
+        (rmsnorm_word(packed_x.y >> 16u, weights.y >> 16u) << 16u),
+    rmsnorm_word(packed_x.z & 0xFFFFu, weights.z & 0xFFFFu) |
+        (rmsnorm_word(packed_x.z >> 16u, weights.z >> 16u) << 16u),
+    rmsnorm_word(packed_x.w & 0xFFFFu, weights.w & 0xFFFFu) |
+        (rmsnorm_word(packed_x.w >> 16u, weights.w >> 16u) << 16u)
+  };
+  if (gl_WorkGroupID.x == 0u && rmsnorm_write_output != 0u) {
+    rmsnorm_output.values[quad_index] = normalized;
+  }
+  return normalized;
+}
+#endif
 #if defined(QMM_VEC_OUTGATE)
 // Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
 // exact arithmetic and rounding of the two elementwise kernels the
@@ -1014,6 +1081,10 @@ void main() {
   } \
 }
 void main() {
+#if defined(QMM_VEC_RMSNORM)
+  rmsnorm_prologue(
+      params.matrix_k, params.lhs_offset, params.alpha, params.flags);
+#endif
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;

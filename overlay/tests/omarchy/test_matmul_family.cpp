@@ -33,6 +33,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
+#include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
@@ -5886,6 +5887,76 @@ TEST_CASE("cpu quantized matmul full-row dot matches host at large K") {
 
   run_case(16384, 8, 64, 4); // the reported failure: 256 groups, bf16
   run_case(8256, 4, 64, 4); // 129-group tail: non-power-of-two group count
+}
+
+TEST_CASE("QMM RMSNorm multi-output prologue matches composed bf16 decode bits") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.subgroup_size != 32u ||
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0u ||
+      !caps.storage_buffer_16bit_access) {
+    skip("no 32-lane subgroup arithmetic");
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(2901);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  constexpr int n = 16;
+  constexpr float eps = 1e-5f;
+  for (int k : {2560, 4096}) {
+    std::vector<float> x_values(k);
+    std::vector<float> norm_weight_values(k);
+    for (float& value : x_values) value = dist(gen);
+    for (float& value : norm_weight_values) value = dist(gen);
+    array x = astype(array(x_values.begin(), Shape{1, k}, float32),
+                     bfloat16, stream);
+    array norm_weight = astype(
+        array(norm_weight_values.begin(), Shape{k}, float32), bfloat16, stream);
+    std::vector<array> weight_words, scales, biases;
+    for (int i = 0; i < 3; ++i) {
+      std::vector<float> matrix(static_cast<size_t>(n) * k);
+      for (float& value : matrix) value = dist(gen);
+      HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 64, 4);
+      host.scales = round_trip(stream, host.scales, bfloat16);
+      host.biases = round_trip(stream, host.biases, bfloat16);
+      weight_words.emplace_back(host.words.begin(), Shape{n, k / 8}, uint32);
+      scales.emplace_back(host.scales.begin(), Shape{n, k / 64}, bfloat16);
+      biases.emplace_back(host.biases.begin(), Shape{n, k / 64}, bfloat16);
+    }
+    array composed_norm = fast::rms_norm(x, norm_weight, eps, stream);
+    std::vector<omarchy::GemvFusionMember> baseline_members;
+    for (int i = 0; i < 3; ++i) {
+      array node = quantized_matmul(
+          composed_norm, weight_words[i], scales[i], biases[i], true,
+          64, 4, "affine", stream);
+      baseline_members.push_back(
+          {node, std::nullopt, std::nullopt, std::nullopt});
+    }
+    REQUIRE(omarchy::dispatch_quantized_gemv_group(
+        baseline_members, nullptr, stream));
+    std::vector<std::vector<float>> expected;
+    for (const auto& member : baseline_members) {
+      expected.push_back(readback_f32(stream, member.node));
+    }
+    array variant_norm = fast::rms_norm(x, norm_weight, eps, stream);
+    std::vector<omarchy::GemvFusionMember> members;
+    for (int i = 0; i < 3; ++i) {
+      array node = quantized_matmul(
+          variant_norm, weight_words[i], scales[i], biases[i], true,
+          64, 4, "affine", stream);
+      members.push_back({node, std::nullopt, std::nullopt, std::nullopt});
+    }
+    omarchy::RmsNormPlan plan{x, norm_weight, eps, variant_norm};
+    REQUIRE(omarchy::dispatch_quantized_gemv_group(
+        members, nullptr, stream, nullptr, &plan));
+    CHECK(bits_identical(readback_f32(stream, variant_norm),
+                         readback_f32(stream, composed_norm)));
+    for (int i = 0; i < 3; ++i) {
+      CHECK(bits_identical(readback_f32(stream, members[i].node), expected[i]));
+    }
+  }
 }
 
 // MLX_OMARCHY_GATHER_QMM_ROWS 4 and 8 compute that many consecutive outputs per

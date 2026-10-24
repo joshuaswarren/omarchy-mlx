@@ -298,6 +298,7 @@
 #include "qmm_vec_q4_multi_f32.h"
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
+#include "qmm_vec_q4_multi_rmsnorm_bf16.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token4_bf16.h"
@@ -1724,6 +1725,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_outgate_bf16,
           qmm_vec_q4_multi_outgate_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiRmsNormBF16:
+      return {
+          qmm_vec_q4_multi_rmsnorm_bf16,
+          qmm_vec_q4_multi_rmsnorm_bf16_size};
     case ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16:
       return {
           qmm_vec_q4_multi_token4_subgroup_bf16,

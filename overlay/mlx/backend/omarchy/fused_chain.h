@@ -177,6 +177,12 @@ struct OutgatePlan {
   // reader when the plan attaches.
   std::uintptr_t sigmoid_id;
 };
+struct RmsNormPlan {
+  array input;
+  array weight;
+  float epsilon;
+  std::optional<array> output;
+};
 
 
 // Validates the group against the kernel contract, allocates every
@@ -196,8 +202,8 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
-
+    OutgatePlan* outgate = nullptr,
+    RmsNormPlan* rmsnorm = nullptr);
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
     const array& input,

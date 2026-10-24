@@ -8848,9 +8848,13 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    RmsNormPlan* rmsnorm) {
+  if (outgate != nullptr && rmsnorm != nullptr) {
+    return false;
+  }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
-      !q4_word_enabled()) {
+      !q4_word_enabled() || (rmsnorm != nullptr && swiglu_out != nullptr)) {
     return false;
   }
   // SwiGLU store epilogue: exactly the gate and up projections, no
@@ -8866,7 +8870,7 @@ bool dispatch_quantized_gemv_group(
   if (encoder.device().compute().binding_limit() < kQmmVecMultiBindings) {
     return false;
   }
-  const array& x = members[0].node.inputs().at(0);
+  const array& x = rmsnorm ? rmsnorm->input : members[0].node.inputs().at(0);
   const Dtype dtype = members[0].node.dtype();
   // Token rows (verify / small-batch): 2..M_TOKENS route to the
   // multi-token column (bf16; the out-gate prologue and producer-direct
@@ -8916,6 +8920,27 @@ bool dispatch_quantized_gemv_group(
         x.ndim() < 2 || x.shape(-2) != 1) {
       return false;
     }
+  } else if (rmsnorm != nullptr) {
+    const array& weight = rmsnorm->weight;
+    if (encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 5 ||
+        dtype != bfloat16 || !subgroup_ready || token_route ||
+        !float_dtype_supported(dtype, caps) || x.dtype() != bfloat16 ||
+        x.ndim() < 2 || x.shape(-2) != 1 ||
+        !whole_dense(x, x.size()) || !input_ready(x, stream) ||
+        x.data_shared_ptr() == nullptr || !x.flags().row_contiguous ||
+        x.offset() != 0 ||
+        weight.dtype() != bfloat16 || !whole_dense(weight, x.shape(-1)) ||
+        !input_ready(weight, stream) ||
+        weight.offset() != 0 ||
+        !std::isfinite(rmsnorm->epsilon) || rmsnorm->epsilon <= 0.0f ||
+        (rmsnorm->output &&
+         (rmsnorm->output->dtype() != bfloat16 ||
+          rmsnorm->output->size() != x.size() ||
+          !rmsnorm->output->flags().row_contiguous ||
+          rmsnorm->output->offset() != 0))) {
+      return false;
+    }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
       x.ndim() < 2 || (!token_route && x.shape(-2) != 1) ||
       !input_ready(x, stream) ||
@@ -8943,7 +8968,12 @@ bool dispatch_quantized_gemv_group(
   uint32_t total_groups = 0;
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
-    if (node.inputs().size() != 4 || node.inputs()[0].id() != x.id() ||
+    if (node.inputs().size() != 4 ||
+        (rmsnorm == nullptr
+             ? node.inputs()[0].id() != x.id()
+             : (rmsnorm->output
+                    ? node.inputs()[0].id() != rmsnorm->output->id()
+                    : node.inputs()[0].size() != x.size())) ||
         node.dtype() != dtype || node.primitive().stream() != stream ||
         typeid(node.primitive()) != typeid(QuantizedMatmul)) {
       return false;
@@ -9035,6 +9065,9 @@ bool dispatch_quantized_gemv_group(
   }
   params.matrix_k = static_cast<uint32_t>(k);
   params.dims = static_cast<uint32_t>(members.size());
+  if (rmsnorm != nullptr) {
+    params.alpha = rmsnorm->epsilon;
+  }
   uint64_t x_offset = x.offset() / x.itemsize();
   if (!compute_index_span_fits(x_offset, x.size())) {
     return false;
@@ -9080,6 +9113,9 @@ bool dispatch_quantized_gemv_group(
     // dispatch writes the product it recomputes, so retained
     // references stay valid.
     outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
+  }
+  if (rmsnorm != nullptr && rmsnorm->output) {
+    rmsnorm->output->set_data(allocator().malloc(rmsnorm->output->nbytes()));
   }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
@@ -9156,7 +9192,7 @@ bool dispatch_quantized_gemv_group(
       }
     }
   }
-  std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
+  std::array<ComputeBinding, kQmmVecMultiBindings + 5> bindings{};
   bindings[0] = binding(outgate != nullptr ? outgate->x : x);
   const ComputeBinding filler = binding(members[0].node);
   for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
@@ -9188,7 +9224,17 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
-  auto kernel = outgate != nullptr
+  if (rmsnorm != nullptr) {
+    bindings[kQmmVecMultiBindings + 3] = binding(rmsnorm->weight);
+    bindings[kQmmVecMultiBindings + 4] =
+        rmsnorm->output ? binding(*rmsnorm->output) : filler;
+    if (rmsnorm->output) {
+      params.flags |= 524288u;
+    }
+  }
+  auto kernel = rmsnorm != nullptr
+      ? ComputeKernel::QmmVecQ4MultiRmsNormBF16
+      : outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
       : token_route
       ? (rows > 4
