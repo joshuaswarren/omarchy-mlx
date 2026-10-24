@@ -1,0 +1,11 @@
+PREREG m3 (written before the build and the screen). Question: does starting the split route at 320 keys instead of 448 on the Apple M2 Max (G14C) speed up Qwen3-4B decode at short prompts, now that the value-phase pass 1 is the default up to 2048 keys (PR 275)?
+Evidence before the build: forced split+PV at every length against the fused default, prompt nominal 270 (256 real tokens, cache 256 to 384 keys) read 63.7 -> 67.3 tok/s (+5.7 percent, digest equal) on the Apple M2 Max (boot dcd857b9, sw-m2-pv2p270). The microbench chain times (fused against split+PV): 256 keys 65.7 / 68.0, 320 keys 89.7 / 64.3, 448 keys 127.4 / 66.1 microseconds.
+Change: sdpa_split_min_keys G14C 448 -> 320 (commit 7104ec94). G13C already starts at 320; G13G at 128; nothing else changes.
+Screen (swscreen8.sh, set m3, prompt nominal 270, 128 generated, 5 interleaved rounds, one process per sample), arms: main = tree-pv (3841edc1) with MLX_OMARCHY_SDPA_SPLIT_PV=1 (the behaviour of main after PR 275 below 448 keys: fused), rule = tree-m3 default routes, fused = tree-m3 with MLX_OMARCHY_SDPA_DECODE_SPLIT=0, ledger = installed wheel (reference only). Compare only inside one boot.
+Reading rules:
+ R1 Speed: rule over main median decode tok/s. Bar: at least +3 percent over 3 or more interleaved rounds with equal token digests. Below the bar: drop the change, say so.
+ R2 Neutrality: main and fused within 1 percent of each other (both are fused at these lengths); else the tree difference matters and the comparison is read against fused.
+ R3 Digests: rule digest equals main digest in every round, else numerics are measured as for PR 274 before any merge.
+ R4 Control: the real prompt length is read from prompt_tokens in the sample output and stated (nominal 270 is 256).
+ R5 Loss: a rule arm below -1 percent is reported with its key range.
+Every result row carries chip, kernel string, boot id, wheel version of both trees, libmlx hash and token digest from the run log.
