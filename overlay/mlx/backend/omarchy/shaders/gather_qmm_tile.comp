@@ -19,9 +19,9 @@
 // (gl_WorkGroupID.x), 256 threads; thread (tr, tc) owns rows 2tr, 2tr+1 and
 // columns 4tc..4tc+3. Per output element the k sum runs in ascending k with
 // the same dequantized value and multiply-add as gather_qmm.comp.
-// Binding, push-constant and packed-buffer layout equal gather_qmm.comp:
-// shape[0] the row count B, in_strides[0]/out_strides[0] the lhs/rhs index
-// word offsets, shape[1] the bias region byte base.
+// The seven-binding direct layout matches gather_qmm_sub.comp: shape[2:3]
+// carry scale/bias word offsets; in_strides[0]/out_strides[0] carry lhs/rhs
+// index word offsets. Parameters stay in their original buffers.
 
 #version 460
 
@@ -59,9 +59,9 @@ layout(local_size_x = 256) in;
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
   STORAGE_TYPE values[];
 } input_x;
-layout(set = 0, binding = 1, std430) readonly buffer PackedParams {
+layout(set = 0, binding = 1, std430) readonly buffer Scales {
   uint values[];
-} packed_params;
+} scale_params;
 layout(set = 0, binding = 2, std430) readonly buffer InputW {
   uint values[];
 } input_w;
@@ -69,8 +69,18 @@ layout(set = 0, binding = 3, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
 } output_data;
 
-#define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
-#define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
+layout(set = 0, binding = 4, std430) readonly buffer Biases {
+  uint values[];
+} bias_params;
+layout(set = 0, binding = 5, std430) readonly buffer LhsIndex {
+  uint values[];
+} lhs_index;
+layout(set = 0, binding = 6, std430) readonly buffer RhsIndex {
+  uint values[];
+} rhs_index;
+
+#define LHS_INDEX_AT(batch) lhs_index.values[lhs_word_base + (batch)]
+#define RHS_INDEX_AT(batch) rhs_index.values[rhs_word_base + (batch)]
 
 layout(push_constant) uniform Params {
   uint count;
@@ -96,10 +106,7 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-// Group parameter (scale or bias) at byte_offset in the packed word buffer,
-// in the storage dtype.
-float decode_param(uint byte_offset) {
-  uint word = packed_params.values[params.aux_offset + byte_offset / 4u];
+float decode_param(uint word, uint byte_offset) {
   uint half_index = byte_offset / 2u;
 #if defined(USE_FP16)
   uint shifted = (half_index & 1u) == 0u ? word : word >> 16u;
@@ -168,8 +175,9 @@ void main() {
         sX2[kk][row >> 1u][row & 1u] = v;
       }
       uint group = k0 / TK;
-      float scale = decode_param((scale_base + group) * PARAM_BYTES);
-      float bias = decode_param(params.shape[1] + (scale_base + group) * PARAM_BYTES);
+      uint byte_offset = (scale_base + group) * PARAM_BYTES;
+      float scale = decode_param(scale_params.values[params.shape[2] + byte_offset / 4u], byte_offset);
+      float bias = decode_param(bias_params.values[params.shape[3] + byte_offset / 4u], byte_offset);
       for (uint j = 0u; j < 2u; ++j) {
         uint word = input_w.values[w_base + (k0 >> 3u) + j];
         for (uint q = 0u; q < 8u; ++q) {

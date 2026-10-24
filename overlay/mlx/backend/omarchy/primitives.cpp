@@ -3346,6 +3346,9 @@ void dispatch_gather_qmm(
   // driver falls through to the per-row kernels instead of failing pipeline creation.
   constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
   const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  const char* direct_env = std::getenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
+  const bool direct_buffers = (direct_env == nullptr || direct_env[0] != '0') &&
+      encoder.device().compute().binding_limit() >= 7;
   const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
   const auto& tile_caps = encoder.device().capabilities();
   // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
@@ -3358,7 +3361,7 @@ void dispatch_gather_qmm(
   for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
     tile_experts *= static_cast<size_t>(w.shape(axis));
   }
-  const bool use_tile = right_sorted && !fp_mode && !no_bias && m == 1 && index_count >= 64 &&
+  const bool use_tile = direct_buffers && right_sorted && !fp_mode && !no_bias && m == 1 && index_count >= 64 &&
       index_count >= 4 * tile_experts &&
       (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
       group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
@@ -3392,14 +3395,7 @@ void dispatch_gather_qmm(
       !omarchy::compute_index_span_fits(params.rhs_offset, w.size())) {
     omarchy::unsupported(tag + " index span", out);
   }
-  // Decode route: bind the scales, biases and index arrays in place. The
-  // staged route below copies every scale and bias of every expert
-  // (15.9 MB per call at 128 experts) to select a few, which is 212 of
-  // 493 us per call on the M2 (notebook H86).
-  const char* direct_env = std::getenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
-  if ((use_sub || use_sub_q3) && !use_tile && !no_bias &&
-      (direct_env == nullptr || direct_env[0] != '0') &&
-      encoder.device().compute().binding_limit() >= 7) {
+  if ((use_sub || use_sub_q3 || use_tile) && !no_bias && direct_buffers) {
     params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 4);
     params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 4);
     params.in_strides[0] = static_cast<uint32_t>(lhs_d.offset() / 4);
@@ -3412,6 +3408,17 @@ void dispatch_gather_qmm(
         binding(*biases_d),
         binding(lhs_d),
         binding(rhs_d)};
+    if (use_tile) {
+      encoder.dispatch_compute(
+          out.dtype() == float16 ? omarchy::ComputeKernel::GatherQmmTileF16
+                                 : omarchy::ComputeKernel::GatherQmmTileBF16,
+          direct_bindings,
+          params,
+          static_cast<uint32_t>(n / 64),
+          tile_row_groups,
+          1u);
+      return;
+    }
     // Word-per-lane kernel (shaders/gather_qmm_word.comp): bf16, 4-bit group 64 or
     // 2-bit group 64 or 128. One 32-lane slot per output element, scales and biases
     // addressed in 16-bit elements, x read as uvec4 (x element offset a multiple of
@@ -3586,19 +3593,6 @@ void dispatch_gather_qmm(
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x_d), binding(packed), binding(w_d), binding(out)};
   omarchy::ComputeKernel kernel;
-  if (use_tile) {
-    const omarchy::ComputeKernel tile_kernel = out.dtype() == float16
-        ? omarchy::ComputeKernel::GatherQmmTileF16
-        : omarchy::ComputeKernel::GatherQmmTileBF16;
-    encoder.dispatch_compute(
-        tile_kernel,
-        bindings,
-        params,
-        static_cast<uint32_t>(n / 64),
-        tile_row_groups,
-        1u);
-    return;
-  }
   if (fp_mode) {
     if (out.dtype() == float32) {
       kernel = use_sub_fp ? omarchy::ComputeKernel::GatherQmmNbSubFpF32
