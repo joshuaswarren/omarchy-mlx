@@ -363,6 +363,10 @@ TEST_CASE("split-K decode SDPA: single-dispatch merge stress, 448, 1024 and 4096
   if (!compute_available()) {
     return;
   }
+  if (!split_device_ready()) {
+    printf("Skipping: split route not available on this device\n");
+    return;
+  }
   Stream stream = gpu_stream();
   const int heads = 32, kv_heads = 8, width = 128;
   const float scale = 1.0f / std::sqrt(128.0f);
@@ -378,14 +382,18 @@ TEST_CASE("split-K decode SDPA: single-dispatch merge stress, 448, 1024 and 4096
       for (int rep = 0; rep < 40; ++rep) {
         Run one = run_attention(q.x, k.x, v.x, scale, "1", stream);
         mismatches += one.out != base.out;
+        CHECK(one.launched == 1);
         ++outputs;
       }
       std::vector<array> group;
       for (int rep = 0; rep < 40; ++rep) {
         group.push_back(fast::scaled_dot_product_attention(q.x, k.x, v.x, scale, "", {}, std::nullopt, false, stream));
         if (group.size() == 16 || rep == 39) {
+          const uint64_t before_group = dispatches();
           eval(group);
           omarchy::get_command_encoder(stream).synchronize();
+          // One dispatch per call: a part that takes another route would pass vacuously otherwise.
+          CHECK(dispatches() - before_group == group.size());
           for (const array& r : group) {
             mismatches += flat(r, stream) != base.out;
             ++outputs;
