@@ -15729,7 +15729,7 @@ void ScaledDotProductAttention::eval_gpu(
         // unset or empty follows omarchy::sdpa_split_pv_default. Needs V element offset, head stride and key stride multiples of 4.
         const int pv_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV");
         const bool pv_aligned = split_params.aux_offset % 4u == 0u && v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0;
-        const bool pv = pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name)));
+        const bool pv = pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
         if (split_group == 1u) {
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;

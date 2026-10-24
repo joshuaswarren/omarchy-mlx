@@ -1,0 +1,29 @@
+PREFLIGHT-RUN
+SETTLE load1=0.48 SETTLED
+GPU-TIMEOUTS before=0 boot=55bab24a-8036-4486-bb92-37c3b1350fd4
+stage run boot 55bab24a kernel 7.1.12-2-20261013.18-egpu-ARCH sha 3841edc18a872c06a2ffc38308f2a566111211d2 start 2026-10-24T01:03:37Z load1 0.48
+b0d0d07a551f4576d68d2a534edf6b012613aa86f889f208f3a282457e976388  omarchy_sdpa_split_tests
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   8 |   8 passed | 0 failed | 0 skipped
+[doctest] assertions: 411 | 411 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_sdpa_split_tests rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: omarchy_sdpa_split_tests [doctest] assertions: 411 | 411 passed | 0 failed |
+b3817b661ddd8d78d52fe2945354acffde652ac3bf418e9d73e7e1c94b049b80  omarchy_sdpa_decode_fused_tests
+  logged: keys := 320
+
+===============================================================================
+[doctest] test cases:      7 |      7 passed | 0 failed | 0 skipped
+[doctest] assertions: 100490 | 100490 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_sdpa_decode_fused_tests rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: omarchy_sdpa_decode_fused_tests [doctest] assertions: 100490 | 100490 passed | 0 failed |
+done 2026-10-24T01:03:38Z rc 0
+GPU-TIMEOUTS after=0 delta=0
+tions: 100490 | 100490 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_sdpa_decode_fused_tests rc 0
+ALL CASES RAN, 0 FAILED, no case skipped: omarchy_sdpa_decode_fused_tests [doctest] assertions: 100490 | 100490 passed | 0 failed |
+done 2026-10-24T01:03:38Z rc 0
