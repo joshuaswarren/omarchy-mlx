@@ -14,7 +14,8 @@ inputs and the same inputs scaled by 8:
 
 `--only compiled` or `--only eager` evaluates one path once and exits, so a dispatch trace can count the kernels of that path.
 Exit status 0 only when every comparison is bit-identical.
-Usage: check_eager_swiglu_bits.py [--draws 64] [--only compiled|eager]
+Usage: check_eager_swiglu_bits.py [--draws 64] [--only compiled|eager] [--family next|qwen3]
+(--family qwen3 needs patch-mlx-lm-qwen3-eager-swiglu.py applied; the default family needs the Qwen3-Next patcher.)
 """
 import argparse
 import sys
@@ -22,14 +23,16 @@ import sys
 import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.activations import swiglu
+from mlx_lm.models.qwen3 import MLP as Qwen3MLP
 from mlx_lm.models.qwen3_next import Qwen3NextMLP
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--draws", type=int, default=64)
 ap.add_argument("--only", choices=("compiled", "eager"))
+ap.add_argument("--family", choices=("next", "qwen3"), default="next", help="next: Qwen3NextMLP (4096 x 12288); qwen3: dense Qwen3-4B MLP (2560 x 9728)")
 a = ap.parse_args()
 
-DIM, HIDDEN = 4096, 12288
+DIM, HIDDEN = (4096, 12288) if a.family == "next" else (2560, 9728)
 
 
 def same_bits(x, y):
@@ -37,7 +40,7 @@ def same_bits(x, y):
 
 
 mx.random.seed(20261014)
-mlp = Qwen3NextMLP(DIM, HIDDEN)
+mlp = (Qwen3NextMLP if a.family == "next" else Qwen3MLP)(DIM, HIDDEN)
 mlp.set_dtype(mx.bfloat16)
 nn.quantize(mlp, group_size=64, bits=4)
 mx.eval(mlp.parameters())
