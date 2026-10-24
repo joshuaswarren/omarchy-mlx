@@ -186,7 +186,9 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   Run split = run_attention(q.x, k, v, scale, "1", stream);
   setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
   Run split_pv = run_attention(q.x, k, v, scale, "1", stream);
-  // The BK=64 value-phase pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK=64) meets the same gates.
+  // The BK=64 value-phase pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK=64) meets the same gates. Two BK < D failure modes this guards: the
+  // per-thread query load covered only dims t < BK, leaving s_q dims 64 to 127 uninitialised (wrong scores), and the block output
+  // store covered only t < BK, leaving scratch value dims 64 to 127 unwritten (pass 2 folds garbage into output dims 64 to 127).
   setenv("MLX_OMARCHY_SDPA_SPLIT_BK", "64", 1);
   Run split_bk64 = run_attention(q.x, k, v, scale, "1", stream);
   unsetenv("MLX_OMARCHY_SDPA_SPLIT_BK");
@@ -307,6 +309,11 @@ TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the 
 TEST_CASE("split-K decode SDPA: cache lengths that are not multiples of 64 hit the BK=64 tail block") {
   if (!compute_available()) {
     return;
+  }
+  // Width 128 with 64 threads: catches a query load or block output store that covers only dims t < 64 (uninitialised s_q dims,
+  // unwritten scratch value dims); 65 and 1000 also hit a 64-key tail block.
+  for (int keys : {65, 1000}) {
+    check_shape(8, 8, keys, keys, 0, 1.0f);
   }
   for (int keys : {1, 63, 64, 65, 127, 129, 1000, 4097}) {
     check_shape(32, 8, keys, keys, 0, 1.0f);

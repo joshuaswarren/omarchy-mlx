@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Split-K pass 1, value-phase variant (selected by MLX_OMARCHY_SDPA_SPLIT_PV; same scratch layout and pass 2 as sdpa_decode_split_p1.comp). Phases 1 and 2 are the same; the weighted value sum uses 8-byte value loads:
-// BK lanes (BK a multiple of 32, default 128, 64 via -DBK=64u) cover the 128 dimensions in groups of four and the BK/32 subgroups each walk 32 of the BK keys, so the serial chain of dependent loads is 32 keys long instead of BK;
+// BK lanes (BK a multiple of 32, default 128, 64 via -DBK=64) cover the 128 dimensions in groups of four and the BK/32 subgroups each walk 32 of the BK keys, so the serial chain of dependent loads is 32 keys long instead of BK;
 // the BK/32 partial sums of a dimension are added in a fixed order through shared memory. Needs V element offset, head stride and key stride multiples of 4.
 //
 // Split-K pass 1 of the bf16 single-query decode SDPA, head width 128. One workgroup per (key-value head, block of 128 keys)
@@ -28,9 +28,9 @@
 #ifndef SPLIT_R
 #define SPLIT_R 4
 #endif
-// Keys per block and workgroup threads. 64 (two subgroups) via -DBK=64u.
+// Keys per block and workgroup threads. 64 (two subgroups) via -DBK=64.
 #ifndef BK
-#define BK 128u
+#define BK 128
 #endif
 
 layout(local_size_x = BK, local_size_y = 1, local_size_z = 1) in;
@@ -96,8 +96,15 @@ void main() {
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
+#if BK == 128
     s_q[r * D + t] = params.alpha * bf16_load(
         query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
+#else
+    for (uint d = t; d < D; d += BK) {
+      s_q[r * D + d] = params.alpha * bf16_load(
+          query_data.values[params.lhs_offset + head * params.shape[0] + d * params.shape[3]]);
+    }
+#endif
   }
   barrier();
 
@@ -218,10 +225,20 @@ void main() {
       scratch_data.values[base] = block_max[r];
       scratch_data.values[base + 1u] = s;
     }
+#if BK == 128
     float total = s_o[r * D + t];
     for (uint i = 1u; i < SUBGROUPS; ++i) {
       total += s_o[(i * SPLIT_R + r) * D + t];
     }
     scratch_data.values[base + 2u + t] = total;
+#else
+    for (uint d = t; d < D; d += BK) {
+      float total = s_o[r * D + d];
+      for (uint i = 1u; i < SUBGROUPS; ++i) {
+        total += s_o[(i * SPLIT_R + r) * D + d];
+      }
+      scratch_data.values[base + 2u + d] = total;
+    }
+#endif
   }
 }
