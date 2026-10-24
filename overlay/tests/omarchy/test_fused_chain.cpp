@@ -2148,3 +2148,27 @@ TEST_CASE("RMSNorm fold input eligibility rejects unsupported shapes and views")
   infinite_epsilon.epsilon = std::numeric_limits<float>::infinity();
   CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(infinite_epsilon));
 }
+TEST_CASE("QMM multi-output dispatch binding counts fit the runtime budget") {
+  using omarchy::QmmVecMultiBindingPath;
+  CHECK_EQ(
+      omarchy::qmm_vec_multi_binding_count(QmmVecMultiBindingPath::standard),
+      omarchy::kQmmVecMultiBindings + 3);
+  CHECK_EQ(
+      omarchy::qmm_vec_multi_binding_count(QmmVecMultiBindingPath::outgate),
+      omarchy::kQmmVecMultiBindings + 3);
+  CHECK_EQ(
+      omarchy::qmm_vec_multi_binding_count(QmmVecMultiBindingPath::rmsnorm),
+      omarchy::kQmmVecMultiBindings);
+  CHECK_LE(
+      omarchy::qmm_vec_multi_binding_count(QmmVecMultiBindingPath::standard),
+      omarchy::kComputeBindingBudget);
+  CHECK_LE(
+      omarchy::qmm_vec_multi_binding_count(QmmVecMultiBindingPath::outgate),
+      omarchy::kComputeBindingBudget);
+  CHECK_LE(
+      omarchy::qmm_vec_multi_binding_count(QmmVecMultiBindingPath::rmsnorm),
+      omarchy::kComputeBindingBudget);
+  CHECK_EQ(omarchy::kQmmVecRmsNormWeights, 3);
+  CHECK_EQ(omarchy::kQmmVecRmsNormWeightBinding, 19);
+  CHECK_EQ(omarchy::kQmmVecRmsNormOutputBinding, 20);
+}

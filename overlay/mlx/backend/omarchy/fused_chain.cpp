@@ -1443,7 +1443,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     auto norm_it = rmsnorm_plans.find(x_id);
     bool x_has_norm =
         norm_it != rmsnorm_plans.end() && x_rows == 1 &&
-        nodes.size() <= kQmmVecMultiWeights && uses[x_id] == nodes.size();
+        nodes.size() <= kQmmVecRmsNormWeights && uses[x_id] == nodes.size();
     // The multi-token Add epilogue fold has one deterministic divergence
     // on the AGX subgroup column (k=896 n=512 tokens=16, one element);
     // until root-caused the token route plans WITHOUT epilogues and the
@@ -1606,9 +1606,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     if (!producer || !is_op(producer, typeid(fast::RMSNorm)) ||
         producer->primitive().stream() != member_stream ||
         !group_inputs_match || uses[norm_output.id()] != group.members.size() ||
-        group.members.size() > kQmmVecMultiWeights ||
-        encoder.device().compute().binding_limit() <
-            kQmmVecMultiBindings + 5 ||
+        group.members.size() > kQmmVecRmsNormWeights ||
+        encoder.device().compute().binding_limit() < kQmmVecMultiBindings ||
         !rmsnorm_fold_input_eligible(
             {plan.input.dtype(),
              plan.weight.dtype(),

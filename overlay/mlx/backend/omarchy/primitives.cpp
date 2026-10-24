@@ -22,6 +22,7 @@
 #include <string>
 #include <typeinfo>
 #include <utility>
+#include <span>
 
 #include "mlx/backend/common/binary.h"
 #include "mlx/backend/common/matmul.h"
@@ -8854,7 +8855,9 @@ bool dispatch_quantized_gemv_group(
     return false;
   }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
-      !q4_word_enabled() || (rmsnorm != nullptr && swiglu_out != nullptr)) {
+      !q4_word_enabled() ||
+      (rmsnorm != nullptr &&
+       (members.size() > kQmmVecRmsNormWeights || swiglu_out != nullptr))) {
     return false;
   }
   // SwiGLU store epilogue: exactly the gate and up projections, no
@@ -8922,8 +8925,7 @@ bool dispatch_quantized_gemv_group(
     }
   } else if (rmsnorm != nullptr) {
     const array& weight = rmsnorm->weight;
-    if (encoder.device().compute().binding_limit() <
-            kQmmVecMultiBindings + 5 ||
+    if (encoder.device().compute().binding_limit() < kQmmVecMultiBindings ||
         dtype != bfloat16 || !subgroup_ready || token_route ||
         !float_dtype_supported(dtype, caps) || x.dtype() != bfloat16 ||
         x.ndim() < 2 || x.shape(-2) != 1 || x.shape(-1) <= 0 ||
@@ -9196,7 +9198,7 @@ bool dispatch_quantized_gemv_group(
       }
     }
   }
-  std::array<ComputeBinding, kQmmVecMultiBindings + 5> bindings{};
+  std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
   bindings[0] = binding(outgate != nullptr ? outgate->x : x);
   const ComputeBinding filler = binding(members[0].node);
   for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
@@ -9229,13 +9231,20 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
   if (rmsnorm != nullptr) {
-    bindings[kQmmVecMultiBindings + 3] = binding(rmsnorm->weight);
-    bindings[kQmmVecMultiBindings + 4] =
+    bindings[kQmmVecRmsNormWeightBinding] = binding(rmsnorm->weight);
+    bindings[kQmmVecRmsNormOutputBinding] =
         rmsnorm->output ? binding(*rmsnorm->output) : filler;
     if (rmsnorm->output) {
       params.flags |= 524288u;
     }
   }
+  const QmmVecMultiBindingPath binding_path = rmsnorm != nullptr
+      ? QmmVecMultiBindingPath::rmsnorm
+      : outgate != nullptr ? QmmVecMultiBindingPath::outgate
+                           : QmmVecMultiBindingPath::standard;
+  const uint32_t binding_count = qmm_vec_multi_binding_count(binding_path);
+  const std::span<const ComputeBinding> dispatch_bindings(
+      bindings.data(), binding_count);
   auto kernel = rmsnorm != nullptr
       ? ComputeKernel::QmmVecQ4MultiRmsNormBF16
       : outgate != nullptr
@@ -9272,15 +9281,18 @@ bool dispatch_quantized_gemv_group(
         return false;
       }
     }
-    encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+    encoder.dispatch_compute(
+        kernel, dispatch_bindings, params, total_groups, 1u, 1u);
     const uint32_t tail_rows = rows - pass_rows;
     params.lhs_offset += pass_rows * static_cast<uint32_t>(k);
     params.out_strides[0] = pass_rows;
     params.matrix_m = tail_rows;
-    encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+    encoder.dispatch_compute(
+        kernel, dispatch_bindings, params, total_groups, 1u, 1u);
     return true;
   }
-  encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+  encoder.dispatch_compute(
+      kernel, dispatch_bindings, params, total_groups, 1u, 1u);
   return true;
 }
 

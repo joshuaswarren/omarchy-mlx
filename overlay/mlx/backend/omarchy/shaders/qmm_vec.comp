@@ -185,12 +185,14 @@ layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
 QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
+#if !defined(QMM_VEC_RMSNORM)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#endif
 #if defined(QMM_VEC_RMSNORM)
-layout(set = 0, binding = 28, std430) readonly buffer RmsNormWeight {
+layout(set = 0, binding = 19, std430) readonly buffer RmsNormWeight {
   uvec4 values[];
 } rmsnorm_weight;
-layout(set = 0, binding = 29, std430) writeonly buffer RmsNormOutput {
+layout(set = 0, binding = 20, std430) writeonly buffer RmsNormOutput {
   uvec4 values[];
 } rmsnorm_output;
 shared float rmsnorm_block_values[256];
@@ -1018,8 +1020,10 @@ void main() {
     Q4_TOK_ROWS(input_w1, scales1, biases1)
   } else if (which == 2u) {
     Q4_TOK_ROWS(input_w2, scales2, biases2)
+#if !defined(QMM_VEC_RMSNORM)
   } else {
     Q4_TOK_ROWS(input_w3, scales3, biases3)
+#endif
   }
   Q4_TOK_REDUCE()
   if (lane_in_slot == 0u) {
@@ -1038,8 +1042,10 @@ void main() {
             output1.values[out_index] = STORE_VALUE(rounded);
           } else if (which == 2u) {
             output2.values[out_index] = STORE_VALUE(rounded);
+#if !defined(QMM_VEC_RMSNORM)
           } else {
             output3.values[out_index] = STORE_VALUE(rounded);
+#endif
           }
           if ((params.flags & (256u << which)) != 0u) {
             // Add epilogue: sum = rounded output + addend; the addend
@@ -1056,9 +1062,11 @@ void main() {
             } else if (which == 2u) {
               sum2.values[out_index] = STORE_VALUE(
                   rounded + LOAD_VALUE(addend2.values[addend_index]));
+#if !defined(QMM_VEC_RMSNORM)
             } else {
               sum3.values[out_index] = STORE_VALUE(
                   rounded + LOAD_VALUE(addend3.values[addend_index]));
+#endif
             }
           }
         }
@@ -1163,8 +1171,10 @@ void main() {
       Q4_ROWS(input_w1, scales1, biases1)
     } else if (which == 2u) {
       Q4_ROWS(input_w2, scales2, biases2)
+#if !defined(QMM_VEC_RMSNORM)
     } else {
       Q4_ROWS(input_w3, scales3, biases3)
+#endif
     }
   }
   Q4_ROWS_REDUCE(total)
@@ -1180,8 +1190,10 @@ void main() {
           Q4_MULTI_STORE(1, rounded)
         } else if (which == 2u) {
           Q4_MULTI_STORE(2, rounded)
+#if !defined(QMM_VEC_RMSNORM)
         } else {
           Q4_MULTI_STORE(3, rounded)
+#endif
         }
       }
     }
@@ -1286,8 +1298,10 @@ void main() {
       Q4_ROW(input_w1, scales1, biases1)
     } else if (which == 2u) {
       Q4_ROW(input_w2, scales2, biases2)
+#if !defined(QMM_VEC_RMSNORM)
     } else {
       Q4_ROW(input_w3, scales3, biases3)
+#endif
     }
   }
   float total;
@@ -1300,8 +1314,10 @@ void main() {
       Q4_MULTI_STORE(1, rounded)
     } else if (which == 2u) {
       Q4_MULTI_STORE(2, rounded)
+#if !defined(QMM_VEC_RMSNORM)
     } else {
       Q4_MULTI_STORE(3, rounded)
+#endif
     }
   }
 }

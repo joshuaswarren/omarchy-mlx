@@ -40,6 +40,20 @@ inline constexpr uint32_t kQmmVecMultiWeights = 4;
 inline constexpr uint32_t kQmmVecMultiBindingsPerWeight = 6;
 inline constexpr uint32_t kQmmVecMultiBindings =
     1 + kQmmVecMultiWeights * kQmmVecMultiBindingsPerWeight;
+// The RMSNorm multi-output kernel has at most three projections and reuses
+// the fourth projection's first two descriptor slots.
+inline constexpr uint32_t kQmmVecRmsNormWeights = 3;
+enum class QmmVecMultiBindingPath : uint8_t { standard, outgate, rmsnorm };
+constexpr uint32_t qmm_vec_multi_binding_count(
+    QmmVecMultiBindingPath path) {
+  return path == QmmVecMultiBindingPath::rmsnorm
+      ? kQmmVecMultiBindings
+      : kQmmVecMultiBindings + 3;
+}
+inline constexpr uint32_t kQmmVecRmsNormWeightBinding =
+    kQmmVecMultiBindings - kQmmVecMultiBindingsPerWeight;
+inline constexpr uint32_t kQmmVecRmsNormOutputBinding =
+    kQmmVecRmsNormWeightBinding + 1;
 // Multi-token (verify / small-batch) GEMV route: the largest compiled
 // token dimension (the token16 blob); rows 2..16 route to the token
 // kernels, rows > 16 compose.
