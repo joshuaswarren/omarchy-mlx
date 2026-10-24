@@ -1,0 +1,17 @@
+Q3BITS start 2026-10-24T15:20:54Z boot=redacted kernel=7.1.12-2-12.6-sep-ARCH load1=0.46
+Q3BITS check_q3_bits.py 44884d255e216a36 driver vulkan-f144c7949b libmlx=b920984dcc4554ec qwen3.py patched d2960086dde9840b
+Q3BITS bits rc 0
+Q3BITS ELEMENTWISE scale=1 batch=1 draws=64 elements=9728 mismatching_draws=0
+Q3BITS ELEMENTWISE scale=1 batch=3 draws=64 elements=29184 mismatching_draws=0
+Q3BITS ELEMENTWISE scale=8 batch=1 draws=64 elements=9728 mismatching_draws=0
+Q3BITS ELEMENTWISE scale=8 batch=3 draws=64 elements=29184 mismatching_draws=0
+Q3BITS MLP scale=1 batch=1 draws=64 outputs=2560 mismatching_draws=0
+Q3BITS MLP scale=1 batch=3 draws=64 outputs=7680 mismatching_draws=0
+Q3BITS MLP scale=8 batch=1 draws=64 outputs=2560 mismatching_draws=0
+Q3BITS MLP scale=8 batch=3 draws=64 outputs=7680 mismatching_draws=0
+Q3BITS RESULT PASS comparisons=512 mismatching=0
+Q3BITS compiled rc 0
+Q3BITS compiled dispatches 47 kernels 0:5 10:4 14:4 102:11 410:1 419:1 425:1 428:3 469:17 
+Q3BITS eager rc 0
+Q3BITS eager dispatches 46 kernels 0:5 10:4 14:4 102:11 410:1 425:1 428:3 469:17 
+Q3BITS end 2026-10-24T15:20:57Z

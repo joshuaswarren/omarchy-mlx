@@ -1,0 +1,1 @@
+{"coreglass_result": {"model": "Qwen3-4B-4bit", "arch": "qwen3", "load_s": 0.88, "prompt_tokens": 443, "prefill_tok_s": 773.4, "ttft_ms": 573.2, "gen_tokens": 128, "decode_tok_s": 67.6, "peak_mem_gb": 2.52, "weights_gb": 2.263, "tokens_sha": "8e68ea1ec2d62fcc"}}

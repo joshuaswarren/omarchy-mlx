@@ -1,0 +1,10 @@
+Written before the shipped patcher ran on either chip.
+
+Change: scripts/patch-mlx-lm-qwen3-eager-swiglu.py rewrites the dense Qwen3 MLP of mlx-lm so that single-token rows compute gate * sigmoid(gate) * up as eager operations. The GEMV planner then folds the product into the gate and up matvec dispatch. Prefill rows keep the compiled swiglu. MLX_OMARCHY_EAGER_SWIGLU=0 restores the compiled function for decode.
+
+Checks, in order:
+1. Bit check on each chip: the eager product and the whole 4-bit MLP equal the compiled swiglu bit for bit on random bf16 data at the Qwen3-4B shapes, 64 draws, scales 1 and 8, batch 1 and 3. One mismatching value fails the change.
+2. Dispatch counts in the same run: the eager path must have fewer dispatches than the compiled path. Equal counts mean the patched file was not in use and the pass is void.
+3. Decode screen on each chip, Qwen3-4B 4-bit, nominal 477 prompt tokens, 128 generated tokens, greedy, 5 interleaved rounds with the arm order rotated, one process per sample, installed mlx-lm against the same wheel with the patched copy of qwen3.py.
+
+Keep rule: the token digest is 8e68ea1ec2d62fcc in every sample, and no round has an eager decode speed below its base. One lower round means no keep. The +3 percent bar of the nightly rule does not apply to a change that is output identical and has no cost; this is the ruling taken for it before the screen.

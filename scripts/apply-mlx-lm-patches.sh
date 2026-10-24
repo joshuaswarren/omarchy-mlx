@@ -299,9 +299,10 @@ python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
 # MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
 # Qwen3 dense MLP (qwen3.py), same fold for single-token rows: 36 fewer
-# dispatches per Qwen3-4B decode token, +1.35% decode on the Apple M2 Max
-# (receipts/2026-10-24-qwen3-eager-swiglu), tokens bit-identical. Prefill keeps
-# the compiled function. Kill switch MLX_OMARCHY_EAGER_SWIGLU=0.
+# dispatches per Qwen3-4B decode token, +1.65% decode on the Apple M2 Max and
+# +1.24% on the Apple M1 Max (receipts/2026-10-24-qwen3-eager-swiglu), tokens
+# bit-identical. Prefill keeps the compiled function. Kill switch
+# MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-eager-swiglu.py" "$VENV"
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
