@@ -14,7 +14,7 @@ The Apple M2 Max machine is a 14-inch model with Vulkan device Apple M2 Max (G14
 
 ## Stack
 
-The tree is the build of commit 3841edc1 (mlx_omarchy 0.32.4.dev202610240043+3841edc, libmlx prefix `2dbe64c6ae0e4811` on all three chips). The rule change in this commit adds only the part rule and its test, so the decode screens ran on the same build with the variant forced by `MLX_OMARCHY_SDPA_SPLIT_PV=1` against the same build with the variable unset. The third arm of each screen is the installed ledger wheel 0.32.4.dev202610231001+48908ca, shown for reference. The model is Qwen3-4B 4-bit (index sha256 prefix `f7825defe5865d17`).
+The tree is the build of commit 3841edc1 (mlx_omarchy 0.32.4.dev202610240043+3841edc, libmlx prefix `2dbe64c6ae0e4811` on all three chips). The rule change in this commit adds only the part rule and its test, so the decode screens ran on the same build with the variant forced by `MLX_OMARCHY_SDPA_SPLIT_PV=1` against the same build with the variable unset, which at that commit meant the old pass 1. The third arm of each screen is the installed ledger wheel 0.32.4.dev202610231001+48908ca, shown for reference. The model is Qwen3-4B 4-bit (index sha256 prefix `f7825defe5865d17`).
 
 ## Kernel sweep
 
@@ -24,9 +24,9 @@ On the Apple M2 Max the variant saves 18 to 21 microseconds from 128 to 1024 key
 
 ## Decode
 
-Files: `run-logs/decode-*.log`, table `tables/decode-qwen3-4b.tsv`. Each screen runs five interleaved rounds of three arms, one process per sample, 128 generated tokens, greedy. The prompt is the ledger prompt and its length is nominal: the sentence repeats round(N/18) times.
+Files: `run-logs/decode-*.log`, table `tables/decode-qwen3-4b.tsv`. The old-pass-1 arm is the build with the variable unset before this rule existed. Each screen runs five interleaved rounds of three arms, one process per sample, 128 generated tokens, greedy. The prompt is the ledger prompt and its length is nominal: the sentence repeats round(N/18) times.
 
-At 477 prompt tokens the Apple M2 Max decodes 63.10 tokens per second by default and 66.00 with the variant. The Apple M1 Max decodes 61.40 and 64.30. The Apple M1 decodes 20.50 and 20.40 with the variant forced. At 1888 tokens the Apple M2 Max reads 57.90 and 59.50, the Apple M1 Max 55.00 and 56.50 and the Apple M1 16.40 and 16.00. Prefill speed does not move by more than 3 percent in any screen. The decode cache holds 1888 to 2016 keys in the 1888-token screens, inside the 2048-key limit.
+At 477 prompt tokens the Apple M2 Max decodes 63.10 tokens per second with the old pass 1 and 66.00 with the variant. The Apple M1 Max decodes 61.40 and 64.30. The Apple M1 decodes 20.50 and 20.40 with the variant forced. At 1888 tokens the Apple M2 Max reads 57.90 and 59.50, the Apple M1 Max 55.00 and 56.50 and the Apple M1 16.40 and 16.00. Prefill speed does not move by more than 3 percent in any screen. The decode cache holds 1888 to 2016 keys in the 1888-token screens, inside the 2048-key limit.
 
 ## Tests
 

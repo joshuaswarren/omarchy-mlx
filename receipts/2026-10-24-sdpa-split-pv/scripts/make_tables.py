@@ -34,7 +34,7 @@ for key, name in CHIPS.items():
 os.makedirs("tables", exist_ok=True)
 open("tables/microbench-chain-us.tsv", "w").write("\n".join(rows) + "\n")
 
-rows = ["chip\tkernel\tprompt_tokens\tdefault_tok_s\tsplit_pv_tok_s\tchange_percent\trounds\tdigest_equal\tdigest"]
+rows = ["chip\tkernel\tprompt_tokens\told_pass1_tok_s\tsplit_pv_tok_s\tchange_percent\trounds\tdigest_equal\tdigest"]
 for key, name in CHIPS.items():
     for pt in (477, 1888):
         path = f"run-logs/decode-{key}-{pt}.log"
