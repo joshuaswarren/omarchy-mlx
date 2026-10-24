@@ -10,7 +10,7 @@ Table: `tables/decode-apple-m2-max-256-tokens.tsv`. Log: `run-logs/decode-apple-
 
 ## Machine and stack
 
-The machine is a 14-inch Apple M2 Max (Vulkan device Apple M2 Max, G14C B1) on the egpu kernel 7.1.12-2-20261013.18-egpu-ARCH. The boot id is in the first line of the log. The tree is the build of commit 7104ec94 (mlx_omarchy 0.32.4.dev202610240500+7104ec9, libmlx prefix `6a268ec29aae0b63`). The model is Qwen3-4B 4-bit (index sha256 prefix `f7825defe5865d17`).
+The machine is a 14-inch Apple M2 Max (Vulkan device Apple M2 Max, G14C B1) on the egpu kernel 7.1.12-2-20261013.18-egpu-ARCH. The boot id is in the start line of the log. The tree is the build of commit 7104ec94 (mlx_omarchy 0.32.4.dev202610240500+7104ec9, libmlx prefix `6a268ec29aae0b63`). The `libmlx=` field in the log header is the installed ledger wheel (prefix `a9738db49ca96906`), not the tree. The model is Qwen3-4B 4-bit (index sha256 prefix `f7825defe5865d17`).
 
 ## Screen
 
@@ -22,4 +22,4 @@ The bar written before the screen was +3 percent over three or more interleaved 
 
 ## What is not covered
 
-Only the Apple M2 Max was screened, because it is the only chip whose rule changes. The gain applies to caches of 320 to 447 keys, so prompts shorter than about 190 tokens and longer than 320 keys see no change. A 7600-token numerics run was not repeated: the kernels are the same ones that ran in the previous change, only the length where they start differs.
+Only the Apple M2 Max was screened, because it is the only chip whose rule changes. The gain applies to caches of 320 to 447 keys. A 128-token decode that starts at a prompt of P tokens covers P to P+128 keys, so it is unchanged only when P+128 is below 320 or P is at least 448. A 7600-token numerics run was not repeated: the kernels are the same ones that ran in the previous change, only the length where they start differs.
