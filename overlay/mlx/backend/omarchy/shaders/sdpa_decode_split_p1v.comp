@@ -238,14 +238,12 @@ void main() {
     scratch_data.values[base + 2u + t] = total;
   }
 #ifdef SPLIT_MERGE
-  memoryBarrierBuffer();
   barrier();
   if (t == 0u) {
     s_last = (atomicAdd(counter_data.values[kv_head], 1u) + 1u == nblocks) ? 1u : 0u;
   }
   barrier();
   if (s_last != 0u) {
-    memoryBarrierBuffer();
     for (uint r = 0u; r < SPLIT_R; ++r) {
       uint head = kv_head * SPLIT_R + r;
       uint mbase = head * nblocks * (D + 2u);
