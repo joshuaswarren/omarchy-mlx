@@ -12,6 +12,7 @@
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/descriptors.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/gpu_profiler.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -660,25 +661,17 @@ void CommandEncoder::dispatch_compute_pipeline(
   auto& dt = vk::device_table();
   VkDescriptorSet descriptor_set = acquire_descriptor_set(compute);
 
-  std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info{};
-  std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes{};
+  std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info;
   for (uint32_t index = 0; index < bindings.size(); ++index) {
     buffer_info[index] = {
         bindings[index].buffer, bindings[index].offset, bindings[index].range};
-    writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[index].dstSet = descriptor_set;
-    writes[index].dstBinding = index;
-    writes[index].descriptorCount = 1;
-    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[index].pBufferInfo = &buffer_info[index];
   }
-  dt.UpdateDescriptorSets(
+  update_storage_descriptors(
+      dt.UpdateDescriptorSets,
       device_.handle(),
-      static_cast<uint32_t>(bindings.size()),
-      writes.data(),
-      0,
-      nullptr);
-  trace::counters().vk_descriptor_update_writes += bindings.size();
+      descriptor_set,
+      {buffer_info.data(), bindings.size()});
+  trace::counters().vk_descriptor_update_writes++;
 
   if (wave_sched()) {
     // Buffer the node; submit() records it in wave order (emit_pending).
