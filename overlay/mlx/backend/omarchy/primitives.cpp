@@ -15719,24 +15719,33 @@ void ScaledDotProductAttention::eval_gpu(
         split_params.in_strides[1] = checked_u32(v.strides()[1], tag, out);
         split_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
         split_params.in_strides[3] = checked_u32(v.strides()[3], tag, out);
-        const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + 127u) / 128u;
-        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * 130u;
-        array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
-        scratch.set_data(allocate_omarchy(scratch.nbytes()));
-        encoder.add_temporary(scratch);
-        std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
         // Value-phase variant (8-byte value loads, 32 keys per lane chain instead of 128): MLX_OMARCHY_SDPA_SPLIT_PV, any non-empty value other than "0" selects it,
         // unset or empty follows omarchy::sdpa_split_pv_default. Needs V element offset, head stride and key stride multiples of 4.
         const int pv_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV");
         const bool pv_aligned = split_params.aux_offset % 4u == 0u && v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0;
         const bool pv = pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
-        omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
+        // Block size (MLX_OMARCHY_SDPA_SPLIT_BK): 64 selects the BK=64 value-phase pass 1 variants, so only when the PV variant is selected; unset, 128 or anything else keeps 128.
+        const uint32_t split_bk =
+            pv ? omarchy::sdpa_split_block_keys(decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK")) : 128u;
+        const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + split_bk - 1u) / split_bk;
+        split_params.flags = split_blocks;
+        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * 130u;
+        array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
+        scratch.set_data(allocate_omarchy(scratch.nbytes()));
+        encoder.add_temporary(scratch);
+        std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+        const bool bk64 = split_bk == 64u;
+        omarchy::ComputeKernel split_p1 = bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP1VBK64R4BF16Hd128 :
+            (pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128);
         if (split_group == 1u) {
-          split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;
+          split_p1 = bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP1VBK64R1BF16Hd128 :
+              (pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128);
         } else if (split_group == 2u) {
-          split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR2BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128;
+          split_p1 = bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP1VBK64R2BF16Hd128 :
+              (pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR2BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128);
         } else if (split_group == 8u) {
-          split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
+          split_p1 = bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP1VBK64R8BF16Hd128 :
+              (pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128);
         }
         encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};

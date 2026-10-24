@@ -454,6 +454,11 @@ omarchy_shader(sdpa_decode_split_p1v_g1 shaders/sdpa_decode_split_p1v.comp -DSPL
 omarchy_shader(sdpa_decode_split_p1v_g2 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=2)
 omarchy_shader(sdpa_decode_split_p1v_g4 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4)
 omarchy_shader(sdpa_decode_split_p1v_g8 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=8)
+# BK=64 variants of the value-phase pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK=64): 64 threads per workgroup, 64-key blocks.
+omarchy_shader(sdpa_decode_split_p1v_bk64_g1 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=1 -DBK=64u)
+omarchy_shader(sdpa_decode_split_p1v_bk64_g2 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=2 -DBK=64u)
+omarchy_shader(sdpa_decode_split_p1v_bk64_g4 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DBK=64u)
+omarchy_shader(sdpa_decode_split_p1v_bk64_g8 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=8 -DBK=64u)
 omarchy_shader(sdpa_decode_split_p2 shaders/sdpa_decode_split_p2.comp)
 # Attn128: one-dispatch small-k wide-row value Partition (the mx.topk route).
 omarchy_shader(partition_smallk_f32 shaders/partition_smallk.comp)

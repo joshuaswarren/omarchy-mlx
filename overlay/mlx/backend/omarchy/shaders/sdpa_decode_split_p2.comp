@@ -3,7 +3,7 @@
 //
 // Split-K pass 2 of the bf16 single-query decode SDPA, head width 128 (see sdpa_decode_split_p1.comp). One workgroup per query
 // head, one thread per output element: folds the per-block (max, exp sum, weighted values) with the global max, divides by the
-// global exp sum and stores the bf16 result (round to nearest even, NaN kept as in cast.comp).
+// global exp sum and stores the bf16 result (round to nearest even, NaN kept as in cast.comp). The block count arrives in params.flags (host sets it from k_len and the pass 1 block size), so BK=64 pass 1 variants share this pass 2 unchanged.
 
 #version 460
 
@@ -44,7 +44,6 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint D = 128u;
-const uint BK = 128u;
 
 uint16_t bf16_store(float value) {
   uint bits = floatBitsToUint(value);
@@ -57,7 +56,7 @@ uint16_t bf16_store(float value) {
 void main() {
   uint t = gl_LocalInvocationID.x;
   uint head = gl_WorkGroupID.x;
-  uint nblocks = (params.matrix_k + BK - 1u) / BK;
+  uint nblocks = params.flags;
   uint base = head * nblocks * (D + 2u);
   float global_max = uintBitsToFloat(0xff800000u);
   for (uint b = 0u; b < nblocks; ++b) {

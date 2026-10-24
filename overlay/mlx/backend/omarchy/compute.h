@@ -1066,6 +1066,11 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1VR4BF16Hd128,
   SdpaDecodeSplitP1VR8BF16Hd128,
   SdpaDecodeSplitP2BF16Hd128,
+  // BK=64 variants of the value-phase pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK=64), sdpa_decode_split_p1v.comp -DSPLIT_R=N -DBK=64u. Appended so earlier ids do not move.
+  SdpaDecodeSplitP1VBK64R1BF16Hd128,
+  SdpaDecodeSplitP1VBK64R2BF16Hd128,
+  SdpaDecodeSplitP1VBK64R4BF16Hd128,
+  SdpaDecodeSplitP1VBK64R8BF16Hd128,
   Count,
 };
 

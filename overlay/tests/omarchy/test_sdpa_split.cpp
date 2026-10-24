@@ -186,14 +186,20 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   Run split = run_attention(q.x, k, v, scale, "1", stream);
   setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
   Run split_pv = run_attention(q.x, k, v, scale, "1", stream);
+  // The BK=64 value-phase pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK=64) meets the same gates.
+  setenv("MLX_OMARCHY_SDPA_SPLIT_BK", "64", 1);
+  Run split_bk64 = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_BK");
   unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
   Errors e_fused = error_against(fused.out, ref);
   Errors e_split = error_against(split.out, ref);
   Errors e_pv = error_against(split_pv.out, ref);
+  Errors e_bk64 = error_against(split_bk64.out, ref);
   INFO("heads " << heads << " kv " << kv_heads << " keys " << keys << " start " << key_start << " split launches " << split.launched);
   if (split_device_ready()) {
     CHECK(split.launched == 2);
     CHECK(split_pv.launched == 2);
+    CHECK(split_bk64.launched == 2);
   } else {
     printf("Skipping: split route not available on this device\n");
   }
@@ -209,6 +215,10 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   CHECK(e_pv.max <= e_fused.max + 2.0 * rounding + 1e-6);
   CHECK(e_pv.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
   CHECK(e_pv.max <= 3.0 * rounding + 1e-5);
+  // The BK=64 value-phase pass 1 meets the same gates.
+  CHECK(e_bk64.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_bk64.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_bk64.max <= 3.0 * rounding + 1e-5);
 }
 
 } // namespace
@@ -294,6 +304,15 @@ TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the 
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
 
+TEST_CASE("split-K decode SDPA: cache lengths that are not multiples of 64 hit the BK=64 tail block") {
+  if (!compute_available()) {
+    return;
+  }
+  for (int keys : {1, 63, 64, 65, 127, 129, 1000, 4097}) {
+    check_shape(32, 8, keys, keys, 0, 1.0f);
+  }
+}
+
 TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 (G13G B1)") == 128);
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 Max (G13C C0)") == 320);
@@ -308,6 +327,17 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 128));
   CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 1048576));
   CHECK_FALSE(omarchy::sdpa_split_default("", 4096));
+}
+
+TEST_CASE("split-K decode SDPA: the block size helper returns 64 only for the exact env value") {
+  CHECK(omarchy::sdpa_split_block_keys(-1) == 128);
+  CHECK(omarchy::sdpa_split_block_keys(0) == 128);
+  CHECK(omarchy::sdpa_split_block_keys(1) == 128);
+  CHECK(omarchy::sdpa_split_block_keys(63) == 128);
+  CHECK(omarchy::sdpa_split_block_keys(64) == 64);
+  CHECK(omarchy::sdpa_split_block_keys(65) == 128);
+  CHECK(omarchy::sdpa_split_block_keys(128) == 128);
+  CHECK(omarchy::sdpa_split_block_keys(256) == 128);
 }
 
 TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a key limit on G14C and G13C and off on G13G") {

@@ -584,4 +584,9 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// Keys per split-K pass 1 block, from MLX_OMARCHY_SDPA_SPLIT_BK (64 selects the BK=64 value-phase pass 1 variants; unset, 128 or any other value gives today's 128). Pure.
+inline uint32_t sdpa_split_block_keys(int env_value) {
+  return env_value == 64 ? 64u : 128u;
+}
+
 } // namespace mlx::core::omarchy
