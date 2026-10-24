@@ -9198,6 +9198,7 @@ bool dispatch_quantized_gemv_group(
       }
     }
   }
+  static_assert(kQmmVecMultiBindings + 3 <= kComputeBindingBudget);
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
   bindings[0] = binding(outgate != nullptr ? outgate->x : x);
   const ComputeBinding filler = binding(members[0].node);

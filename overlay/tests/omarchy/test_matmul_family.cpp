@@ -5914,6 +5914,9 @@ TEST_CASE("QMM RMSNorm multi-output prologue matches composed bf16 decode bits")
                      bfloat16, stream);
     array norm_weight = astype(
         array(norm_weight_values.begin(), Shape{k}, float32), bfloat16, stream);
+    std::vector<array> ready_inputs{x, norm_weight};
+    eval(ready_inputs);
+    omarchy::get_command_encoder(stream).synchronize();
     std::vector<array> weight_words, scales, biases;
     for (int i = 0; i < 3; ++i) {
       std::vector<float> matrix(static_cast<size_t>(n) * k);
@@ -5925,7 +5928,14 @@ TEST_CASE("QMM RMSNorm multi-output prologue matches composed bf16 decode bits")
       scales.emplace_back(host.scales.begin(), Shape{n, k / 64}, bfloat16);
       biases.emplace_back(host.biases.begin(), Shape{n, k / 64}, bfloat16);
     }
+    ready_inputs.insert(ready_inputs.end(), weight_words.begin(), weight_words.end());
+    ready_inputs.insert(ready_inputs.end(), scales.begin(), scales.end());
+    ready_inputs.insert(ready_inputs.end(), biases.begin(), biases.end());
+    eval(ready_inputs);
+    omarchy::get_command_encoder(stream).synchronize();
     array composed_norm = fast::rms_norm(x, norm_weight, eps, stream);
+    eval(composed_norm);
+    omarchy::get_command_encoder(stream).synchronize();
     std::vector<omarchy::GemvFusionMember> baseline_members;
     for (int i = 0; i < 3; ++i) {
       array node = quantized_matmul(

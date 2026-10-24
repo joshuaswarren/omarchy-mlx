@@ -2001,11 +2001,12 @@ TEST_CASE("RMSNorm decode GEMV fold refuses an output with another consumer") {
   auto candidate = forward();
   eval(candidate);
   sync_stream(stream);
-  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 2);
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 3);
   REQUIRE_EQ(baseline.size(), candidate.size());
-  for (size_t i = 0; i < baseline.size(); ++i) {
+  for (size_t i = 0; i < 3; ++i) {
     expect_bit_exact(baseline[i], candidate[i], stream);
   }
+  expect_bit_exact(baseline[3], candidate[3], stream);
   unsetenv("MLX_OMARCHY_NORM_APPLE");
   unsetenv("MLX_OMARCHY_NORM_FOLD");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
