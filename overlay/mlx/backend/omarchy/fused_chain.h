@@ -183,6 +183,21 @@ struct RmsNormPlan {
   float epsilon;
   std::optional<array> output;
 };
+struct RmsNormFoldInputs {
+  Dtype input_dtype;
+  Dtype weight_dtype;
+  Dtype output_dtype;
+  Shape input_shape;
+  Shape weight_shape;
+  Shape output_shape;
+  int64_t input_offset;
+  int64_t weight_offset;
+  bool input_contiguous;
+  bool input_row_contiguous;
+  bool weight_contiguous;
+  float epsilon;
+};
+bool rmsnorm_fold_input_eligible(const RmsNormFoldInputs& inputs);
 
 
 // Validates the group against the kernel contract, allocates every

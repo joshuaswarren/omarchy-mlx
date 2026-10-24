@@ -8928,11 +8928,11 @@ bool dispatch_quantized_gemv_group(
         !float_dtype_supported(dtype, caps) || x.dtype() != bfloat16 ||
         x.ndim() < 2 || x.shape(-2) != 1 ||
         !whole_dense(x, x.size()) || !input_ready(x, stream) ||
-        x.data_shared_ptr() == nullptr || !x.flags().row_contiguous ||
-        x.offset() != 0 ||
-        weight.dtype() != bfloat16 || !whole_dense(weight, x.shape(-1)) ||
-        !input_ready(weight, stream) ||
-        weight.offset() != 0 ||
+        x.data_shared_ptr() == nullptr || !x.flags().contiguous ||
+        !x.flags().row_contiguous || x.offset() != 0 ||
+        weight.dtype() != bfloat16 || weight.ndim() != 1 ||
+        !weight.flags().contiguous || !whole_dense(weight, x.shape(-1)) ||
+        !input_ready(weight, stream) || weight.offset() != 0 ||
         !std::isfinite(rmsnorm->epsilon) || rmsnorm->epsilon <= 0.0f ||
         (rmsnorm->output &&
          (rmsnorm->output->dtype() != bfloat16 ||

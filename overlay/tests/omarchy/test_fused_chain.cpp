@@ -30,6 +30,8 @@
 #include "mlx/random.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
+#include "mlx/fast.h"
+#include "mlx/backend/omarchy/fused_chain.h"
 
 using namespace mlx::core;
 using mlx::core::omarchy::trace::counters;
@@ -1859,4 +1861,212 @@ TEST_CASE("token-multi q4 gemv kill switch restores the single-row fence") {
   expect_bit_exact(composed[0], switched[0], stream);
   unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+TEST_CASE("RMSNorm decode GEMV fold is disabled by default") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  constexpr int k = 2560;
+  auto q = make_linear(256, k, bfloat16, stream);
+  auto key = make_linear(256, k, bfloat16, stream);
+  auto value = make_linear(256, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array weight =
+      astype(random::normal(Shape{k}, float32, std::nullopt, stream),
+             bfloat16,
+             stream);
+  eval({x, weight});
+  sync_stream(stream);
+  auto forward = [&] {
+    array normed = fast::rms_norm(x, weight, 1e-6f, stream);
+    return std::vector<array>{
+        project(normed, q, stream),
+        project(normed, key, stream),
+        project(normed, value, stream)};
+  };
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  unsetenv("MLX_OMARCHY_NORM_FOLD");
+  uint64_t before = counters().vk_compute_dispatches.load();
+  auto candidate = forward();
+  eval(candidate);
+  sync_stream(stream);
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 2);
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+TEST_CASE("RMSNorm decode GEMV folds qkv and gate-up groups exactly") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
+  constexpr int k = 2560;
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array norm_weight =
+      astype(random::normal(Shape{k}, float32, std::nullopt, stream),
+             bfloat16,
+             stream);
+  auto q = make_linear(256, k, bfloat16, stream);
+  auto key = make_linear(256, k, bfloat16, stream);
+  auto value = make_linear(256, k, bfloat16, stream);
+  auto gate = make_linear(256, k, bfloat16, stream);
+  auto up = make_linear(256, k, bfloat16, stream);
+  eval({x, norm_weight});
+  sync_stream(stream);
+  auto forward = [&](bool qkv) {
+    array normed = fast::rms_norm(x, norm_weight, 1e-6f, stream);
+    if (qkv) {
+      return std::vector<array>{
+          project(normed, q, stream),
+          project(normed, key, stream),
+          project(normed, value, stream)};
+    }
+    return std::vector<array>{
+        project(normed, gate, stream), project(normed, up, stream)};
+  };
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  setenv("MLX_OMARCHY_NORM_FOLD", "0", 1);
+  for (bool qkv : {true, false}) {
+    auto baseline = forward(qkv);
+    eval(baseline);
+    sync_stream(stream);
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_NORM_FOLD", "1", 1);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    auto candidate = forward(qkv);
+    eval(candidate);
+    sync_stream(stream);
+    CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1);
+    REQUIRE_EQ(baseline.size(), candidate.size());
+    for (size_t i = 0; i < baseline.size(); ++i) {
+      expect_bit_exact(baseline[i], candidate[i], stream);
+    }
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    setenv("MLX_OMARCHY_NORM_FOLD", "0", 1);
+  }
+  unsetenv("MLX_OMARCHY_NORM_APPLE");
+  unsetenv("MLX_OMARCHY_NORM_FOLD");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+TEST_CASE("RMSNorm decode GEMV fold refuses an output with another consumer") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
+  constexpr int k = 2560;
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array norm_weight =
+      astype(random::normal(Shape{k}, float32, std::nullopt, stream),
+             bfloat16,
+             stream);
+  auto q = make_linear(256, k, bfloat16, stream);
+  auto key = make_linear(256, k, bfloat16, stream);
+  auto value = make_linear(256, k, bfloat16, stream);
+  eval({x, norm_weight});
+  sync_stream(stream);
+  auto forward = [&] {
+    array normed = fast::rms_norm(x, norm_weight, 1e-6f, stream);
+    array side = multiply(normed, array(2.0f, bfloat16), stream);
+    return std::vector<array>{
+        project(normed, q, stream),
+        project(normed, key, stream),
+        project(normed, value, stream),
+        side};
+  };
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_NORM_FOLD", "0", 1);
+  auto baseline = forward();
+  eval(baseline);
+  sync_stream(stream);
+  setenv("MLX_OMARCHY_NORM_FOLD", "1", 1);
+  uint64_t before = counters().vk_compute_dispatches.load();
+  auto candidate = forward();
+  eval(candidate);
+  sync_stream(stream);
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 2);
+  REQUIRE_EQ(baseline.size(), candidate.size());
+  for (size_t i = 0; i < baseline.size(); ++i) {
+    expect_bit_exact(baseline[i], candidate[i], stream);
+  }
+  unsetenv("MLX_OMARCHY_NORM_APPLE");
+  unsetenv("MLX_OMARCHY_NORM_FOLD");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+TEST_CASE("RMSNorm fold input eligibility rejects unsupported shapes and views") {
+  constexpr int k = 16;
+  const omarchy::RmsNormFoldInputs valid{
+      bfloat16,
+      bfloat16,
+      bfloat16,
+      Shape{1, 1, k},
+      Shape{k},
+      Shape{1, 1, k},
+      0,
+      0,
+      true,
+      true,
+      true,
+      1e-6f};
+  CHECK(omarchy::rmsnorm_fold_input_eligible(valid));
+
+  auto input_offset = valid;
+  input_offset.input_offset = 2;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(input_offset));
+  auto input_noncontiguous = valid;
+  input_noncontiguous.input_contiguous = false;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(input_noncontiguous));
+  auto input_not_row_contiguous = valid;
+  input_not_row_contiguous.input_row_contiguous = false;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(input_not_row_contiguous));
+  auto weight_offset = valid;
+  weight_offset.weight_offset = 2;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(weight_offset));
+  auto weight_noncontiguous = valid;
+  weight_noncontiguous.weight_contiguous = false;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(weight_noncontiguous));
+  auto weight_rank_two = valid;
+  weight_rank_two.weight_shape = Shape{1, k};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(weight_rank_two));
+  auto weight_wrong_size = valid;
+  weight_wrong_size.weight_shape = Shape{k - 1};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(weight_wrong_size));
+  auto unsupported_k = valid;
+  unsupported_k.input_shape = Shape{1, 1, 10};
+  unsupported_k.weight_shape = Shape{10};
+  unsupported_k.output_shape = Shape{1, 1, 10};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(unsupported_k));
+  auto token_rows = valid;
+  token_rows.input_shape = Shape{1, 2, k};
+  token_rows.output_shape = Shape{1, 2, k};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(token_rows));
+  auto non_bf16 = valid;
+  non_bf16.input_dtype = float16;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(non_bf16));
+  auto mismatched_shapes = valid;
+  mismatched_shapes.input_shape = Shape{1, 1, k - 1};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(mismatched_shapes));
+  auto zero_epsilon = valid;
+  zero_epsilon.epsilon = 0.0f;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(zero_epsilon));
+  auto infinite_epsilon = valid;
+  infinite_epsilon.epsilon = std::numeric_limits<float>::infinity();
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(infinite_epsilon));
 }
