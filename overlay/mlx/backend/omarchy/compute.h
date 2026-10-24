@@ -1061,6 +1061,10 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1R2BF16Hd128,
   SdpaDecodeSplitP1R4BF16Hd128,
   SdpaDecodeSplitP1R8BF16Hd128,
+  SdpaDecodeSplitP1VR1BF16Hd128,
+  SdpaDecodeSplitP1VR2BF16Hd128,
+  SdpaDecodeSplitP1VR4BF16Hd128,
+  SdpaDecodeSplitP1VR8BF16Hd128,
   SdpaDecodeSplitP2BF16Hd128,
   Count,
 };

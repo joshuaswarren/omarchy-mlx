@@ -182,12 +182,18 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   const float scale = 1.0f / std::sqrt(static_cast<float>(width));
   std::vector<double> ref = reference(q.values, kfull.values, vfull.values, heads, kv_heads, keys, capacity, key_start, width, scale);
   Run fused = run_attention(q.x, k, v, scale, "0", stream);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "0", 1);
   Run split = run_attention(q.x, k, v, scale, "1", stream);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  Run split_pv = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
   Errors e_fused = error_against(fused.out, ref);
   Errors e_split = error_against(split.out, ref);
+  Errors e_pv = error_against(split_pv.out, ref);
   INFO("heads " << heads << " kv " << kv_heads << " keys " << keys << " start " << key_start << " split launches " << split.launched);
   if (split_device_ready()) {
     CHECK(split.launched == 2);
+    CHECK(split_pv.launched == 2);
   } else {
     printf("Skipping: split route not available on this device\n");
   }
@@ -199,6 +205,10 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   CHECK(e_split.max <= e_fused.max + 2.0 * rounding + 1e-6);
   CHECK(e_split.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
   CHECK(e_split.max <= 3.0 * rounding + 1e-5);
+  // The value-phase variant of pass 1 (8-byte value loads, four key partitions per dimension group) meets the same gates.
+  CHECK(e_pv.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_pv.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_pv.max <= 3.0 * rounding + 1e-5);
 }
 
 } // namespace
@@ -298,6 +308,45 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 128));
   CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 1048576));
   CHECK_FALSE(omarchy::sdpa_split_default("", 4096));
+}
+
+TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a key limit on G14C and G13C and off on G13G") {
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Max (G14C B1)") == 2048);
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M1 Max (G13C C0)") == 2048);
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M1 (G13G B1)") == 0);
+  CHECK(omarchy::sdpa_split_pv_max_keys("") == 0);
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Pro (G14S B1)") == 0);
+  CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 128));
+  CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2048));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2049));
+  CHECK(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 2048));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 4096));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 (G13G B1)", 128));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default("", 128));
+}
+
+TEST_CASE("split-K decode SDPA: the value-phase variant falls back to the old pass 1 when V is not 4-aligned") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int heads = 32;
+  const int kv_heads = 8;
+  const int keys = 300;
+  const int stored_width = 130;
+  Stored q = make_bf16(pattern(static_cast<size_t>(heads) * 128, 3, 1.0f), Shape{1, heads, 1, 128}, stream);
+  Stored k = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * 128, 4, 1.0f), Shape{1, kv_heads, keys, 128}, stream);
+  Stored vw = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * stored_width, 5, 1.0f), Shape{1, kv_heads, keys, stored_width}, stream);
+  // Element offset 2 and key stride 130: even (the old pass 1 accepts it) but not a multiple of 4 (the variant needs that).
+  array v = slice(vw.x, Shape{0, 0, 0, 2}, Shape{1, kv_heads, keys, 130}, stream);
+  const float scale = 1.0f / std::sqrt(128.0f);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "0", 1);
+  Run off = run_attention(q.x, k.x, v, scale, "1", stream);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  Run on = run_attention(q.x, k.x, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+  CHECK(on.launched == off.launched);
+  CHECK(on.out == off.out);
 }
 
 TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {

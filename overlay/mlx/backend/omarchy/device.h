@@ -566,4 +566,22 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len) {
   return min_keys != 0 && k_len >= min_keys;
 }
 
+// Value-phase variant of the split-K pass 1 (MLX_OMARCHY_SDPA_SPLIT_PV unset): the largest cache length, in keys, up to which the variant is the default on a part.
+// 0 means the plain pass 1 stays the default. The variant takes about 19 microseconds off the flat 80 to 90 microsecond floor of the split route on short caches and costs more
+// than it saves on long ones. Chain microseconds per call, split against split with the variant:
+//   G14C (Apple M2 Max): 128 to 1024 keys 86 to 93 against 64 to 75; 2048 keys 103.8 against 89.1; 4096 keys 124.8 against 150.1; so the limit is 2048;
+//   G13C (Apple M1 Max): 128 to 2048 keys 80 to 104 against 59 to 85; 4096 keys 155.6 against 149.4 (tie); 8192 keys 299.7 against 313.2; so the limit is 2048;
+//   G13G (Apple M1): 128 and 512 keys 78 and 88 against 57 and 73, but 1024 keys 113 against 130 and 2048 keys 239 against 268, and decode of Qwen3-4B reads -0.5 percent at 477 prompt tokens and -2.4 percent at 1888, so the default stays off.
+// Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated, one tree, default against the variant: +4.6 percent on G14C (63.1 to 66.0 tokens per second), +2.8 percent at 1888 tokens. An unmeasured part keeps the plain pass 1. Pure.
+inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
+  if (device_name.find("G14C") != std::string::npos) return 2048;
+  if (device_name.find("G13C") != std::string::npos) return 2048;
+  return 0;
+}
+
+inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_split_pv_max_keys(device_name);
+  return max_keys != 0 && k_len <= max_keys;
+}
+
 } // namespace mlx::core::omarchy

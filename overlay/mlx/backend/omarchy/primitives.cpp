@@ -15725,13 +15725,18 @@ void ScaledDotProductAttention::eval_gpu(
         scratch.set_data(allocate_omarchy(scratch.nbytes()));
         encoder.add_temporary(scratch);
         std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
-        omarchy::ComputeKernel split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
+        // Value-phase variant (8-byte value loads, 32 keys per lane chain instead of 128): MLX_OMARCHY_SDPA_SPLIT_PV, any non-empty value other than "0" selects it,
+        // unset or empty follows omarchy::sdpa_split_pv_default. Needs V element offset, head stride and key stride multiples of 4.
+        const int pv_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV");
+        const bool pv_aligned = split_params.aux_offset % 4u == 0u && v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0;
+        const bool pv = pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
+        omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
         if (split_group == 1u) {
-          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;
+          split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;
         } else if (split_group == 2u) {
-          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128;
+          split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR2BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128;
         } else if (split_group == 8u) {
-          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
+          split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
         }
         encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};

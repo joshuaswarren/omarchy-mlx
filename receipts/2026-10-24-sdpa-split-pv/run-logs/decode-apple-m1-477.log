@@ -1,0 +1,20 @@
+ARMS prompt tokens 477
+ARMS start 2026-10-24T01:55:20Z boot=0555013d kernel=7.1.12-2-20261013.18-sep-ARCH gov=performance load1=0.25 settle= set pv
+ARMS llmstep 14f21df0d126ef48
+ARMS driver vulkan-f144c7949b model f7825defe5865d17 mx=0.32.4.dev202610231001+48908ca libmlx=a9738db49ca96906
+ARMS round 1 base rc=0 decode 20.40 prefill 177.9 ttft 2490.5 sha 8e68ea1ec2d62fcc load1=0.21
+ARMS round 1 pv rc=0 decode 20.40 prefill 177.8 ttft 2492.6 sha 8e68ea1ec2d62fcc load1=0.33
+ARMS round 1 ledger rc=0 decode 16.80 prefill 176.7 ttft 2507.4 sha 8e68ea1ec2d62fcc load1=0.48
+ARMS round 2 pv rc=0 decode 20.40 prefill 177.8 ttft 2492.3 sha 8e68ea1ec2d62fcc load1=0.49
+ARMS round 2 ledger rc=0 decode 16.80 prefill 177.1 ttft 2501.8 sha 8e68ea1ec2d62fcc load1=0.52
+ARMS round 2 base rc=0 decode 20.60 prefill 178.1 ttft 2487.3 sha 8e68ea1ec2d62fcc load1=0.51
+ARMS round 3 ledger rc=0 decode 16.80 prefill 175.1 ttft 2530.6 sha 8e68ea1ec2d62fcc load1=0.62
+ARMS round 3 base rc=0 decode 20.60 prefill 178.1 ttft 2487.5 sha 8e68ea1ec2d62fcc load1=0.69
+ARMS round 3 pv rc=0 decode 20.40 prefill 177.9 ttft 2491.2 sha 8e68ea1ec2d62fcc load1=0.66
+ARMS round 4 base rc=0 decode 20.50 prefill 178.6 ttft 2481.3 sha 8e68ea1ec2d62fcc load1=0.74
+ARMS round 4 pv rc=0 decode 20.40 prefill 177.7 ttft 2494.1 sha 8e68ea1ec2d62fcc load1=0.70
+ARMS round 4 ledger rc=0 decode 16.80 prefill 176.7 ttft 2508.1 sha 8e68ea1ec2d62fcc load1=0.59
+ARMS round 5 pv rc=0 decode 20.40 prefill 176.7 ttft 2507.6 sha 8e68ea1ec2d62fcc load1=0.61
+ARMS round 5 ledger rc=0 decode 16.80 prefill 176.5 ttft 2510.1 sha 8e68ea1ec2d62fcc load1=0.51
+ARMS round 5 base rc=0 decode 20.50 prefill 178.4 ttft 2483.4 sha 8e68ea1ec2d62fcc load1=0.55
+ARMS end 2026-10-24T01:58:19Z

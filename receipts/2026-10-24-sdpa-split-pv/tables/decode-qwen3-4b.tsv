@@ -1,0 +1,7 @@
+chip	kernel	prompt_tokens	old_pass1_tok_s	split_pv_tok_s	change_percent	rounds	digest_equal	digest
+Apple M2 Max	7.1.12-2-20261013.18-egpu-ARCH	477	63.10	66.00	+4.6	5	yes	8e68ea1ec2d62fcc
+Apple M2 Max	7.1.12-2-20261013.18-egpu-ARCH	1888	57.90	59.50	+2.8	5	yes	8e68ea1ec2d62fcc
+Apple M1 Max	7.1.12-2-12.6-sep-ARCH	477	61.40	64.30	+4.7	5	yes	8e68ea1ec2d62fcc
+Apple M1 Max	7.1.12-2-12.6-sep-ARCH	1888	55.00	56.50	+2.7	5	yes	8e68ea1ec2d62fcc
+Apple M1	7.1.12-2-20261013.18-sep-ARCH	477	20.50	20.40	-0.5	5	yes	8e68ea1ec2d62fcc
+Apple M1	7.1.12-2-20261013.18-sep-ARCH	1888	16.40	16.00	-2.4	5	yes	8e68ea1ec2d62fcc
