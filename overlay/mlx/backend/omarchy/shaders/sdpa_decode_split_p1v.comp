@@ -40,9 +40,23 @@ layout(set = 0, binding = 1, std430) readonly buffer Key {
 layout(set = 0, binding = 2, std430) readonly buffer Value {
   uvec2 values[];
 } value_data;
+#ifdef SPLIT_MERGE
+// Single-dispatch variant: the last workgroup of a key-value head (atomic count of finished blocks) folds the per-block results
+// of its SPLIT_R query heads exactly as sdpa_decode_split_p2.comp does, so the output is bit-equal to the two-dispatch route.
+layout(set = 0, binding = 3, std430) coherent buffer Scratch {
+  float values[];
+} scratch_data;
+layout(set = 0, binding = 4, std430) coherent buffer Counter {
+  uint values[];
+} counter_data;
+layout(set = 0, binding = 5, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+#else
 layout(set = 0, binding = 3, std430) writeonly buffer Scratch {
   float values[];
 } scratch_data;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -77,6 +91,17 @@ shared float s_p[SPLIT_R * BK];
 shared float s_max[SPLIT_R * SUBGROUPS];
 shared float s_sum[SPLIT_R * SUBGROUPS];
 shared float s_o[4u * SPLIT_R * D];
+#ifdef SPLIT_MERGE
+shared uint s_last;
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#endif
 
 float bf16_load(uint16_t bits) {
   return uintBitsToFloat(uint(bits) << 16u);
@@ -212,4 +237,35 @@ void main() {
     float total = s_o[r * D + t] + s_o[(SPLIT_R + r) * D + t] + s_o[(2u * SPLIT_R + r) * D + t] + s_o[(3u * SPLIT_R + r) * D + t];
     scratch_data.values[base + 2u + t] = total;
   }
+#ifdef SPLIT_MERGE
+  memoryBarrierBuffer();
+  barrier();
+  if (t == 0u) {
+    s_last = (atomicAdd(counter_data.values[kv_head], 1u) + 1u == nblocks) ? 1u : 0u;
+  }
+  barrier();
+  if (s_last != 0u) {
+    memoryBarrierBuffer();
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      uint head = kv_head * SPLIT_R + r;
+      uint mbase = head * nblocks * (D + 2u);
+      float global_max = uintBitsToFloat(0xff800000u);
+      for (uint b = 0u; b < nblocks; ++b) {
+        float m = scratch_data.values[mbase + b * (D + 2u)];
+        if (isnan(m) || m > global_max) {
+          global_max = m;
+        }
+      }
+      float denominator = 0.0;
+      float acc = 0.0;
+      for (uint b = 0u; b < nblocks; ++b) {
+        uint at = mbase + b * (D + 2u);
+        float w = exp(scratch_data.values[at] - global_max);
+        denominator += scratch_data.values[at + 1u] * w;
+        acc += scratch_data.values[at + 2u + t] * w;
+      }
+      output_data.values[params.output_offset + head * D + t] = bf16_store(acc / denominator);
+    }
+  }
+#endif
 }

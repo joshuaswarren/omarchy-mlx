@@ -15738,6 +15738,22 @@ void ScaledDotProductAttention::eval_gpu(
         } else if (split_group == 8u) {
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
         }
+        // Single-dispatch variant (MLX_OMARCHY_SDPA_SPLIT_MERGE, any non-empty value other than "0"; off by default): the last pass 1 workgroup of each
+        // key-value head folds the blocks, so pass 2 and the dependency gap before it disappear. Value-phase kernel only, at most 32 blocks (4096 keys).
+        // One counter per key-value head, zeroed by a buffer fill before the dispatch.
+        if (pv && split_blocks <= 32u && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE") > 0) {
+          array counters(Shape{static_cast<int>(split_params.matrix_n)}, uint32, nullptr, {});
+          counters.set_data(allocate_omarchy(counters.nbytes()));
+          encoder.add_temporary(counters);
+          encoder.fill_buffer(binding(counters).buffer, 0u, counters.nbytes(), 0);
+          const omarchy::ComputeKernel merge_kernels[4] = {omarchy::ComputeKernel::SdpaDecodeSplitP1VMR1BF16Hd128,
+              omarchy::ComputeKernel::SdpaDecodeSplitP1VMR2BF16Hd128, omarchy::ComputeKernel::SdpaDecodeSplitP1VMR4BF16Hd128,
+              omarchy::ComputeKernel::SdpaDecodeSplitP1VMR8BF16Hd128};
+          const uint32_t merge_index = split_group == 1u ? 0u : split_group == 2u ? 1u : split_group == 4u ? 2u : 3u;
+          std::array<omarchy::ComputeBinding, 6> merge_bindings{binding(q), binding(k), binding(v), binding(scratch), binding(counters), binding(out)};
+          encoder.dispatch_compute(merge_kernels[merge_index], merge_bindings, split_params, split_params.matrix_n, split_blocks);
+          return;
+        }
         encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
         encoder.dispatch_compute(

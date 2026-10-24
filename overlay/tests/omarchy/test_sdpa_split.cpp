@@ -186,6 +186,10 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   Run split = run_attention(q.x, k, v, scale, "1", stream);
   setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
   Run split_pv = run_attention(q.x, k, v, scale, "1", stream);
+  // Single-dispatch variant: pass 2 folded into the last pass 1 workgroup of each key-value head; bit-equal to the two-dispatch value-phase route.
+  setenv("MLX_OMARCHY_SDPA_SPLIT_MERGE", "1", 1);
+  Run split_merge = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_MERGE");
   unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
   Errors e_fused = error_against(fused.out, ref);
   Errors e_split = error_against(split.out, ref);
@@ -194,6 +198,7 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   if (split_device_ready()) {
     CHECK(split.launched == 2);
     CHECK(split_pv.launched == 2);
+    CHECK(split_merge.launched == (keys <= 4096 ? 1 : 2));
   } else {
     printf("Skipping: split route not available on this device\n");
   }
@@ -209,6 +214,7 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   CHECK(e_pv.max <= e_fused.max + 2.0 * rounding + 1e-6);
   CHECK(e_pv.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
   CHECK(e_pv.max <= 3.0 * rounding + 1e-5);
+  CHECK(split_merge.out == split_pv.out);
 }
 
 } // namespace

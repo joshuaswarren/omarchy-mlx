@@ -330,6 +330,10 @@
 #include "sdpa_decode_split_p1v_g2.h"
 #include "sdpa_decode_split_p1v_g4.h"
 #include "sdpa_decode_split_p1v_g8.h"
+#include "sdpa_decode_split_p1vm_g1.h"
+#include "sdpa_decode_split_p1vm_g2.h"
+#include "sdpa_decode_split_p1vm_g4.h"
+#include "sdpa_decode_split_p1vm_g8.h"
 #include "sdpa_decode_split_p2.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
@@ -1796,6 +1800,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p1v_g8, sdpa_decode_split_p1v_g8_size};
     case ComputeKernel::SdpaDecodeSplitP2BF16Hd128:
       return {sdpa_decode_split_p2, sdpa_decode_split_p2_size};
+    case ComputeKernel::SdpaDecodeSplitP1VMR1BF16Hd128:
+      return {sdpa_decode_split_p1vm_g1, sdpa_decode_split_p1vm_g1_size};
+    case ComputeKernel::SdpaDecodeSplitP1VMR2BF16Hd128:
+      return {sdpa_decode_split_p1vm_g2, sdpa_decode_split_p1vm_g2_size};
+    case ComputeKernel::SdpaDecodeSplitP1VMR4BF16Hd128:
+      return {sdpa_decode_split_p1vm_g4, sdpa_decode_split_p1vm_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1VMR8BF16Hd128:
+      return {sdpa_decode_split_p1vm_g8, sdpa_decode_split_p1vm_g8_size};
     case ComputeKernel::PartitionSmallKF32:
       return {partition_smallk_f32, partition_smallk_f32_size};
     case ComputeKernel::PartitionSmallKF16:
