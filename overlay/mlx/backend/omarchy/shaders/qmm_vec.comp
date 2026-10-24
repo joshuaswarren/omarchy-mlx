@@ -198,11 +198,23 @@ layout(set = 0, binding = 20, std430) writeonly buffer RmsNormOutput {
 shared float rmsnorm_block_values[256];
 shared float rmsnorm_inverse;
 shared uint rmsnorm_write_output;
+shared uint rmsnorm_row[2048];
 float rmsnorm_value(uint index) {
   uvec4 packed = input_x.values[index / 8u];
   uint word = packed[(index / 2u) & 3u];
   uint half_bits = (index & 1u) == 0u ? word & 0xFFFFu : word >> 16u;
   return uintBitsToFloat(half_bits << 16u);
+}
+float rmsnorm_half(uint index) {
+  uvec4 packed = rmsnorm_weight.values[index / 8u];
+  uint word = packed[(index / 2u) & 3u];
+  uint half_bits = (index & 1u) == 0u ? word & 0xFFFFu : word >> 16u;
+  return uintBitsToFloat(half_bits << 16u);
+}
+uint rmsnorm_word(uint input_bits, uint weight_bits) {
+  float value = uintBitsToFloat(input_bits << 16u);
+  float weight = uintBitsToFloat(weight_bits << 16u);
+  return uint(bf16_store(value * rmsnorm_inverse * weight));
 }
 void rmsnorm_prologue(uint row_length, uint row_start, float epsilon,
                       uint flags) {
@@ -226,29 +238,37 @@ void rmsnorm_prologue(uint row_length, uint row_start, float epsilon,
     rmsnorm_write_output = (flags & 524288u) != 0u ? 1u : 0u;
   }
   barrier();
-}
-uint rmsnorm_word(uint input_bits, uint weight_bits) {
-  float value = uintBitsToFloat(input_bits << 16u);
-  float weight = uintBitsToFloat(weight_bits << 16u);
-  return uint(bf16_store(value * rmsnorm_inverse * weight));
+  for (uint word_index = thread; word_index < row_length / 2u;
+       word_index += 256u) {
+    uint index = word_index * 2u;
+    uint low = rmsnorm_word(
+        floatBitsToUint(rmsnorm_value(row_start + index)) >> 16u,
+        floatBitsToUint(rmsnorm_half(index)) >> 16u);
+    uint high = rmsnorm_word(
+        floatBitsToUint(rmsnorm_value(row_start + index + 1u)) >> 16u,
+        floatBitsToUint(rmsnorm_half(index + 1u)) >> 16u);
+    rmsnorm_row[word_index] = low | (high << 16u);
+  }
+  barrier();
+  if (gl_WorkGroupID.x == 0u && rmsnorm_write_output != 0u) {
+    for (uint quad_index = thread; quad_index < row_length / 8u;
+         quad_index += 256u) {
+      uint word_index = quad_index * 4u;
+      rmsnorm_output.values[quad_index] = uvec4(
+          rmsnorm_row[word_index],
+          rmsnorm_row[word_index + 1u],
+          rmsnorm_row[word_index + 2u],
+          rmsnorm_row[word_index + 3u]);
+    }
+  }
 }
 uvec4 rmsnorm_quad(uint quad_index) {
-  uvec4 packed_x = input_x.values[quad_index];
-  uvec4 weights = rmsnorm_weight.values[quad_index];
-  uvec4 normalized = {
-    rmsnorm_word(packed_x.x & 0xFFFFu, weights.x & 0xFFFFu) |
-        (rmsnorm_word(packed_x.x >> 16u, weights.x >> 16u) << 16u),
-    rmsnorm_word(packed_x.y & 0xFFFFu, weights.y & 0xFFFFu) |
-        (rmsnorm_word(packed_x.y >> 16u, weights.y >> 16u) << 16u),
-    rmsnorm_word(packed_x.z & 0xFFFFu, weights.z & 0xFFFFu) |
-        (rmsnorm_word(packed_x.z >> 16u, weights.z >> 16u) << 16u),
-    rmsnorm_word(packed_x.w & 0xFFFFu, weights.w & 0xFFFFu) |
-        (rmsnorm_word(packed_x.w >> 16u, weights.w >> 16u) << 16u)
-  };
-  if (gl_WorkGroupID.x == 0u && rmsnorm_write_output != 0u) {
-    rmsnorm_output.values[quad_index] = normalized;
-  }
-  return normalized;
+  uint word_index = quad_index * 4u;
+  return uvec4(
+      rmsnorm_row[word_index],
+      rmsnorm_row[word_index + 1u],
+      rmsnorm_row[word_index + 2u],
+      rmsnorm_row[word_index + 3u]);
 }
 #endif
 #if defined(QMM_VEC_OUTGATE)

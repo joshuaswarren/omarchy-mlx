@@ -48,7 +48,7 @@ bool rmsnorm_fold_input_eligible(const RmsNormFoldInputs& inputs) {
   const char* apple_norm = std::getenv("MLX_OMARCHY_NORM_APPLE");
   const bool apple_norm_disabled =
       apple_norm != nullptr && !env_flag("MLX_OMARCHY_NORM_APPLE");
-  return k > 0 && k % 8 == 0 &&
+  return k > 0 && k <= kQmmVecRmsNormMaxK && k % 8 == 0 &&
       (apple_norm_disabled || (k != 256 && k != 2048)) &&
       inputs.input_offset == 0 && inputs.input_contiguous &&
       inputs.input_row_contiguous && inputs.weight_shape.size() == 1 &&

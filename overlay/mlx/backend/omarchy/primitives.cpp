@@ -8927,8 +8927,10 @@ bool dispatch_quantized_gemv_group(
     const array& weight = rmsnorm->weight;
     if (encoder.device().compute().binding_limit() < kQmmVecMultiBindings ||
         dtype != bfloat16 || !subgroup_ready || token_route ||
+        caps.max_compute_shared_memory_size < kQmmVecRmsNormSharedBytes ||
         !float_dtype_supported(dtype, caps) || x.dtype() != bfloat16 ||
         x.ndim() < 2 || x.shape(-2) != 1 || x.shape(-1) <= 0 ||
+        static_cast<uint32_t>(x.shape(-1)) > kQmmVecRmsNormMaxK ||
         apple_norm_enabled(
             encoder.device(),
             static_cast<size_t>(x.shape(-1)),

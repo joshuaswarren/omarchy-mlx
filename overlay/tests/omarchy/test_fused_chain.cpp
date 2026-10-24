@@ -2132,6 +2132,11 @@ TEST_CASE("RMSNorm fold input eligibility rejects unsupported shapes and views")
   unsupported_k.weight_shape = Shape{10};
   unsupported_k.output_shape = Shape{1, 1, 10};
   CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(unsupported_k));
+  auto oversized_k = valid;
+  oversized_k.input_shape = Shape{1, 1, 4104};
+  oversized_k.weight_shape = Shape{4104};
+  oversized_k.output_shape = Shape{1, 1, 4104};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(oversized_k));
   auto token_rows = valid;
   token_rows.input_shape = Shape{1, 2, k};
   token_rows.output_shape = Shape{1, 2, k};

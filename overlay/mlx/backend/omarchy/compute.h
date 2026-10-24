@@ -43,6 +43,11 @@ inline constexpr uint32_t kQmmVecMultiBindings =
 // The RMSNorm multi-output kernel has at most three projections and reuses
 // the fourth projection's first two descriptor slots.
 inline constexpr uint32_t kQmmVecRmsNormWeights = 3;
+inline constexpr uint32_t kQmmVecRmsNormMaxK = 4096;
+inline constexpr uint32_t kQmmVecRmsNormSharedBytes =
+    kQmmVecRmsNormMaxK * sizeof(uint16_t) + 256u * sizeof(float) +
+    sizeof(float) + sizeof(uint32_t);
+static_assert(kQmmVecRmsNormSharedBytes < 32u * 1024u);
 enum class QmmVecMultiBindingPath : uint8_t { standard, outgate, rmsnorm };
 constexpr uint32_t qmm_vec_multi_binding_count(
     QmmVecMultiBindingPath path) {
