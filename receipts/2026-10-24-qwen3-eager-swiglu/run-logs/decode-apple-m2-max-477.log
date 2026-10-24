@@ -1,0 +1,16 @@
+ARMS prompt tokens 477
+ARMS start 2026-10-24T15:43:09Z boot=redacted kernel=7.1.12-2-12.6-sep-ARCH gov=performance load1=0.26 settle=20 set q3
+ARMS llmstep 14f21df0d126ef48
+ARMS driver vulkan-f144c7949b model f7825defe5865d17 mx=0.32.4.dev202610241001+1edd56d libmlx=b920984dcc4554ec
+ARMS mlxlm-q3 qwen3.py d2960086dde9840b installed d627a87a45f9fce6
+ARMS round 1 base rc=0 decode 65.80 prefill 758.9 ttft 584.1 sha 8e68ea1ec2d62fcc load1=0.32
+ARMS round 1 eager rc=0 decode 67.60 prefill 773.4 ttft 573.2 sha 8e68ea1ec2d62fcc load1=0.37
+ARMS round 2 eager rc=0 decode 67.70 prefill 775.2 ttft 571.9 sha 8e68ea1ec2d62fcc load1=0.37
+ARMS round 2 base rc=0 decode 66.50 prefill 770.7 ttft 575.2 sha 8e68ea1ec2d62fcc load1=0.42
+ARMS round 3 base rc=0 decode 66.50 prefill 769.7 ttft 576.0 sha 8e68ea1ec2d62fcc load1=0.47
+ARMS round 3 eager rc=0 decode 67.40 prefill 776.0 ttft 571.3 sha 8e68ea1ec2d62fcc load1=0.51
+ARMS round 4 eager rc=0 decode 67.50 prefill 774.1 ttft 572.7 sha 8e68ea1ec2d62fcc load1=0.55
+ARMS round 4 base rc=0 decode 66.60 prefill 770.9 ttft 575.0 sha 8e68ea1ec2d62fcc load1=0.59
+ARMS round 5 base rc=0 decode 66.30 prefill 769.7 ttft 575.9 sha 8e68ea1ec2d62fcc load1=0.62
+ARMS round 5 eager rc=0 decode 67.60 prefill 772.4 ttft 574.0 sha 8e68ea1ec2d62fcc load1=0.65
+ARMS end 2026-10-24T15:43:55Z
