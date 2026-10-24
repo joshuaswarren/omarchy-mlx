@@ -1,0 +1,5 @@
+7f59bb409b0408a89fbce6fcf090ce3d3c345f855bd36905ca5b84e43bb9ca6b  ./README.md
+310d81bf8f0881d643bab06edfbe7959add20827e6a51e7edf0b938163e83bdf  ./prereg.txt
+6be2eb02272bbe43caee6a26621d79de3ff153d3801c8894325581910fc8a0ed  ./run-logs/decode-apple-m2-max-256-sample.out
+b0dc411cf8948c0a0326bee9674b2642c6dcab3e04540ed5e6353bc7d652d02c  ./run-logs/decode-apple-m2-max-256.log
+1125906d349b2a82f4e5e8304ca717dea0ee6a44978f5b4fb19a012121173145  ./tables/decode-apple-m2-max-256-tokens.tsv

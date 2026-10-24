@@ -297,11 +297,11 @@ TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the 
 TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 (G13G B1)") == 128);
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 Max (G13C C0)") == 320);
-  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Max (G14C B1)") == 448);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Max (G14C B1)") == 320);
   CHECK(omarchy::sdpa_split_min_keys("") == 0);
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 0);
-  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 447));
-  CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 448));
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 319));
+  CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 320));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 320));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 127));
