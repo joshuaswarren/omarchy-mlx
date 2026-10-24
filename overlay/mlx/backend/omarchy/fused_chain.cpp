@@ -38,17 +38,23 @@ bool fused_chain_enabled() {
 }
 bool rmsnorm_fold_input_eligible(const RmsNormFoldInputs& inputs) {
   if (inputs.input_dtype != bfloat16 || inputs.weight_dtype != bfloat16 ||
-      inputs.output_dtype != bfloat16 || inputs.output_shape.size() < 2 ||
+      inputs.output_dtype != bfloat16 || inputs.output_is_eval_root ||
+      inputs.output_shape.size() < 2 ||
       inputs.output_shape[inputs.output_shape.size() - 2] != 1 ||
       inputs.input_shape != inputs.output_shape) {
     return false;
   }
   const size_t k = static_cast<size_t>(inputs.output_shape.back());
-  return k > 0 && k % 8 == 0 && inputs.input_offset == 0 &&
-      inputs.input_contiguous && inputs.input_row_contiguous &&
-      inputs.weight_shape.size() == 1 && inputs.weight_shape[0] == k &&
-      inputs.weight_offset == 0 && inputs.weight_contiguous &&
-      std::isfinite(inputs.epsilon) && inputs.epsilon > 0.0f;
+  const char* apple_norm = std::getenv("MLX_OMARCHY_NORM_APPLE");
+  const bool apple_norm_disabled =
+      apple_norm != nullptr && !env_flag("MLX_OMARCHY_NORM_APPLE");
+  return k > 0 && k % 8 == 0 &&
+      (apple_norm_disabled || (k != 256 && k != 2048)) &&
+      inputs.input_offset == 0 && inputs.input_contiguous &&
+      inputs.input_row_contiguous && inputs.weight_shape.size() == 1 &&
+      inputs.weight_shape[0] == k && inputs.weight_offset == 0 &&
+      inputs.weight_contiguous && std::isfinite(inputs.epsilon) &&
+      inputs.epsilon > 0.0f;
 }
 namespace {
 
@@ -1204,6 +1210,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     auto it = nodes.find(ref.id());
     return it == nodes.end() ? nullptr : it->second;
   };
+  std::unordered_set<std::uintptr_t> eval_output_ids;
+  if (!tape.empty()) {
+    for (const auto& output : tape.front().inputs()) {
+      eval_output_ids.insert(output.id());
+    }
+  }
   // Swiglu chains planned for the GEMV store epilogue fold: the gate
   // and up leaves plus the tail array the fold will store into.
   struct SwigluPlan {
@@ -1372,11 +1384,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
                input.flags().contiguous,
                input.flags().row_contiguous,
                weight.flags().contiguous,
-               epsilon})) {
+               epsilon,
+               eval_output_ids.count(node.id()) != 0})) {
         continue;
       }
       rmsnorm_plans.emplace(
-          node.id(), RmsNormPlan{input, weight, epsilon, std::nullopt});
+          node.id(), RmsNormPlan{input, weight, epsilon, node});
     }
   }
   std::unordered_map<std::uintptr_t, std::vector<const array*>> by_x;

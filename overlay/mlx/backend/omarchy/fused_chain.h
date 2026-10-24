@@ -196,6 +196,7 @@ struct RmsNormFoldInputs {
   bool input_row_contiguous;
   bool weight_contiguous;
   float epsilon;
+  bool output_is_eval_root{false};
 };
 bool rmsnorm_fold_input_eligible(const RmsNormFoldInputs& inputs);
 

@@ -8926,7 +8926,11 @@ bool dispatch_quantized_gemv_group(
             kQmmVecMultiBindings + 5 ||
         dtype != bfloat16 || !subgroup_ready || token_route ||
         !float_dtype_supported(dtype, caps) || x.dtype() != bfloat16 ||
-        x.ndim() < 2 || x.shape(-2) != 1 ||
+        x.ndim() < 2 || x.shape(-2) != 1 || x.shape(-1) <= 0 ||
+        apple_norm_enabled(
+            encoder.device(),
+            static_cast<size_t>(x.shape(-1)),
+            x.size() / static_cast<size_t>(x.shape(-1))) ||
         !whole_dense(x, x.size()) || !input_ready(x, stream) ||
         x.data_shared_ptr() == nullptr || !x.flags().contiguous ||
         !x.flags().row_contiguous || x.offset() != 0 ||

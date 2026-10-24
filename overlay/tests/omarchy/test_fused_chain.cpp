@@ -2010,6 +2010,81 @@ TEST_CASE("RMSNorm decode GEMV fold refuses an output with another consumer") {
   unsetenv("MLX_OMARCHY_NORM_FOLD");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
+TEST_CASE("RMSNorm fold refuses eval output roots") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
+  constexpr int k = 2560;
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array weight =
+      astype(random::normal(Shape{k}, float32, std::nullopt, stream),
+             bfloat16,
+             stream);
+  auto q = make_linear(256, k, bfloat16, stream);
+  eval({x, weight});
+  sync_stream(stream);
+  auto forward = [&] {
+    array normed = fast::rms_norm(x, weight, 1e-6f, stream);
+    array projected = project(normed, q, stream);
+    return std::pair<array, array>{normed, projected};
+  };
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_NORM_FOLD", "0", 1);
+  auto baseline = forward();
+  eval({baseline.first, baseline.second});
+  sync_stream(stream);
+  setenv("MLX_OMARCHY_NORM_FOLD", "1", 1);
+  uint64_t before = counters().vk_compute_dispatches.load();
+  auto candidate = forward();
+  eval({candidate.first, candidate.second});
+  sync_stream(stream);
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 2);
+  expect_bit_exact(baseline.first, candidate.first, stream);
+  expect_bit_exact(baseline.second, candidate.second, stream);
+  unsetenv("MLX_OMARCHY_NORM_APPLE");
+  unsetenv("MLX_OMARCHY_NORM_FOLD");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+TEST_CASE("RMSNorm fold input eligibility excludes Apple norm widths") {
+  constexpr int k = 2560;
+  omarchy::RmsNormFoldInputs valid{
+      bfloat16,
+      bfloat16,
+      bfloat16,
+      Shape{1, 1, k},
+      Shape{k},
+      Shape{1, 1, k},
+      0,
+      0,
+      true,
+      true,
+      true,
+      1e-6f};
+  unsetenv("MLX_OMARCHY_NORM_APPLE");
+  CHECK(omarchy::rmsnorm_fold_input_eligible(valid));
+  auto apple_256 = valid;
+  apple_256.input_shape = Shape{1, 1, 256};
+  apple_256.weight_shape = Shape{256};
+  apple_256.output_shape = Shape{1, 1, 256};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(apple_256));
+  auto apple_2048 = valid;
+  apple_2048.input_shape = Shape{1, 1, 2048};
+  apple_2048.weight_shape = Shape{2048};
+  apple_2048.output_shape = Shape{1, 1, 2048};
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(apple_2048));
+  setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
+  CHECK(omarchy::rmsnorm_fold_input_eligible(apple_256));
+  CHECK(omarchy::rmsnorm_fold_input_eligible(apple_2048));
+  unsetenv("MLX_OMARCHY_NORM_APPLE");
+}
 TEST_CASE("RMSNorm fold input eligibility rejects unsupported shapes and views") {
   constexpr int k = 16;
   const omarchy::RmsNormFoldInputs valid{
@@ -2026,6 +2101,9 @@ TEST_CASE("RMSNorm fold input eligibility rejects unsupported shapes and views")
       true,
       1e-6f};
   CHECK(omarchy::rmsnorm_fold_input_eligible(valid));
+  auto eval_output = valid;
+  eval_output.output_is_eval_root = true;
+  CHECK_FALSE(omarchy::rmsnorm_fold_input_eligible(eval_output));
 
   auto input_offset = valid;
   input_offset.input_offset = 2;
