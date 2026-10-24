@@ -1,6 +1,6 @@
 # Dense Qwen3 decode folds SwiGLU into the gate and up matvec (2026-10-24)
 
-The mlx-lm patch set now rewrites the dense Qwen3 MLP so that single-token rows compute `gate * sigmoid(gate) * up` as eager operations. The GEMV planner folds that product into the gate and up matvec dispatch, so one dispatch per layer disappears: 36 of the 371 dispatches of a Qwen3-4B decode token. Qwen3-4B 4-bit decodes 1.65 percent faster on the Apple M2 Max and 1.24 percent faster on the Apple M1 Max. The token digest is identical in all 20 samples.
+The mlx-lm patch set now rewrites the dense Qwen3 MLP so that single-token rows compute `gate * sigmoid(gate) * up` as eager operations. The GEMV planner folds that product into the gate and up matvec dispatch, so one dispatch per layer disappears: 36 dispatches per Qwen3-4B decode token, out of the 371 that an earlier decode census of the unpatched path counted (that census is not part of this receipt). Qwen3-4B 4-bit decodes 1.65 percent faster on the Apple M2 Max and 1.24 percent faster on the Apple M1 Max. The token digest is identical in all 20 samples.
 
 The +3 percent bar of the nightly rule is not met. The change ships on the rule written in `prereg.txt` before the run: the output is bit identical, the dispatch count drops, and no round is slower than its base.
 
@@ -35,8 +35,8 @@ Decode tokens per second, base then eager:
 
 The token digest is `8e68ea1ec2d62fcc` in all 10 samples of each chip. Prefill speed is unchanged. The base reading of round 1 on the Apple M2 Max is the lowest of its arm and has a lower prefill speed than the other base samples, so the +2.74 percent of that round is the least reliable. The other four rounds read +1.35 to +1.96 percent. Tables: `tables/decode-apple-m2-max-477.tsv`, `tables/decode-apple-m1-max-477.tsv`. Logs and one sample output per chip are in `run-logs/`.
 
-The gain is about 6 microseconds per removed dispatch on the Apple M2 Max: 1.1 tokens per second at 66.5 is 0.25 ms of a 15 ms step, divided over 36 layers.
+The gain is about 7 microseconds per removed dispatch on the Apple M2 Max: 66.5 tokens per second is 15.04 ms per step, 67.6 is 14.79 ms, and the 0.245 ms difference divided over 36 layers is 6.8 microseconds.
 
 ## What is not covered
 
-The bit check uses bf16 weights quantized to 4 bits with group size 64. Models in fp16 and other group sizes use the same patch and are not tested here. Only the dense Qwen3 file is patched. Other model families that call the compiled `swiglu` keep their dispatch. The Apple M1 was not screened. The boot id is redacted in the logs.
+The bit check uses bf16 weights quantized to 4 bits with group size 64. Models in fp16 and other group sizes use the same patch and are not tested here. Only the dense Qwen3 file is patched. Other model families that call the compiled `swiglu` keep their dispatch. The 13-inch Apple M1 was not screened. The boot id is redacted in the logs.
