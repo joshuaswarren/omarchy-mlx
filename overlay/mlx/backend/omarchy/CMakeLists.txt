@@ -70,14 +70,19 @@ function(omarchy_shader name source)
   set(output_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
   set(spirv "${output_dir}/${name}.spv")
   set(header "${output_dir}/${name}.h")
+  set(shader_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+                          "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h")
+  if(source STREQUAL "shaders/qmm_coopmat.comp")
+    list(APPEND shader_dependencies
+         "${CMAKE_CURRENT_SOURCE_DIR}/shaders/qmm_drain.h")
+  endif()
   if(OMARCHY_GLSLC)
     add_custom_command(
       OUTPUT "${spirv}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
       COMMAND "${OMARCHY_GLSLC}" -O --target-env=vulkan1.3 ${ARGN}
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
-      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
-              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+      DEPENDS ${shader_dependencies}
       VERBATIM)
   else()
     add_custom_command(
@@ -85,8 +90,7 @@ function(omarchy_shader name source)
       COMMAND "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
       COMMAND "${OMARCHY_GLSLANG}" -V -Os --target-env vulkan1.3 ${ARGN}
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
-      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
-              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+      DEPENDS ${shader_dependencies}
       VERBATIM)
   endif()
   add_custom_command(
