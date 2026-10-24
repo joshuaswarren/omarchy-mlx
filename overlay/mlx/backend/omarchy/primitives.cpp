@@ -15741,7 +15741,8 @@ void ScaledDotProductAttention::eval_gpu(
         // Single-dispatch variant (MLX_OMARCHY_SDPA_SPLIT_MERGE, any non-empty value other than "0"; off by default): the last pass 1 workgroup of each
         // key-value head folds the blocks, so pass 2 and the dependency gap before it disappear. Value-phase kernel only, at most 32 blocks (4096 keys).
         // One counter per key-value head, zeroed by a buffer fill before the dispatch.
-        if (pv && split_blocks <= 32u && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE") > 0) {
+        if (pv && split_blocks <= 32u && encoder.device().compute().binding_limit() >= 6 &&
+            decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE") > 0) {
           array counters(Shape{static_cast<int>(split_params.matrix_n)}, uint32, nullptr, {});
           counters.set_data(allocate_omarchy(counters.nbytes()));
           encoder.add_temporary(counters);

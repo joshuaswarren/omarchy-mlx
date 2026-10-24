@@ -28,6 +28,7 @@
 #include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
+#include "mlx/transforms.h"
 
 using namespace mlx::core;
 
@@ -353,6 +354,51 @@ TEST_CASE("split-K decode SDPA: the value-phase variant falls back to the old pa
   unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
   CHECK(on.launched == off.launched);
   CHECK(on.out == off.out);
+}
+
+// Stress for the single-dispatch merge: the last-workgroup hand-off is a race if the fences do not hold, and a passing single call proves little.
+// 20 data sets per length, each checked 40 times one call per evaluation and 40 times in groups of 16 calls per evaluation (counters of different
+// calls live at the same time), every output exactly equal to the two-dispatch value-phase output.
+TEST_CASE("split-K decode SDPA: single-dispatch merge stress, 448, 1024 and 4096 keys") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int heads = 32, kv_heads = 8, width = 128;
+  const float scale = 1.0f / std::sqrt(128.0f);
+  size_t mismatches = 0, outputs = 0;
+  for (int keys : {448, 1024, 4096}) {
+    for (int set = 0; set < 20; ++set) {
+      Stored q = make_bf16(pattern(static_cast<size_t>(heads) * width, 100 + set, 1.0f), Shape{1, heads, 1, width}, stream);
+      Stored k = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * width, 200 + set, 1.0f), Shape{1, kv_heads, keys, width}, stream);
+      Stored v = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * width, 300 + set, 1.0f), Shape{1, kv_heads, keys, width}, stream);
+      setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+      Run base = run_attention(q.x, k.x, v.x, scale, "1", stream);
+      setenv("MLX_OMARCHY_SDPA_SPLIT_MERGE", "1", 1);
+      for (int rep = 0; rep < 40; ++rep) {
+        Run one = run_attention(q.x, k.x, v.x, scale, "1", stream);
+        mismatches += one.out != base.out;
+        ++outputs;
+      }
+      std::vector<array> group;
+      for (int rep = 0; rep < 40; ++rep) {
+        group.push_back(fast::scaled_dot_product_attention(q.x, k.x, v.x, scale, "", {}, std::nullopt, false, stream));
+        if (group.size() == 16 || rep == 39) {
+          eval(group);
+          omarchy::get_command_encoder(stream).synchronize();
+          for (const array& r : group) {
+            mismatches += flat(r, stream) != base.out;
+            ++outputs;
+          }
+          group.clear();
+        }
+      }
+      unsetenv("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+      unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+    }
+  }
+  INFO("outputs " << outputs);
+  CHECK(mismatches == 0);
 }
 
 TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {
