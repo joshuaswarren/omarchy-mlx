@@ -1,19 +1,15 @@
 # omarchy-mlx
 
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink)](https://github.com/sponsors/joshuaswarren)
-
-Sponsor this work or help stock the lab: [joshuawarren.com/sponsors](https://joshuawarren.com/sponsors)
-
 MLX on the Apple GPU under Linux, and Core ML models on the
 Apple Neural Engine.
 
 [MLX](https://github.com/ml-explore/mlx) is Apple's array framework for
-machine learning on Apple silicon. Upstream it speaks Metal, so it runs
-on macOS only. omarchy-mlx runs the same `import mlx.core as mx` code on
-an Apple silicon Mac running
-[Omarchy](https://github.com/omacom/omarchy) Linux. The GPU driver is
-Mesa's Honeykrisp Vulkan stack. Tensors stay on the GPU. There is no
-Metal and no CPU fallback.
+machine learning on Apple silicon. Upstream runs on macOS through Metal
+and on Linux through CUDA or CPU. omarchy-mlx runs the same
+`import mlx.core as mx` code on an Apple silicon Mac running
+[Omarchy](https://github.com/omacom/omarchy) Linux, on the Apple GPU. The
+GPU driver is Mesa's Honeykrisp Vulkan stack. Tensors stay on the GPU.
+There is no Metal and no CPU fallback.
 
 It is for people who run Linux on an M1 or M2 Mac. You get local chat,
 serving, and speech to text, with no macOS and no cloud account.
@@ -58,7 +54,7 @@ plus Laya, and it needs a 96 GB machine.
 |---|---|---|
 | M1 | Tested | Parakeet islands |
 | M1 Max | Tested | Whole encoder |
-| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
+| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
@@ -69,11 +65,40 @@ this project measures on. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
 to send us the numbers and ANE state that only real silicon gives.
 
-The ANE is a separate lane from the GPU. It has its own driver and its
+The ANE is separate hardware from the GPU. It has its own driver and its
 own tested state. Chip-by-chip ANE status, including what each untested
 chip needs, lives in the [chip coverage
 table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage) of
 [omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
+
+## Install
+
+Run one command on an Arch install for an M1-class Mac or an M2 Max. The script picks the latest release, checks the wheel against the release
+`SHA256SUMS`, and requires Python 3.14 on aarch64.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
+```
+
+The other ways to install (the Omarchy package, the script flags, a
+release wheel) are in [docs/INSTALL.md](docs/INSTALL.md).
+
+## Quick start
+
+After any install path, this works:
+
+```bash
+mlx-omarchy-info                                                   # GPU and driver state
+mlx-omarchy -c "import mlx.core as mx; print(mx.default_device())" # Device(gpu, 0)
+mlx-omarchy-chat                                                   # chat in the browser
+```
+
+The first chat run asks you to approve a model download. Then it
+streams the answer from the Apple GPU.
+
+## Usage
+
+See [docs/USAGE.md](docs/USAGE.md).
 
 ## Other Vulkan GPUs (development)
 
@@ -95,46 +120,6 @@ run record in [receipts/2026-10-11-non-apple-gpu-run/README.md](receipts/2026-10
 | RTX 5060 Ti | NVIDIA 615.71.09 | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [Non-Apple GPUs](docs/compatibility.md#non-apple-gpus-development-drivers) |
 
 AMD (RADV) has no qualifying run.
-
-## Install
-
-Run one command on an Arch install for an M1-class Mac or an M2 Max. The script picks the latest release, checks the wheel against the release
-`SHA256SUMS`, and asks for Python 3.14 on aarch64.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
-```
-
-The other ways to install are in [docs/INSTALL.md](docs/INSTALL.md).
-
-### The Omarchy package
-
-See [docs/INSTALL.md](docs/INSTALL.md#the-omarchy-package).
-
-### Install with the script
-
-See [docs/INSTALL.md](docs/INSTALL.md#install-with-the-script).
-
-### From a release wheel
-
-See [docs/INSTALL.md](docs/INSTALL.md#from-a-release-wheel).
-
-## Quick start
-
-After any install path, this works:
-
-```bash
-mlx-omarchy-info                                                   # GPU and driver state
-mlx-omarchy -c "import mlx.core as mx; print(mx.default_device())" # Device(gpu, 0)
-mlx-omarchy-chat                                                   # chat in the browser
-```
-
-The first chat run asks you to approve a model download. Then it
-streams the answer from the Apple GPU.
-
-## Usage
-
-See [docs/USAGE.md](docs/USAGE.md).
 
 ## How close to macOS
 
@@ -195,13 +180,10 @@ Omarchy, and submit both. The full guide, including what gets
 collected and how redaction works, is
 [docs/contribute-data.md](docs/contribute-data.md).
 
-## M2 Max ANE (measured)
+## Apple Neural Engine
 
-See [docs/ANE-LINUX.md](docs/ANE-LINUX.md#m2-max-ane-measured).
-
-## Turn on the ANE for your chip
-
-See [docs/ANE-LINUX.md](docs/ANE-LINUX.md#turn-on-the-ane-for-your-chip).
+Measured M2 Max results: [docs/ANE-LINUX.md](docs/ANE-LINUX.md#m2-max-ane-measured).
+To enable the ANE on your chip: [docs/ANE-LINUX.md](docs/ANE-LINUX.md#turn-on-the-ane-for-your-chip).
 
 ## Troubleshooting
 
@@ -209,11 +191,7 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## Support
 
-Every bit of support helps keep omarchy-mlx alive and free. If you are able, [sponsor on GitHub](https://github.com/sponsors/joshuaswarren) or send a Lightning donation to `joshuaswarren@strike.me` to directly fund continued development and new integrations.
-
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?style=for-the-badge)](https://github.com/sponsors/joshuaswarren)
-
-If financial support is not an option, you can still make a big difference: [star the repo](https://github.com/joshuaswarren/omarchy-mlx), share it, or recommend it to a colleague. Word of mouth is how most people find omarchy-mlx.
+If omarchy-mlx is useful to you: [sponsor on GitHub](https://github.com/sponsors/joshuaswarren), a Lightning donation to `joshuaswarren@strike.me`, [star the repo](https://github.com/joshuaswarren/omarchy-mlx), or stock the lab at [joshuawarren.com/sponsors](https://joshuawarren.com/sponsors).
 
 ## Contributing
 

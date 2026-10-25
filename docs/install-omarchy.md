@@ -112,8 +112,7 @@ when it has no RAW/WAW/WAR overlap with any earlier node. Ranges are exact
 byte ranges. The read/write split comes from SPIR-V reflection. Hazards stay
 ordered exactly as in tape order, so outputs are unchanged. Hazard-free
 nodes run concurrently. They no longer serialize behind barriers their
-tape neighbors induced. Requires gated barriers. Off by default until its
-jw16 A/B lands.
+tape neighbors induced. Requires gated barriers. Off by default.
 
 Submit batching is scheduling only, and results are bit-identical. The open
 batch is submitted at 4096 nodes or at the byte budget.
@@ -127,7 +126,7 @@ it to 128. That applies only around prompt processing and the first token
 of `generate_step`. Pipelined decode keeps one submit per token. A constant
 early first batch cost decode about 1%.
 `MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT=1` disables the patch's behavior.
-Measured on jwm1 (T8103): qwen38 protocol TTFT 0.1844 -> 0.1590 s (-13.8%),
+Measured on a 13-inch M1 (T8103): Qwen3.8-2B protocol TTFT 0.1844 -> 0.1590 s (-13.8%),
 decode64 41.48 tok/s, digests unchanged.
 
 Per-submission GPU-time cap (issue #19). One queue submission holds the GPU
@@ -204,20 +203,14 @@ everywhere. Decode depends on the model. On the 13-inch M1 under `schedutil`,
 gemma-4-E4B decodes at 10.6 tok/s without the clamp and 15.3 tok/s with it.
 Qwen3.5-9B was flat on the 13-inch and on the M2 Max. The clamp reaches decode
 when the calling thread is clamped, before or after the imports (receipt:
-`receipts/2026-10-17-uclamp-placement`). The w71
-lane's ≥6 % first-token numbers were taken against an idle-decayed P
-cluster. That machine state did not recur in this A/B. The
+`receipts/2026-10-17-uclamp-placement`). The
 power-profiles-daemon route this replaces cannot work on Apple Silicon.
 ppd 0.30 offers only placeholder profiles (no `performance`). Holds are
 polkit-gated to seat-active sessions. A successful hold moves no governor.
 So the in-process clamp is the supported route. A narrow sudoers+helper
 governor flip remains the documented fallback for a kernel that refuses
 `sched_setattr` (`receipts/2026-10-02-perf-hold`). The payoff is
-conditional on the P cluster's idle state. An independent jwm1 run on an
-idle-decayed cluster measured pf512 first-token 0.1424 to 0.1303 s
-(−8.7 %). Ttft rate was +10.5 % with exact digests. That run is reported in
-the receipt's addendum ("reported by the jwm1 lane, notebook entry H219;
-not re-measured here").
+conditional on the P cluster's idle state. An independent 13-inch M1 run against an idle-decayed cluster measured pf512 first-token 0.1424 to 0.1303 s (−8.7 %), first-token rate +10.5 %, exact digests (addendum in `receipts/2026-10-17-uclamp-placement`).
 
 ## Build the wheel
 

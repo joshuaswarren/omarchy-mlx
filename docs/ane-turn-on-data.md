@@ -153,7 +153,7 @@ the kernel DT node can enable the chip), empty or absent is `overlay`, a
 missing file is `unknown`. Per issue #155, a row with
 `driver_source == "intree"`, the chip's driver bound, a 20/20 bit-exact
 smoke, and no faults is judged exactly like a dkms row; the omarchy-ane
-checker (w73) owns that verdict and its wording. The untested-chip steps
+checker owns that verdict and its wording. The untested-chip steps
 the collector prints branch on both facts: on an in-tree kernel it says
 userspace + smoke + firmware fetch only and never omarchy-ane-dkms, and
 when `dtbs_source == "kernel"` it appends that the overlay opt-in has no
@@ -169,8 +169,7 @@ mil-hwx-compiler rung-1 add package as `fixtures/h13-anec/add`, run it
 20x via `ane-run --check add` on a T8103 or T6001, and add the H13
 chips + golden to the smoke.
 
-Send corrections or an override only through the omarchy-ane lane
-(w73); this file describes the collector side.
+Send corrections or an override through the omarchy-ane project; this file describes the collector side.
 
 ### Linux probe detail
 
