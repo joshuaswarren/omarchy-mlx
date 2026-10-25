@@ -2082,28 +2082,25 @@ ComputeRuntime::ComputeRuntime(
   VKX_CHECK(dt.CreateDescriptorSetLayout(
       device_, &descriptor_info, nullptr, &descriptor_layout_));
 
-  VkPushConstantRange push_ranges[2]{};
-  push_ranges[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-  // First range covers the live fields of ComputeParams (everything up to
-  // scalar_args). Vulkan only guarantees 128 bytes of push-constant space;
-  // 128 here matches that contract exactly so every physical device
-  // accepts the layout. The reserved tail (scalar_args) is exposed
-  // through a second range, sized to its actual storage (32 bytes) and
-  // offset to 128 so the layout stays within the device-dependent band
-  // (128..256). Native kernels ignore the second range; fast::CustomKernel
-  // kernels declare a separate `layout(push_constant) uniform Scalars { ... };`
-  // block in the translated GLSL and read scalar names from it.
-  push_ranges[0].offset = 0;
-  push_ranges[0].size = 128;
-  push_ranges[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-  push_ranges[1].offset = 128;
-  push_ranges[1].size = 32;
+  // One compute range covers every push constant, the whole of ComputeParams.
+  // The spec allows each stage in at most one range
+  // (VUID-VkPipelineLayoutCreateInfo-pPushConstantRanges-00292). Two compute
+  // ranges make the common runtime of Honeykrisp assert in debug builds at the
+  // first compute pipeline. The whole struct is pushed from offset 0, so the
+  // range must be sizeof(ComputeParams) or larger
+  // (VUID-vkCmdPushConstants-size-00369). Honeykrisp reports a 256-byte push
+  // constant limit; assert the struct stays within it.
+  static_assert(sizeof(ComputeParams) <= 256, "push constant limit");
+  VkPushConstantRange push_range{};
+  push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  push_range.offset = 0;
+  push_range.size = sizeof(ComputeParams);
   VkPipelineLayoutCreateInfo pipeline_info{
       VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
   pipeline_info.setLayoutCount = 1;
   pipeline_info.pSetLayouts = &descriptor_layout_;
-  pipeline_info.pushConstantRangeCount = 2;
-  pipeline_info.pPushConstantRanges = push_ranges;
+  pipeline_info.pushConstantRangeCount = 1;
+  pipeline_info.pPushConstantRanges = &push_range;
   try {
     VKX_CHECK(dt.CreatePipelineLayout(
         device_, &pipeline_info, nullptr, &pipeline_layout_));
