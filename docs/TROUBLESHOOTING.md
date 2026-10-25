@@ -19,6 +19,5 @@ Back to the [README](../README.md).
   M1 Max with `/dev/accel/accel0` present and the `ane` module
   loaded. The refusal names the missing piece.
 - On an M2 Max, `mlx-omarchy-info` reports the ANE as available when the
-  driver is loaded (read on 2026-10-10 with the installed 0.7.28 package:
-  node, `accel0`, module and version all present). An older release could
-  report it as missing; if yours does, update the package.
+  `ane_t6021` driver is loaded. An older release could report it as
+  missing; if yours does, update the package.

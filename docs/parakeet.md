@@ -72,10 +72,6 @@ and uint32 significands. This is required because the custom-kernel native
 `0x4748616b` for the retained finite probe. The integer implementation also
 avoids the overflow and underflow failures of the former unscaled Dekker split.
 
-The CPU comparison receipt is
-[`2026-09-12-parakeet-mel-frontend`](../receipts/2026-09-12-parakeet-mel-frontend/receipt.json).
-The Vulkan implementation and device trace are recorded in
-[`2026-09-13-parakeet-vulkan-mel`](../receipts/2026-09-13-parakeet-vulkan-mel/receipt.json).
 The previous Apple result covers only the pinned ordinary-input fixture. The
 first finite-range rerun passed 8,192 full-exponent FMA triples on Apple M1,
 but its `2^-120` DFT produced 1,028 real-component bit mismatches, starting
@@ -127,9 +123,7 @@ The licensed clip produces identical 104-token outputs on ANE and GPU.
 The pinned reference emits repeated punctuation and a Cyrillic suffix; these
 remain in the golden transcript. CPU emits 100 tokens and does not match that
 transcript. Each compute plan matches its own end-to-end reference transcriber.
-This freeze records native behavior, not clean transcription quality. See the
-[licensed reference receipt](../receipts/2026-09-12-licensed-parakeet-reference.json)
-for exact text, token counts, and duration/frame differences.
+This freeze records native behavior, not clean transcription quality.
 
 ## Downloader
 
@@ -175,7 +169,7 @@ socket is mode 0600, owner-only and single-instance. The daemon exits on
 its idle timer, SIGTERM, `--stop --socket PATH`, or a lost session (a
 client killed mid-request, a failed submit, or resident exit). The client
 connects within 1 s or falls back to a private worker, and the report
-records which one it used in `ane.session.transport`. On jwm1 this cuts
+records which one it used in `ane.session.transport`. On the 13-inch M1 this cuts
 a warm `transcribe` from 1939 ms to 853 ms per call (median), with the
 encoder stage at the ANE exec floor; see
 [the receipt](../receipts/2026-10-02-parakeet-warm-clip/README.md).

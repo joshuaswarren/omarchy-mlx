@@ -8,9 +8,10 @@ The packages are published in the `[omarchy]` pacman repository at
 `https://pkgs.omarchy.org/edge/$arch`. A fresh install from the Omarchy
 Mac installer writes that repository into `/etc/pacman.conf`. A build
 that does not list it cannot find the packages, and they are not in the
-AUR. On such a build, use the script below. As of 2026-10-11 the
-repository serves 0.7.28-2, and 0.7.32 waits on
-[omarchy-pkgs#839](https://github.com/omacom/omarchy-pkgs/pull/839).
+AUR. On such a build, use the script below. On 2026-10-25 the
+repository serves 0.7.28-4. Release 0.7.32 is proposed in
+[omarchy-pkgs#839](https://github.com/omacom/omarchy-pkgs/pull/839); the
+newest release, v0.7.33, is not packaged yet.
 
 Where the repository is configured, `omarchy-mac-ml` is the meta
 package. It pulls in `omarchy-mlx` (the runtime, as a system venv under
@@ -28,7 +29,7 @@ may not be in your build. The Mac platform repository's menu has the row
 Install > AI > MLX (Apple GPU), added in
 [omacom/omarchy-mac#385](https://github.com/omacom/omarchy-mac/pull/385)
 (merged 2026-09-12). It runs the script below and does not install the
-private driver. A build from another fork may carry neither row. A fork build can also list its own `[omarchy]` repository, which does not serve these packages; `pacman -Si omarchy-mac-ml` is the check. The official edge `aarch64/omarchy.db` lists `omarchy-mlx 0.7.28-2` and `omarchy-mlx-vulkan 0.7.28-2`; anything else is a different repo (issue #104).
+private driver. A build from another fork may carry neither row. A fork build can also list its own `[omarchy]` repository, which does not serve these packages; `pacman -Si omarchy-mac-ml` is the check. The official edge `aarch64/omarchy.db` lists `omarchy-mlx 0.7.28-4` and `omarchy-mlx-vulkan 0.7.28-4`; anything else is a different repo (issue #104).
 
 ## Install with the script
 
@@ -50,10 +51,10 @@ v0.7.32, `mlx_lm.benchmark -p 512 -g 128 -n 3`). The report gives
 20.5 prompt tok/s on the system Mesa 26.2.4 driver against 151.0
 with the private ICD, and 23.0 against 23.8 generation tok/s. The
 report also notes that the system driver does not expose
-`VK_KHR_cooperative_matrix` and the private ICD does. That is the
-reporter's measurement on their machine. This repository has not
-reproduced it
-([issue #104 comment](https://github.com/joshuaswarren/omarchy-mlx/issues/104#issuecomment-6108693960)).
+`VK_KHR_cooperative_matrix` and the private ICD does. That is the reporter's
+measurement on their machine
+([issue #104 comment](https://github.com/joshuaswarren/omarchy-mlx/issues/104#issuecomment-6108693960));
+this repository has not reproduced it.
 Install `omarchy-mlx-vulkan` for prefill-heavy models.
 
 ```bash
@@ -63,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/inst
 The flags: `--ane` sets up ANE device ownership. Use `--voice` for the
 optional speech packages. Use `--uninstall` to remove it. The script
 picks the latest release, checks the wheel against the release
-`SHA256SUMS`, and asks for Python 3.14 on aarch64.
+`SHA256SUMS`, and requires Python 3.14 on aarch64.
 
 ## From a release wheel
 

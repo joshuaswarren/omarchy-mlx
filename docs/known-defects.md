@@ -1,6 +1,6 @@
 # Known defects, by release
 
-This page records silent wrong values and crashes in releases and development builds. Each entry states the observed version and platform, the symptom, and the fix status. Upstream MLX tests exposed the initial list on 2026-09-02; per-case evidence sits in [the suite receipt](../receipts/2026-09-02-upstream-suite-coverage.md). The M1 findings are recorded in [the hardware receipt](../receipts/2026-09-02-m1-red-suites-root-cause.md).
+This page records silent wrong values and crashes in releases and development builds. Each entry states the observed version and platform, the symptom, and the fix status. Upstream MLX tests exposed the initial list on 2026-09-02. The M1 findings are recorded in the entries below.
 
 The backend must refuse unsupported operations by name rather than return a wrong number. Known silent failures take priority over coverage expansion; this ledger is not proof that unlisted paths are correct.
 
@@ -28,8 +28,7 @@ behavior in the pinned lineage; changing it is a reference-contract decision,
 intentionally not taken unilaterally. No output cleanup is applied.
 
 The exact ANE output is retained as a native parity reference, not presented
-as clean ASR output. This is a macOS reference finding, not a demonstrated
-Linux backend defect. [Capture and exact outputs](../receipts/2026-09-12-licensed-parakeet-reference.json).
+as clean ASR output. This is a macOS reference finding, not a demonstrated Linux backend defect.
 
 ## Vulkan timeline stall kills serving threads: mlx_lm.server (0.31.3 and 872ae88) and oMLX 0.6.4
 
@@ -54,10 +53,7 @@ died silently and every later request hung forever (the reported ">180 s chat ha
 artifact). 872ae88 fails fast ("generation thread died") but the stall is identical: no
 upstream floor version exists. oMLX 0.6.4 hit the same stall in its own engine prefill on
 Ministral-3-8B. Threads, per-thread streams, and the chat-vs-completions split are all
-exonerated; single-sequence `stream_generate` escapes on both tested models. Deterministic
-main-thread repro (`probe_bg.py`), the full isolation ladder, and the instrumented
-event-lifecycle trace that pinned the deadlock are in
-[the serving-hang receipt](../receipts/2026-09-19-mlxlm-server-hang-t6001-test-host.md).
+exonerated; single-sequence `stream_generate` escapes on both tested models. Deterministic main-thread repro (`probe_bg.py`), the full isolation ladder, and an instrumented event-lifecycle trace pin the deadlock.
 
 The fix: the gate's scalar path now mirrors its vector path — `settle()` schedules a
 still-unscheduled offset event-free, `synchronize()` proves the bytes are final, and the
@@ -93,11 +89,7 @@ across Mesa builds that advertise `VK_KHR_cooperative_matrix`. Releases
 are measured and digest-checked on the installed driver, which produces
 the required values; a user on a different coopmat-capable build may see
 a different stream on prefill-heavy prompts. The capability bit alone is
-therefore not a sufficient gate for reproducible output. Evidence, with
-both `vulkaninfo` identities, both `device_info` dumps, the selected
-kernel and all six digests per configuration:
-[`receipts/2026-09-10-prefill-qmm-isa/driver-portability-defect.json`](../receipts/2026-09-10-prefill-qmm-isa/driver-portability-defect.json).
-
+therefore not a sufficient gate for reproducible output. 
 Not yet fixed. The candidate fix is to pin the arithmetic the kernel
 depends on rather than the extension's presence: assert the lowering we
 need with an on-device probe at device creation and fall back to the
@@ -119,8 +111,6 @@ for time.**
    mean. The two modes bracket the lie from both sides. Release attribution
    therefore rests on payload ablation (GEMV -5.63 ms + skeleton 2.37 ms
    ~ 8.0 ms ~ the wall, leaving 0.3-0.6 ms of slack), not on profiled gaps.
-   Receipt:
-   [`receipts/2026-09-11-q4-fused-projection-state/gap-verdict.json`](../receipts/2026-09-11-q4-fused-projection-state/gap-verdict.json).
 2. **Device timestamps undercounted by 2.07x.** A per-layer cost summed from
    honeykrisp device-timestamp intervals implied 86 GB/s on a part whose
    measured roof is 58.5 GB/s - again physically impossible, and it had been
@@ -141,12 +131,11 @@ the wall, or a bandwidth exceeding the roof, means the instrument is wrong.
 
 ### Float32 log differs from the host by one ULP
 
-Observed on M1 Honeykrisp in v0.3.7 (`417c06e6`) and `f5ba1c82`. Both installed wheels return `1.0986121892929077` for `log(3)`, while the correctly rounded host float32 value is `1.0986123085021973`. This fails upstream's exact-equality assertion for an irregularly strided input. The full native C++ run at `f5ba1c82` passes 250 of 251 cases; the failing case remains open. [Values, bit patterns, and native suite logs](../receipts/2026-09-07-q4-second-wave/native-log-gap.json).
+Observed on M1 Honeykrisp in v0.3.7 (`417c06e6`) and `f5ba1c82`. Both installed wheels return `1.0986121892929077` for `log(3)`, while the correctly rounded host float32 value is `1.0986123085021973`. This fails upstream's exact-equality assertion for an irregularly strided input. The full native C++ run at `f5ba1c82` passes 250 of 251 cases; the failing case remains open.
 
 Fixed in the `honeykrisp-omarchy` driver: the fork's `log` and `log2`
 are correctly rounded on every probe input (4,107 of 4,107 exact,
-1,048,558 of 1,048,561 exact in the stress sweep, worst case one ULP;
-[receipt](../receipts/hk/2026-09-08-honeykrisp-omarchy-integration.json)).
+1,048,558 of 1,048,561 exact in the stress sweep, worst case one ULP).
 Stock Mesa keeps the gap. The supported driver is the packaged private
 Honeykrisp ICD; see
 [docs/install-omarchy.md](install-omarchy.md#honeykrisp-driver).
@@ -160,8 +149,7 @@ driver defect), which turns complex `tan(fl(pi/2) + 0i)` into NaN
 instead of -2.2877e7. The `hk/precise-math` fork trig (`979453d`,
 merged in `honeykrisp-omarchy-e10be72`) reduces exactly and the value
 matches the host. `test_complex_ops` probes the builtin at that point
-and skips the single pin by name on drivers that return 0. Receipt:
-[`receipts/2026-09-08-m1-complex-ops.json`](../receipts/2026-09-08-m1-complex-ops.json).
+and skips the single pin by name on drivers that return 0. 
 
 ### BF16 projection deltas against macOS are macOS-side rounding, not a backend defect
 
@@ -183,8 +171,7 @@ would mean emulating a reduced-precision accumulation order, so the BF16
 parity oracle is the float64 round-to-nearest reference, not the macOS
 capture. Note that the quantized matmul kernels are not on this path at
 all; decode projections dispatch the dense matmul and prefill dispatches
-the cooperative-matrix kernel. Receipt:
-[`receipts/2026-09-10-bf16-rootcause/README.md`](../receipts/2026-09-10-bf16-rootcause/README.md).
+the cooperative-matrix kernel. 
 
 ### The fast attention route stores scores and probabilities in the narrow input type
 
@@ -210,23 +197,21 @@ moved because of it.
 
 Two things follow. Promoting those two intermediates to float32 would match
 upstream arithmetic but costs bandwidth on exactly the class that already
-dominates the BF16 decode token (58% of it at short context per
-[`receipts/2026-09-11-bf16-decode-attribution`](../receipts/2026-09-11-bf16-decode-attribution/README.md)),
+dominates the BF16 decode token (58% of it at short context),
 so it is a measurement, not an obvious win. And an f64 max-ULP bound applied
 to this route measures this storage rather than whatever change is under
 test — which is why the bf16 coopmat alpha fix stalled against a 32 ULP
 bound it was never the cause of: a differential instrument on 2026-09-11
 showed that same 242 signature on the pure f32 composition route with no
 cooperative-matrix kernel involved, while the fixed kernel is bit-exact
-against an oracle that models this storage. Receipt:
-[`receipts/2026-09-11-bf16-alpha-fix/README.md`](../receipts/2026-09-11-bf16-alpha-fix/README.md).
+against an oracle that models this storage. 
 
 ## Fixed in development
 
 ### Int8Matmul, CastBool, and fused rope_rms_norm went unwritten past one dispatch (16,776,960 threads)
 
-Observed on: jw16 (M1 Max, G13C, honeykrisp vulkan-release) and, at the DiT
-shapes, jw16 G13C with the v0.7.31 wheel. Status: FIXED on main in
+Observed on: an M1 Max (G13C, honeykrisp vulkan-release) and, at the DiT
+shapes, M1 Max G13C with the v0.7.31 wheel. Status: FIXED on main in
 `2df1aed43` (Int8Matmul) and `ba6f6c4e6` (CastBool SOURCE_BOOL,
 fast_rope_norm fuse_norm, bonsai grid refusals).
 
@@ -271,7 +256,7 @@ no realistic Bonsai shape reaches those bounds.
 
 ### Batched linalg factorizations went unwritten past 65,535 matrices
 
-Observed on: jw16 (M1 Max, G13C, honeykrisp vulkan-release) with a numpy
+Observed on: an M1 Max (G13C, honeykrisp vulkan-release) with a numpy
 cross-check: at batch 66000 x 3x3, cholesky maxdiff 2.33 and svd values
 maxdiff 5.15 at batch indices 65535..65999, exact below. Status: FIXED in
 `88425b9b1`. The seven linalg kernels (cholesky, inverse, lu, svd sweep +
@@ -352,16 +337,13 @@ correctly rounded value (80/25 and 10/25 one ulp low; a quantize
 boundary quotient one ulp high, flipping round-half-away from 219 to
 218). llvmpipe and the CPU/Metal references are correctly rounded.
 The earlier attribution to non-IEEE `fma()` was wrong. The isolated driver
-probe found zero mismatches in 1,000 FMA inputs on stock Mesa; see
-`receipts/hk/2026-09-08-precise-math.json`.
+probe found zero mismatches in 1,000 FMA inputs on stock Mesa.
 The fix routes those divisions through a `precise`-qualified Dekker
 exact-residual correction, which is a no-op where the native quotient is
-already correct. Receipts: M1 log `receipts-m1/11-bitexact-fix-aa66b1af.log`
-in the qualification checkout; the two cases pin the exact inputs.
+already correct.
 
 Fixed in the `honeykrisp-omarchy` driver (`hk/precise-math`): division
-and reciprocal are correctly rounded on all 1,048,561 stress inputs
-([receipt](../receipts/hk/2026-09-08-honeykrisp-omarchy-integration.json)).
+and reciprocal are correctly rounded on all 1,048,561 stress inputs.
 The Dekker correction stays in the two pinned shaders for stock Mesa,
 where it is a no-op on the fork.
 
@@ -376,10 +358,7 @@ VK_ERROR_OUT_OF_DEVICE_MEMORY, which the memory-aware batch flush
 
 A single `mx.eval` over a full-sequence forward at 2,048 tokens appeared to
 wedge the queue: the completion counter read 0 and the counter-only
-watchdog declared a hang at its ten-second bound. The earlier reading
-("genuine hang",
-[receipts/2026-09-04-hang-watchdog-hardware.md](../receipts/2026-09-04-hang-watchdog-hardware.md))
-was wrong. The GPU completed every job: the queue's syncobj advanced in
+watchdog declared a hang at its ten-second bound. The earlier reading ("genuine hang") was wrong. The GPU completed every job: the queue's syncobj advanced in
 lockstep with submissions, dmesg showed no fault or timeout, and a
 standalone reproducer showed the timeline counter cannot advance inside a
 single long job at all. The watchdog was firing on one legitimate ~28 s
@@ -402,8 +381,7 @@ upper bound. The 2,048-token forward now completes on the default heap in
 about 10.7 s with argmax 3974, and five alternating pairs against
 `f5ba1c82` on the stock driver show no decode/prefill regression with
 identical generated token IDs. Chunked prefill, which `mlx_lm` uses, was
-never affected. Receipt:
-[`receipts/2026-09-08-eval-watchdog-heap.json`](../receipts/2026-09-08-eval-watchdog-heap.json).
+never affected. 
 
 ### Dispatch bindings left their buffers unstamped, corrupting the heap under reuse
 
@@ -454,8 +432,6 @@ Mesa 26.1.7 - 1 passed, 240 subtests. With the driver BO cache disabled
 reproduced with no GPU fault in dmesg, so no device-side writer into
 recycled memory exists. Per-test isolation counts and the class-c receipts
 remain in `after2-classc-m1.txt` / `after2-classc-ct.txt` on M1 Linux.
-Receipt:
-[`receipts/hk/2026-09-08-queue-lifetime.json`](../receipts/hk/2026-09-08-queue-lifetime.json).
 
 ### Idle-stream events destroyed their semaphore while a submit still used it
 
@@ -527,7 +503,6 @@ after EOS at index 9. This fixes the observed first-token corruption, not
 general cross-backend token equality. The synchronization guard stays in
 place, and compiled bf16 is not qualified by this eager check.
 
-Evidence: [original full-token comparison](../receipts/2026-09-04-native-output-comparison.json) and [fixed-source M1 values and full-token comparison](../receipts/2026-09-04-bf16-rope-layout-m1.json).
 
 ## Live in v0.3.5
 
@@ -577,8 +552,6 @@ The workaround is removed on main; non-host-constant offsets still synchronize,
 and all trig limits remain enforced. This acceptance does not identify the
 historical writer or establish native numerical parity.
 
-Evidence: [original observation](../receipts/2026-09-04-rope-gate-drain.md) and
-[current paired receipts](../receipts/2026-09-08-rope-drain-current/).
 
 
 ### 4-bit decode runs at 0.21 tok/s (v0.3.4 only)
@@ -591,8 +564,7 @@ loop, so every host wait on GPU completion cost a full 100 ms tick. About 48
 waits per token gives 4.8 s/token: 4-bit decode 12.5 -> 0.21 tok/s, 60x. The
 release notes' 12.52 was measured on the commit before the watchdog was
 cherry-picked in; nobody measured the uploaded wheel. Do not use v0.3.4 for
-decode; v0.3.3 is unaffected. Three-arm measurement, fix, and the release
-rule it produced: [receipts/2026-09-04-v0.3.4-decode-regression.md](../receipts/2026-09-04-v0.3.4-decode-regression.md).
+decode; v0.3.3 is unaffected.
 
 
 ## Live in v0.3.1
@@ -727,8 +699,7 @@ A standalone probe reported `fast::rope` diverging from its host reference by 13
 `omarchy_primitive_tests` case "quantized matmul binds affine streams at
 storage offsets" failed one CHECK per M1 run from 2026-09-06 to
 2026-09-12: m = 1, one output column at 0.416748 against a 0.409468
-oracle, epsilon 4e-3 (Item 2 of
-[the composed-regressions receipt](../receipts/2026-09-12-composed-regressions/README.md)).
+oracle, epsilon 4e-3.
 The working hypothesis was a mis-composed view offset in the vector
 route's aux bindings. That hypothesis is refuted: an exact transcription
 of the `QMM_VEC_Q4_WORD` arithmetic reproduces the failing value bit for
@@ -747,8 +718,7 @@ the same logical streams bound once at non-zero storage offsets and once
 at zero must drive the identical dispatch to bit-identical output, with
 absolute values still pinned by the host-oracle cases. Mutation-checked
 (a forced `aux_offset = 0` fails it loudly) and green on the M1 with the
-full standing battery, 30/30
-([receipt](../receipts/2026-09-12-q4-gemv-offset-oracle/README.md)).
+full standing battery, 30/30.
 
 The lesson joins this section's rule: a tolerance bound to a
 double-precision oracle is a claim about the oracle's route, not the
@@ -788,8 +758,7 @@ The fourth Honeykrisp miscompile family: shift-then-mask byte extraction with a 
 The workaround is per-site and probe-pinned, and that is the finding worth reading. In `select.comp`'s packed-bool path the constant-shift select-chain form is WRONG and the original helper form is correct - the exact inverse of every other site. An eight-variant device probe pins it: macro form wrong at 5 of 17 positions, helper form wrong nowhere. Neither form is safe by default on this hardware, so every byte-extraction site is probed individually. Gates on the M1 after the fix: scatter 21/21, select 11/11, eq_math 6/6, primitive 86/86, 604,733 assertions, three repeated runs each.
 
 Fixed in the `honeykrisp-omarchy` driver (`hk/byte-extract`): all 20
-shift-then-mask variants pass on the fork where stock fails 13
-([receipt](../receipts/hk/2026-09-08-honeykrisp-omarchy-integration.json)).
+shift-then-mask variants pass on the fork where stock fails 13.
 The per-site probed workarounds stay in the shaders for stock Mesa.
 
 ### Real-M1-only float scatter refusals
@@ -813,8 +782,7 @@ Inside `mx.compile` the same gate applies - see the correction section above, wh
 
 Fixed in the `honeykrisp-omarchy` driver (`hk/precise-math`): the fork
 reduces exactly, worst case one ULP for |x| up to 1e8 and for |x| >=
-2^22 in the stress sweep
-([receipt](../receipts/hk/2026-09-08-honeykrisp-omarchy-integration.json)).
+2^22 in the stress sweep.
 The 1e5 refusal stays in the shaders for stock Mesa.
 
 ## Shipped in v0.3.0-alpha.1 - fixed in v0.3.0 unless marked otherwise
@@ -915,7 +883,7 @@ Named `[omarchy] ... is not implemented` errors remain the honest failure mode. 
 
 ## f16 attention score cap (sdpa-f16-scores branch, unreleased)
 
-`fast::scaled_dot_product_attention` on float16 inputs stores attention scores in f16 with f32 accumulation inside the kernel, so scaled scores above 65504 saturate to inf and softmax turns the row into NaN, while the f32/bf16 composition stays finite: the trigger is extreme but valid f16 activations (an untuned fine-tune reaches it; normalised models do not). The additive causal/padding mask uses the f16 finite maximum (-65504), not -inf, so fully masked rows stay defined and match the f32 path. This matches upstream Metal's f16 SDPA, which has the same storage cap; run f32/bf16 if you need overflow-immune attention. Reproduction and tolerance evidence: [receipt](../receipts/2026-09-04-sdpa-f16-scores-rework.md) and `scripts/sdpa_equivalence.py` (fully-masked-row and overflow-boundary cases).
+`fast::scaled_dot_product_attention` on float16 inputs stores attention scores in f16 with f32 accumulation inside the kernel, so scaled scores above 65504 saturate to inf and softmax turns the row into NaN, while the f32/bf16 composition stays finite: the trigger is extreme but valid f16 activations (an untuned fine-tune reaches it; normalised models do not). The additive causal/padding mask uses the f16 finite maximum (-65504), not -inf, so fully masked rows stay defined and match the f32 path. This matches upstream Metal's f16 SDPA, which has the same storage cap; run f32/bf16 if you need overflow-immune attention. Reproduction and tolerance evidence: `scripts/sdpa_equivalence.py` (fully-masked-row and overflow-boundary cases).
 
 ## SDPA backward VJP crash at tiny shapes - fixed 2026-10-03 (SdpaVjpFix)
 
@@ -938,15 +906,15 @@ layout (`tile_shape[3] = kL; tile_shape[4] = D`); at rep=1 the GQA head
 split is a no-op so q5 and the tiles are 4-D and `tile_shape[4]` wrote
 past the end of the Shape. In NDEBUG builds the write lands in unused
 inline storage and the still-correct 4-D shapes flow on, which is why
-every Release battery (M2 G14X, jw16 G13C, dev-box llvmpipe) stayed
-green while asserts-enabled builds aborted. NormApple's original jw16
+every Release battery (M2 G14X, M1 Max G13C, dev-box llvmpipe) stayed
+green while asserts-enabled builds aborted. NormApple's original M1 Max
 abort is retained in receipts/2026-10-03-norm-apple.
 
 Fix (6ebdb4d53): derive the tile shapes from the score plane -
 `Shape tile_shape = S.shape(); tile_shape.back() = D;` - one
 rank-agnostic construction for both routes; no guard, no special case.
 Evidence: asserts-enabled builds run the case clean standalone and in
-the suite on llvmpipe; on jw16 G13C hardware the fixed tree runs the
+the suite on llvmpipe; on M1 Max G13C hardware the fixed tree runs the
 full omarchy_fast_ops_tests 40/40 (SUCCESS; the 12 failing assertions
 are the pre-existing may_fail composed-dk legs, unchanged) plus
 primitive 104/104, runtime 41/41, fused_chain 36/36, compiled_tape
@@ -967,7 +935,7 @@ documented composed-chain dk defect:
 1. `qL == 1` with `kL > 1` maskless (e.g. B=1, H=1, qL=1, kL=2, D=4,
    f32): dk and dv come back all zero while dq and the forward are
    correct. dS is provably nonzero (dq = dS K is right), so the zero
-   appears in the dK/dV stage. Confirmed on dev-box llvmpipe AND jw16
+   appears in the dK/dV stage. Confirmed on dev-box llvmpipe AND the M1 Max
    M1 Max hardware (identical zeros; forward 0.297208 vs host 0.297208;
    dq 0.0056/0.0430/0.0169/0.0039 matches host on both).
 2. `B == 1` with `kL == 5`: dk[0]/dk[16] return exact 0 and dv spots
@@ -999,7 +967,7 @@ key of head 1, multi-head rep=1 shapes (dv[104] 5x7, dk[28]/dv[28] 4x4;
 receipts/2026-10-07-sdpa-vjp-fused-off.
 
 2026-10-07 update (receipts/2026-10-07-sdpa-vjp-fused-off): the defect
-is now STANDALONE-REPRODUCIBLE on jw16 hardware at the strict shapes
+is now STANDALONE-REPRODUCIBLE on the M1 Max hardware at the strict shapes
 (B=1,qL=1,kL=2,D=4: dk all stale bytes — recycled poison with
 MLX_OMARCHY_POISON_FREED=1, zeros without; dv zeros), while the same
 shapes pass in-suite — allocator/queue-state dependent, with a trailing
@@ -1047,7 +1015,7 @@ GPU pipeline drain + host read per sin/cos call - the Kokoro serve-path
 stall) and put a Cody-Waite reduction into `elementwise.comp` with a NaN
 above 1e9. The intent was right, the constants were not, and the
 contract tests (33 assertions) still pinned the old refusal, so the
-release was silent about it. Measured on jw16 (M1 Max), jwm1 (M1),
+release was silent about it. Measured on the M1 Max and the 13-inch M1,
 and llvmpipe, 1e5 random f32 samples per decade plus edges, vs float64
 (`receipts/2026-10-03-trig-contract/`):
 
@@ -1073,8 +1041,7 @@ is exact in float32 - `C1 = 6.28125 = 201*2^-5`, exact for every
 down to the contract value 5e5) - plus a dyadic `2^-9` term (exact for
 all k) and two f32 correction terms, in a `precise` three-subtract
 chain. Measured max abs error in the reduction band 1e4..5e5:
-2.5e-7 (llvmpipe), 2.5e-7 (jw16 M1 Max), and 2.0e-7 in the far band on
-jwm1 (M1) - though jwm1's older-Mesa built-in sin/cos adds up to
+2.5e-7 (llvmpipe), 2.5e-7 (M1 Max), and 2.0e-7 in the far band on the 13-inch M1 - though the 13-inch M1's older-Mesa built-in sin/cos adds up to
 6.9e-4 at some reduced arguments (measured, stable across runs), the
 same argument-dependent error its built-in band already documents.
 Above 5e5
@@ -1112,14 +1079,14 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   and is dead: the earlier fma-probe result was a constant-folding
   artifact (NIR strength-reduces `a*3` to `a+a+a`), and with runtime
   operands the measured band errors match the unfused model
-  (1.5e-2 at 1e6 on jw16), so fused fma cannot be assumed on
+  (1.5e-2 at 1e6 on the M1 Max), so fused fma cannot be assumed on
   Honeykrisp. The Payne-Hanek software fallback remains dead
   (dynamic-indexing miscompile class, 2026-09-02); the k-splitting
   idea was probed and is broken by design (the split leaves a
   ~4e5-magnitude intermediate whose subtractions round at ulp/2 ~
   0.016).
-- jw16's newer Mesa (109060195) has an accurate built-in sin/cos to 1e9
-  (3-5e-8 measured); jwm1's (109060099) still collapses from 1e3
+- the M1 Max's newer Mesa (109060195) has an accurate built-in sin/cos to 1e9
+  (3-5e-8 measured); the 13-inch M1's (109060099) still collapses from 1e3
   (7.1e-4 at decade 1e3-1e4). The contract stays device-independent on
   purpose: the same constants must produce the same answer class on
   both, and the built-in bands keep their documented (measured)
@@ -1137,7 +1104,7 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   every reduce site; NaN never wins any compare, so NaN rows resolved to
   the first non-NaN extremum. NOT order dependence, NOT shared state.
   Observed identically on pure main (ec2cd9dc) and on the branch tree,
-  jwm1 G13G coreglass ICD. Not a GPU-vendor quirk: it is the shader's
+  the 13-inch M1 G13G coreglass ICD. Not a GPU-vendor quirk: it is the shader's
   comparison semantics.
 - Fix: NaN-wins compare (first NaN index wins; integer dtypes unchanged;
   the cross-thread tree keeps its index tiebreak) +

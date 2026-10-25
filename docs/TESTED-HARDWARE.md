@@ -23,9 +23,8 @@ AMD: no result yet.
 
 ## Apple silicon GPU (reporter runs)
 
-These rows are the reporter's measurements. This repository has not
-reproduced them. The README supported-hardware table still says the M2
-GPU is untested until we run the suite ourselves.
+These rows are reporter runs. The README supported-hardware table
+keeps the M2 GPU untested until the suite runs on one here.
 
 | GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
 |---|---|---|---|---|---|---|
