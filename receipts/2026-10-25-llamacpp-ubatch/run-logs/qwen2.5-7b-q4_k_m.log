@@ -1,0 +1,18 @@
+UBSCREEN start 2026-10-25T12:04:25Z kernel 7.1.12-2-12.6-sep-ARCH
+UBSCREEN llama-bench 5ec986362d0a11c8 model qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf icd 2e1318a23f7c lib 0838d4d73a9a0746
+UBSCREEN round 1 arm ub512 rc 0 pp2048 242.02 load1=0.25
+UBSCREEN round 1 arm ub1024 rc 0 pp2048 263.68 load1=0.16
+UBSCREEN round 1 arm ub2048 rc 0 pp2048 267.99 load1=0.10
+UBSCREEN round 2 arm ub1024 rc 0 pp2048 260.87 load1=0.13
+UBSCREEN round 2 arm ub2048 rc 0 pp2048 266.24 load1=0.14
+UBSCREEN round 2 arm ub512 rc 0 pp2048 241.94 load1=0.17
+UBSCREEN round 3 arm ub2048 rc 0 pp2048 268.7 load1=0.19
+UBSCREEN round 3 arm ub512 rc 0 pp2048 242.18 load1=0.12
+UBSCREEN round 3 arm ub1024 rc 0 pp2048 263.99 load1=0.08
+UBSCREEN round 4 arm ub512 rc 0 pp2048 242.07 load1=0.36
+UBSCREEN round 4 arm ub1024 rc 0 pp2048 264.17 load1=0.43
+UBSCREEN round 4 arm ub2048 rc 0 pp2048 268.68 load1=0.28
+UBSCREEN round 5 arm ub1024 rc 0 pp2048 264.27 load1=0.18
+UBSCREEN round 5 arm ub2048 rc 0 pp2048 268.74 load1=0.12
+UBSCREEN round 5 arm ub512 rc 0 pp2048 242.05 load1=0.08
+UBSCREEN end 2026-10-25T12:10:55Z

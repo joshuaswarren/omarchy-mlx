@@ -210,6 +210,17 @@ Six more models on the M2 Max, measured by another run with the same llama.cpp c
 
 The two mixture-of-experts models decode at 29 tok/s, about 30 percent faster than the 9B dense model (22.3) and about four times faster than the 27B and 31B dense models. The Qwen3.8 27B decode mean comes from four runs at 6.9 and one at 3.8, so quote the median. Per-run JSON is in `receipts/2026-10-09-linux-vs-macos/m2-max-linux/`.
 
+## Prefill batch shape on the M2 Max (prompts above 512 tokens)
+
+`-ub` sets how many prompt tokens go to the GPU in one batch. A 512 token prompt fits in the default `-ub 512`, so the pp512 numbers above do not change. For longer prompts the default leaves speed unused. On an Apple M2 Max with the v3 driver (`f144c7949b`), `llama-bench -p 2048 -n 0 -b 2048 -r 2`, five interleaved rounds, median prefill tok/s:
+
+| model | `-ub 512` (default) | `-ub 1024` | `-ub 2048` |
+|---|---|---|---|
+| Llama-2-7B Q4_0 | 288.68 | 306.76 (+6.3%) | 312.41 (+8.2%) |
+| Qwen2.5-7B Q4_K_M | 242.05 | 263.99 (+9.1%) | 268.68 (+11.0%) |
+
+Both larger batches beat the default in 5 of 5 rounds on both models. Turning flash attention off at `-ub 512` costs 5.1 percent on the first model, so leave `-fa` at its default. Use `-ub 2048 -b 2048` for prompts above 512 tokens. The `-ub 256 -b 256` advice in the 8 GB section stays for small-memory machines and the older driver. Memory use of the larger batch and other GPUs are not measured. Receipt: [llama.cpp ubatch](../receipts/2026-10-25-llamacpp-ubatch/README.md).
+
 ## Step 3: put it on stage
 
 From the same folder, one command, and the audience watches tokens appear:
