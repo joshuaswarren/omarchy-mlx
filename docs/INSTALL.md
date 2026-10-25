@@ -51,9 +51,10 @@ v0.7.32, `mlx_lm.benchmark -p 512 -g 128 -n 3`). The report gives
 20.5 prompt tok/s on the system Mesa 26.2.4 driver against 151.0
 with the private ICD, and 23.0 against 23.8 generation tok/s. The
 report also notes that the system driver does not expose
-`VK_KHR_cooperative_matrix` and the private ICD does. The reporter's
+`VK_KHR_cooperative_matrix` and the private ICD does. That is the reporter's
 measurement on their machine
-([issue #104 comment](https://github.com/joshuaswarren/omarchy-mlx/issues/104#issuecomment-6108693960)).
+([issue #104 comment](https://github.com/joshuaswarren/omarchy-mlx/issues/104#issuecomment-6108693960));
+this repository has not reproduced it.
 Install `omarchy-mlx-vulkan` for prefill-heavy models.
 
 ```bash

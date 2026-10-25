@@ -343,8 +343,7 @@ exact-residual correction, which is a no-op where the native quotient is
 already correct.
 
 Fixed in the `honeykrisp-omarchy` driver (`hk/precise-math`): division
-and reciprocal are correctly rounded on all 1,048,561 stress inputs
-.
+and reciprocal are correctly rounded on all 1,048,561 stress inputs.
 The Dekker correction stays in the two pinned shaders for stock Mesa,
 where it is a no-op on the fork.
 
@@ -504,7 +503,6 @@ after EOS at index 9. This fixes the observed first-token corruption, not
 general cross-backend token equality. The synchronization guard stays in
 place, and compiled bf16 is not qualified by this eager check.
 
-.
 
 ## Live in v0.3.5
 
@@ -760,8 +758,7 @@ The fourth Honeykrisp miscompile family: shift-then-mask byte extraction with a 
 The workaround is per-site and probe-pinned, and that is the finding worth reading. In `select.comp`'s packed-bool path the constant-shift select-chain form is WRONG and the original helper form is correct - the exact inverse of every other site. An eight-variant device probe pins it: macro form wrong at 5 of 17 positions, helper form wrong nowhere. Neither form is safe by default on this hardware, so every byte-extraction site is probed individually. Gates on the M1 after the fix: scatter 21/21, select 11/11, eq_math 6/6, primitive 86/86, 604,733 assertions, three repeated runs each.
 
 Fixed in the `honeykrisp-omarchy` driver (`hk/byte-extract`): all 20
-shift-then-mask variants pass on the fork where stock fails 13
-.
+shift-then-mask variants pass on the fork where stock fails 13.
 The per-site probed workarounds stay in the shaders for stock Mesa.
 
 ### Real-M1-only float scatter refusals
@@ -785,8 +782,7 @@ Inside `mx.compile` the same gate applies - see the correction section above, wh
 
 Fixed in the `honeykrisp-omarchy` driver (`hk/precise-math`): the fork
 reduces exactly, worst case one ULP for |x| up to 1e8 and for |x| >=
-2^22 in the stress sweep
-.
+2^22 in the stress sweep.
 The 1e5 refusal stays in the shaders for stock Mesa.
 
 ## Shipped in v0.3.0-alpha.1 - fixed in v0.3.0 unless marked otherwise
