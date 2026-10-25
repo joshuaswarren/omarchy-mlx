@@ -2082,19 +2082,19 @@ ComputeRuntime::ComputeRuntime(
   VKX_CHECK(dt.CreateDescriptorSetLayout(
       device_, &descriptor_info, nullptr, &descriptor_layout_));
 
-  // One compute range covers every push constant. The live fields of
-  // ComputeParams take the first 128 bytes, which Vulkan guarantees on every
-  // device. The reserved tail (scalar_args, 32 bytes at offset 128) stays in
-  // the same range: the spec allows each stage in at most one range
-  // (VUID-VkPipelineLayoutCreateInfo-pPushConstantRanges-00292), and two
-  // compute ranges make the common runtime of Honeykrisp assert in debug
-  // builds. Native kernels ignore the tail; fast::CustomKernel kernels declare
-  // a separate `layout(push_constant) uniform Scalars { ... };` block in the
-  // translated GLSL at offset 128 and read scalar names from it.
+  // One compute range covers every push constant, the whole of ComputeParams.
+  // The spec allows each stage in at most one range
+  // (VUID-VkPipelineLayoutCreateInfo-pPushConstantRanges-00292). Two compute
+  // ranges make the common runtime of Honeykrisp assert in debug builds at the
+  // first compute pipeline. The whole struct is pushed from offset 0, so the
+  // range must be sizeof(ComputeParams) or larger
+  // (VUID-vkCmdPushConstants-size-00369). Honeykrisp reports a 256-byte push
+  // constant limit; assert the struct stays within it.
+  static_assert(sizeof(ComputeParams) <= 256, "push constant limit");
   VkPushConstantRange push_range{};
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
-  push_range.size = 160;
+  push_range.size = sizeof(ComputeParams);
   VkPipelineLayoutCreateInfo pipeline_info{
       VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
   pipeline_info.setLayoutCount = 1;

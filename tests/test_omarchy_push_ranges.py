@@ -27,11 +27,14 @@ class PushRangeTest(unittest.TestCase):
                     f"{src.name}: pushConstantRangeCount = {m.group(1)}",
                 )
 
-    def test_runtime_layout_range_covers_scalar_tail(self):
+    def test_runtime_layout_covers_whole_params(self):
         text = (BACKEND / "compute.cpp").read_text()
-        m = re.search(r"push_range\.offset = 0;\s*push_range\.size = (\d+);", text)
-        self.assertIsNotNone(m, "the runtime layout must declare one range at 0")
-        self.assertGreaterEqual(int(m.group(1)), 160)
+        m = re.search(r"push_range\.offset = 0;\s*push_range\.size = sizeof\(ComputeParams\);", text)
+        self.assertIsNotNone(
+            m,
+            "the runtime layout must declare one range of sizeof(ComputeParams) at 0",
+        )
+        self.assertIn("static_assert(sizeof(ComputeParams) <= 256", text)
 
 
 if __name__ == "__main__":
