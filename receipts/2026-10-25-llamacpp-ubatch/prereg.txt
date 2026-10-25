@@ -1,0 +1,11 @@
+Written before the runs, and sent to two reviewers who each approved the script and the command line by hash before either run started.
+
+Question: does a larger llama.cpp ubatch speed up prefill of a 2048 token prompt on the Apple M2 Max with the v3 Honeykrisp driver?
+
+Method: llama-bench, `-p 2048 -n 0 -b 2048 -r 2`, all layers on the GPU. Arms are `-ub 512` (the default), `-ub 1024` and `-ub 2048`. The first model also runs `-ub 512 -fa off`. Five interleaved rounds, one process per sample, the arm order rotated by one each round. The same binary, model file and driver library in every arm. Only the flags change.
+
+Models: Llama-2-7B Q4_0 and Qwen2.5-7B-Instruct Q4_K_M, so the advice does not rest on one model or one quantization.
+
+Keep rule: an arm counts when its prefill speed beats `-ub 512` in at least 4 of 5 rounds with a median gain of at least 3 percent. The output is a speed only, so no token digest applies, and the flags do not change the weights or the prompt.
+
+Not covered by the run: memory use of the larger batch, other GPUs, prompts shorter than the batch.
