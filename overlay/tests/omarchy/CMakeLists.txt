@@ -17,6 +17,24 @@ target_link_options(omarchy_copy_offset_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_copy_offset_tests)
 add_test(NAME omarchy_copy_offset_tests COMMAND omarchy_copy_offset_tests)
 
+# GPU profiler output sink and runtime control: pure C++, no GPU and no
+# mlx linkage.
+find_package(Threads REQUIRED)
+add_executable(omarchy_gpu_profile_sink_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gpu_profile_sink.cpp)
+target_link_libraries(omarchy_gpu_profile_sink_tests
+                      PRIVATE doctest Threads::Threads)
+target_include_directories(omarchy_gpu_profile_sink_tests
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+target_compile_options(omarchy_gpu_profile_sink_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gpu_profile_sink_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_gpu_profile_sink_tests)
+add_test(NAME omarchy_gpu_profile_sink_tests
+         COMMAND omarchy_gpu_profile_sink_tests)
+
 add_executable(omarchy_primitive_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_primitives.cpp)
 target_link_libraries(omarchy_primitive_tests PRIVATE mlx doctest)

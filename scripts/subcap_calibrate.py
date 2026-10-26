@@ -75,6 +75,11 @@ def ms_per_submit(profile_path, grace_seconds=10.0):
             except json.JSONDecodeError:
                 continue
             k = e.get("k")
+            if k == "cap":
+                raise RuntimeError(
+                    f"profiler hit byte cap ({e.get('bytes')} of "
+                    f"{e.get('cap')} bytes); stream incomplete, "
+                    "per-submit histogram would be partial")
             if k == "meta":
                 period_ns = e.get("period_ns", period_ns)
                 valid_bits = e.get("valid_bits", valid_bits)

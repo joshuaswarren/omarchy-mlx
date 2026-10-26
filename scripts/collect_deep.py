@@ -436,6 +436,7 @@ def section_profile(redactor, repo, ws):
         with open(raw, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
         hist = {}
+        cap_rec = None
         for line in lines:
             try:
                 event = json.loads(line)
@@ -444,19 +445,31 @@ def section_profile(redactor, repo, ws):
             name = event.get("kernel") or event.get("name") or event.get("k")
             if name:
                 hist[name] = hist.get(name, 0) + 1
+            if event.get("k") == "cap":
+                cap_rec = event
         kept = lines[:MAX_STREAM_LINES]
         with open(os.path.join(ws, "profile-stream.jsonl"), "w",
                   encoding="utf-8") as fh:
             for line in kept:
                 fh.write(redactor.apply(line) + "\n")
-        out["stream"] = {
-            "available": bool(lines),
-            "lines_total": len(lines),
-            "lines_included": len(kept),
-            "kernel_histogram": sorted(
-                hist.items(), key=lambda kv: (-kv[1], kv[0]))[:20],
-        }
-        out["available"] = out["available"] or bool(lines)
+        if cap_rec:
+            # The profiler stopped permanently at the byte cap; the stream
+            # is truncated, so it must not be offered as available data.
+            out["stream"] = {
+                "available": False,
+                "error": f"profiler hit byte cap ({cap_rec.get('bytes')} of "
+                         f"{cap_rec.get('cap')} bytes); event stream "
+                         "incomplete",
+            }
+        else:
+            out["stream"] = {
+                "available": bool(lines),
+                "lines_total": len(lines),
+                "lines_included": len(kept),
+                "kernel_histogram": sorted(
+                    hist.items(), key=lambda kv: (-kv[1], kv[0]))[:20],
+            }
+            out["available"] = out["available"] or bool(lines)
     else:
         out["stream"] = {"available": False,
                          "error": "no event stream; the installed wheel may "

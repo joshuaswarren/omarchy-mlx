@@ -191,9 +191,15 @@ def window_counters(prof, mark, names):
     unresolved = 0
     for line in open(prof):
         ev = json.loads(line)
-        if ev.get("k") == "s":
+        k = ev.get("k")
+        if k == "cap":
+            raise SystemExit(
+                f"FATAL: profiler hit byte cap ({ev.get('bytes')} of "
+                f"{ev.get('cap')} bytes); stages incomplete, refusing to "
+                "attribute copies over a partial stream")
+        if k == "s":
             sub_t[ev["s"]] = ev["t"]
-        elif ev.get("k") == "d":
+        elif k == "d":
             if not isinstance(ev.get("e"), int) or ev["e"] < 0 or \
                     ev["e"] >= len(names):
                 unresolved += 1

@@ -86,6 +86,10 @@ for line in open(a.profile):
         begins.append(r)
     elif k == "end":
         endrec = r
+    elif k == "cap":
+        raise SystemExit(
+            f"profiler hit byte cap ({r.get('bytes')} of {r.get('cap')} "
+            "bytes); stream incomplete, refusing to summarize")
 
 # Assign submissions to token windows by submit host time.
 def win_of(t):

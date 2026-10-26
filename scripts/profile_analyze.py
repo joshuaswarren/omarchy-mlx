@@ -127,6 +127,12 @@ def main():
                 submits.append(rec)
             elif kind == "end":
                 end_rec = rec
+            elif kind == "cap":
+                print(f"profiler hit byte cap ({rec.get('bytes')} of "
+                      f"{rec.get('cap')} bytes); stream incomplete, "
+                      "refusing to summarize a capped profile",
+                      file=sys.stderr)
+                sys.exit(1)
 
     if meta is None:
         print("no meta line; not a profile file", file=sys.stderr)

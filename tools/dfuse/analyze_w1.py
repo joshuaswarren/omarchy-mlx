@@ -31,6 +31,12 @@ def load(path):
     with open(path) as f:
         for line in f:
             line = line.strip()
+            if line.startswith('{"k":"cap"'):
+                cap = json.loads(line)
+                raise SystemExit(
+                    f"{path}: profiler hit byte cap ({cap.get('bytes')} of "
+                    f"{cap.get('cap')} bytes); stream incomplete, dispatch "
+                    "counts would be partial")
             if not line.startswith('{"k":"d"'):
                 continue
             try:

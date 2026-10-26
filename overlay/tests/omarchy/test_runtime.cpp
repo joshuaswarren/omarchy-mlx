@@ -2941,3 +2941,17 @@ TEST_CASE("stuck-submit warning fires before the wall typed error") {
   CHECK_FALSE(run.signaled);
   CHECK(run.code == 0);
 }
+
+extern "C" int mlx_omarchy_gpu_profile_control(int enabled, uint64_t max_bytes);
+
+TEST_CASE("gpu profile control reports unavailable without a profile path") {
+  // 0 in compiled-out builds and in profiling builds without
+  // MLX_OMARCHY_GPU_PROFILE, before and after argument checks.
+  if (std::getenv("MLX_OMARCHY_GPU_PROFILE") != nullptr) {
+    skip("MLX_OMARCHY_GPU_PROFILE is set.");
+    return;
+  }
+  CHECK(mlx_omarchy_gpu_profile_control(1, 4096) == 0);
+  CHECK(mlx_omarchy_gpu_profile_control(0, 4096) == 0);
+  CHECK(mlx_omarchy_gpu_profile_control(2, 0) == 0);
+}

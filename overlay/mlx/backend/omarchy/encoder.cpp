@@ -1383,7 +1383,8 @@ void CommandEncoder::submit() {
   // cross-submission dependency, so the open batch's unsynced ranges
   // die here either way.
   reset_dependency_tracking();
-  prof::get().on_submit_boundary(submitted, close_t, queue_t0, queue_t1);
+  prof::get().on_submit_boundary(
+      this, current_slot_, submitted, close_t, queue_t0, queue_t1);
   prof::get().on_submit_end(
       this,
       submitted,
@@ -1428,3 +1429,15 @@ std::unordered_map<int, CommandEncoder>& get_global_command_encoders() {
 }
 
 } // namespace mlx::core::omarchy
+
+// Diagnostic GPU profiler switch for an observer thread (ctypes). enabled is
+// 0 (pause) or 1 (resume); max_bytes > 0 is the process-lifetime byte cap of
+// the profile file. Returns 1 accepted, 0 profiling unavailable (compiled
+// out, MLX_OMARCHY_GPU_PROFILE unset, or the profile file failed to write),
+// -1 invalid arguments (including a cap below bytes already written;
+// nothing changes), -2 cap exhausted (a pause still applies). Valid before
+// the first device or file exists.
+extern "C" __attribute__((visibility("default"))) int
+mlx_omarchy_gpu_profile_control(int enabled, uint64_t max_bytes) {
+  return mlx::core::omarchy::prof::get().control(enabled, max_bytes);
+}

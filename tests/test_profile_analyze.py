@@ -193,5 +193,42 @@ class MalformedInputTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class CapFooterTests(unittest.TestCase):
+    """{"k":"cap"} means the profiler exhausted its byte cap and stopped
+    permanently: the stream is truncated, so no summary may be produced
+    from it as if it were a complete profile."""
+
+    def test_cap_footer_fails_closed_nonzero(self):
+        capped = PROFILE[:-1] + [
+            {"k": "cap", "bytes": 1073741824, "cap": 1073741824}]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, capped)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("byte cap", r.stderr)
+        self.assertIn("1073741824", r.stderr)
+        # No partial analysis on stdout that could read as complete.
+        self.assertNotIn("GPU busy fraction", r.stdout)
+
+    def test_cap_footer_mid_stream_still_fails(self):
+        # The runtime appends cap last and stops, but a consumer must not
+        # depend on its position.
+        capped = PROFILE[:4] + [
+            {"k": "cap", "bytes": 65536, "cap": 65536}] + PROFILE[4:]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, capped)
+            r = run_analyzer(profile)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("byte cap", r.stderr)
+
+    def test_uncapped_profile_still_analyzes(self):
+        # Existing valid fixture (ends with k=end, no cap): unchanged.
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, PROFILE)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("GPU busy fraction", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

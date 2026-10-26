@@ -9,7 +9,11 @@
 // code (no branches in the dispatch path, no getenv). With it defined,
 // set MLX_OMARCHY_GPU_PROFILE=<path> (and optionally
 // MLX_OMARCHY_GPU_PROFILE_LABEL=<name>) to append one NDJSON event stream
-// to <path> for the life of the process:
+// to <path> for the life of the process, at most 1 GiB unless
+// mlx_omarchy_gpu_profile_control (encoder.cpp) sets another cap. That C
+// export, callable from any thread, pauses (0) or resumes (1) capture of
+// new work; paused hooks record no timestamps and emit no b/s/q/j/d
+// records except to finish work captured before the pause:
 //
 //   {"k":"meta",...}  once: device name, timestamp period and valid bits,
 //                     pool capacity, label, host clock start
@@ -32,6 +36,8 @@
 //                     and of the noncoherent invalidate, plus the caller reason
 //   {"k":"end",...}   at exit: totals incl. barrier decisions ("barriers",
 //                     "barriers_skipped"; transfer/fill decisions included)
+//   {"k":"cap",...}   once, when the next record would pass the byte cap;
+//                     nothing follows it (stderr reports it too)
 //
 // GPU ticks convert to nanoseconds with meta.period_ns; tick wraparound
 // wraps at 2^valid_bits. Kernel enum values map to names by their
@@ -46,8 +52,10 @@
 // of the encoder at once) or when the encoder reuses a completed ring
 // slot, and only then. Every hook is main-thread only (recording and
 // joining both happen on the encoder's thread; the completion thread
-// never calls in), so there is no lock. All Vulkan entry points go
-// through the dlopened device table; nothing links libvulkan directly.
+// never calls in). Only control() runs on another thread; it touches the
+// sink's atomics and mutex-guarded FILE state, never Vulkan or contexts.
+// All Vulkan entry points go through the dlopened device table; nothing
+// links libvulkan directly.
 
 #ifdef MLX_OMARCHY_GPU_PROFILING
 
@@ -57,7 +65,6 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
-#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -69,6 +76,7 @@
 #include <vector>
 
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/gpu_profile_sink.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -89,18 +97,30 @@ class GpuProfiler {
     return instance;
   }
 
+  // Output-open, not capture-enabled: host clock endpoints stay valid
+  // across a pause.
   bool profiling() const {
-    return out_ != nullptr;
+    return sink_.is_open();
+  }
+
+  // Runtime switch behind mlx_omarchy_gpu_profile_control; the only
+  // member another thread may call. 0 when no profile path is set.
+  int control(int enabled, uint64_t max_bytes) {
+    const char* path = std::getenv("MLX_OMARCHY_GPU_PROFILE");
+    if (path == nullptr || path[0] == '\0') {
+      return 0;
+    }
+    return sink_.control(enabled, max_bytes);
   }
 
   // Called once per CommandEncoder construction. Keyed by the encoder
   // pointer; a destroyed encoder leaves its context (and query pools) for
   // process exit rather than touching Vulkan after teardown.
   void attach(const void* owner, const Device& device) {
-    if (!out_) {
+    if (!sink_.is_open()) {
       open_output(device);
     }
-    if (!out_ || valid_bits_ == 0) {
+    if (!sink_.is_open() || valid_bits_ == 0) {
       return;
     }
     auto ctx = std::make_unique<Ctx>();
@@ -133,14 +153,16 @@ class GpuProfiler {
       int slot,
       VkCommandBuffer cmd,
       uint64_t begin_cost) {
-    if (out_ == nullptr) {
+    if (!sink_.is_open()) {
       return;
     }
-    emitf("{\"k\":\"b\",\"o\":%" PRIu64 ",\"dur\":%" PRIu64
-          ",\"t\":%" PRIu64 "}\n",
-          owner_id(owner),
-          begin_cost,
-          host_ns());
+    if (sink_.active()) {
+      sink_.emitf("{\"k\":\"b\",\"o\":%" PRIu64 ",\"dur\":%" PRIu64
+                  ",\"t\":%" PRIu64 "}\n",
+                  owner_id(owner),
+                  begin_cost,
+                  host_ns());
+    }
     Ctx* ctx = find(owner);
     if (ctx == nullptr) {
       return;
@@ -156,12 +178,14 @@ class GpuProfiler {
   // before the dispatch itself, so t0 lands when prior GPU work
   // (including the barrier) completes. barrier reports whether this
   // dispatch recorded a dependency barrier (gated mode may skip it).
+  // The capture decision is latched per slot here and consumed by the
+  // paired after_dispatch, so a concurrent toggle cannot split a pair.
   void before_dispatch(
       const void* owner,
       int slot,
       VkCommandBuffer cmd,
       bool barrier) {
-    if (out_ == nullptr) {
+    if (!sink_.is_open()) {
       return;
     }
     Ctx* ctx = find(owner);
@@ -169,6 +193,10 @@ class GpuProfiler {
       return;
     }
     SlotCtx& s = ctx->slots[slot];
+    s.open = sink_.active();
+    if (!s.open) {
+      return;
+    }
     PendingDispatch p{};
     p.skipped = s.cursor + 2 > kPoolQueries;
     p.bar = barrier ? 1u : 0u;
@@ -188,7 +216,7 @@ class GpuProfiler {
   // Dependency-barrier decision counter (dispatch pre/post and
   // transfer/fill decisions; excludes TAPE_FULL_BARRIERS diagnostics).
   void on_barrier(bool emitted) {
-    if (out_ == nullptr) {
+    if (!sink_.is_open()) {
       return;
     }
     if (emitted) {
@@ -212,7 +240,7 @@ class GpuProfiler {
       uint32_t gz,
       uint64_t host_cost,
       uint32_t tape) {
-    if (out_ == nullptr) {
+    if (!sink_.is_open()) {
       return;
     }
     Ctx* ctx = find(owner);
@@ -220,6 +248,10 @@ class GpuProfiler {
       return;
     }
     SlotCtx& s = ctx->slots[slot];
+    if (!s.open) {
+      return;
+    }
+    s.open = false;
     PendingDispatch& p = s.pending.back();
     p.kernel = static_cast<uint32_t>(kernel);
     p.operation = params.operation;
@@ -255,36 +287,42 @@ class GpuProfiler {
       uint64_t sub,
       uint64_t submit_cost,
       int slot) {
-    if (out_ == nullptr || sub == 0) {
+    if (!sink_.is_open() || sub == 0) {
       return;
     }
-    submissions_++;
+    bool emit = keep_submission(owner, slot);
     Ctx* ctx = find(owner);
     if (ctx != nullptr) {
       ctx->slots[slot].last_sub = sub;
     }
-    emitf("{\"k\":\"s\",\"s\":%" PRIu64 ",\"dur\":%" PRIu64
-          ",\"t\":%" PRIu64 "}\n",
-          sub,
-          submit_cost,
-          host_ns());
+    if (!emit) {
+      return;
+    }
+    submissions_++;
+    sink_.emitf("{\"k\":\"s\",\"s\":%" PRIu64 ",\"dur\":%" PRIu64
+                ",\"t\":%" PRIu64 "}\n",
+                sub,
+                submit_cost,
+                host_ns());
   }
 
   void on_submit_boundary(
+      const void* owner,
+      int slot,
       uint64_t sub,
       uint64_t close_t,
       uint64_t queue_t0,
       uint64_t queue_t1) {
-    if (out_ == nullptr || sub == 0) {
+    if (!sink_.is_open() || sub == 0 || !keep_submission(owner, slot)) {
       return;
     }
-    emitf("{\"k\":\"q\",\"s\":%" PRIu64
-          ",\"close\":%" PRIu64 ",\"queue_t0\":%" PRIu64
-          ",\"queue_t1\":%" PRIu64 "}\n",
-          sub,
-          close_t,
-          queue_t0,
-          queue_t1);
+    sink_.emitf("{\"k\":\"q\",\"s\":%" PRIu64
+                ",\"close\":%" PRIu64 ",\"queue_t0\":%" PRIu64
+                ",\"queue_t1\":%" PRIu64 "}\n",
+                sub,
+                close_t,
+                queue_t0,
+                queue_t1);
   }
 
   // Called from join_last_completion after the wait and the noncoherent
@@ -298,18 +336,20 @@ class GpuProfiler {
       uint64_t wait_t1,
       uint64_t inval_t2,
       const char* reason) {
-    if (out_ == nullptr) {
+    if (!sink_.is_open()) {
       return;
     }
-    joins_++;
-    emitf("{\"k\":\"j\",\"s\":%" PRIu64 ",\"wait\":%" PRIu64
-          ",\"inval\":%" PRIu64 ",\"t\":%" PRIu64
-          ",\"reason\":\"%s\"}\n",
-          sub,
-          wait_t1 - join_t0,
-          inval_t2 - wait_t1,
-          join_t0,
-          reason);
+    if (sink_.active()) {
+      joins_++;
+      sink_.emitf("{\"k\":\"j\",\"s\":%" PRIu64 ",\"wait\":%" PRIu64
+                  ",\"inval\":%" PRIu64 ",\"t\":%" PRIu64
+                  ",\"reason\":\"%s\"}\n",
+                  sub,
+                  wait_t1 - join_t0,
+                  inval_t2 - wait_t1,
+                  join_t0,
+                  reason);
+    }
     Ctx* ctx = find(owner);
     if (ctx == nullptr) {
       return;
@@ -353,6 +393,8 @@ class GpuProfiler {
     VkQueryPool pool{VK_NULL_HANDLE};
     uint32_t cursor{0};
     uint64_t last_sub{0};
+    // Capture decision of the open before/after_dispatch pair.
+    bool open{false};
     std::vector<PendingDispatch> pending;
   };
 
@@ -366,22 +408,21 @@ class GpuProfiler {
 
   GpuProfiler() = default;
   ~GpuProfiler() {
-    if (out_ == nullptr) {
+    if (!sink_.is_open()) {
       return;
     }
-    emitf("{\"k\":\"end\",\"t\":%" PRIu64 ",\"dispatches\":%" PRIu64
-          ",\"dropped\":%u,\"submissions\":%" PRIu64 ",\"joins\":%" PRIu64
-          ",\"barriers\":%" PRIu64 ",\"barriers_skipped\":%" PRIu64
-          "}\n",
-          host_ns(),
-          dispatches_,
-          dropped_,
-          submissions_,
-          joins_,
-          barriers_emitted_,
-          barriers_skipped_);
-    std::fclose(out_);
-    out_ = nullptr;
+    sink_.emitf("{\"k\":\"end\",\"t\":%" PRIu64 ",\"dispatches\":%" PRIu64
+                ",\"dropped\":%u,\"submissions\":%" PRIu64
+                ",\"joins\":%" PRIu64 ",\"barriers\":%" PRIu64
+                ",\"barriers_skipped\":%" PRIu64 "}\n",
+                host_ns(),
+                dispatches_,
+                dropped_,
+                submissions_,
+                joins_,
+                barriers_emitted_,
+                barriers_skipped_);
+    sink_.close();
   }
 
   GpuProfiler(const GpuProfiler&) = delete;
@@ -391,7 +432,8 @@ class GpuProfiler {
   // the slot's submission has completed (slot reuse or a full join).
   void flush_slot(Ctx& ctx, int slot, uint64_t sub) {
     SlotCtx& s = ctx.slots[slot];
-    if (s.pending.empty() || valid_bits_ == 0 || s.last_sub == 0) {
+    if (s.pending.empty() || valid_bits_ == 0 || s.last_sub == 0 ||
+        sink_.stopped()) {
       s.pending.clear();
       s.cursor = 0;
       return;
@@ -421,7 +463,7 @@ class GpuProfiler {
       if (p.skipped) {
         continue;
       }
-      emitf("{\"k\":\"d\",\"s\":%" PRIu64 ",\"e\":%u,\"op\":%u,\"n\":%u"
+      sink_.emitf("{\"k\":\"d\",\"s\":%" PRIu64 ",\"e\":%u,\"op\":%u,\"n\":%u"
             ",\"gx\":%u,\"gy\":%u,\"gz\":%u,\"h\":%" PRIu64 ",\"tp\":%u"
             ",\"bar\":%u,\"p\":\"%s\"",
             sub,
@@ -437,19 +479,19 @@ class GpuProfiler {
             p.prim.data());
       if (p.tick_index + 1 < queries &&
           ticks[p.tick_index + 1] >= ticks[p.tick_index]) {
-        emitf(",\"t0\":%" PRIu64 ",\"t1\":%" PRIu64,
+        sink_.emitf(",\"t0\":%" PRIu64 ",\"t1\":%" PRIu64,
               ticks[p.tick_index],
               ticks[p.tick_index + 1]);
       }
-      emitf(",\"b\":[");
+      sink_.emitf(",\"b\":[");
       for (size_t j = 0; j < p.nb; ++j) {
-        emitf("%s[%" PRIu64 ",%u,%u]",
+        sink_.emitf("%s[%" PRIu64 ",%u,%u]",
               j > 0 ? "," : "",
               p.bind[j][0],
               p.bind[j][1],
               p.bind[j][2]);
       }
-      emitf("]}\n");
+      sink_.emitf("]}\n");
     }
     s.pending.clear();
     s.cursor = 0;
@@ -460,18 +502,19 @@ class GpuProfiler {
     if (path == nullptr || path[0] == '\0') {
       return;
     }
-    out_ = std::fopen(path, "w");
-    if (out_ == nullptr) {
+    FILE* out = std::fopen(path, "w");
+    if (out == nullptr) {
       std::fprintf(
           stderr, "[prof] cannot open MLX_OMARCHY_GPU_PROFILE path %s\n", path);
       return;
     }
+    sink_.open(out);
     valid_bits_ = device.capabilities().queue_timestamp_valid_bits;
     period_ns_ = device.capabilities().timestamp_period;
     device_ = device.handle();
     host_t0_ = host_ns();
     const char* label = std::getenv("MLX_OMARCHY_GPU_PROFILE_LABEL");
-    emitf("{\"k\":\"meta\",\"device\":\"%s\",\"period_ns\":%.6f"
+    sink_.emitf("{\"k\":\"meta\",\"device\":\"%s\",\"period_ns\":%.6f"
           ",\"valid_bits\":%u,\"pool\":%u,\"label\":\"%s\",\"host_t0\":%"
           PRIu64 "}\n",
           device.capabilities().device_name.c_str(),
@@ -496,16 +539,19 @@ class GpuProfiler {
     return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(owner));
   }
 
-  void emitf(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    std::vfprintf(out_, fmt, args);
-    va_end(args);
+  // s/q records are kept while capturing, and while paused for a batch
+  // that still holds captured dispatches, so their d records join an s.
+  bool keep_submission(const void* owner, int slot) {
+    if (sink_.active()) {
+      return true;
+    }
+    Ctx* ctx = find(owner);
+    return ctx != nullptr && !ctx->slots[slot].pending.empty();
   }
 
   std::unordered_map<const void*, std::unique_ptr<Ctx>> contexts_;
   VkDevice device_{VK_NULL_HANDLE};
-  FILE* out_{nullptr};
+  ProfileSink sink_;
   uint32_t valid_bits_{0};
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
@@ -544,6 +590,10 @@ class GpuProfiler {
     return false;
   }
 
+  int control(int, uint64_t) {
+    return 0;
+  }
+
   void attach(const void*, const Device&) {}
   void on_begin(const void*, int, VkCommandBuffer, uint64_t) {}
   void before_dispatch(const void*, int, VkCommandBuffer, bool) {}
@@ -561,7 +611,8 @@ class GpuProfiler {
       uint64_t,
       uint32_t) {}
   void on_submit_end(const void*, uint64_t, uint64_t, int) {}
-  void on_submit_boundary(uint64_t, uint64_t, uint64_t, uint64_t) {}
+  void on_submit_boundary(
+      const void*, int, uint64_t, uint64_t, uint64_t, uint64_t) {}
   void on_join(
       const void*, uint64_t, uint64_t, uint64_t, uint64_t, const char*) {}
 };

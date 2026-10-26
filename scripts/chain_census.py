@@ -82,7 +82,12 @@ def main():
     with open(args.profile, encoding="utf-8") as fh:
         for line in fh:
             ev = json.loads(line)
-            if ev.get("k") == "s":
+            k = ev.get("k")
+            if k == "cap":
+                sys.exit(f"profiler hit byte cap ({ev.get('bytes')} of "
+                         f"{ev.get('cap')} bytes); stream incomplete, "
+                         "census would be partial")
+            if k == "s":
                 sub_t[ev["s"]] = ev["t"]
 
     # Pass 2: dispatch events ordered by (submission time, file order).

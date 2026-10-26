@@ -50,7 +50,13 @@ def main():
     sub_t = {}
     for line in open(args.profile, encoding="utf-8"):
         ev = json.loads(line)
-        if ev.get("k") == "s":
+        k = ev.get("k")
+        if k == "cap":
+            raise SystemExit(
+                f"profiler hit byte cap ({ev.get('bytes')} of "
+                f"{ev.get('cap')} bytes); stream incomplete, counts would "
+                "be partial")
+        if k == "s":
             sub_t[ev["s"]] = ev["t"]
 
     events = []
