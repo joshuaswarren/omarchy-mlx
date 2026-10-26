@@ -1467,6 +1467,12 @@ void specialize_threadgroup_helper_params(
 }
 
 void translate_header(std::string& header) {
+  // Metal's resource hint is not shared storage; Vulkan gets its local size from the launch.
+  header = std::regex_replace(
+      header,
+      std::regex(
+          R"(\[\[\s*max_total_threads_per_threadgroup\s*\(\s*[1-9][0-9]*\s*\)\s*\]\])"),
+      "");
   // Any #include has no GLSL meaning: the OMARCHY ICD compiles the shader
   // standalone, and a kernel that actually calls the included APIs fails
   // later on its own tokens (metal_stdlib helpers are mapped above; MPP

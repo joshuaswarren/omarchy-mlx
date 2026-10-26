@@ -204,6 +204,45 @@ TEST_CASE("body threadgroup declarations become shared without helpers") {
   // MSL identifier `in` is a GLSL reserved word; renamed in the body.
   CHECK(glsl.find("_mlx_in") != std::string::npos);
 }
+
+TEST_CASE("Metal thread limit attribute preserves bf16 shared row reduction") {
+  const std::string body = R"(
+[[kernel]] void row_norm(
+    const device bfloat16_t* H [[buffer(0)]],
+    device bfloat16_t* XO [[buffer(1)]],
+    uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]]) {
+  constexpr int K = 4096;
+  constexpr int E = 16;
+  constexpr int TPG = K / E;
+  threadgroup float red[TPG / 32];
+  uint t = thread_position_in_threadgroup.x;
+  float ss = float(H[t]) * float(H[t]);
+  ss = simd_sum(ss);
+  if (t % 32 == 0) red[t / 32] = ss;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (int i = 0; i < TPG / 32; i++) total += red[i];
+  XO[t] = bfloat16_t(metal::rsqrt(total / float(K) + 1e-6f));
+}
+)";
+  auto run = [](const std::string& source) {
+    return mlx::core::fast::mlx_omarchy_translate_msl_for_test(
+        source, 256, 64, 1, 256, 1, 1, 1);
+  };
+  const auto baseline = run("\n" + body);
+  for (const auto* attribute : {
+           "[[max_total_threads_per_threadgroup(256)]]\n",
+           "[[ max_total_threads_per_threadgroup ( 256 ) ]]\n"}) {
+    const auto glsl = run(attribute + body);
+    CHECK(glsl == baseline);
+    CHECK(glsl.find("shared float red[") != std::string::npos);
+    CHECK(glsl.find("barrier()") != std::string::npos);
+    CHECK(glsl.find("layout(local_size_x=256, local_size_y=1, local_size_z=1)") !=
+          std::string::npos);
+  }
+  CHECK_THROWS_AS(run("[[unknown_kernel_attribute(256)]]\n" + body), std::runtime_error);
+}
+
 // ---------------------------------------------------------------------------
 // KernelRecheck 2026-10-08: the section-(b) inventory kernels on current main.
 // Each case mirrors a construct the M2 recheck run showed dying at GLSL
