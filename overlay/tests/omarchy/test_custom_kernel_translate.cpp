@@ -601,6 +601,73 @@ TEST_CASE("MSL auto value declarations become float locals") {
         std::string::npos);
 }
 
+TEST_CASE("MSL auto recurrence indices preserve integral arithmetic") {
+  // SOURCE-DERIVED from TF552 recurrence prologues, not a captured shader.
+  const char* source = R"(
+[[kernel]] void recurrence(
+    device float* out [[buffer(0)]],
+    uint3 thread_position_in_grid [[thread_position_in_grid]],
+    uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]]) {
+  auto n = thread_position_in_grid.z;
+  auto hv_idx = n % 32;
+  auto hk_idx = hv_idx / (32 / 16);
+  constexpr int n_per_t = 128 / 32;
+  auto dk_idx = thread_position_in_threadgroup.x;
+  auto dv_idx = thread_position_in_grid.y;
+  for (int i = 0; i < n_per_t; ++i) {
+    auto s_idx = n_per_t * dk_idx + i;
+    out[s_idx] = float(hk_idx + dv_idx);
+  }
+  auto signed_index = -3;
+  auto signed_next = signed_index + 2;
+  auto unsigned_index = 3u;
+  out[0] = float(signed_next) + float(unsigned_index);
+})";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("auto ") == std::string::npos);
+  CHECK(glsl.find("uint n = uint(gl_GlobalInvocationID.z);") != std::string::npos);
+  CHECK(glsl.find("uint hv_idx = uint(n % 32);") != std::string::npos);
+  CHECK(glsl.find("uint hk_idx = uint(hv_idx / (32 / 16));") != std::string::npos);
+  CHECK(glsl.find("uint s_idx = uint(n_per_t * dk_idx + i);") != std::string::npos);
+  CHECK(glsl.find("int signed_index = int(-3);") != std::string::npos);
+  CHECK(glsl.find("int signed_next = int(signed_index + 2);") != std::string::npos);
+  CHECK(glsl.find("uint unsigned_index = uint(3u);") != std::string::npos);
+}
+
+TEST_CASE("MSL auto does not guess unknown or boolean initializer types") {
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device float* out [[buffer(0)]]) {"
+      "auto index = missing + 1; out[0] = float(index);}", 1));
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device float* out [[buffer(0)]]) {"
+      "auto comparison = 1 < 2; out[0] = float(comparison);}", 1));
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device float* out [[buffer(0)]]) {"
+      "auto index = gl_UnknownID; out[0] = float(index);}", 1));
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device float* out [[buffer(0)]]) {"
+      "auto index = later + 1; int later = 2; out[0] = float(index);}", 1));
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device float* out [[buffer(0)]]) {"
+      "int x = 1; {uint x = 2u;} auto index = x + 1;"
+      "out[0] = float(index);}", 1));
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device float* out [[buffer(0)]]) {"
+      "auto index = 4294967296u; out[0] = float(index);}", 1));
+}
+
+TEST_CASE("MSL static casts preserve nested indexed operands") {
+  // Literal expression class from the TF552 row-chain prefetch.
+  auto glsl = translate(
+      "[[kernel]] void k(const device bfloat16_t* k [[buffer(0)]],"
+      "device float* out [[buffer(1)]]) {"
+      "int node = 0; int hk_idx = 0; int dk_idx = 0; int i = 0;"
+      "out[0] = static_cast<float>(k[((node + 1) * 16 + hk_idx) * 128 + 4 * dk_idx + i]);"
+      "out[1] = static_cast<float>(static_cast<int>(node + (1)));}", 1);
+  CHECK(glsl.find("static_cast") == std::string::npos);
+  CHECK(glsl.find("(node + 1) * 16 + hk_idx") != std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // Qwen3.6-35B-A3B prefill (no expert offload, custom-kernel gate off — these
 // are mlx_vlm kernels): the qwen3_5 ragged-SDPA and gated-delta kernels walk

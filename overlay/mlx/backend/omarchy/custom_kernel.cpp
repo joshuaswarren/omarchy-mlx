@@ -318,8 +318,8 @@ void translate_types(std::string& code, const std::vector<Parameter>& parameters
   }
   code = std::regex_replace(
       code,
-      std::regex(R"(static_cast\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\(([^()]*)\))"),
-      "$1($2)");
+      std::regex(R"(static_cast\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\()"),
+      "$1(");
   translate_as_type(code, parameters);
 }
 
@@ -792,18 +792,22 @@ void translate_device_pointer_aliases(
 // `const auto sy = 1 / (1 + metal::precise::exp(metal::abs(conv)));` —
 // 2026-10-09, offline repro at .comp:72/73; v0.7.31 9b5c938 fails
 // identically at .comp:60, so the construct was never supported, only
-// newly reached). Two corpus shapes:
+// newly reached). Three corpus shapes:
 //   * value declarations (`const auto sy = 1 / (1 + ...)`) become float:
-//     Metal deduces the initializer's type and every value auto in the
-//     serving corpus is an fp32 expression (GLSL's implicit
+//     Metal deduces the initializer's type and every fp32 value auto in
+//     the serving corpus is an fp32 expression (GLSL's implicit
 //     int->float declaration conversion covers degenerate integer forms
 //     at float precision);
+//   * integral value declarations (`auto n = gl_GlobalInvocationID.z;
+//     auto hv_idx = n % Hv;` — the TF552 gated-delta recurrence prologue)
+//     retain signedness across arithmetic over declared integral operands;
 //   * pointer declarations (`const auto x_row = x + row * K;` — the MoE
 //     router/decode row-walk idiom, half the Qwen3.5 decode kernels)
 //     deduce the base buffer's element type; they are rewritten to the
 //     explicit `const device T*` form the device-pointer alias pass
 //     already translates, and scoped rebinds (`const auto x = x_row;`,
 //     x_row itself an alias) chain through the same type map.
+
 void translate_auto_declarations(
     std::string& body,
     const std::vector<Parameter>& parameters) {
@@ -817,6 +821,20 @@ void translate_auto_declarations(
       pointer_types[parameter.name] = parameter.type;
     }
   }
+  std::unordered_map<std::string, std::string> integral_types;
+  for (const auto& parameter : parameters) {
+    if (parameter.scalar &&
+        (parameter.type == "int" || parameter.type == "uint")) {
+      integral_types[parameter.name] = parameter.type;
+    }
+  }
+  static const std::regex scalar_decl(
+      R"((?:^|[;{}(])\s*(?:(?:const|constexpr)\s+)?(int|uint|float|bool)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;))");
+  static const std::string uint_builtin_pattern =
+      R"(gl_(?:GlobalInvocationID|LocalInvocationID|WorkGroupID|NumWorkGroups)\.[xyz]|gl_(?:LocalInvocationIndex|SubgroupInvocationID|SubgroupSize|SubgroupID|NumSubgroups)\b)";
+  static const std::regex uint_builtin(uint_builtin_pattern);
+  static const std::regex integral_token(uint_builtin_pattern +
+      R"(|[0-9]+[uU]?\b|[A-Za-z_][A-Za-z0-9_]*|[()+*/%-])");
   std::string rewritten;
   rewritten.reserve(body.size());
   size_t last = 0;
@@ -827,6 +845,18 @@ void translate_auto_declarations(
     rewritten += body.substr(last, match.position() - last);
     const std::string name = match[2].str();
     const std::string init = trim(match[3].str());
+    // Only declarations before this auto are visible. Differently typed
+    // shadows are ambiguous to this pass, so never infer through them.
+    const std::string prefix = body.substr(0, match.position());
+    for (std::sregex_iterator d(prefix.begin(), prefix.end(), scalar_decl), dend;
+         d != dend; ++d) {
+      const auto found = integral_types.find((*d)[2].str());
+      if (found != integral_types.end() && found->second != (*d)[1].str()) {
+        found->second.clear();
+      } else {
+        integral_types.emplace((*d)[2].str(), (*d)[1].str());
+      }
+    }
     std::smatch parts;
     if (std::regex_search(init, parts, base_offset)) {
       const auto base = pointer_types.find(parts[1].str());
@@ -841,10 +871,10 @@ void translate_auto_declarations(
     // Value declaration: Metal deduces the initializer's type. Float is
     // correct only when the initializer is provably float-valued: a float
     // literal, a math builtin, or a read through a pointer alias or a
-    // declared float local (bf16 buffer reads widen to float). Integer
-    // initializers (`auto n = thread_position_in_grid.z; auto hv_idx =
-    // n % Hv;`, gated-delta step) would silently compute at float
-    // precision and then fail on `%` and indexing — refuse them by name.
+    // declared float local (bf16 buffer reads widen to float). Integral
+    // initializers use the same-width int/uint arithmetic conversion.
+    // shortcut: infer only integral arithmetic, extend via the existing
+    // compiler path if casts or other expression classes are required.
     const std::regex float_local_decl(
         R"(\bfloat\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|\[|;))");
     const std::regex pointer_decl(
@@ -875,11 +905,62 @@ void translate_auto_declarations(
       }
     }
     if (!float_valued) {
-      throw std::runtime_error(
-          "unsupported MSL feature `auto` value declaration with a "
-          "non-float initializer (declare the type explicitly)");
+      std::string type = "int";
+      size_t consumed = 0;
+      bool operand = false;
+      bool supported = true;
+      for (std::sregex_iterator t(init.begin(), init.end(), integral_token), tend;
+           t != tend; ++t) {
+        if (!trim(init.substr(consumed, t->position() - consumed)).empty()) {
+          supported = false;
+          break;
+        }
+        const std::string token = t->str();
+        consumed = t->position() + t->length();
+        if (token.size() == 1 && std::string("()+*/%-").find(token) !=
+            std::string::npos) {
+          continue;
+        }
+        operand = true;
+        if (std::regex_match(token, uint_builtin)) {
+          type = "uint";
+        } else if (std::isdigit(static_cast<unsigned char>(token[0]))) {
+          const bool is_unsigned = token.back() == 'u' || token.back() == 'U';
+          const auto value = std::stoull(token);
+          if (value > (is_unsigned ? UINT32_MAX : INT32_MAX)) {
+            supported = false;
+            break;
+          }
+          if (is_unsigned) {
+            type = "uint";
+          }
+        } else {
+          const auto found = integral_types.find(token);
+          if (found == integral_types.end() ||
+              (found->second != "int" && found->second != "uint")) {
+            supported = false;
+            break;
+          }
+          if (found->second == "uint") {
+            type = "uint";
+          }
+        }
+      }
+      if (!supported || !operand || !trim(init.substr(consumed)).empty()) {
+        throw std::runtime_error(
+            "unsupported MSL feature `auto` value declaration with a "
+            "non-float initializer (declare the type explicitly)");
+      }
+      const auto previous = integral_types.find(name);
+      if (previous != integral_types.end() && previous->second != type) {
+        integral_types[name].clear();
+      } else {
+        integral_types[name] = type;
+      }
+      rewritten += match[1].str() + type + " " + name + " = " + init + ";";
+    } else {
+      rewritten += match[1].str() + "float " + name + " = " + init + ";";
     }
-    rewritten += match[1].str() + "float " + name + " = " + init + ";";
     last = match.position() + match.length();
   }
   rewritten += body.substr(last);
