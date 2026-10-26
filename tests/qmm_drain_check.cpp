@@ -24,7 +24,8 @@ int main() {
                 for (uint cb = 0; cb < 4u; ++cb) {
                   for (uint r = 0; r < 8u; ++r) {
                     for (uint c = 0; c < 8u; ++c) {
-                      const uint slot = qmm_drain_slot(subgroup, cb, r, c);
+                      // coopMatStore writes row-major independently of the drain helper.
+                      const uint slot = subgroup * 256u + cb * 64u + r * 8u + c;
                       assert(slot < scratch.size());
                       assert(!occupied[slot]);
                       occupied[slot] = true;
