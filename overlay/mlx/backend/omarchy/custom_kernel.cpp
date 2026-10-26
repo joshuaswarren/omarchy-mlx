@@ -2351,6 +2351,9 @@ Translation translate_msl(
           ++depth;
         } else if (c == ')' || c == ']' || c == '}') {
           --depth;
+        } else if (depth == 0 && c == ',') {
+          // Comma-separated declarations are not one boolean initializer.
+          return std::vector<std::string>{init};
         } else if (depth == 0 && c == '&' && i + 1 < init.size() &&
                    init[i + 1] == '&') {
           parts.push_back(init.substr(start, i - start));

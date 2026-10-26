@@ -400,6 +400,43 @@ TEST_CASE("const multi-declarator lines keep comma declarators") {
   CHECK(glsl.find(", KHI") != std::string::npos);
 }
 
+TEST_CASE("boolean and rewrite keeps dependent comma declarators") {
+  const char* source = R"(
+[[kernel]] void gdn_flags(
+    const device float* X [[buffer(0)]],
+    device float* Y [[buffer(1)]],
+    uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]) {
+  const uint head = threadgroup_position_in_grid.y;
+  const bool isq = head < 16, isk = !isq && head < 2 * 16;
+  bool active = isq && head < 32, inactive = !active && isk;
+  Y[0] = (isq || isk || active || inactive) ? X[0] : 0.0f;
+}
+)";
+  const auto glsl = translate(source, 1);
+  CHECK(glsl.find("const bool isq = head < 16, isk = !isq && head < 2 * 16;") !=
+        std::string::npos);
+  CHECK(glsl.find("bool active = isq && head < 32, inactive = !active && isk;") !=
+        std::string::npos);
+  CHECK(glsl.find("_mlx_bool_and") == std::string::npos);
+}
+
+TEST_CASE("boolean and rewrite still handles numeric operands with nested commas") {
+  const char* source = R"(
+[[kernel]] void numeric_flag(
+    const device float* X [[buffer(0)]],
+    device float* Y [[buffer(1)]],
+    uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]) {
+  const uint head = threadgroup_position_in_grid.y;
+  bool allowed = head < 16 && min(head, 1u);
+  Y[0] = allowed ? X[0] : 0.0f;
+}
+)";
+  const auto glsl = translate(source, 1);
+  CHECK(glsl.find("bool allowed = _mlx_bool_and(") != std::string::npos);
+  CHECK(glsl.find("min(head, 1u)") != std::string::npos);
+  CHECK(glsl.find("&& min(") == std::string::npos);
+}
+
 TEST_CASE("metal fabs maps to GLSL abs and header casts rewrite") {
   const char* header =
       "inline float sigmoidish(float x) {\n"
