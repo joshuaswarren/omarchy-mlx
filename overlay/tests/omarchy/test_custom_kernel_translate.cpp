@@ -787,6 +787,106 @@ TEST_CASE("header helper numeric_limits constants map like the body") {
   CHECK(glsl.find("omlx_cap(_mlx_arg0[i])") != std::string::npos);
 }
 
+TEST_CASE("selected buffer reads capture the pointer choice before scalar changes") {
+  // SOURCE-DERIVED row_streams CSs selector; no captured shader identity.
+  auto glsl = translate(R"(
+[[kernel]] void selected(
+    const device int* control [[buffer(0)]],
+    const device bfloat16_t* CS0 [[buffer(1)]],
+    const device bfloat16_t* CS1 [[buffer(2)]],
+    device float* out [[buffer(3)]]) {
+  int sg = control[0];
+  auto CSs = sg == 0 ? CS0 : CS1;
+  sg = 1 - sg;
+  out[0] = float(CSs[control[1]]);
+})", 1);
+  CHECK(glsl.find("auto ") == std::string::npos);
+  CHECK(glsl.find("device ") == std::string::npos);
+  CHECK(glsl.find("_b1.data[") != std::string::npos);
+  CHECK(glsl.find("_b2.data[") != std::string::npos);
+  CHECK(glsl.find("_b1.data[(0) + (_mlx_arg0[1])]") != std::string::npos);
+  CHECK(glsl.find("sg == 0") == glsl.rfind("sg == 0"));
+}
+
+TEST_CASE("selected output buffer aliases retain their choice and offset") {
+  auto glsl = translate(R"(
+[[kernel]] void selected(
+    const device int* control [[buffer(0)]],
+    const device float* x [[buffer(1)]],
+    device float* state_out0 [[buffer(2)]],
+    device float* state_out1 [[buffer(3)]]) {
+  const int sg = control[0];
+  const int base = control[1];
+  auto SOUT = sg == 0 ? state_out0 : state_out1;
+  auto o_state = SOUT + base;
+  for (int i = 0; i < 4; ++i) o_state[i] = x[i];
+})", 2);
+  CHECK(glsl.find("auto ") == std::string::npos);
+  CHECK(glsl.find("device ") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg2[") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg3[") != std::string::npos);
+  CHECK(glsl.find("base") != std::string::npos);
+}
+
+TEST_CASE("selected stores preserve signed indices without an unsigned snapshot") {
+  auto glsl = translate(R"(
+[[kernel]] void selected(
+    const device int* control [[buffer(0)]],
+    const device float* x [[buffer(1)]],
+    device float* state_out0 [[buffer(2)]],
+    device float* state_out1 [[buffer(3)]]) {
+  const int sg = control[0];
+  auto SOUT = sg == 0 ? state_out0 : state_out1;
+  auto p = SOUT + 4;
+  p[-1] = x[0];
+})", 2);
+  CHECK(glsl.find("uint(-1)") == std::string::npos);
+  CHECK(glsl.find("(-1)") != std::string::npos);
+}
+
+TEST_CASE("selected pointer declarations reject unknown or differently typed buffers") {
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(const device float* x [[buffer(0)]],"
+      "const device int* ids [[buffer(1)]],device float* out [[buffer(2)]]) {"
+      "int sg = ids[0]; auto p = sg == 0 ? x : ids; out[0] = p[0];}", 1));
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(const device float* x [[buffer(0)]],"
+      "device float* out [[buffer(1)]]) {"
+      "auto p = 0 == 0 ? x : missing; out[0] = p[0];}", 1));
+}
+
+TEST_CASE("BF16 nested indices preserve input read and output store conversions") {
+  auto glsl = translate(R"(
+[[kernel]] void indexed(
+    const device bfloat16_t* state [[buffer(0)]],
+    const device int* ids [[buffer(1)]],
+    device bfloat16_t* out [[buffer(2)]]) {
+  out[ids[0]] = state[ids[1]];
+  out[ids[2]] = state[ids[3]];
+})", 1);
+  CHECK(glsl.find("_b2.data[_mlx_arg1[0]] = _mlx_float_to_bf16(") != std::string::npos);
+  CHECK(glsl.find("_b2.data[_mlx_arg1[2]] = _mlx_float_to_bf16(") != std::string::npos);
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[_mlx_arg1[1]])") != std::string::npos);
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[_mlx_arg1[3]])") != std::string::npos);
+}
+
+TEST_CASE("BF16 output reads remain unsupported") {
+  CHECK_THROWS(translate(
+      "[[kernel]] void k(device bfloat16_t* out [[buffer(0)]]) {"
+      "out[0] = out[1];}", 1));
+}
+
+TEST_CASE("BF16 data parameter is not confused with generated buffer members") {
+  auto glsl = translate(R"(
+[[kernel]] void indexed(
+    const device bfloat16_t* data [[buffer(0)]],
+    const device int* ids [[buffer(1)]],
+    device float* out [[buffer(2)]]) {
+  out[0] = float(data[ids[0]]);
+})", 1);
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[_mlx_arg1[0]])") != std::string::npos);
+}
+
 TEST_CASE("float16_t buffer reads stay half in a plain assignment and a call argument") {
   // Parakeet decoder-step chains (v0.7.32 freeze, G13C): `sh_a[i] =
   // embedding[j];` and `exact_fma16(bc, sh_a[k], weights[j])` need float16_t.

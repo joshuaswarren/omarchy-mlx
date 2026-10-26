@@ -473,6 +473,18 @@ void translate_c_style_casts(std::string& code) {
   }
 }
 
+// A selected-buffer alias (`auto CSs = sg == 0 ? CS0 : sg == 1 ? CS1 : CS2;`
+// — the TF552 row_streams multistream admission) has no single base buffer:
+// the choice is snapshotted into a uint local at the declaration, and every
+// branch is an original buffer parameter. translate_auto_declarations
+// detects and registers them;
+// translate_device_pointer_aliases lowers their uses.
+struct SelectedAlias {
+  std::string type;                  // shared element type of every branch
+  std::string selector;              // captured choice, a uint local
+  std::vector<std::string> branches; // buffer parameter names, case order
+};
+
 // Rewrite local device-pointer aliases into (buffer, offset) indexing.
 //
 // The MSL idiom `device const T* p = base + off; ... p[i]` (37 sites across
@@ -492,7 +504,8 @@ void translate_c_style_casts(std::string& code) {
 void translate_device_pointer_aliases(
     std::string& body,
     const std::vector<Parameter>& parameters,
-    std::string& prologue_helpers) {
+    std::string& prologue_helpers,
+    const std::unordered_map<std::string, SelectedAlias>& selected) {
   // Three rigid per-order declaration patterns. GCC's ECMAScript engine
   // mis-binds groups when an alternation and optional const are combined
   // (it shifted the type/name groups by one on
@@ -513,6 +526,11 @@ void translate_device_pointer_aliases(
   struct Alias {
     std::string base;
     std::string offset;
+    // Selected-buffer form (base empty): the captured choice plus one
+    // original buffer per case, each branch with its own offset.
+    std::string selector;
+    std::vector<std::string> branches;
+    std::vector<std::string> branch_offsets;
   };
   std::unordered_map<std::string, Alias> aliases;
   std::unordered_set<std::string> vector_aliases;
@@ -532,6 +550,15 @@ void translate_device_pointer_aliases(
         type.size() - 1;
   };
   bool vector_read_helpers = false;
+  // Seed the auto pass's selected-buffer aliases: no body declaration
+  // introduces them; later alias declarations (`auto i_state = SIN + off;`
+  // arriving as `const device T* i_state = SIN + off;`) chain onto them in
+  // the declaration loop below, and uses lower through the selected path in
+  // the rewrite loop.
+  for (const auto& [chosen_name, chosen] : selected) {
+    aliases[chosen_name] = {"", "", chosen.selector, chosen.branches,
+        std::vector<std::string>(chosen.branches.size(), "0")};
+  }
   bool progressed = true;
   // Per-pattern match-group indices for (type, name, initializer); the
   // optional const/address-space groups shift them per pattern.
@@ -606,8 +633,36 @@ void translate_device_pointer_aliases(
         }
         if (base_is_alias) {
           const auto& parent = aliases[base];
-          offset = "(" + parent.offset + " + " + offset + ")";
-          aliases[name] = {parent.base, offset};
+          if (parent.base.empty()) {
+            // Selected parent: the child keeps the captured choice and
+            // every branch target, composing the advance onto each branch
+            // offset (`auto i_state = SIN + off;`). The declared type must
+            // be the branches' element type.
+            for (const auto& branch : parent.branches) {
+              const auto found = std::find_if(
+                  parameters.begin(), parameters.end(),
+                  [&](const Parameter& parameter) {
+                    return parameter.name == branch;
+                  });
+              if (found == parameters.end() || found->scalar ||
+                  found->type != type) {
+                throw std::runtime_error(
+                    "unsupported MSL feature `selected-buffer alias with a "
+                    "mismatched element type` is not implemented for the "
+                    "Omarchy Vulkan backend");
+              }
+            }
+            std::vector<std::string> child_offsets;
+            child_offsets.reserve(parent.branch_offsets.size());
+            for (const auto& parent_offset : parent.branch_offsets) {
+              child_offsets.push_back("(" + parent_offset + " + " + offset + ")");
+            }
+            aliases[name] = {
+                "", "", parent.selector, parent.branches, child_offsets};
+          } else {
+            offset = "(" + parent.offset + " + " + offset + ")";
+            aliases[name] = {parent.base, offset};
+          }
         } else {
           aliases[name] = {base, offset};
         }
@@ -623,6 +678,7 @@ void translate_device_pointer_aliases(
   }
   for (const auto& [name, alias] : aliases) {
     const bool is_vector_alias = vector_aliases.count(name) > 0;
+    const bool is_selected = alias.base.empty();
     size_t search_from = 0;
     // First: scalar-constructor casts on the alias — `float(NAME)`,
     // `int(NAME)`, etc. (the Qwen3.5 GDN chunk kernels: `float(U0_o)`,
@@ -640,8 +696,11 @@ void translate_device_pointer_aliases(
     //     parenthesised type token, and the chars immediately before
     //     the `(` are `(` and a type token, this is a C-style cast
     //     over an indexed use (b).
+    // Selected aliases take no cast lowering: the walk would rewrite
+    // through a nonexistent base, so any cast or bare use of them reaches
+    // the indexed walk below and refuses there.
     size_t p = 0;
-    while (true) {
+    while (!is_selected) {
       const auto pos = body.find(name, p);
       if (pos == std::string::npos) break;
       p = pos + name.size();
@@ -754,6 +813,111 @@ void translate_device_pointer_aliases(
       }
       const auto close = matching_delimiter(body, after, '[', ']');
       const std::string inner = body.substr(after + 1, close - after - 1);
+      if (is_selected) {
+        // Classify the use: simple store (`NAME[i] = rhs;`), augmented
+        // store, or read. Only the simple store has a selected lowering —
+        // GLSL ternaries are no lvalues — and read-modify-write has no
+        // single-visit form: both refuse by name instead of miscompiling.
+        size_t after_close = close + 1;
+        while (after_close < body.size() &&
+               std::isspace(static_cast<unsigned char>(body[after_close]))) {
+          ++after_close;
+        }
+        const char c0 = after_close < body.size() ? body[after_close] : '\0';
+        const char c1 =
+            after_close + 1 < body.size() ? body[after_close + 1] : '\0';
+        const bool augmented =
+            (c0 == '+' || c0 == '-' || c0 == '*' || c0 == '/' || c0 == '%' ||
+                c0 == '&' || c0 == '|' || c0 == '^') &&
+            c1 == '=';
+        const bool incdec =
+            (c0 == '+' && c1 == '+') || (c0 == '-' && c1 == '-');
+        const bool shift_assign = after_close + 2 < body.size() &&
+            ((c0 == '<' && c1 == '<') || (c0 == '>' && c1 == '>')) &&
+            body[after_close + 2] == '=';
+        if (augmented || incdec || shift_assign) {
+          throw std::runtime_error(
+              "unsupported MSL feature `read-modify-write through a "
+              "selected-buffer alias` is not implemented for the Omarchy "
+              "Vulkan backend");
+        }
+        if (c0 != '=' || c1 == '=') {
+          // Read: nested ternary over one plain indexed read per branch.
+          // GLSL evaluates only the taken branch, so exactly one buffer
+          // read executes, and each branch stays a plain buffer read the
+          // later per-parameter rewrites (bf16 widening) apply to unchanged.
+          std::string replacement = "(";
+          for (size_t k = 0; k < alias.branches.size(); ++k) {
+            replacement += k == 0 ? "" : " : ";
+            if (k + 1 < alias.branches.size()) {
+              replacement += alias.selector + " == " + std::to_string(k) +
+                  "u ? ";
+            }
+            replacement += alias.branches[k] + "[(" +
+                alias.branch_offsets[k] + ") + (" + inner + ")]";
+          }
+          replacement += ")";
+          body.replace(position, close - position + 1, replacement);
+          search_from = position + replacement.size();
+          continue;
+        }
+        const size_t statement_end = body.find(';', close);
+        if (statement_end == std::string::npos) {
+          throw std::runtime_error(
+              "unsupported MSL feature `selected-buffer alias store without "
+              "a statement end` is not implemented for the Omarchy Vulkan "
+              "backend");
+        }
+        for (size_t s = close + 1; s < statement_end; ++s) {
+          if (body[s] == '{' || body[s] == '}') {
+            throw std::runtime_error(
+                "unsupported MSL feature `selected-buffer alias store across "
+                "a block boundary` is not implemented for the Omarchy Vulkan "
+                "backend");
+          }
+        }
+        const std::string rhs = trim(
+            body.substr(after_close + 1, statement_end - after_close - 1));
+        if (rhs.empty()) {
+          throw std::runtime_error(
+              "unsupported MSL feature `selected-buffer alias store without "
+              "a value` is not implemented for the Omarchy Vulkan backend");
+        }
+        // Evaluate the RHS once, then the unchanged index only in the
+        // taken branch. bf16 stores retain the direct-store RNE conversion.
+        const auto branch_param = std::find_if(
+            parameters.begin(), parameters.end(),
+            [&](const Parameter& parameter) {
+              return parameter.name == alias.branches[0];
+            });
+        const std::string compute =
+            branch_param != parameters.end() &&
+                branch_param->type == "bfloat16_t"
+            ? std::string("float")
+            : glsl_type(branch_param != parameters.end() ? branch_param->type
+                                                         : "");
+        std::string block =
+            "{ const " + compute + " _mlx_v_" + name + " = " + rhs + ";\n";
+        for (size_t k = 0; k < alias.branches.size(); ++k) {
+          const std::string store = alias.branches[k] + "[(" +
+              alias.branch_offsets[k] + ") + (" + inner +
+              ")] = _mlx_v_" + name + "; }";
+          if (k == 0) {
+            block += "if (" + alias.selector + " == 0u) { " + store;
+          } else if (k + 1 == alias.branches.size()) {
+            // Last branch is the fallback: any selector value the chain
+            // did not match lands here, exactly like the MSL ternary.
+            block += " else { " + store;
+          } else {
+            block += " else if (" + alias.selector + " == " +
+                std::to_string(k) + "u) { " + store;
+          }
+        }
+        block += " }";
+        body.replace(position, statement_end - position + 1, block);
+        search_from = position + block.size();
+        continue;
+      }
       std::string replacement;
       if (is_vector_alias) {
         // One alias index spans four consecutive bf16 elements: widen
@@ -810,7 +974,8 @@ void translate_device_pointer_aliases(
 
 void translate_auto_declarations(
     std::string& body,
-    const std::vector<Parameter>& parameters) {
+    const std::vector<Parameter>& parameters,
+    std::unordered_map<std::string, SelectedAlias>& selected) {
   static const std::regex auto_decl(
       R"((const\s+)?auto\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;{}]+);)");
   static const std::regex base_offset(
@@ -857,6 +1022,87 @@ void translate_auto_declarations(
         integral_types.emplace((*d)[2].str(), (*d)[1].str());
       }
     }
+    // Selected-buffer alias: `auto NAME = sg == 0 ? B0 : sg == 1 ? B1 : B2;`
+    // (the TF552 row_streams multistream admission). Rigid flat chain: one
+    // shared integral selector tested `SEL == k` ascending from 0, every
+    // branch an original scalar buffer parameter, all branches one element
+    // type, 2..8 branches. Snapshot the choice at the declaration, before
+    // any later selector mutation, and register the alias for
+    // translate_device_pointer_aliases; anything
+    // else falls through to the value paths below, which refuse by name.
+    {
+      static const std::regex level(
+          R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*==\s*([0-9]+)[uU]?\s*\?\s*)"
+          R"(([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$)");
+      static const std::regex identifier(R"(^[A-Za-z_][A-Za-z0-9_]*$)");
+      std::string rest = init;
+      std::string selector_token;
+      std::vector<std::string> branch_names;
+      while (true) {
+        std::smatch part;
+        if (!std::regex_match(rest, part, level) ||
+            std::stoul(part[2].str()) != branch_names.size() ||
+            branch_names.size() >= 8 ||
+            (!selector_token.empty() && part[1].str() != selector_token)) {
+          break;
+        }
+        selector_token = part[1].str();
+        branch_names.push_back(part[3].str());
+        rest = trim(part[4].str());
+      }
+      if (!selector_token.empty() && std::regex_match(rest, identifier)) {
+        branch_names.push_back(rest);
+        if (branch_names.size() < 2 || branch_names.size() > 8) {
+          throw std::runtime_error(
+              "unsupported MSL feature `selected-buffer alias branch count`");
+        }
+        const auto selector_type = integral_types.find(selector_token);
+        if (selector_type == integral_types.end() ||
+            (selector_type->second != "int" &&
+                selector_type->second != "uint")) {
+          throw std::runtime_error(
+              "unsupported MSL feature `selected-buffer alias with a "
+              "non-integral selector` is not implemented for the Omarchy "
+              "Vulkan backend");
+        }
+        std::string element;
+        for (const auto& branch : branch_names) {
+          const auto found = std::find_if(
+              parameters.begin(), parameters.end(),
+              [&](const Parameter& parameter) {
+                return parameter.name == branch;
+              });
+          if (found == parameters.end() || found->scalar ||
+              (!element.empty() && found->type != element)) {
+            throw std::runtime_error(
+                "unsupported MSL feature `selected-buffer alias over a "
+                "mismatched or non-buffer branch `" + branch +
+                "` is not implemented for the Omarchy Vulkan backend");
+          }
+          if (element.empty()) {
+            element = found->type;
+            if (!element.empty() &&
+                element.find_first_of("234", element.size() - 1) ==
+                    element.size() - 1) {
+              throw std::runtime_error(
+                  "unsupported MSL feature `selected-buffer alias of vector "
+                  "type `" + element + "` is not implemented for the Omarchy "
+                  "Vulkan backend");
+            }
+          }
+        }
+        std::string snapshot = "(" + selector_token + " == 0) ? 0u";
+        for (size_t k = 1; k + 1 < branch_names.size(); ++k) {
+          snapshot += " : (" + selector_token + " == " + std::to_string(k) +
+              ") ? " + std::to_string(k) + "u";
+        }
+        snapshot += " : " + std::to_string(branch_names.size() - 1) + "u";
+        rewritten += "const uint _mlx_sel_" + name + " = " + snapshot + ";";
+        selected[name] = {element, "_mlx_sel_" + name, branch_names};
+        last = match.position() + match.length();
+        continue;
+      }
+    }
     std::smatch parts;
     if (std::regex_search(init, parts, base_offset)) {
       const auto base = pointer_types.find(parts[1].str());
@@ -864,6 +1110,16 @@ void translate_auto_declarations(
         rewritten += match[1].str() + "device " + base->second + "* " + name +
             " = " + init + ";";
         pointer_types[name] = base->second;
+        last = match.position() + match.length();
+        continue;
+      }
+      // Advance onto a selected alias (`auto i_state = SIN + off;`): emit
+      // the same explicit device-pointer form, whose base the alias pass
+      // resolves to the parent's captured choice and branch targets.
+      const auto chained = selected.find(parts[1].str());
+      if (chained != selected.end()) {
+        rewritten += match[1].str() + "device " + chained->second.type +
+            "* " + name + " = " + init + ";";
         last = match.position() + match.length();
         continue;
       }
@@ -2066,35 +2322,49 @@ void translate_bfloat_parameter(
     bool output) {
   const std::string escaped = regex_escape(parameter.name);
   const std::string storage = "_b" + std::to_string(parameter.binding) + ".data";
-  if (output) {
-    body = std::regex_replace(
-        body,
-        std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\]\s*=\s*([^;]+);)"),
-        storage + "[$1] = _mlx_float_to_bf16($2);");
-    if (std::regex_search(body, std::regex("\\b" + escaped + R"(\s*\[)"))) {
-      throw std::runtime_error(
-          "bfloat16 output supports direct assignment only");
-    }
-  } else if (parameter.scalar) {
+  if (!output && parameter.scalar) {
     replace_word(body, parameter.name, "_mlx_bf16_to_float(" + storage + "[0])");
   } else {
-    body = std::regex_replace(
-        body,
-        std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\])"),
-        "_mlx_bf16_to_float(" + storage + "[$1])");
-    // The read pass rewrote in-place stores into a bf16 INPUT buffer
-    // (state-cache updates, e.g. Qwen3.5 GDN recurrent_state) into
-    // '_mlx_bf16_to_float(slot) = rhs;' — an assignment to a call.
-    // Narrow instead: slot = _mlx_float_to_bf16(rhs), which is exactly
-    // the round-to-nearest-even bf16 store the MSL performed.
-    body = std::regex_replace(
-        body,
-        std::regex(
-            R"(_mlx_bf16_to_float\()" + regex_escape(storage) +
-            R"(\[([^\]]*)\]\)\s*=\s*([^;]+);)"),
-        storage + "[$1] = _mlx_float_to_bf16($2);");
-    if (std::regex_search(body, std::regex("\\b" + escaped + R"(\s*\[)"))) {
-      throw std::runtime_error("unsupported bfloat16 buffer expression");
+    const std::regex indexed("(^|[^.\\w])" + escaped + R"(\s*\[)");
+    size_t search = 0;
+    std::smatch match;
+    while (search < body.size()) {
+      const std::string remaining = body.substr(search);
+      if (!std::regex_search(remaining, match, indexed)) {
+        break;
+      }
+      const size_t position = search + match.position() + match[1].length();
+      const size_t open = search + match.position() + match.length() - 1;
+      const size_t close = matching_delimiter(body, open, '[', ']');
+      const std::string index = body.substr(open + 1, close - open - 1);
+      size_t next = close + 1;
+      while (next < body.size() &&
+             std::isspace(static_cast<unsigned char>(body[next]))) {
+        ++next;
+      }
+      const bool store = next < body.size() && body[next] == '=' &&
+          (next + 1 == body.size() || body[next + 1] != '=');
+      if (store) {
+        const size_t end = body.find(';', next);
+        if (end == std::string::npos) {
+          throw std::runtime_error("unterminated bfloat16 buffer assignment");
+        }
+        const std::string rhs = body.substr(next + 1, end - next - 1);
+        body.replace(position, end - position + 1,
+            storage + "[" + index + "] = _mlx_float_to_bf16(" + rhs + ");");
+      } else {
+        if (output) {
+          throw std::runtime_error(
+              "bfloat16 output supports direct assignment only");
+        }
+        body.replace(position, close - position + 1,
+            "_mlx_bf16_to_float(" + storage + "[" + index + "])");
+      }
+      // Rescan the rewritten expression's index/RHS for nested reads.
+      search = position;
+    }
+    if (output) {
+      return;
     }
     // Bare (non-indexed) uses — float(NAME) of a whole bf16 buffer — have
     // no GLSL meaning either; the scalar form (&) is the supported route.
@@ -2348,12 +2618,14 @@ Translation translate_msl(
   // the construct — v0.7.31 included). Value autos become float;
   // pointer-style autos rewrite to the explicit device-pointer alias form,
   // so this must run before the alias pass below consumes those forms.
-  translate_auto_declarations(body, parameters);
+  std::unordered_map<std::string, SelectedAlias> selected_aliases;
+  translate_auto_declarations(body, parameters, selected_aliases);
   // Pointer-advance walks (`kptr += step;`) become index variables; this
   // must also run before the alias pass, which refuses bare alias uses.
   translate_pointer_advance(body, parameters);
   std::string vector_alias_helpers;
-  translate_device_pointer_aliases(body, parameters, vector_alias_helpers);
+  translate_device_pointer_aliases(
+      body, parameters, vector_alias_helpers, selected_aliases);
 
   // MSL implicitly narrows/widens in scalar declarations; GLSL 460
   // rejects implicit conversions. Wrap const scalar-declaration
