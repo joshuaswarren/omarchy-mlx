@@ -566,5 +566,47 @@ class SocGateTests(unittest.TestCase):
             self.assertIn(chip, catalog.ARCHES)
 
 
+class PipedInstallerTests(unittest.TestCase):
+    """`curl ... | bash` runs install.sh from stdin: BASH_SOURCE[0] is unset under set -u."""
+
+    def run_piped(self, *args):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                ["bash", "-s", "--", *args],
+                input=INSTALLER.read_text(),
+                env={**os.environ, **PINNED_VERSION_ENV, "HOME": tmp},
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            return result, sorted(os.listdir(tmp))
+
+    def test_piped_script_does_not_trip_set_u_on_bash_source(self):
+        # An unknown option exits before anything is installed, after the top-level code has run.
+        result, left = self.run_piped("--no-such-option")
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertNotIn("null directory", result.stderr)
+        self.assertIn("unknown option: --no-such-option", result.stderr)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(left, [], "the disposable HOME must stay empty")
+
+    def test_piped_system_install_refuses_because_it_needs_a_checkout(self):
+        result, left = self.run_piped("--system")
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertIn("--system runs from a checkout", result.stderr)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(left, [])
+
+    def test_file_run_still_resolves_the_checkout(self):
+        # Same --system call from the file: ROOT is set, so it gets past the checkout gate to the next check.
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                ["bash", str(INSTALLER), "--system"],
+                env={**os.environ, **PINNED_VERSION_ENV, "HOME": tmp},
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        self.assertNotIn("runs from a checkout", result.stderr)
+        self.assertIn("--system requires --vendor DIR and --lock FILE", result.stderr)
+        self.assertEqual(result.returncode, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
