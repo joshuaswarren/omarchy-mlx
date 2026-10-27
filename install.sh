@@ -16,7 +16,12 @@ set -euo pipefail
 
 # Name table of record for every install path: serve/mlx_omarchy_paths.py
 # (packaging/paths.sh is generated from it and sourced by --system).
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Piped into bash (curl | bash) there is no script file and BASH_SOURCE[0] is unset, which set -u
+# rejects. ROOT stays empty then: only --system reads it, and --system needs a checkout.
+ROOT=""
+if [[ -n ${BASH_SOURCE[0]:-} ]]; then
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 
 REPO=joshuaswarren/omarchy-mlx
 PREFIX="${MLX_OMARCHY_HOME:-$HOME/.local/share/mlx-omarchy}"
@@ -99,6 +104,7 @@ apply_to_existing_venv() {
 # network, pacman, systemd state, or the running machine's $HOME.
 install_system() {
   local dest_root="" vendor="" lock="" serve_src="" python_bin="" import_smoke=0
+  [[ -n $ROOT ]] || die "--system runs from a checkout: clone the repository and run bash install.sh --system there (it cannot be piped into bash)"
   while (($#)); do
     case "$1" in
       --dest-root) dest_root="$2"; shift 2 ;;
