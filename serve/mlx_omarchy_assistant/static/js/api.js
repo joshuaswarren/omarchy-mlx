@@ -349,9 +349,11 @@ async function readSseStream(body, onEvent) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
+    // A CRLF line keeps its CR after the split on LF; drop it. A CR that ends
+    // a chunk stays in the buffer until its LF arrives.
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
-    for (const line of lines) handleLine(line);
+    for (const line of lines) handleLine(line.endsWith("\r") ? line.slice(0, -1) : line);
   }
   if (buffer) handleLine(buffer);
 }
