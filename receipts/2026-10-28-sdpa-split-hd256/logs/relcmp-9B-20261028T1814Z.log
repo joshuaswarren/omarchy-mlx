@@ -1,0 +1,28 @@
+relcmp 9B 20261028T1814Z load 0.07
+== rep 1 arm P
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.88 tok/s (84.2 ms/token, min 83.4, max 87.4); per token: dispatches 399 submissions 6 commits-with-work 6 barriers 387 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 4.72 tok/s (211.9 ms/token, min 211.5, max 247.2); per token: dispatches 471 submissions 9 commits-with-work 9 barriers 446 copies 16 fills 0 finalize 1
+== rep 1 arm RA
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.72 tok/s (85.3 ms/token, min 85.2, max 85.6); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 4.69 tok/s (213.4 ms/token, min 213.1, max 279.9); per token: dispatches 471 submissions 25 commits-with-work 25 barriers 462 copies 16 fills 0 finalize 1
+== rep 1 arm RB
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.69 tok/s (85.6 ms/token, min 85.3, max 93.0); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 10.07 tok/s (99.3 ms/token, min 99.2, max 99.6); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+== rep 2 arm P
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.94 tok/s (83.8 ms/token, min 83.4, max 94.9); per token: dispatches 399 submissions 6 commits-with-work 6 barriers 387 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 4.72 tok/s (211.9 ms/token, min 211.5, max 252.5); per token: dispatches 471 submissions 9 commits-with-work 9 barriers 446 copies 16 fills 0 finalize 1
+== rep 2 arm RA
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.72 tok/s (85.3 ms/token, min 85.2, max 85.8); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 4.68 tok/s (213.7 ms/token, min 213.2, max 276.1); per token: dispatches 471 submissions 25 commits-with-work 25 barriers 462 copies 16 fills 0 finalize 1
+== rep 2 arm RB
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.73 tok/s (85.2 ms/token, min 85.0, max 85.5); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 10.07 tok/s (99.3 ms/token, min 99.0, max 99.6); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+== rep 3 arm P
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.88 tok/s (84.2 ms/token, min 83.5, max 86.3); per token: dispatches 399 submissions 6 commits-with-work 6 barriers 387 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 4.72 tok/s (211.9 ms/token, min 211.3, max 217.5); per token: dispatches 471 submissions 9 commits-with-work 9 barriers 446 copies 16 fills 0 finalize 1
+== rep 3 arm RA
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.71 tok/s (85.4 ms/token, min 85.2, max 85.6); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 4.69 tok/s (213.2 ms/token, min 213.0, max 277.7); per token: dispatches 471 submissions 25 commits-with-work 25 barriers 462 copies 16 fills 0 finalize 1
+== rep 3 arm RB
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.72 tok/s (85.3 ms/token, min 85.2, max 85.9); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 8192: 10.08 tok/s (99.2 ms/token, min 99.0, max 102.8); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
