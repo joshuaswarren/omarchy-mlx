@@ -47,6 +47,132 @@ class Sha256SumsTests(unittest.TestCase):
                              ["2026-10-01-v077-release.md"])
 
 
+class AliasWheelTests(unittest.TestCase):
+    STAMPED = "mlx_omarchy-0.32.4.dev1+abc1234-cp314-cp314-linux_aarch64.whl"
+    X86 = "mlx_omarchy-0.32.4.dev1+abc1234-cp311-cp311-linux_x86_64.whl"
+
+    def _wheels(self, directory, alias_bytes):
+        root = Path(directory)
+        stamped = root / self.STAMPED
+        stamped.write_bytes(b"aarch64 wheel bytes")
+        x86 = root / "other" / self.X86
+        x86.parent.mkdir()
+        x86.write_bytes(b"x86 wheel bytes")
+        alias = None
+        if alias_bytes is not None:
+            alias = root / MODULE["ALIAS_WHEEL"]
+            alias.write_bytes(alias_bytes)
+        return alias, [stamped, x86]
+
+    def test_identical_copy_passes_and_other_cases_fail(self):
+        check = MODULE["alias_failure"]
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, b"aarch64 wheel bytes")
+            self.assertIsNone(check(False, alias, wheels))
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, b"a different wheel")
+            self.assertIn("byte-identical", check(False, alias, wheels))
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, None)
+            self.assertIn("is missing", check(False, alias, wheels))
+
+    def test_diagnostics_release_needs_no_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, None)
+            self.assertIsNone(MODULE["alias_failure"](True, alias, wheels))
+
+    def test_copy_without_an_aarch64_wheel_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, b"aarch64 wheel bytes")
+            only_x86 = [w for w in wheels if "x86_64" in w.name]
+            self.assertIn("no linux_aarch64 wheel",
+                          MODULE["alias_failure"](False, alias, only_x86))
+
+
+class AliasMainTests(unittest.TestCase):
+    """main() against a stubbed release: the alias leaves the wheel list, its SHA256SUMS line is checked, -diag is exempt."""
+
+    STAMPED = AliasWheelTests.STAMPED
+    X86 = AliasWheelTests.X86
+
+    def _run(self, tag, files, sums_override=None):
+        import contextlib
+        import io
+        import shutil
+        import sys
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data in files.items():
+                (root / name).write_bytes(data)
+            sums = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
+            sums.update(sums_override or {})
+            sums_text = "".join(f"{digest}  {name}\n" for name, digest in sums.items())
+            verified = []
+
+            def fake_download_asset(repo, release_tag, name, dest):
+                (Path(dest) / name).write_text(sums_text)
+                return True
+
+            def fake_verify(wheel, *args):
+                verified.append(wheel.name)
+                return [], [], []
+
+            patches = {
+                "release": lambda repo, t: {"tagName": t, "isPrerelease": False, "isDraft": True, "body": "",
+                                            "assets": [{"name": n} for n in list(files) + ["SHA256SUMS"]]},
+                "download_wheels": lambda repo, t, dest: sorted(root / n for n in files if n.endswith(".whl")),
+                "download_asset": fake_download_asset,
+                "tag_commit": lambda *a: "a" * 40,
+                "verify": fake_verify,
+            }
+            live = MODULE["main"].__globals__
+            saved = {key: live[key] for key in patches}
+            live.update(patches)
+            out = io.StringIO()
+            code = 0
+            try:
+                with mock.patch.object(shutil, "which", return_value="gh"), \
+                        mock.patch.object(sys, "argv", ["verify-release-assets.py", tag]), \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                    try:
+                        MODULE["main"]()
+                    except SystemExit as exit_:
+                        code = exit_.code or 0
+            finally:
+                live.update(saved)
+            return code, out.getvalue(), verified
+
+    def test_identical_alias_is_not_verified_as_a_wheel_and_passes(self):
+        files = {self.STAMPED: b"aarch64", self.X86: b"x86", MODULE["ALIAS_WHEEL"]: b"aarch64"}
+        code, out, verified = self._run("v9.9.9", files)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(verified), sorted([self.STAMPED, self.X86]))
+        self.assertIn("byte-identical", out)
+
+    def test_differing_or_missing_alias_fails_the_release(self):
+        alias = MODULE["ALIAS_WHEEL"]
+        code, out, _ = self._run("v9.9.9", {self.STAMPED: b"aarch64", self.X86: b"x86", alias: b"other"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("byte-identical copy", out)
+        code, out, _ = self._run("v9.9.9", {self.STAMPED: b"aarch64", self.X86: b"x86"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("is missing", out)
+
+    def test_alias_checksum_line_must_match_the_uploaded_bytes(self):
+        alias = MODULE["ALIAS_WHEEL"]
+        files = {self.STAMPED: b"aarch64", self.X86: b"x86", alias: b"aarch64"}
+        code, out, _ = self._run("v9.9.9", files, {alias: "e" * 64})
+        self.assertEqual(code, 1, out)
+        self.assertIn("SHA256SUMS lists", out)
+
+    def test_diagnostics_release_is_exempt_and_prints_no_identity_line(self):
+        code, out, _ = self._run("v9.9.9-diag.1", {self.STAMPED: b"aarch64"})
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("byte-identical", out)
+
+
 class ReleaseCommitTests(unittest.TestCase):
     def test_long_abbreviation_distinguishes_shared_short_prefix(self):
         version = "0.32.2+12345678"

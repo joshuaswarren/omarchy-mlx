@@ -62,6 +62,8 @@ WHERE_BUILT = {
     "linux_aarch64": "an aarch64 Apple Silicon host (cp314, glslc)",
     "linux_x86_64": "the dev box (cp311)",
 }
+# Fixed-name copy of the aarch64 wheel (no per-build stamp in the name), so omacom/omarchy-pkgs can follow the tag.
+ALIAS_WHEEL = "omarchy-mlx-wheel-cp314-aarch64.whl"
 
 
 def run(cmd, **kw):
@@ -119,6 +121,30 @@ def sums_coverage(asset_names, sums):
     stale = sorted(set(sums) - set(asset_names))
     uncovered = sorted(set(asset_names) - set(sums) - {"SHA256SUMS"})
     return stale, uncovered
+
+
+def alias_failure(is_diag, alias, wheels):
+    """None, or why the fixed-name wheel copy is missing or differs.
+
+    A stable release carries ALIAS_WHEEL: byte-identical to its linux_aarch64
+    wheel, so the distro package can name its source without the per-build
+    stamp in the wheel's filename. A -diag release does not need it.
+    """
+    if is_diag:
+        return None
+    if alias is None:
+        return (f"{ALIAS_WHEEL} is missing: a stable release carries a "
+                "fixed-name copy of the linux_aarch64 wheel")
+    stamped = [w for w in wheels if wheel_platform(w) == "linux_aarch64"]
+    if not stamped:
+        return f"{ALIAS_WHEEL} has no linux_aarch64 wheel to match"
+    digest = hashlib.sha256(Path(alias).read_bytes()).hexdigest()
+    for wheel in stamped:
+        if hashlib.sha256(Path(wheel).read_bytes()).hexdigest() == digest:
+            return None
+    return (f"{ALIAS_WHEEL} differs from the linux_aarch64 wheel "
+            f"{', '.join(w.name for w in stamped)}: it must be a "
+            "byte-identical copy")
 
 
 def receipt_paths(repo_root, tag):
@@ -376,6 +402,8 @@ def main():
 
     wheels = download_wheels(args.repo, args.tag,
                              tempfile.mkdtemp(prefix="verify-release-"))
+    alias = next((w for w in wheels if w.name == ALIAS_WHEEL), None)
+    wheels = [w for w in wheels if w.name != ALIAS_WHEEL]
     if not wheels:
         die(f"release {args.tag} has no wheel assets")
 
@@ -434,6 +462,19 @@ def main():
     if args.platforms:
         print(f"\n== platform coverage override: required = "
               f"{', '.join(required)} (recorded in the invocation)")
+    alias_problem = alias_failure(is_diag, alias, wheels)
+    if alias is not None and sums.get(ALIAS_WHEEL):
+        listed = sums[ALIAS_WHEEL]
+        actual = hashlib.sha256(alias.read_bytes()).hexdigest()
+        if listed != actual:
+            all_failures.append(
+                f"{ALIAS_WHEEL}: SHA256SUMS lists {listed} but the uploaded "
+                f"bytes hash to {actual}; the installer's checksum step "
+                "would fail")
+    if alias_problem:
+        all_failures.append(alias_problem)
+    elif alias is not None and not is_diag:
+        print(f"\n== {ALIAS_WHEEL}: byte-identical to the linux_aarch64 wheel")
     missing = [p for p in required if p not in present]
     if missing:
         where = "; ".join(f"{p} is built on {WHERE_BUILT[p]}"
