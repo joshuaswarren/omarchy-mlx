@@ -7856,6 +7856,68 @@ omarchy::ComputeKernel qmm_vec_word_format_kernel(
               : K::QmmVecWordSubgroupF16Q8G64;
 }
 
+// Tile columns per piece for one scalar-tile QMM dispatch of n_groups x m_groups work-groups under a work budget (0 = no budget).
+// Whole dispatch when it fits, else as many whole tile columns as fit, at least one.
+uint32_t qmm_tile_columns_per_piece(
+    uint32_t n_groups,
+    uint32_t m_groups,
+    uint64_t budget) {
+  if (budget == 0u || n_groups == 0u) {
+    return n_groups;
+  }
+  const uint64_t rows = std::max<uint32_t>(m_groups, 1u);
+  if (static_cast<uint64_t>(n_groups) * rows <= budget) {
+    return n_groups;
+  }
+  return static_cast<uint32_t>(std::max<uint64_t>(1u, budget / rows));
+}
+
+// Issue 202: the work budget only separates submissions BETWEEN dispatches, so on a slow device one full-logit QMM (a prefill
+// lm_head: thousands of tile columns) can outlast the 2 s GPU job watchdog. A dispatch over the budget is issued as pieces of
+// whole tile columns and the submission is committed between pieces. qmm_tile.comp reads the window from lhs_size (first tile
+// column) and rhs_size (tile-column count) and keeps every stride on the full matrix_n, so each output is computed exactly as
+// in the unsplit dispatch (bit-identical). Not split while a tape records (commit() is not valid there); a budget of 0 or a
+// dispatch within budget issues the single dispatch it always did, with lhs_size and rhs_size left at 0.
+void dispatch_qmm_tile(
+    omarchy::CommandEncoder& encoder,
+    omarchy::ComputeKernel kernel,
+    std::span<const omarchy::ComputeBinding> bindings,
+    const omarchy::ComputeParams& params,
+    uint32_t n_groups,
+    uint32_t m_groups) {
+  const uint64_t budget = encoder.in_tape_recording
+      ? 0u
+      : omarchy::batch_work_budget(
+            encoder.device().hardware_capabilities().device_name);
+  const uint32_t piece = qmm_tile_columns_per_piece(n_groups, m_groups, budget);
+  if (piece >= n_groups) {
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+        1u);
+    return;
+  }
+  for (uint32_t begin = 0u; begin < n_groups; begin += piece) {
+    const uint32_t count = std::min(piece, n_groups - begin);
+    omarchy::ComputeParams piece_params = params;
+    piece_params.lhs_size = begin;
+    piece_params.rhs_size = count;
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        piece_params,
+        std::min(count, omarchy::kMaxComputeGroupCountX),
+        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+        1u);
+    if (begin + count < n_groups) {
+      encoder.commit();
+    }
+  }
+}
+
 } // namespace
 
 void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -8760,6 +8822,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           : coopmat_rows == 16u
           ? omarchy::ComputeKernel::QmmPrefillCoopmatM16F16
           : omarchy::ComputeKernel::QmmPrefillCoopmatF16;
+      if (!coopmat) {
+        // Register-blocked scalar tile: the same shader as the fallback below, so it takes the same budget split (issue 202).
+        // The coopmat kernels are other shaders and are dispatched whole.
+        dispatch_qmm_tile(
+            encoder, qmm_kernel, bindings, params, n_groups, m_groups);
+        return;
+      }
       encoder.dispatch_compute(
           qmm_kernel,
           bindings,
@@ -8776,13 +8845,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         omarchy::ComputeKernel::QmmTileBF16);
     uint32_t m_groups = (params.matrix_m + 15u) / 16u;
     uint32_t n_groups = (params.matrix_n + 15u) / 16u;
-    encoder.dispatch_compute(
-        tile_kernel,
-        bindings,
-        params,
-        std::min(n_groups, omarchy::kMaxComputeGroupCountX),
-        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
-        1u);
+    // Scalar tile fallback (a device without cooperative matrix): split by output columns when the dispatch exceeds the work
+    // budget, so one full-logit QMM cannot outlast the GPU job watchdog (issue 202).
+    dispatch_qmm_tile(encoder, tile_kernel, bindings, params, n_groups, m_groups);
     return;
   }
   auto kernel = select_float_kernel(

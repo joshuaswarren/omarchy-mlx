@@ -5434,6 +5434,119 @@ TEST_CASE("quantized matmul matches dequant and host references") {
   run_case(1, 16, 192, 64, 8);
 }
 
+// Issue 202: one full-logit quantized matmul over the work budget runs as several column pieces with a submission between them. The
+// pieces must reproduce the unsplit result bit for bit (including the partial last tile column) and must really be issued.
+TEST_CASE("quantized matmul split by output columns is bit identical") {
+  if (!compute_available()) {
+    return;
+  }
+  struct RestoreBudget {
+    ~RestoreBudget() {
+      omarchy::batch_work_budget_test_override().store(-1);
+    }
+  } restore_budget;
+  Stream stream = gpu_stream();
+  std::mt19937 gen(202);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  // 3 row groups of 16 and 40 tile columns, the last one partial (629 = 39 * 16 + 5).
+  const int m = 40;
+  const int n = 629;
+  const int k = 128;
+  const int group_size = 64;
+  const int bits = 4;
+  const uint32_t n_groups = 40;
+  const uint32_t m_groups = 3;
+  std::vector<float> w_values(static_cast<size_t>(n) * k);
+  std::vector<float> x_values(static_cast<size_t>(m) * k);
+  for (auto& value : w_values) {
+    value = dist(gen);
+  }
+  for (auto& value : x_values) {
+    value = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(w_values, n, k, group_size, bits);
+  const int groups = k / group_size;
+  const int words_per_row = k * bits / 32;
+  array w_words(host.words.begin(), Shape{n, words_per_row}, uint32);
+  array w_scales(host.scales.begin(), Shape{n, groups}, float32);
+  array w_biases(host.biases.begin(), Shape{n, groups}, float32);
+  array x(x_values.begin(), Shape{m, k}, float32);
+  std::vector<float> expected =
+      host_quantized_matmul(host, x_values, m, n, k, group_size, bits);
+
+  struct Run {
+    std::vector<float> values;
+    uint64_t dispatches;
+    uint64_t submissions;
+  };
+  // The allocator recycles freed output buffers, and the previous run's output holds the correct result, which would hide
+  // columns a piece never writes. Several decoy matmuls (different activations) held alive together, then released, leave
+  // decoy values in every pooled buffer of this size before each measured run.
+  std::vector<float> decoy_x_values = x_values;
+  for (auto& value : decoy_x_values) {
+    value *= -1.5f;
+  }
+  array decoy_x(decoy_x_values.begin(), Shape{m, k}, float32);
+  auto run = [&](long long budget) {
+    omarchy::batch_work_budget_test_override().store(0);
+    {
+      std::vector<array> decoys;
+      for (int copy = 0; copy < 6; ++copy) {
+        decoys.push_back(quantized_matmul(
+            decoy_x, w_words, w_scales, w_biases, /*transpose=*/true, group_size,
+            bits, "affine", stream));
+        REQUIRE(evaluation_error(decoys.back()).empty());
+      }
+      REQUIRE(readback_f32(stream, decoys.front()) != expected);
+    }
+    omarchy::batch_work_budget_test_override().store(budget);
+    auto& counters = omarchy::trace::counters();
+    const uint64_t dispatches_before = counters.vk_compute_dispatches.load();
+    const uint64_t submissions_before = counters.vk_submissions.load();
+    array out = quantized_matmul(
+        x, w_words, w_scales, w_biases, /*transpose=*/true, group_size, bits,
+        "affine", stream);
+    REQUIRE(evaluation_error(out).empty());
+    Run result;
+    result.values = readback_f32(stream, out);
+    result.dispatches = counters.vk_compute_dispatches.load() - dispatches_before;
+    result.submissions = counters.vk_submissions.load() - submissions_before;
+    return result;
+  };
+
+  // Budget 0 turns the cap off: the single-dispatch reference.
+  Run whole = run(0);
+  REQUIRE_EQ(whole.values.size(), expected.size());
+  for (size_t index = 0; index < expected.size(); ++index) {
+    CHECK(whole.values[index] == doctest::Approx(expected[index]).epsilon(2e-4));
+  }
+
+  // A budget that exactly fits the dispatch, and one that is far larger, do not split.
+  for (long long budget : {static_cast<long long>(n_groups * m_groups), 1000000LL}) {
+    CAPTURE(budget);
+    Run fits = run(budget);
+    CHECK_EQ(fits.dispatches, whole.dispatches);
+    CHECK(std::memcmp(fits.values.data(), whole.values.data(),
+                      whole.values.size() * sizeof(float)) == 0);
+  }
+
+  // Budgets below the dispatch split it into ceil(n_groups / columns_per_piece) pieces; 1 forces one tile column per piece.
+  for (long long budget : {119LL, 61LL, 10LL, 4LL, 1LL}) {
+    CAPTURE(budget);
+    const uint32_t per_piece = std::max<uint32_t>(
+        1u, static_cast<uint32_t>(budget) / m_groups);
+    const uint32_t pieces = (n_groups + per_piece - 1u) / per_piece;
+    REQUIRE_GT(pieces, 1u);
+    Run split = run(budget);
+    CHECK_EQ(split.dispatches, whole.dispatches + (pieces - 1u));
+    CHECK_GE(split.submissions, whole.submissions + (pieces - 1u));
+    REQUIRE_EQ(split.values.size(), whole.values.size());
+    CHECK(std::memcmp(split.values.data(), whole.values.data(),
+                      whole.values.size() * sizeof(float)) == 0);
+  }
+}
+
 TEST_CASE("quantized matmul runs f16 and bf16 activations") {
   if (!compute_available()) {
     return;

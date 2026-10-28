@@ -3,6 +3,7 @@
 
 #pragma once
 #include <cstdlib>
+#include <atomic>
 
 #include <vulkan/vulkan.h>
 
@@ -186,7 +187,20 @@ inline uint64_t batch_work_fallback() {
   return kBatchWorkFallback;
 }
 
+// Test hook (issue 202): a value >= 0 replaces the budget for the whole process (0 turns the cap off), -1 (the default) leaves the
+// environment variable and the board table in charge. The environment variable is read once per process, so a test that compares a
+// split run with an unsplit one in the same process needs this. Atomic because primitives evaluate on the stream's worker thread.
+inline std::atomic<long long>& batch_work_budget_test_override() {
+  static std::atomic<long long> value{-1};
+  return value;
+}
+
 inline uint64_t batch_work_budget(std::string_view device_name) {
+  if (const long long forced = batch_work_budget_test_override().load(
+          std::memory_order_relaxed);
+      forced >= 0) {
+    return static_cast<uint64_t>(forced);
+  }
   // The env override is a process setting: read it once. A set but
   // non-positive value disables the cap, so "set" and its value stay
   // separate statics (issue 207).
