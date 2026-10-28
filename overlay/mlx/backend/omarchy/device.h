@@ -545,7 +545,7 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
-// Split-K bf16 decode attention (MLX_OMARCHY_SDPA_DECODE_SPLIT unset): the smallest cache length, in keys, from which the route is the default on a part.
+// Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.
 // 0 means the fused kernel stays the default. The route costs 79 to 90 microseconds per call up to 512 keys (two dispatches) and 89 to 113 at 1024 keys, and it wins by more as the cache grows,
 // so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent
 // calls, default against split on one tree, receipts/2026-10-23-sdpa-split-decode) where the split route is faster in both shapes of work, except G14C, which starts where it is faster in the chain shape of a decode step:

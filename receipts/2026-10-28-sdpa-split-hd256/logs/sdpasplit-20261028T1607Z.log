@@ -1,0 +1,11 @@
+sdpa split tests (hd256) real GPU 20261028T1607Z load 2.21 tree ff4b52aca2021c6be9874ca9f349935c98b082f7
+== omarchy_sdpa_split_tests
+      1 [doctest] Status: SUCCESS!
+      1 [doctest] assertions: 791 | 791 passed | 0 failed |
+      1 [doctest] test cases:  11 |  11 passed | 0 failed | 0 skipped
+rc=0
+== omarchy_primitive_tests (hd128 and everything else unchanged)
+[doctest] test cases:     107 |     107 passed | 0 failed | 0 skipped
+[doctest] assertions: 2768377 | 2768377 passed | 0 failed |
+[doctest] Status: SUCCESS!
+rc=0

@@ -1,0 +1,39 @@
+ab cell BENCH 20261028T1608Z load 0.49 mlx ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so
+== arm A
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba mlx file ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so SPLIT env 0 libs {}
+ROOF elementwise copy bandwidth: 59.1 GB/s
+SDPA bf16 9B H16 Hkv4 D256 L512: single 512 us = 4.1 GB/s; 8 chained 348 us each = 6.0 GB/s (KV 2.1 MB)
+SDPA bf16 9B H16 Hkv4 D256 L2048: single 1501 us = 5.6 GB/s; 8 chained 1259 us each = 6.7 GB/s (KV 8.4 MB)
+SDPA bf16 9B H16 Hkv4 D256 L8192: single 10776 us = 3.1 GB/s; 8 chained 10783 us each = 3.1 GB/s (KV 33.6 MB)
+SDPA bf16 9B H16 Hkv4 D256 L16384: single 21402 us = 3.1 GB/s; 8 chained 21338 us each = 3.1 GB/s (KV 67.1 MB)
+SDPA bf16 9B H16 Hkv4 D256 L32768: single 44793 us = 3.0 GB/s; 8 chained 41877 us each = 3.2 GB/s (KV 134.2 MB)
+SDPA bf16 2B H8 Hkv2 D256 L512: single 366 us = 2.9 GB/s; 8 chained 213 us each = 4.9 GB/s (KV 1.0 MB)
+SDPA bf16 2B H8 Hkv2 D256 L2048: single 932 us = 4.5 GB/s; 8 chained 727 us each = 5.8 GB/s (KV 4.2 MB)
+SDPA bf16 2B H8 Hkv2 D256 L8192: single 5451 us = 3.1 GB/s; 8 chained 5411 us each = 3.1 GB/s (KV 16.8 MB)
+SDPA bf16 2B H8 Hkv2 D256 L16384: single 10614 us = 3.2 GB/s; 8 chained 10565 us each = 3.2 GB/s (KV 33.6 MB)
+SDPA bf16 2B H8 Hkv2 D256 L32768: single 21358 us = 3.1 GB/s; 8 chained 20914 us each = 3.2 GB/s (KV 67.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L512: single 670 us = 3.1 GB/s; 8 chained 459 us each = 4.6 GB/s (KV 2.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L2048: single 1642 us = 5.1 GB/s; 8 chained 1483 us each = 5.7 GB/s (KV 8.4 MB)
+SDPA bf16 4B H32 Hkv8 D128 L8192: single 11362 us = 3.0 GB/s; 8 chained 11297 us each = 3.0 GB/s (KV 33.6 MB)
+SDPA bf16 4B H32 Hkv8 D128 L16384: single 22489 us = 3.0 GB/s; 8 chained 22402 us each = 3.0 GB/s (KV 67.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L32768: single 44678 us = 3.0 GB/s; 8 chained 44587 us each = 3.0 GB/s (KV 134.2 MB)
+DONE
+== arm B
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba mlx file ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so SPLIT env None libs {}
+ROOF elementwise copy bandwidth: 59.1 GB/s
+SDPA bf16 9B H16 Hkv4 D256 L512: single 352 us = 6.0 GB/s; 8 chained 185 us each = 11.3 GB/s (KV 2.1 MB)
+SDPA bf16 9B H16 Hkv4 D256 L2048: single 404 us = 20.7 GB/s; 8 chained 238 us each = 35.2 GB/s (KV 8.4 MB)
+SDPA bf16 9B H16 Hkv4 D256 L8192: single 1039 us = 32.3 GB/s; 8 chained 803 us each = 41.8 GB/s (KV 33.6 MB)
+SDPA bf16 9B H16 Hkv4 D256 L16384: single 1712 us = 39.2 GB/s; 8 chained 1413 us each = 47.5 GB/s (KV 67.1 MB)
+SDPA bf16 9B H16 Hkv4 D256 L32768: single 3041 us = 44.1 GB/s; 8 chained 2662 us each = 50.4 GB/s (KV 134.2 MB)
+SDPA bf16 2B H8 Hkv2 D256 L512: single 313 us = 3.4 GB/s; 8 chained 170 us each = 6.2 GB/s (KV 1.0 MB)
+SDPA bf16 2B H8 Hkv2 D256 L2048: single 350 us = 12.0 GB/s; 8 chained 193 us each = 21.8 GB/s (KV 4.2 MB)
+SDPA bf16 2B H8 Hkv2 D256 L8192: single 719 us = 23.3 GB/s; 8 chained 487 us each = 34.5 GB/s (KV 16.8 MB)
+SDPA bf16 2B H8 Hkv2 D256 L16384: single 1087 us = 30.9 GB/s; 8 chained 803 us each = 41.8 GB/s (KV 33.6 MB)
+SDPA bf16 2B H8 Hkv2 D256 L32768: single 1819 us = 36.9 GB/s; 8 chained 1434 us each = 46.8 GB/s (KV 67.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L512: single 255 us = 8.2 GB/s; 8 chained 113 us each = 18.5 GB/s (KV 2.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L2048: single 429 us = 19.6 GB/s; 8 chained 246 us each = 34.1 GB/s (KV 8.4 MB)
+SDPA bf16 4B H32 Hkv8 D128 L8192: single 966 us = 34.7 GB/s; 8 chained 768 us each = 43.7 GB/s (KV 33.6 MB)
+SDPA bf16 4B H32 Hkv8 D128 L16384: single 1547 us = 43.4 GB/s; 8 chained 1315 us each = 51.0 GB/s (KV 67.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L32768: single 2755 us = 48.7 GB/s; 8 chained 2497 us each = 53.7 GB/s (KV 134.2 MB)
+DONE

@@ -1,0 +1,33 @@
+H3 short-context check 20261028T1736Z load 4.31
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 1 arm A
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 128: 41.65 tok/s (24.0 ms/token, min 23.7, max 24.7); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 41.31 tok/s (24.2 ms/token, min 23.9, max 24.7); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 1 arm B
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 128: 40.90 tok/s (24.4 ms/token, min 24.4, max 24.6); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.72 tok/s (24.6 ms/token, min 24.2, max 24.8); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 2 arm A
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 128: 41.89 tok/s (23.9 ms/token, min 23.7, max 24.2); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 41.55 tok/s (24.1 ms/token, min 23.8, max 24.7); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 2 arm B
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 128: 40.87 tok/s (24.5 ms/token, min 24.3, max 24.6); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.79 tok/s (24.5 ms/token, min 24.3, max 24.8); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+== mlx-community/Qwen3.5-9B-4bit rep 1 arm A
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 128: 11.78 tok/s (84.9 ms/token, min 84.7, max 85.2); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.64 tok/s (85.9 ms/token, min 85.7, max 88.1); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+== mlx-community/Qwen3.5-9B-4bit rep 1 arm B
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 128: 11.75 tok/s (85.1 ms/token, min 84.8, max 85.5); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.72 tok/s (85.3 ms/token, min 85.1, max 85.9); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+== mlx-community/Qwen3.5-9B-4bit rep 2 arm A
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 128: 10.98 tok/s (91.1 ms/token, min 90.3, max 92.7); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.70 tok/s (85.4 ms/token, min 85.2, max 86.0); per token: dispatches 399 submissions 23 commits-with-work 23 barriers 404 copies 16 fills 0 finalize 1
+== mlx-community/Qwen3.5-9B-4bit rep 2 arm B
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {} snapshot fields 10 counters on mlx file ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so HF_HUB_OFFLINE 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 128: 10.92 tok/s (91.6 ms/token, min 90.8, max 141.3); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.52 tok/s (86.8 ms/token, min 85.3, max 91.6); per token: dispatches 407 submissions 23 commits-with-work 23 barriers 412 copies 16 fills 0 finalize 1

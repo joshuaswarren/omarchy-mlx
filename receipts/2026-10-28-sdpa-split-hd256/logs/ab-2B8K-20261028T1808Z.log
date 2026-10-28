@@ -1,0 +1,7 @@
+ab cell 2B8K 20261028T1808Z load 0.27 mlx ~/t7/venv-rel/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so
+pair 1 arm A: run round 0 size 8192: prefill 369.0 tok/s (22 s), decode 13.97 tok/s, peak 1.65 GiB
+pair 1 arm B: run round 0 size 8192: prefill 371.5 tok/s (22 s), decode 34.34 tok/s, peak 1.65 GiB
+pair 2 arm A: run round 0 size 8192: prefill 368.1 tok/s (22 s), decode 13.97 tok/s, peak 1.65 GiB
+pair 2 arm B: run round 0 size 8192: prefill 371.7 tok/s (22 s), decode 34.38 tok/s, peak 1.65 GiB
+pair 3 arm A: run round 0 size 8192: prefill 370.6 tok/s (22 s), decode 13.96 tok/s, peak 1.65 GiB
+pair 3 arm B: run round 0 size 8192: prefill 372.1 tok/s (22 s), decode 34.47 tok/s, peak 1.65 GiB
