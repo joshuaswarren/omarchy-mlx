@@ -47,6 +47,48 @@ class Sha256SumsTests(unittest.TestCase):
                              ["2026-10-01-v077-release.md"])
 
 
+class AliasWheelTests(unittest.TestCase):
+    STAMPED = "mlx_omarchy-0.32.4.dev1+abc1234-cp314-cp314-linux_aarch64.whl"
+    X86 = "mlx_omarchy-0.32.4.dev1+abc1234-cp311-cp311-linux_x86_64.whl"
+
+    def _wheels(self, directory, alias_bytes):
+        root = Path(directory)
+        stamped = root / self.STAMPED
+        stamped.write_bytes(b"aarch64 wheel bytes")
+        x86 = root / "other" / self.X86
+        x86.parent.mkdir()
+        x86.write_bytes(b"x86 wheel bytes")
+        alias = None
+        if alias_bytes is not None:
+            alias = root / MODULE["ALIAS_WHEEL"]
+            alias.write_bytes(alias_bytes)
+        return alias, [stamped, x86]
+
+    def test_identical_copy_passes_and_other_cases_fail(self):
+        check = MODULE["alias_failure"]
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, b"aarch64 wheel bytes")
+            self.assertIsNone(check(False, alias, wheels))
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, b"a different wheel")
+            self.assertIn("byte-identical", check(False, alias, wheels))
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, None)
+            self.assertIn("is missing", check(False, alias, wheels))
+
+    def test_diagnostics_release_needs_no_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, None)
+            self.assertIsNone(MODULE["alias_failure"](True, alias, wheels))
+
+    def test_copy_without_an_aarch64_wheel_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            alias, wheels = self._wheels(directory, b"aarch64 wheel bytes")
+            only_x86 = [w for w in wheels if "x86_64" in w.name]
+            self.assertIn("no linux_aarch64 wheel",
+                          MODULE["alias_failure"](False, alias, only_x86))
+
+
 class ReleaseCommitTests(unittest.TestCase):
     def test_long_abbreviation_distinguishes_shared_short_prefix(self):
         version = "0.32.2+12345678"

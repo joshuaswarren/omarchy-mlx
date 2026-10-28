@@ -36,6 +36,13 @@ the gate enforces them.
    result ships as `omarchy-mlx-vendor-wheels-v<TAG>-cp314-aarch64.tar`
    plus a `.sha256` sidecar. `SHA256SUMS` (flat filenames) must cover every
    uploaded asset.
+   A stable release also carries a fixed-name copy of the aarch64 wheel,
+   `omarchy-mlx-wheel-cp314-aarch64.whl`: `cp` the stamped wheel to that
+   name and upload both. The distro package (omacom/omarchy-pkgs) names its
+   wheel source from the tag alone, and the stamp in the wheel's filename
+   changes with every build. The gate fails a stable release without the
+   copy, or with a copy whose bytes differ from the stamped aarch64 wheel.
+   `SHA256SUMS` covers the copy like any other asset.
 
 3. Create the GitHub release as a DRAFT. Upload the assets to it. Run the
    gate and the installed-from-release gates against the DRAFT's assets.
