@@ -394,7 +394,13 @@ export async function replaceArchive(
     chunk_sha256: string[];
   },
 ): Promise<void> {
-  await db.batch([
+  // One transaction: deleting the original chunks before the
+  // replacements were inserted let an interrupted rewrite leave
+  // changed metadata with partial replacement bytes and no way to
+  // recover the original (issue #267). D1 batch statements run in a
+  // single transaction, so a failure rolls the delete back with the
+  // inserts and a retry rewrites the intact original.
+  const statements: D1PreparedStatement[] = [
     db.prepare("DELETE FROM chunks WHERE content_sha256 = ?1").bind(sha),
     db.prepare(
       `UPDATE submissions SET
@@ -407,20 +413,22 @@ export async function replaceArchive(
     ).bind(sha, shape.total_bytes, shape.chunk_bytes, shape.chunk_count,
             JSON.stringify(shape.chunk_sha256),
             Math.floor(Date.now() / 1000)),
-  ]);
+  ];
   for (let i = 0; i < shape.chunk_count; i++) {
     const start = i * shape.chunk_bytes;
     const end = Math.min(newBytes.byteLength, start + shape.chunk_bytes);
     const slice = new Uint8Array(newBytes.slice(start, end));
     const hash = await sha256Hex(slice);
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO chunks (content_sha256, idx, chunk_sha256, bytes)
-         VALUES (?1, ?2, ?3, ?4)`,
-      )
-      .bind(sha, i, hash, slice)
-      .run();
+    statements.push(
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO chunks (content_sha256, idx, chunk_sha256, bytes)
+           VALUES (?1, ?2, ?3, ?4)`,
+        )
+        .bind(sha, i, hash, slice),
+    );
   }
+  await db.batch(statements);
 }
 
 /**

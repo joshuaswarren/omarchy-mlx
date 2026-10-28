@@ -5,14 +5,21 @@
 // chunks), replay dedupe, hash mismatch, oversize archive, oversize
 // chunk, failed/absent proof of work, PII strip (row stored clean), incomplete complete,
 // archive round-trip, cron cache rebuild, and GC of stale submissions.
+// Also covers the sanitized-archive publication path (issue #267):
+// interrupted rewrite mid-insert, retry recovery, overlapping
+// completions, and cache-rebuild failure recovery.
 import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { buildProbeArchive, controlBytes, findMember, gunzip } from "./fixtures/archive";
 
 const PORT = Number(process.env.SMOKE_PORT ?? 8799);
 const BASE = "http://127.0.0.1:" + PORT;
 const SERVICE = join(import.meta.dir, "..");
-const STATE = join(SERVICE, ".wrangler", "smoke-state");
+// Overridable so the suite can keep its SQLite state off the watched
+// source tree; some hosts deadlock esbuild's watcher when D1 writes
+// land inside the service directory.
+const STATE = process.env.SMOKE_STATE_DIR ?? join(SERVICE, ".wrangler", "smoke-state");
 const WRANGLER = join(SERVICE, "node_modules", ".bin", "wrangler");
 const DB_NAME = "mlx-omarchy-community";
 const CHUNK = 768 * 1024;
@@ -145,16 +152,6 @@ async function uploadChunk(sha: string, idx: number, bytes: Uint8Array) {
 async function complete(sha: string) {
   const res = await fetch(`${BASE}/v1/submit/${sha}/complete`, { method: "POST" });
   return { res, body: await res.json() };
-}
-
-async function d1(sql: string): Promise<any> {
-  const proc = spawnSync(WRANGLER, [
-    "d1", "execute", DB_NAME, "--local", "--persist-to", STATE, "--json", "--command", sql,
-  ], { cwd: SERVICE, encoding: "utf8" });
-  if (proc.status !== 0) {
-    throw new Error(`d1 execute failed: ${proc.stdout} ${proc.stderr}`);
-  }
-  return JSON.parse(proc.stdout);
 }
 
 type Scenario = { name: string; fn: () => Promise<string> };
@@ -428,6 +425,263 @@ scenario("archive round-trips byte-identical", async () => {
   expect(back.length === archive.length, `length ${back.length} != ${archive.length}`);
   expect(sha256Hex(back) === sha256Hex(archive), "sha256 mismatch after round-trip");
   return `${back.length} bytes identical`;
+});
+
+// ---------------------------------------------------------------------------
+// Sanitized-archive publication under interruption (issue #267).
+// Fixtures come from test/fixtures/archive.ts; storage failures are
+// real local SQLite triggers, never faked batches.
+// ---------------------------------------------------------------------------
+const FIXTURE_CHUNK = 1024;
+const PROBE_MAC = "02:00:00:00:00:01";
+const PROBE_SERIAL = "TEST-SERIAL-0001";
+
+async function sqlRows(sqlText: string): Promise<Array<Record<string, unknown>>> {
+  const rows = await d1(sqlText);
+  return rows[0]?.results ?? [];
+}
+
+async function rawComplete(sha: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(`${BASE}/v1/submit/${sha}/complete`, { method: "POST" });
+  const text = await res.text();
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    body = { raw: text };
+  }
+  return { status: res.status, body };
+}
+
+async function initiateProbe(seed: number) {
+  const archive = await buildProbeArchive(seed);
+  const sha = sha256Hex(archive);
+  const count = Math.ceil(archive.length / FIXTURE_CHUNK);
+  const hashes: string[] = [];
+  for (let i = 0; i < count; i++) {
+    hashes.push(sha256Hex(archive.subarray(i * FIXTURE_CHUNK, (i + 1) * FIXTURE_CHUNK)));
+  }
+  const res = await fetch(`${BASE}/v1/submit`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schema_version: 1,
+      kind: "deep",
+      content_sha256: sha,
+      payload: payload({ model: `eth0 ${PROBE_MAC}` }),
+      archive: {
+        total_bytes: archive.length,
+        chunk_bytes: FIXTURE_CHUNK,
+        chunk_count: count,
+        chunk_sha256: hashes,
+      },
+      pow: { nonce: solvePow(sha), difficulty: POW_BITS },
+    }),
+  });
+  return { res, body: await res.json() as Record<string, unknown>, archive, sha };
+}
+
+async function uploadProbeChunks(sha: string, archive: Uint8Array): Promise<void> {
+  const count = Math.ceil(archive.length / FIXTURE_CHUNK);
+  for (let idx = 0; idx < count; idx++) {
+    const up = await uploadChunk(sha, idx, archive.subarray(idx * FIXTURE_CHUNK, (idx + 1) * FIXTURE_CHUNK));
+    expect(up.res.status === 200 && up.body.status === "stored", `chunk ${idx}: ${up.res.status}`);
+  }
+}
+
+// The published row serves the fully sanitized archive and the stored
+// chunks agree with the served bytes.
+async function expectSanitizedPublished(sha: string, seed: number): Promise<void> {
+  const record = await fetch(`${BASE}/v1/results/${sha}`);
+  expect(record.status === 200, `detail ${record.status}`);
+  const doc = await record.json() as {
+    summary: unknown;
+    archive: { total_bytes: number; chunk_bytes: number; chunk_count: number } | null;
+  };
+  const summaryText = JSON.stringify(doc.summary);
+  expect(!summaryText.includes(PROBE_MAC), "raw MAC served in the summary");
+  expect(summaryText.includes("[redacted-mac]"), "redaction marker missing from the summary");
+  expect(doc.archive !== null && doc.archive.chunk_count >= 2, "published archive does not span two chunks");
+  expect(doc.archive!.chunk_bytes === FIXTURE_CHUNK, "chunk_bytes changed during the rewrite");
+  const res = await fetch(`${BASE}/v1/results/${sha}/archive`);
+  expect(res.status === 200, `archive ${res.status}`);
+  const served = new Uint8Array(await res.arrayBuffer());
+  expect(served.length === doc.archive!.total_bytes, "served length disagrees with metadata");
+  const tar = await gunzip(served);
+  const dtsMember = findMember(tar, "probe.dts");
+  expect(dtsMember !== null, "probe.dts missing from the served archive");
+  const dts = new TextDecoder().decode(dtsMember!);
+  expect(!dts.includes(PROBE_SERIAL), "serial line survived sanitization");
+  expect(dts.includes('compatible = "test,fixture"'), "benign compatible line lost");
+  const control = findMember(tar, "control.bin");
+  expect(control !== null, "control.bin missing from the served archive");
+  const expectedControl = controlBytes(seed);
+  expect(
+    control!.length === expectedControl.length &&
+      control!.every((b, i) => b === expectedControl[i]),
+    "control.bin bytes differ from the fixture",
+  );
+  const stored = await sqlRows(
+    `SELECT idx, length(bytes) AS len, chunk_sha256 AS h FROM chunks ` +
+    `WHERE content_sha256 = '${sha}' ORDER BY idx`,
+  );
+  expect(stored.length === doc.archive!.chunk_count,
+    `stored ${stored.length} chunks vs metadata ${doc.archive!.chunk_count}`);
+  for (let idx = 0; idx < stored.length; idx++) {
+    const start = idx * FIXTURE_CHUNK;
+    const slice = served.subarray(start, Math.min(served.length, start + FIXTURE_CHUNK));
+    expect(Number(stored[idx].idx) === idx, `chunk index gap at ${idx}`);
+    expect(Number(stored[idx].len) === slice.length, `chunk ${idx} length disagrees with served bytes`);
+    expect(String(stored[idx].h) === sha256Hex(slice), `chunk ${idx} hash disagrees with served bytes`);
+  }
+}
+
+// The row stays unpublished and invisible, and stored chunk bytes
+// never disagree with the row's declared archive metadata.
+async function expectUnpublished(sha: string): Promise<void> {
+  const rows = await sqlRows(
+    `SELECT published, archive_chunk_sha256 AS hashes FROM submissions WHERE content_sha256 = '${sha}'`,
+  );
+  expect(rows.length === 1, "submission row missing");
+  expect(Number(rows[0].published) === 0, "failed rewrite left the row published");
+  if (rows[0].hashes !== null && rows[0].hashes !== undefined) {
+    const declared = JSON.parse(String(rows[0].hashes)) as string[];
+    const stored = await sqlRows(
+      `SELECT idx, chunk_sha256 AS h FROM chunks WHERE content_sha256 = '${sha}'`,
+    );
+    const byIdx = new Map(stored.map((r) => [Number(r.idx), String(r.h)]));
+    expect(byIdx.size === declared.length, "stored chunk set disagrees with declared metadata");
+    for (let idx = 0; idx < declared.length; idx++) {
+      expect(byIdx.get(idx) === declared[idx],
+        `stored bytes disagree with declared metadata at chunk ${idx}`);
+    }
+  }
+  expect((await fetch(`${BASE}/v1/results/${sha}`)).status === 404,
+    "unpublished row readable on the detail route");
+  expect((await fetch(`${BASE}/v1/results/${sha}/archive`)).status === 404,
+    "unpublished archive readable");
+  expect((await fetch(`${BASE}/v1/submit/${sha}`)).status === 404,
+    "unpublished row visible on the dedup probe");
+  const index = await fetch(`${BASE}/v1/results`);
+  expect(!JSON.stringify(await index.json()).includes(sha),
+    "unpublished row listed in the bulk index");
+  const jsonl = await fetch(`${BASE}/v1/dataset/latest.jsonl`);
+  expect(!(await jsonl.text()).includes(sha),
+    "unpublished row listed in the dataset");
+}
+
+scenario("sanitized_archive_publishes_complete_bytes", async () => {
+  const seed = 0x26700001;
+  const init = await initiateProbe(seed);
+  expect(init.res.status === 200, `initiate ${init.res.status} ${JSON.stringify(init.body)}`);
+  expect(JSON.stringify(init.body.pii_redacted) === '{"mac":1}',
+    `pii_redacted ${JSON.stringify(init.body.pii_redacted)}`);
+  await uploadProbeChunks(init.sha, init.archive);
+  const fin = await rawComplete(init.sha);
+  expect(fin.status === 200 && fin.body.status === "stored", JSON.stringify(fin.body));
+  expect(fin.body.archive_withheld_pii === undefined, "valid archive was withheld");
+  await expectSanitizedPublished(init.sha, seed);
+  return `${init.archive.length} bytes uploaded, sanitized archive complete`;
+});
+
+for (const failIdx of [0, 1]) {
+  scenario(`replacement_insert_failure_is_private_and_recoverable (replacement chunk ${failIdx})`, async () => {
+    const seed = 0x26700010 + failIdx;
+    const init = await initiateProbe(seed);
+    expect(init.res.status === 200, `initiate ${init.res.status} ${JSON.stringify(init.body)}`);
+    await uploadProbeChunks(init.sha, init.archive);
+    const trigger = `smoke_fail_replacement_${failIdx}`;
+    await d1(
+      `CREATE TRIGGER ${trigger} BEFORE INSERT ON chunks ` +
+      `WHEN NEW.content_sha256 = '${init.sha}' AND NEW.idx = ${failIdx} ` +
+      `BEGIN SELECT RAISE (ABORT, 'simulated replacement failure'); END;`,
+    );
+    let first: { status: number; body: Record<string, unknown> };
+    try {
+      first = await rawComplete(init.sha);
+    } finally {
+      await d1(`DROP TRIGGER IF EXISTS ${trigger}`);
+    }
+    if (first.status === 200) {
+      expect(first.body.status !== "stored" && first.body.status !== "duplicate",
+        `failed rewrite reported ${String(first.body.status)}`);
+    }
+    await expectUnpublished(init.sha);
+    const retry = await rawComplete(init.sha);
+    expect(retry.status === 200 && retry.body.status === "stored",
+      `retry ${retry.status} ${JSON.stringify(retry.body)}`);
+    expect(retry.body.archive_withheld_pii === undefined,
+      "retry withheld the archive instead of recovering it");
+    await expectSanitizedPublished(init.sha, seed);
+    return `failure at replacement chunk ${failIdx}, recovered on retry`;
+  });
+}
+
+scenario("overlapping_complete_requests_preserve_one_archive", async () => {
+  const seed = 0x26700020;
+  const init = await initiateProbe(seed);
+  expect(init.res.status === 200, `initiate ${init.res.status} ${JSON.stringify(init.body)}`);
+  await uploadProbeChunks(init.sha, init.archive);
+  const [a, b] = await Promise.all([rawComplete(init.sha), rawComplete(init.sha)]);
+  for (const r of [a, b]) {
+    expect(r.status === 200, `overlapping completion ${r.status} ${JSON.stringify(r.body)}`);
+    expect(r.body.status === "stored" || r.body.status === "duplicate",
+      `overlapping completion status ${String(r.body.status)}`);
+  }
+  const third = await rawComplete(init.sha);
+  expect(third.status === 200 && third.body.status === "duplicate",
+    `third completion ${JSON.stringify(third.body)}`);
+  const published = await sqlRows(
+    `SELECT COUNT(*) AS n FROM submissions WHERE content_sha256 = '${init.sha}' AND published = 1`,
+  );
+  expect(Number(published[0].n) === 1, "published row is not unique");
+  await expectSanitizedPublished(init.sha, seed);
+  return `overlapping statuses ${String(a.body.status)}/${String(b.body.status)}, one archive`;
+});
+
+scenario("cache_write_failure_recovers_on_duplicate_complete", async () => {
+  const seed = 0x26700030;
+  const init = await initiateProbe(seed);
+  expect(init.res.status === 200, `initiate ${init.res.status} ${JSON.stringify(init.body)}`);
+  await uploadProbeChunks(init.sha, init.archive);
+  expect((await fetch(`${BASE}/cdn-cgi/local/scheduled`)).status === 200, "cache prebuild failed");
+  await d1(
+    `CREATE TRIGGER smoke_fail_cache_dataset BEFORE INSERT ON cache_meta ` +
+    `WHEN NEW.cache_key = 'dataset' ` +
+    `BEGIN SELECT RAISE (ABORT, 'simulated cache failure'); END;`,
+  );
+  let first: { status: number; body: Record<string, unknown> };
+  try {
+    first = await rawComplete(init.sha);
+  } finally {
+    await d1(`DROP TRIGGER IF EXISTS smoke_fail_cache_dataset`);
+  }
+  expect(
+    !(first.status === 200 &&
+      (first.body.status === "stored" || first.body.status === "duplicate")),
+    `first completion reported success: ${JSON.stringify(first.body)}`,
+  );
+  // The trigger fired: the results cache was rebuilt with the new row
+  // while the aborted dataset insert kept the previous count.
+  const during = await sqlRows(
+    `SELECT (SELECT count FROM cache_meta WHERE cache_key = 'results') AS r, ` +
+    `(SELECT count FROM cache_meta WHERE cache_key = 'dataset') AS d`,
+  );
+  expect(Number(during[0].r) === Number(during[0].d) + 1,
+    `dataset cache was rebuilt despite the trigger (${JSON.stringify(during[0])})`);
+  await expectSanitizedPublished(init.sha, seed);
+  const retry = await rawComplete(init.sha);
+  expect(retry.status === 200 && retry.body.status === "duplicate",
+    `retry ${retry.status} ${JSON.stringify(retry.body)}`);
+  const index = await fetch(`${BASE}/v1/results`);
+  const idxDoc = await index.json() as { results: Array<{ content_sha256: string }> };
+  expect(idxDoc.results.filter((r) => r.content_sha256 === init.sha).length === 1,
+    "index does not list the published row exactly once");
+  const jsonl = await (await fetch(`${BASE}/v1/dataset/latest.jsonl`)).text();
+  expect(jsonl.split("\n").filter((line) => line.includes(init.sha)).length === 1,
+    "dataset does not list the published row exactly once");
+  await expectSanitizedPublished(init.sha, seed);
+  return `first completion ${first.status}, retry ${String(retry.body.status)}`;
 });
 
 scenario("/v1/schema reports the worker's schema identity", async () => {
