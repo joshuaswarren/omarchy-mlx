@@ -172,3 +172,101 @@ TEST_CASE("the batch-shared GEMV engages only where it is enabled and B <= 4") {
   CHECK_FALSE(ran(traced_kernels([&] { gemv(x4, q, false, s); }), batch4));
   CHECK_FALSE(ran(traced_kernels([&] { gemv(x5, q, true, s); }), batch4));
 }
+
+namespace {
+
+// One quantized_matmul with MLX_OMARCHY_QMV_SMALL_T set to `small_t` ("" unsets it).
+array short_pass(const array& x, const Weight& q, const char* small_t, Stream s) {
+  if (*small_t) {
+    setenv("MLX_OMARCHY_QMV_SMALL_T", small_t, 1);
+  } else {
+    unsetenv("MLX_OMARCHY_QMV_SMALL_T");
+  }
+  array out = quantized_matmul(
+      x, q.w, q.scales, q.biases, true, 64, 4, "affine", s);
+  out.eval();
+  omarchy::get_command_encoder(s).synchronize();
+  unsetenv("MLX_OMARCHY_QMV_SMALL_T");
+  return out;
+}
+
+// The single-row GEMV applied to each row of a [1, T, K] x on its own.
+array rows_one_by_one(const array& x, const Weight& q, Stream s) {
+  int t = x.shape(1);
+  std::vector<array> rows;
+  for (int r = 0; r < t; ++r) {
+    array row = slice(x, {0, r, 0}, {1, r + 1, x.shape(2)}, s);
+    rows.push_back(gemv(contiguous(row, false, s), q, false, s));
+  }
+  array out = concatenate(rows, 1, s);
+  out.eval();
+  return out;
+}
+
+} // namespace
+
+TEST_CASE("short-pass GEMV rows match the single-row kernel bit for bit") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  struct Cell {
+    int k;
+    int n;
+  };
+  for (Cell cell : {Cell{2048, 6144}, Cell{6144, 2048}, Cell{2048, 520},
+                    Cell{448, 130}}) {
+    for (int t = 2; t <= 8; ++t) {
+      CAPTURE(cell.k);
+      CAPTURE(cell.n);
+      CAPTURE(t);
+      int failing = 0;
+      for (int seed = 0; seed < kDatasets; ++seed) {
+        random::seed(2000003u * cell.k + 211u * cell.n + 31u * t + seed);
+        Weight q = make_weight(cell.n, cell.k, s);
+        array x = astype(
+            random::normal(Shape{1, t, cell.k}, float32, std::nullopt, s),
+            bfloat16, s);
+        x.eval();
+        array want = rows_one_by_one(x, q, s);
+        array got = short_pass(x, q, "8", s);
+        if (!array_equal(got, want, s).item<bool>()) {
+          ++failing;
+          int diff = sum(astype(not_equal(got, want, s), int32, s), s).item<int>();
+          std::cout << "[qmv_small_t] mismatch k=" << cell.k << " n=" << cell.n
+                    << " t=" << t << " seed=" << seed << " elements=" << diff
+                    << "\n";
+        }
+      }
+      CHECK_MESSAGE(failing == 0, failing, " of ", kDatasets,
+                    " datasets differ from the single-row kernel");
+    }
+  }
+}
+
+TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers T") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  random::seed(11);
+  Weight q = make_weight(2048, 2048, s);
+  auto x_pass = [&](int t) {
+    array x = astype(
+        random::normal(Shape{1, t, 2048}, float32, std::nullopt, s), bfloat16, s);
+    x.eval();
+    return x;
+  };
+  array x1 = x_pass(1);
+  array x6 = x_pass(6);
+  array x7 = x_pass(7);
+  const auto batch4 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
+  if (!ran(traced_kernels([&] { gemv(x1, q, false, s); }),
+           omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16)) {
+    std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
+    return;
+  }
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x6, q, "", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x6, q, "0", s); }), batch4));
+  CHECK(ran(traced_kernels([&] { short_pass(x6, q, "6", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x7, q, "6", s); }), batch4));
+  setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x6, q, "6", s); }), batch4));
+  unsetenv("MLX_OMARCHY_QMV_BATCH");
+}

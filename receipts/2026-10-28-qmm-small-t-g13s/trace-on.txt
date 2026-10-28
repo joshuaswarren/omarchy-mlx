@@ -1,0 +1,12 @@
+=== rows=1
+[rtmod] DISPATCH kernel=410 count=9216 gx=1152 gy=1 gz=1
+=== rows=2
+[rtmod] DISPATCH kernel=547 count=18432 gx=1152 gy=1 gz=1
+=== rows=4
+[rtmod] DISPATCH kernel=547 count=36864 gx=1152 gy=1 gz=1
+=== rows=6
+[rtmod] DISPATCH kernel=547 count=36864 gx=1152 gy=1 gz=1
+[rtmod] DISPATCH kernel=547 count=18432 gx=1152 gy=1 gz=1
+=== rows=7
+[rtmod] DISPATCH kernel=9 count=17920 gx=70 gy=1 gz=1
+[rtmod] DISPATCH kernel=449 count=64512 gx=288 gy=1 gz=1
