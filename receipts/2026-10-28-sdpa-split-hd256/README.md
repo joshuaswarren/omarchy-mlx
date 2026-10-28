@@ -64,6 +64,23 @@ The Qwen3-4B rows are the head-width-128 route of 2026-10-23, which no release c
 
 The route sums in float32 in a different order from the fused kernel, so the output is not bit-equal to it.
 
+## Against the packaged wheel (same session, three arms interleaved, three repetitions)
+
+P is the packaged wheel (0.32.4.dev202610050725), RA this branch's Release build with the route off, RB the same build with the route on (`logs/relcmp-*.log`). Decode tokens per second:
+
+| Cell | P | RA | RB |
+| --- | --- | --- | --- |
+| Qwen3.5-9B, 256 | 11.88, 11.94, 11.88 | 11.72, 11.72, 11.71 | 11.69, 11.73, 11.72 |
+| Qwen3.5-9B, 8192 | 4.72, 4.72, 4.72 | 4.69, 4.68, 4.69 | 10.07, 10.07, 10.08 |
+| Qwen3.8-2B, 256 | 40.45, 40.37, 40.54 | 41.43, 41.70, 41.67 | 40.74, 40.64, 40.80 |
+| Qwen3.8-2B, 8192 | 13.79, 13.77, 13.79 | 13.77, 13.77, 13.76 | 33.43, 33.53, 33.36 |
+
+At 256 tokens the 9B on this branch is 1.4 percent below the packaged wheel (it makes 23 submissions per token against 6, the board budget of 3b24ad416 and a04423e42) and the 2B is at or above it. At 8192 tokens RB is 2.13 times (9B) and 2.43 times (2B) the packaged wheel.
+
+## Head width 128 is unchanged
+
+The shaders keep the previous head-width-128 code under `#if HD == 128`. Compiled with the same glslc, pass 1 for groups 1, 2, 4 and 8 and pass 2 are byte-identical SPIR-V to the shaders before this change. The first version of this change shared the loops between the two widths and measured 7 percent slower at 8192 keys at width 128 (`logs/hd128-*.log`: 754 against 704 microseconds per call, three interleaved repetitions); that version is not the one in this branch. The width-256 SPIR-V of this branch is byte-identical to the version the device runs above used.
+
 ## Not measured
 
 The 14-inch M2 Max (a run is queued; its numbers will be added in a separate receipt). Contexts above 32768 tokens. Qwen3-4B end to end after this change (its route is unchanged here).

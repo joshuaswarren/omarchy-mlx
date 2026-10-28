@@ -92,6 +92,13 @@ void main() {
   uint nblocks = (k_len + BK - 1u) / BK;
   uint sg = gl_SubgroupID;
 
+#if HD == 128
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    s_q[r * D + t] = params.alpha * bf16_load(
+        query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
+  }
+#else
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
     for (uint d = 0u; d < DPT; ++d) {
@@ -100,6 +107,7 @@ void main() {
           query_data.values[params.lhs_offset + head * params.shape[0] + dim * params.shape[3]]);
     }
   }
+#endif
   barrier();
 
   uint key = block * BK + t;
@@ -158,6 +166,30 @@ void main() {
   uint v_stride = params.in_strides[2];
   uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
       block * BK * v_stride + t * params.in_strides[3];
+#if HD == 128
+  float o[SPLIT_R];
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    o[r] = 0.0;
+  }
+  uint key0 = 0u;
+  for (; key0 + 8u <= nk; key0 += 8u) {
+    float v[8];
+    for (uint i = 0u; i < 8u; ++i) {
+      v[i] = bf16_load(value_data.values[v_base + (key0 + i) * v_stride]);
+    }
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      for (uint i = 0u; i < 8u; ++i) {
+        o[r] += s_p[r * BK + key0 + i] * v[i];
+      }
+    }
+  }
+  for (; key0 < nk; ++key0) {
+    float v = bf16_load(value_data.values[v_base + key0 * v_stride]);
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      o[r] += s_p[r * BK + key0] * v;
+    }
+  }
+#else
   float o[SPLIT_R * DPT];
   for (uint r = 0u; r < SPLIT_R * DPT; ++r) {
     o[r] = 0.0;
@@ -185,6 +217,7 @@ void main() {
       }
     }
   }
+#endif
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
@@ -194,8 +227,12 @@ void main() {
       scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u] +
           s_sum[r * SUBGROUPS + 2u] + s_sum[r * SUBGROUPS + 3u];
     }
+#if HD == 128
+    scratch_data.values[base + 2u + t] = o[r];
+#else
     for (uint d = 0u; d < DPT; ++d) {
       scratch_data.values[base + 2u + d * 128u + t] = o[r * DPT + d];
     }
+#endif
   }
 }

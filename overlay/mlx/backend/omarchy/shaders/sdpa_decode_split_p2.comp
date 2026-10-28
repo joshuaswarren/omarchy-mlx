@@ -70,6 +70,17 @@ void main() {
       global_max = m;
     }
   }
+#if HD == 128
+  float denominator = 0.0;
+  float acc = 0.0;
+  for (uint b = 0u; b < nblocks; ++b) {
+    uint at = base + b * (D + 2u);
+    float w = exp(scratch_data.values[at] - global_max);
+    denominator += scratch_data.values[at + 1u] * w;
+    acc += scratch_data.values[at + 2u + t] * w;
+  }
+  output_data.values[params.output_offset + head * D + t] = bf16_store(acc / denominator);
+#else
   float denominator = 0.0;
   float acc[DPT];
   for (uint d = 0u; d < DPT; ++d) {
@@ -86,4 +97,5 @@ void main() {
   for (uint d = 0u; d < DPT; ++d) {
     output_data.values[params.output_offset + head * D + d * 128u + t] = bf16_store(acc[d] / denominator);
   }
+#endif
 }
