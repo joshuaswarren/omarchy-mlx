@@ -1,0 +1,15 @@
+token compare 20261028T1800Z load 0.11
+SiddhJagani/Qwen3.8-2B-mlx-4Bit arm A rc=0 PROMPT_TOKENS 419 mlx ~/t7/venv-rel/lib/pyt
+A: TOKENS 271 248068 271 248069 271 760 6092 59489 13569 11 321 19340 30592 6730 2272 836 61789 1345 338 68042 17061 888 88620 383 279 172113 13 357 73237 22651 88562 314 7948 15530 3055 279 272 19792 624 11 321 279 8598 3294 279 33619 3626 21671
+A: TEXT '\n\n<think>\n\n</think>\n\nThe town wakes slowly, and fishing boats rock against their ropes while gulls argue over scraps on the quay. A baker carries trays of warm bread along the cobbles, and the clock above the customs house strikes'
+SiddhJagani/Qwen3.8-2B-mlx-4Bit arm B rc=0 PROMPT_TOKENS 419 mlx ~/t7/venv-rel/lib/pyt
+B: TOKENS 271 248068 271 248069 271 760 6092 59489 13569 11 321 19340 30592 6730 2272 836 61789 1345 338 68042 17061 888 88620 383 279 172113 13 357 73237 22651 88562 314 7948 15530 3055 279 272 19792 624 11 321 279 8598 3294 279 33619 3626 21671
+B: TEXT '\n\n<think>\n\n</think>\n\nThe town wakes slowly, and fishing boats rock against their ropes while gulls argue over scraps on the quay. A baker carries trays of warm bread along the cobbles, and the clock above the customs house strikes'
+AGREE 48 of 48 token ids; first difference at index None
+mlx-community/Qwen3.5-9B-4bit arm A rc=0 PROMPT_TOKENS 419 mlx ~/t7/venv-rel/lib/pyt
+A: TOKENS 271 248068 198 90700 8340 25 271 16 13 220 2972 2014 53983 279 5952 64700 198 262 348 256 5396 1414 25 357 13901 21988 264 72103 6092 46040 685 13 561 1414 369 11173 5081 2942 318 91020 1040 264 2880 2195 5352 1412 466 264
+A: TEXT '\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input text: A paragraph describing a harbour town waking up. The text is repeated multiple times (looks like a copy-paste error or a'
+mlx-community/Qwen3.5-9B-4bit arm B rc=0 PROMPT_TOKENS 419 mlx ~/t7/venv-rel/lib/pyt
+B: TOKENS 271 248068 198 90700 8340 25 271 16 13 220 2972 2014 53983 279 5952 64700 198 262 348 256 5396 1414 25 357 13901 21988 264 72103 6092 46040 685 13 561 1414 369 11173 5081 2942 318 91020 1040 264 2880 2195 5352 1412 466 264
+B: TEXT '\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input text: A paragraph describing a harbour town waking up. The text is repeated multiple times (looks like a copy-paste error or a'
+AGREE 48 of 48 token ids; first difference at index None
