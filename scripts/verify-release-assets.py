@@ -463,9 +463,17 @@ def main():
         print(f"\n== platform coverage override: required = "
               f"{', '.join(required)} (recorded in the invocation)")
     alias_problem = alias_failure(is_diag, alias, wheels)
+    if alias is not None and sums.get(ALIAS_WHEEL):
+        listed = sums[ALIAS_WHEEL]
+        actual = hashlib.sha256(alias.read_bytes()).hexdigest()
+        if listed != actual:
+            all_failures.append(
+                f"{ALIAS_WHEEL}: SHA256SUMS lists {listed} but the uploaded "
+                f"bytes hash to {actual}; the installer's checksum step "
+                "would fail")
     if alias_problem:
         all_failures.append(alias_problem)
-    elif alias is not None:
+    elif alias is not None and not is_diag:
         print(f"\n== {ALIAS_WHEEL}: byte-identical to the linux_aarch64 wheel")
     missing = [p for p in required if p not in present]
     if missing:
