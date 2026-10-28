@@ -331,6 +331,11 @@
 #include "sdpa_decode_split_p1v_g4.h"
 #include "sdpa_decode_split_p1v_g8.h"
 #include "sdpa_decode_split_p2.h"
+#include "sdpa_decode_split_p1_hd256_g1.h"
+#include "sdpa_decode_split_p1_hd256_g2.h"
+#include "sdpa_decode_split_p1_hd256_g4.h"
+#include "sdpa_decode_split_p1_hd256_g8.h"
+#include "sdpa_decode_split_p2_hd256.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -1796,6 +1801,16 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p1v_g8, sdpa_decode_split_p1v_g8_size};
     case ComputeKernel::SdpaDecodeSplitP2BF16Hd128:
       return {sdpa_decode_split_p2, sdpa_decode_split_p2_size};
+    case ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256:
+      return {sdpa_decode_split_p1_hd256_g1, sdpa_decode_split_p1_hd256_g1_size};
+    case ComputeKernel::SdpaDecodeSplitP1R2BF16Hd256:
+      return {sdpa_decode_split_p1_hd256_g2, sdpa_decode_split_p1_hd256_g2_size};
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256:
+      return {sdpa_decode_split_p1_hd256_g4, sdpa_decode_split_p1_hd256_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1R8BF16Hd256:
+      return {sdpa_decode_split_p1_hd256_g8, sdpa_decode_split_p1_hd256_g8_size};
+    case ComputeKernel::SdpaDecodeSplitP2BF16Hd256:
+      return {sdpa_decode_split_p2_hd256, sdpa_decode_split_p2_hd256_size};
     case ComputeKernel::PartitionSmallKF32:
       return {partition_smallk_f32, partition_smallk_f32_size};
     case ComputeKernel::PartitionSmallKF16:

@@ -1,7 +1,7 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 //
-// Split-K pass 1 of the bf16 single-query decode SDPA, head width 128. One workgroup per (key-value head, block of 128 keys)
+// Split-K pass 1 of the bf16 single-query decode SDPA, head width 128 (default) or 256 (-DHD=256). One workgroup per (key-value head, block of 128 keys)
 // computes, for the SPLIT_R query heads that share the key-value head, the block's scores, the block softmax numerators and the
 // block-weighted value sum, and stores (block max, block exp sum, 128 weighted-value floats) per (query head, block) for pass 2
 // (sdpa_decode_split_p2.comp). The fused kernel (sdpa_decode_native.comp, BF16_IO arm) keeps one 1024-thread workgroup per query
@@ -23,6 +23,12 @@
 
 #ifndef SPLIT_R
 #define SPLIT_R 4
+#endif
+
+// Head width: 128 (default) or 256 (-DHD=256, the Qwen3.5/3.8 full-attention layers). Each of the 128 threads owns D / 128 output
+// dimensions in the value phase and one key row in the score phase.
+#ifndef HD
+#define HD 128
 #endif
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
@@ -64,7 +70,8 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-const uint D = 128u;
+const uint D = uint(HD);
+const uint DPT = D / 128u;
 const uint BK = 128u;
 const uint SUBGROUPS = 4u;
 
@@ -85,11 +92,22 @@ void main() {
   uint nblocks = (k_len + BK - 1u) / BK;
   uint sg = gl_SubgroupID;
 
+#if HD == 128
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
     s_q[r * D + t] = params.alpha * bf16_load(
         query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
   }
+#else
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    for (uint d = 0u; d < DPT; ++d) {
+      uint dim = d * 128u + t;
+      s_q[r * D + dim] = params.alpha * bf16_load(
+          query_data.values[params.lhs_offset + head * params.shape[0] + dim * params.shape[3]]);
+    }
+  }
+#endif
   barrier();
 
   uint key = block * BK + t;
@@ -148,6 +166,7 @@ void main() {
   uint v_stride = params.in_strides[2];
   uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
       block * BK * v_stride + t * params.in_strides[3];
+#if HD == 128
   float o[SPLIT_R];
   for (uint r = 0u; r < SPLIT_R; ++r) {
     o[r] = 0.0;
@@ -170,6 +189,35 @@ void main() {
       o[r] += s_p[r * BK + key0] * v;
     }
   }
+#else
+  float o[SPLIT_R * DPT];
+  for (uint r = 0u; r < SPLIT_R * DPT; ++r) {
+    o[r] = 0.0;
+  }
+  uint dim_step = 128u * params.in_strides[3];
+  uint key0 = 0u;
+  for (; key0 + 8u <= nk; key0 += 8u) {
+    for (uint d = 0u; d < DPT; ++d) {
+      float v[8];
+      for (uint i = 0u; i < 8u; ++i) {
+        v[i] = bf16_load(value_data.values[v_base + d * dim_step + (key0 + i) * v_stride]);
+      }
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        for (uint i = 0u; i < 8u; ++i) {
+          o[r * DPT + d] += s_p[r * BK + key0 + i] * v[i];
+        }
+      }
+    }
+  }
+  for (; key0 < nk; ++key0) {
+    for (uint d = 0u; d < DPT; ++d) {
+      float v = bf16_load(value_data.values[v_base + d * dim_step + key0 * v_stride]);
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        o[r * DPT + d] += s_p[r * BK + key0] * v;
+      }
+    }
+  }
+#endif
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
@@ -179,6 +227,12 @@ void main() {
       scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u] +
           s_sum[r * SUBGROUPS + 2u] + s_sum[r * SUBGROUPS + 3u];
     }
+#if HD == 128
     scratch_data.values[base + 2u + t] = o[r];
+#else
+    for (uint d = 0u; d < DPT; ++d) {
+      scratch_data.values[base + 2u + d * 128u + t] = o[r * DPT + d];
+    }
+#endif
   }
 }

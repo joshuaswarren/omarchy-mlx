@@ -1,7 +1,7 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 //
-// Split-K pass 2 of the bf16 single-query decode SDPA, head width 128 (see sdpa_decode_split_p1.comp). One workgroup per query
+// Split-K pass 2 of the bf16 single-query decode SDPA, head width 128 (default) or 256 (-DHD=256; see sdpa_decode_split_p1.comp). One workgroup per query
 // head, one thread per output element: folds the per-block (max, exp sum, weighted values) with the global max, divides by the
 // global exp sum and stores the bf16 result (round to nearest even, NaN kept as in cast.comp).
 
@@ -43,7 +43,11 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-const uint D = 128u;
+#ifndef HD
+#define HD 128
+#endif
+const uint D = uint(HD);
+const uint DPT = D / 128u;
 const uint BK = 128u;
 
 uint16_t bf16_store(float value) {
@@ -66,6 +70,7 @@ void main() {
       global_max = m;
     }
   }
+#if HD == 128
   float denominator = 0.0;
   float acc = 0.0;
   for (uint b = 0u; b < nblocks; ++b) {
@@ -75,4 +80,22 @@ void main() {
     acc += scratch_data.values[at + 2u + t] * w;
   }
   output_data.values[params.output_offset + head * D + t] = bf16_store(acc / denominator);
+#else
+  float denominator = 0.0;
+  float acc[DPT];
+  for (uint d = 0u; d < DPT; ++d) {
+    acc[d] = 0.0;
+  }
+  for (uint b = 0u; b < nblocks; ++b) {
+    uint at = base + b * (D + 2u);
+    float w = exp(scratch_data.values[at] - global_max);
+    denominator += scratch_data.values[at + 1u] * w;
+    for (uint d = 0u; d < DPT; ++d) {
+      acc[d] += scratch_data.values[at + 2u + d * 128u + t] * w;
+    }
+  }
+  for (uint d = 0u; d < DPT; ++d) {
+    output_data.values[params.output_offset + head * D + d * 128u + t] = bf16_store(acc[d] / denominator);
+  }
+#endif
 }

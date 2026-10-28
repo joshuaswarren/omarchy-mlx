@@ -1,0 +1,15 @@
+NLL check 20261028T1659Z load 0.49
+SiddhJagani/Qwen3.8-2B-mlx-4Bit arm A rc=0
+NLL_SETUP SiddhJagani/Qwen3.8-2B-mlx-4Bit prompt 3000 steps 400 mlx ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so SPLIT 0
+NLL 3.093787 nats/token over 400 steps, top-1 agreement with the text 187/400
+SiddhJagani/Qwen3.8-2B-mlx-4Bit arm B rc=0
+NLL_SETUP SiddhJagani/Qwen3.8-2B-mlx-4Bit prompt 3000 steps 400 mlx ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so SPLIT None
+NLL 3.092004 nats/token over 400 steps, top-1 agreement with the text 190/400
+DELTA B minus A: mean -0.001784 nats/token over 400 steps, largest per-step |delta| 0.1961
+mlx-community/Qwen3.5-9B-4bit arm A rc=0
+NLL_SETUP mlx-community/Qwen3.5-9B-4bit prompt 3000 steps 400 mlx ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so SPLIT 0
+NLL 2.666244 nats/token over 400 steps, top-1 agreement with the text 195/400
+mlx-community/Qwen3.5-9B-4bit arm B rc=0
+NLL_SETUP mlx-community/Qwen3.5-9B-4bit prompt 3000 steps 400 mlx ~/t7/venv-main/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so SPLIT None
+NLL 2.665796 nats/token over 400 steps, top-1 agreement with the text 195/400
+DELTA B minus A: mean -0.000447 nats/token over 400 steps, largest per-step |delta| 0.1449
