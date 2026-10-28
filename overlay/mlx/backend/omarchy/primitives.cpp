@@ -3998,18 +3998,20 @@ static int decode_path_override(const char* name) {
 }
 
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
-// live): the largest pass length T (2..8) whose [1, T, K] bf16 x runs as
-// blocks of the batch-shared decode GEMV instead of the coopmat prefill tile.
-// Unset, empty or 0 keeps the shipped route. Each row is bit-identical to the
-// single-row GEMV, not to the coopmat chain, so the route is opt-in until a
-// numerics decision (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
+// live): the largest pass length T (2..4) whose [1, T, K] bf16 x runs as
+// one batch-shared decode GEMV instead of the coopmat prefill tile. The cap
+// is 4 because above it a second GEMV block costs more than the tile on G13G
+// (PR #296). Unset, empty or 0 keeps the shipped route. Each row is
+// bit-identical to the single-row GEMV, not to the coopmat chain, so the
+// route is opt-in until a numerics decision
+// (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
 static int qmv_small_t_max_rows() {
   const char* v = std::getenv("MLX_OMARCHY_QMV_SMALL_T");
   if (v == nullptr || *v == '\0') {
     return 0;
   }
   int rows = std::atoi(v);
-  return rows >= 2 ? std::min(rows, 8) : 0;
+  return rows >= 2 ? std::min(rows, 4) : 0;
 }
 
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
@@ -8503,7 +8505,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   // Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T, default off): the rows of a
   // batch-1 [1, T, K] x sit at the same strides as a [T, 1, K] decode batch,
-  // so the pass runs as ceil(T / 4) batch-shared GEMV blocks. Each row keeps
+  // so the pass runs as one batch-shared GEMV of T <= 4 rows. Each row keeps
   // the single-row chain bit for bit (tests/omarchy/test_qmv_batch.cpp).
   if (small_t_candidate && batch == 1u && transpose_ &&
       params.matrix_n <= omarchy::kMaxComputeGroupCountX * kGemvColumnsPerGroup) {
@@ -8521,23 +8523,16 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      constexpr uint32_t kBlockRows = 4u;
-      for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
-        uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
-        omarchy::ComputeParams block = params;
-        block.count = rows * params.matrix_n;
-        block.matrix_m = 1u;
-        block.shape[0] = rows;
-        block.lhs_offset = params.lhs_offset + row * params.matrix_k;
-        block.output_offset = params.output_offset + row * params.matrix_n;
-        encoder.dispatch_compute(
-            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
-            bindings,
-            block,
-            n_groups_qmm_vec,
-            1u,
-            1u);
-      }
+      omarchy::ComputeParams pass = params;
+      pass.matrix_m = 1u;
+      pass.shape[0] = params.matrix_m;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+          bindings,
+          pass,
+          n_groups_qmm_vec,
+          1u,
+          1u);
       return;
     }
   }

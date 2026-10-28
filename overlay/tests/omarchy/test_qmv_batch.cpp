@@ -214,7 +214,7 @@ TEST_CASE("short-pass GEMV rows match the single-row kernel bit for bit") {
   };
   for (Cell cell : {Cell{2048, 6144}, Cell{6144, 2048}, Cell{2048, 520},
                     Cell{448, 130}}) {
-    for (int t = 2; t <= 8; ++t) {
+    for (int t = 2; t <= 4; ++t) {
       CAPTURE(cell.k);
       CAPTURE(cell.n);
       CAPTURE(t);
@@ -227,7 +227,7 @@ TEST_CASE("short-pass GEMV rows match the single-row kernel bit for bit") {
             bfloat16, s);
         x.eval();
         array want = rows_one_by_one(x, q, s);
-        array got = short_pass(x, q, "8", s);
+        array got = short_pass(x, q, "4", s);
         if (!array_equal(got, want, s).item<bool>()) {
           ++failing;
           int diff = sum(astype(not_equal(got, want, s), int32, s), s).item<int>();
@@ -254,19 +254,23 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
     return x;
   };
   array x1 = x_pass(1);
-  array x6 = x_pass(6);
-  array x7 = x_pass(7);
+  array x3 = x_pass(3);
+  array x4 = x_pass(4);
+  array x5 = x_pass(5);
   const auto batch4 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
   if (!ran(traced_kernels([&] { gemv(x1, q, false, s); }),
            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16)) {
     std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
     return;
   }
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x6, q, "", s); }), batch4));
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x6, q, "0", s); }), batch4));
-  CHECK(ran(traced_kernels([&] { short_pass(x6, q, "6", s); }), batch4));
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x7, q, "6", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "0", s); }), batch4));
+  CHECK(ran(traced_kernels([&] { short_pass(x3, q, "3", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "3", s); }), batch4));
+  CHECK(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
+  // Values above 4 count as 4.
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x5, q, "8", s); }), batch4));
   setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x6, q, "6", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
   unsetenv("MLX_OMARCHY_QMV_BATCH");
 }

@@ -36,7 +36,7 @@ Route (`trace-off.txt`, `trace-on.txt`, kernel ids from `ComputeKernel`):
 | 6 | 9, 449 | 547 four rows, 547 two rows |
 | 7 | 9, 449 | 9, 449 (above T max) |
 
-Tests: `omarchy_qmv_batch_tests` on this device, 4 test cases and 48 assertions pass, 0 skipped (`doctest-qmv-batch.txt`). The two new cases check every row against the single-row kernel bit for bit at T 2 to 8 over 24 datasets per cell, and the trace-proven engagement rule.
+Tests: `omarchy_qmv_batch_tests` on this device, 4 test cases and 34 assertions pass, 0 skipped (`doctest-qmv-batch.txt`, rerun after the cap below). The two new cases check every row against the single-row kernel bit for bit at T 2 to 4 over 24 datasets per cell, and the trace-proven engagement rule.
 
 Check 1 (`perop-error.json`): the candidate mean error is no worse in 40 of 42 cells. In the other two (K 448, N 130, T 3 and T 7) it is higher by 1.5e-12 and 1.3e-12 on a mean of 1.7e-3, with the same maximum. The median candidate/deployed ratio over all cells is 0.99999997.
 
@@ -54,6 +54,10 @@ Checks 2 and 3 (`gate.txt`, `gate-summary.json`), 5,120 positions:
 - Check 3 passes: PPL deviation 0.000307 (candidate) against 0.000434 (baseline); baseline noise 0, since the five runs of each arm are identical.
 - Harness check (`validate.json`, prompts 0 and 1): S=1 PPL 1.42504, one-pass PPL 1.42546, relative difference 2.9e-4.
 - Old against new (`compare_tf9.txt`, information only): 5,094 of 5,120 top-1 the same (99.49%); 26 differences, largest gap 2.0 bf16 ULP, mean 0.73.
+
+## Revision: cap at 4
+
+The G13G A/B on PR #296 found the route faster at 2 to 4 rows and slower from 5, where a second GEMV block costs more than the coopmat tile. The flag now accepts 2 to 4 (larger values count as 4), and a pass runs as one Batch4 dispatch. The gate above still covers the capped route: every pass in the 4-token chunk runs is at most 4 rows, so those runs dispatch the same kernel with the same operands under the cap. A 6-row pass now takes the coopmat tile, so the 6-token chunk runs no longer exercise the route; they are kept as measured. The same holds for the T 5 to 8 cells of check 1.
 
 ## Files
 
