@@ -1,6 +1,8 @@
-# 2026-10-28: GATES.md G1 to G4 re-run at the v0.7.34 tag commit
+# 2026-10-28: GATES.md G1 to G4 re-run at origin/main 5e40ecf9
 
-Tree: detached at `5e40ecf953e8b907dcae1ce6caadce6ad62b0e0f` (origin/main, the v0.7.34 tag commit), no tracked changes.
+`GATES.md` is a local ledger (it is in `.gitignore`), so a reader of the repo cannot open the evidence lines this receipt cites.
+
+Tree: detached at `5e40ecf953e8b907dcae1ce6caadce6ad62b0e0f`, the origin/main commit chosen for v0.7.34 (the tag did not exist at the time of the run), no tracked changes.
 Command: `gate-check.mjs --approve --reverify --jobs 1 --timeout 3300 GATES.md`, 13 minutes, on llvmpipe (software Vulkan).
 A first `--approve` run without `--reverify` returned ALL MET without executing anything, because the committed evidence still matched the unchanged CHECK definitions. That run is not counted.
 
@@ -11,5 +13,5 @@ A first `--approve` run without `--reverify` returned ALL MET without executing 
 | G3 Omarchy-disabled build remains valid | PASS | 0 | eadd0d7cb1170e492963def90aa8be1b5214d66b34feddc59e2aa6248f525192 | 4333 |
 | G4 thin boundary contains no prepared MLX source | PASS | 0 | 5b333bd9e24b4dd8f4cd9d267821b12e1ffb0c7723ab6bfc33f3bc17da41f36b | 26 |
 
-Final line of the checker: `GATES.md: 5 gates, ALL MET (5 met, reran: 4)`.
+The checker's final line was `GATES.md: 5 gates, ALL MET (5 met, reran: 4)`. The fifth gate, G5 (adversarial review), is a recorded review and was not re-run.
 G1 and G2 show the tests pass on llvmpipe, not on an Apple GPU.
