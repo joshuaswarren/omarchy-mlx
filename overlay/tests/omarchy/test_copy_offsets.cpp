@@ -1483,6 +1483,15 @@ TEST_CASE("bool source cast writes every element past the dispatch clamp") {
   Stream s = gpu_stream();
   const int64_t count = 1LL << 26;
   const int64_t first_bad = 65535LL * 256 * 4;
+  // The compared array and the cast output are float32 arrays of `count`
+  // elements, so each binding is count * 4 bytes. A device whose
+  // maxStorageBufferRange cannot host one binding cannot run this case.
+  const size_t limit = std::get<size_t>(
+      gpu::device_info(0).at("max_storage_buffer_range"));
+  if (limit < static_cast<size_t>(count) * sizeof(float)) {
+    skip("device maxStorageBufferRange cannot host this test's arrays.");
+    return;
+  }
 
   array x = arange(0.0, static_cast<double>(count), 1.0, float32, s);
   array cond = greater(x, array(static_cast<double>(count) / 2.0, float32), s);
