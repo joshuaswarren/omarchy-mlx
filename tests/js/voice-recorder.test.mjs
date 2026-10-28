@@ -124,6 +124,150 @@ const silent = () => new Float32Array(128);
   await quiet.stop();
 }
 
+// ---------------------------------------------------------------------------
+// Startup failure and microphone release (issue #266).
+// ---------------------------------------------------------------------------
+// Fakes that count resource lifetimes: every track stop() and context close()
+// is recorded, and the track keeps the real registered "ended" listener so a
+// test can fire device loss the way the browser does. restore() hands the
+// shared stubs above back so the earlier scenarios stay untouched.
+function micWorld({ gum, contextError, workletError } = {}) {
+  const counts = { gumCalls: 0, tracksStopped: 0, contextsClosed: 0 };
+  let ended = null;
+  const track = {
+    addEventListener(type, fn) { if (type === "ended") ended = fn; },
+    stop() { counts.tracksStopped++; },
+  };
+  const world = {
+    counts,
+    stream: { getAudioTracks: () => [track], getTracks: () => [track] },
+    fireDeviceLost: () => ended(),
+  };
+  const savedGum = navigator.mediaDevices.getUserMedia;
+  const SavedContext = globalThis.AudioContext;
+  navigator.mediaDevices.getUserMedia = gum ?? (async () => {
+    counts.gumCalls++;
+    return world.stream;
+  });
+  globalThis.AudioContext = class {
+    constructor() {
+      if (contextError) throw contextError;
+      this.sampleRate = 48000;
+      this.currentTime = 0;
+      this.audioWorklet = { addModule: async () => { if (workletError) throw workletError; } };
+    }
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    close() { counts.contextsClosed++; return new Promise((r) => setTimeout(r, 5)); }
+  };
+  world.restore = () => {
+    navigator.mediaDevices.getUserMedia = savedGum;
+    globalThis.AudioContext = SavedContext;
+  };
+  return world;
+}
+
+// getUserMedia rejecting must surface the named browser error, leave the
+// recorder idle, and never reach the upload callback (nothing was acquired).
+{
+  const upload = [];
+  const world = micWorld({ gum: async () => {
+    throw Object.assign(new Error("denied"), { name: "NotAllowedError" });
+  } });
+  try {
+    const recorder = new Recorder({ onStop: (s) => upload.push(s) });
+    await assert.rejects(recorder.start(), /Microphone permission denied/);
+    assert.equal(recorder.state, "idle");
+    assert.equal(upload.length, 0, "no upload callback after permission denial");
+    navigator.mediaDevices.getUserMedia = async () => {
+      throw Object.assign(new Error("gone"), { name: "NotFoundError" });
+    };
+    await assert.rejects(recorder.start(), /No microphone found/);
+    assert.equal(recorder.state, "idle");
+    assert.equal(upload.length, 0);
+  } finally { world.restore(); }
+}
+
+// AudioContext construction failing after the mic was acquired must release
+// the stream, and the recorder must start cleanly afterwards.
+{
+  const upload = [];
+  const world = micWorld({ contextError: new Error("no audio host") });
+  try {
+    const recorder = new Recorder({ onStop: (s) => upload.push(s) });
+    await assert.rejects(recorder.start(), /no audio host/);
+    assert.equal(recorder.state, "idle");
+    assert.equal(world.counts.tracksStopped, 1, "acquired stream stopped on context failure");
+    assert.equal(upload.length, 0);
+    world.restore();
+    assert.equal(await recorder.start(), true, "recorder starts again after the failure");
+    await recorder.stop();
+    assert.equal(upload.length, 1);
+  } finally { world.restore(); }
+}
+
+// audioWorklet.addModule failing after the mic was acquired must stop the
+// track and close the context; a later start still works.
+{
+  const world = micWorld({ workletError: new Error("worklet module rejected") });
+  try {
+    const recorder = new Recorder({ onStop: () => {} });
+    await assert.rejects(recorder.start(), /worklet module rejected/);
+    assert.equal(recorder.state, "idle");
+    assert.equal(world.counts.tracksStopped, 1, "acquired track stopped on worklet failure");
+    assert.equal(world.counts.contextsClosed, 1, "created context closed on worklet failure");
+    world.restore();
+    assert.equal(await recorder.start(), true, "recorder starts again after the failure");
+    await recorder.stop();
+  } finally { world.restore(); }
+}
+
+// A second start while acquisition is pending is refused (one capture at
+// most), and a cancel during the pending acquisition releases the mic when
+// it finally arrives instead of going live.
+{
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const world = micWorld({ gum: () => {
+    world.counts.gumCalls++;
+    return gate.then(() => world.stream);
+  } });
+  try {
+    const recorder = new Recorder({ onStop: () => {} });
+    const pending = recorder.start();
+    assert.equal(await recorder.start(), false, "second start refused while acquiring");
+    assert.equal(world.counts.gumCalls, 1, "at most one capture is acquired");
+    await recorder.cancel();
+    release();
+    assert.equal(await pending, false, "cancelled acquisition never records");
+    assert.equal(recorder.state, "idle");
+    assert.equal(world.counts.tracksStopped, 1, "late-arriving stream released after cancel");
+    assert.equal(world.counts.contextsClosed, 1);
+  } finally { world.restore(); }
+}
+
+// Device loss mid-recording: firing the track's registered "ended" notifies
+// onDeviceLost exactly once, releases the resources, and skips the upload.
+{
+  const upload = [];
+  const lost = [];
+  const world = micWorld();
+  try {
+    const recorder = new Recorder({
+      onStop: (s) => upload.push(s),
+      onDeviceLost: (e) => lost.push(e),
+    });
+    assert.equal(await recorder.start(), true);
+    world.fireDeviceLost();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(lost.length, 1, "one device-loss notification");
+    assert.equal(lost[0].reason, "device");
+    assert.equal(upload.length, 0, "no transcription upload on device loss");
+    assert.equal(recorder.state, "idle");
+    assert.equal(world.counts.tracksStopped, 1, "track stopped after device loss");
+    assert.equal(world.counts.contextsClosed, 1, "context closed after device loss");
+  } finally { world.restore(); }
+}
+
 console.log("voice-recorder hands-free checks passed");
 
 console.log("voice recorder js tests passed");

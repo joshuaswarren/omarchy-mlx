@@ -88,6 +88,8 @@ export class Recorder {
     this._maxSamples = 0;
     this._stopReason = null;       // 'user' | 'limit' | 'device' | 'silence' | null
     this._hf = null;               // hands-free config from setHandsFree()
+    this._starting = false;        // a start() sits between the guard and the recording state
+    this._cancelPending = false;   // cancel() saw _starting and wants the mic dropped
   }
 
   // Wake-word hands-free mode: stop on the first silence gap after speech
@@ -97,7 +99,24 @@ export class Recorder {
   }
 
   async start() {
-    if (this.state !== "idle") return false;
+    // A second start during the awaits below (state stays "idle" until the
+    // very end) must be refused, not double-acquire the microphone.
+    if (this.state !== "idle" || this._starting) return false;
+    this._starting = true;
+    try {
+      return await this._startup();
+    } catch (err) {
+      // A failure after getUserMedia would leave the microphone and audio
+      // context live: release whatever was acquired, then rethrow.
+      this._cancelPending = false;
+      await this._cleanup();
+      throw err;
+    } finally {
+      this._starting = false;
+    }
+  }
+
+  async _startup() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
       throw new Error("Microphone API unavailable in this browser");
     if (!window.AudioWorkletNode)
@@ -122,10 +141,16 @@ export class Recorder {
         throw new Error("The microphone is in use by another application.");
       throw err;
     }
+    // Track each resource as it comes into existence so a later startup
+    // failure (or a cancel during startup) can release what was acquired.
+    this._stream = stream;
     const ctx = new AudioContext();
+    this._ctx = ctx;
     await ctx.audioWorklet.addModule(new URL("./worklet/capture-worklet.js", import.meta.url));
     const source = ctx.createMediaStreamSource(stream);
+    this._source = source;
     const node = new AudioWorkletNode(ctx, "mlx-capture");
+    this._node = node;
     node.port.onmessage = (event) => {
       if (this.state !== "recording") return;
       const frame = event.data;
@@ -173,10 +198,13 @@ export class Recorder {
         this.stop().catch(() => {});
       });
     }
-    this._ctx = ctx;
-    this._source = source;
-    this._node = node;
-    this._stream = stream;
+    if (this._cancelPending) {
+      // cancel() arrived while acquisition was pending: release the mic
+      // instead of going into recording.
+      this._cancelPending = false;
+      await this._cleanup();
+      return false;
+    }
     this._samples = [];
     this._maxSamples = 0;
     this._warned = false;
@@ -238,7 +266,12 @@ export class Recorder {
   }
 
   async cancel() {
-    if (this.state !== "recording") return;
+    if (this.state !== "recording") {
+      // Cancelled during a still-pending start(): remember it so the
+      // pending start releases the mic instead of recording.
+      if (this._starting) this._cancelPending = true;
+      return;
+    }
     this.state = "stopping";
     this._hf = null;
     if (this._tickHandle) { clearInterval(this._tickHandle); this._tickHandle = null; }
