@@ -455,6 +455,11 @@ omarchy_shader(sdpa_decode_split_p1v_g2 shaders/sdpa_decode_split_p1v.comp -DSPL
 omarchy_shader(sdpa_decode_split_p1v_g4 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4)
 omarchy_shader(sdpa_decode_split_p1v_g8 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=8)
 omarchy_shader(sdpa_decode_split_p2 shaders/sdpa_decode_split_p2.comp)
+omarchy_shader(sdpa_decode_split_p1_hd256_g1 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=1 -DHD=256)
+omarchy_shader(sdpa_decode_split_p1_hd256_g2 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=2 -DHD=256)
+omarchy_shader(sdpa_decode_split_p1_hd256_g4 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=4 -DHD=256)
+omarchy_shader(sdpa_decode_split_p1_hd256_g8 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=8 -DHD=256)
+omarchy_shader(sdpa_decode_split_p2_hd256 shaders/sdpa_decode_split_p2.comp -DHD=256)
 # Attn128: one-dispatch small-k wide-row value Partition (the mx.topk route).
 omarchy_shader(partition_smallk_f32 shaders/partition_smallk.comp)
 omarchy_shader(partition_smallk_f16 shaders/partition_smallk.comp -DF16_IO=1)

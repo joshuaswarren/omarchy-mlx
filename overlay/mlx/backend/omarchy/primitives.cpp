@@ -15739,7 +15739,7 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
-  // Split-K decode route (bf16, head width 128, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
+  // Split-K decode route (bf16, head width 128 or 256, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
   // fused kernel above is one 1024-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
   // blocks and reads each K and V row once per group. Float32 arithmetic in a different order, so the result is not bit-equal to the
@@ -15760,7 +15760,7 @@ void ScaledDotProductAttention::eval_gpu(
         (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
         q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
         inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && q_len == 1 &&
-        head_dim == 128 && v_dim == 128 && k_len > 0 && 1048577 > k_len &&
+        (head_dim == 128 || head_dim == 256) && v_dim == head_dim && k_len > 0 && 1048577 > k_len &&
         (split_group == 1u || split_group == 2u || split_group == 4u || split_group == 8u) &&
         q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
         k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 && v.strides()[1] % 2 == 0 && v.strides()[2] % 2 == 0) {
@@ -15785,7 +15785,8 @@ void ScaledDotProductAttention::eval_gpu(
         split_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
         split_params.in_strides[3] = checked_u32(v.strides()[3], tag, out);
         const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + 127u) / 128u;
-        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * 130u;
+        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * static_cast<uint64_t>(head_dim + 2);
+        const bool split_wide = head_dim == 256;
         array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
         scratch.set_data(allocate_omarchy(scratch.nbytes()));
         encoder.add_temporary(scratch);
@@ -15794,9 +15795,14 @@ void ScaledDotProductAttention::eval_gpu(
         // unset or empty follows omarchy::sdpa_split_pv_default. Needs V element offset, head stride and key stride multiples of 4.
         const int pv_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV");
         const bool pv_aligned = split_params.aux_offset % 4u == 0u && v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0;
-        const bool pv = pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
+        const bool pv = !split_wide && pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
-        if (split_group == 1u) {
+        if (split_wide) {
+          split_p1 = split_group == 1u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256
+              : split_group == 2u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd256
+              : split_group == 8u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd256
+                                  : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+        } else if (split_group == 1u) {
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;
         } else if (split_group == 2u) {
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR2BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128;
@@ -15806,7 +15812,8 @@ void ScaledDotProductAttention::eval_gpu(
         encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
         encoder.dispatch_compute(
-            omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128, split_pass2, split_params, split_params.matrix_m);
+            split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128,
+            split_pass2, split_params, split_params.matrix_m);
         return;
       }
     }

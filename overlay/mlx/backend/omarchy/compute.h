@@ -1066,6 +1066,12 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1VR4BF16Hd128,
   SdpaDecodeSplitP1VR8BF16Hd128,
   SdpaDecodeSplitP2BF16Hd128,
+  // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
+  SdpaDecodeSplitP1R1BF16Hd256,
+  SdpaDecodeSplitP1R2BF16Hd256,
+  SdpaDecodeSplitP1R4BF16Hd256,
+  SdpaDecodeSplitP1R8BF16Hd256,
+  SdpaDecodeSplitP2BF16Hd256,
   Count,
 };
 

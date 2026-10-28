@@ -162,8 +162,7 @@ Errors error_against(const std::vector<float>& out, const std::vector<double>& r
 
 // One decode shape: heads, kv heads, cache keys, capacity of the cache buffer, first key of the view. With one_hot the scores are uniform (K = 0)
 // and the values are one-hot rows: output d is the share of keys whose index modulo the width is d, so a dropped or doubled key moves it.
-void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start, float amplitude, bool one_hot = false) {
-  const int width = 128;
+void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start, float amplitude, bool one_hot = false, int width = 128) {
   Stream stream = gpu_stream();
   Stored q = make_bf16(pattern(static_cast<size_t>(heads) * width, 11, amplitude), Shape{1, heads, 1, width}, stream);
   std::vector<float> k_host = pattern(static_cast<size_t>(kv_heads) * capacity * width, 23, amplitude);
@@ -240,6 +239,34 @@ TEST_CASE("split-K decode SDPA: strided cache views") {
   check_shape(32, 8, 500, 640, 0, 1.0f);
   check_shape(32, 8, 333, 640, 24, 1.0f);
   check_shape(32, 8, 130, 640, 5, 1.0f);
+}
+
+TEST_CASE("split-K decode SDPA: head width 256 (the Qwen3.5 and Qwen3.8 full-attention layers), groups 1, 2, 4 and 8") {
+  if (!compute_available()) {
+    return;
+  }
+  for (int keys : {1, 17, 127, 128, 129, 255, 257, 500, 2048, 4097}) {
+    check_shape(16, 4, keys, keys, 0, 1.0f, false, 256);
+  }
+  check_shape(8, 2, 777, 777, 0, 1.0f, false, 256);
+  check_shape(8, 8, 300, 300, 0, 1.0f, false, 256);
+  check_shape(8, 4, 513, 513, 0, 1.0f, false, 256);
+  check_shape(32, 4, 400, 400, 0, 1.0f, false, 256);
+  check_shape(16, 4, 9000, 9000, 0, 1.0f, false, 256);
+  check_shape(16, 4, 500, 500, 0, 8.0f, false, 256);
+  check_shape(16, 4, 500, 640, 0, 1.0f, false, 256);
+  check_shape(16, 4, 333, 640, 24, 1.0f, false, 256);
+}
+
+TEST_CASE("split-K decode SDPA: head width 256 one-hot values and uniform scores expose a dropped or doubled key") {
+  if (!compute_available()) {
+    return;
+  }
+  for (int keys : {127, 128, 129, 255, 256, 257, 500}) {
+    for (int heads : {4, 8, 16, 32}) {
+      check_shape(heads, 4, keys, keys, 0, 1.0f, true, 256);
+    }
+  }
 }
 
 TEST_CASE("split-K decode SDPA: one-hot values and uniform scores expose a dropped or doubled key") {
