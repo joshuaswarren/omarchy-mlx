@@ -13,5 +13,9 @@
     "@oxlint/plugins": "^1.81.0",
     "oxlint": "^1.81.0",
     "wrangler": "^4.38.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "undici": "7.29.1"
   }
 }
