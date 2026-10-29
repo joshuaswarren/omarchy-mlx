@@ -902,6 +902,7 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectBF16NtK4S8,
   // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
   QmmVecQ4WordSubgroupBatch4BF16,
+  QmmVecQ4WordSubgroupBatch4HBF16,
   QmmVecQ4WordSubgroupBatch8BF16,
   QmmVecQ4WordSubgroupBatch16BF16,
   // Bonsai 1-bit / 2-bit affine decode: enum bindings for the shader
