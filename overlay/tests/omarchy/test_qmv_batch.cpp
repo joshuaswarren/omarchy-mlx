@@ -115,6 +115,23 @@ bool ran(const std::vector<int>& kernels, omarchy::ComputeKernel kernel) {
 TEST_CASE("batch-shared bf16 GEMV rows match the per-row kernel bit for bit") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
+  {
+    Weight probe = make_weight(2048, 2048, s);
+    array x1 = astype(
+        random::normal(Shape{1, 1, 2048}, float32, std::nullopt, s), bfloat16, s);
+    array x2 = astype(
+        random::normal(Shape{2, 1, 2048}, float32, std::nullopt, s), bfloat16, s);
+    eval({x1, x2});
+    if (!ran(traced_kernels([&] { gemv(x1, probe, false, s); }),
+             omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16)) {
+      std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
+      return;
+    }
+    REQUIRE_MESSAGE(
+        ran(traced_kernels([&] { gemv(x2, probe, true, s); }),
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16),
+        "the 2-row batch did not run the 4-row kernel");
+  }
   struct Cell {
     int k;
     int n;
@@ -210,14 +227,24 @@ TEST_CASE("short-pass GEMV rows match the single-row kernel bit for bit") {
   Stream s = gpu_stream();
   {
     Weight probe = make_weight(2048, 2048, s);
-    array x = astype(
-        random::normal(Shape{1, 2, 2048}, float32, std::nullopt, s), bfloat16, s);
-    x.eval();
-    if (!ran(traced_kernels([&] { short_pass(x, probe, "4", s); }),
-             omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16)) {
-      std::cout << "Skipping: the short-pass GEMV route does not engage here\n";
+    auto probe_x = [&](int rows) {
+      array x = astype(
+          random::normal(Shape{1, rows, 2048}, float32, std::nullopt, s),
+          bfloat16, s);
+      x.eval();
+      return x;
+    };
+    array x1 = probe_x(1);
+    array x2 = probe_x(2);
+    if (!ran(traced_kernels([&] { gemv(x1, probe, false, s); }),
+             omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16)) {
+      std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
       return;
     }
+    REQUIRE_MESSAGE(
+        ran(traced_kernels([&] { short_pass(x2, probe, "4", s); }),
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16),
+        "the 2-row short pass did not run the 4-row kernel");
   }
   struct Cell {
     int k;
