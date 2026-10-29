@@ -1660,19 +1660,6 @@ void main() {
 // epilogue and the same subgroup reduction, so each row matches the
 // batch-outer main below bit for bit while the weight bytes are read once
 // instead of B times.
-#define Q4_ROWS_BATCH_ROW(w, X_WORDS) { \
-  uint x_row = params.lhs_offset + bt * params.matrix_k; \
-  precise float dot[ROWS_PER_SLOT]; \
-  precise float input_sum = 0.0; \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    dot[r] = 0.0; \
-  } \
-  X_WORDS \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    precise float bias_term = input_sum * bias_r[r]; \
-    acc[bt][r] += fma(scale_r[r], dot[r], bias_term); \
-  } \
-}
 #define Q4_ROWS_BATCH_PARAMS(w, S, B) \
   float scale_r[ROWS_PER_SLOT]; \
   float bias_r[ROWS_PER_SLOT]; \
@@ -1682,26 +1669,56 @@ void main() {
     bias_r[r] = \
         LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + (w) / 8u]); \
   }
-// The eight nibble-to-float conversions of each weight word and column are
-// computed once per word and reused by every row (they used to be recomputed
-// per row, so every added row cost about one weight stream of ALU work).
-// Q4_NIB(p, 4 * j) of the word equals Q4_NIB(word >> 16, 4 * (j - 4)) for the
-// second quad, and each row's fma chain takes the same values in the same
-// order as the single-row chain, so every row matches it bit for bit.
-#define Q4_NIB_WORD(p, n) \
-  for (uint j = 0u; j < 8u; ++j) { \
-    n[j] = uintBitsToFloat((((p) >> (4u * j)) & 0xfu) | 0x4B000000u) - \
-        8388608.0; \
+// The nibble-to-float conversions are made once per quad (four nibbles) and
+// column and reused by every row, instead of once per row (which made every
+// added row cost about one weight stream of ALU work). The row loop sits
+// inside the quad loop, so only 2 x 4 conversions are live at a time; each
+// row keeps its own dot and input sum across the quads of a step. Each
+// (row, column) chain adds the same products in the same order as the
+// single-row chain, so every row matches it bit for bit.
+#define Q4_ROWS_BATCH_STATE \
+  precise float dotb[QMM_VEC_BATCH][ROWS_PER_SLOT]; \
+  precise float isum[QMM_VEC_BATCH]; \
+  for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
+    isum[bt] = 0.0; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      dotb[bt][r] = 0.0; \
+    } \
   }
-#define Q4_QUAD_ROWS_NIB(NB, OFF, a, b) { \
-  Q4_QUAD_LOAD(a, b) \
+#define Q4_ROWS_BATCH_QUAD(PW, XWORDS, XLO, XHI) { \
+  float nq[ROWS_PER_SLOT][4]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    dot[r] += fma(x3, NB[r][(OFF) + 3u], \
-        fma(x2, NB[r][(OFF) + 2u], \
-            fma(x1, NB[r][(OFF) + 1u], \
-                x0 * NB[r][(OFF)]))); \
+    uint p = (PW); \
+    nq[r][0] = Q4_NIB(p, 0u); \
+    nq[r][1] = Q4_NIB(p, 4u); \
+    nq[r][2] = Q4_NIB(p, 8u); \
+    nq[r][3] = Q4_NIB(p, 12u); \
+  } \
+  for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
+    if (bt < batch) { \
+      uint x_row = params.lhs_offset + bt * params.matrix_k; \
+      uvec4 xw = XWORDS; \
+      precise float input_sum = isum[bt]; \
+      Q4_QUAD_LOAD(xw.XLO, xw.XHI) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dotb[bt][r] += fma(x3, nq[r][3], \
+            fma(x2, nq[r][2], \
+                fma(x1, nq[r][1], \
+                    x0 * nq[r][0]))); \
+      } \
+      isum[bt] = input_sum; \
+    } \
   } \
 }
+#define Q4_ROWS_BATCH_EPILOGUE \
+  for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
+    if (bt < batch) { \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        precise float bias_term = isum[bt] * bias_r[r]; \
+        acc[bt][r] += fma(scale_r[r], dotb[bt][r], bias_term); \
+      } \
+    } \
+  }
 #define Q4_ROWS_BATCH(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -1710,43 +1727,31 @@ void main() {
   if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
     for (uint w = lane_in_slot * 2u; w < words_per_row; \
          w += LANES * 2u) { \
-      float na[ROWS_PER_SLOT][8]; \
-      float nb[ROWS_PER_SLOT][8]; \
+      uint wa[ROWS_PER_SLOT]; \
+      uint wb[ROWS_PER_SLOT]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint wa = W.values[w_base + row_base[r] * words_per_row + w]; \
-        uint wb = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
-        Q4_NIB_WORD(wa, na[r]) \
-        Q4_NIB_WORD(wb, nb[r]) \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
       } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
-      for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
-        if (bt < batch) { \
-          Q4_ROWS_BATCH_ROW(w, \
-            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-            uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
-            Q4_QUAD_ROWS_NIB(na, 0u, xa.x, xa.y) \
-            Q4_QUAD_ROWS_NIB(na, 4u, xa.z, xa.w) \
-            Q4_QUAD_ROWS_NIB(nb, 0u, xb.x, xb.y) \
-            Q4_QUAD_ROWS_NIB(nb, 4u, xb.z, xb.w)) \
-        } \
-      } \
+      Q4_ROWS_BATCH_STATE \
+      Q4_ROWS_BATCH_QUAD(wa[r], OUTGATE_XWORDS(x_row + w * 8u), x, y) \
+      Q4_ROWS_BATCH_QUAD(wa[r] >> 16u, OUTGATE_XWORDS(x_row + w * 8u), z, w) \
+      Q4_ROWS_BATCH_QUAD(wb[r], OUTGATE_XWORDS(x_row + w * 8u + 8u), x, y) \
+      Q4_ROWS_BATCH_QUAD(wb[r] >> 16u, OUTGATE_XWORDS(x_row + w * 8u + 8u), z, w) \
+      Q4_ROWS_BATCH_EPILOGUE \
     } \
   } else { \
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
-      float na[ROWS_PER_SLOT][8]; \
+      uint wa[ROWS_PER_SLOT]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint wa = W.values[w_base + row_base[r] * words_per_row + w]; \
-        Q4_NIB_WORD(wa, na[r]) \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
       } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
-      for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
-        if (bt < batch) { \
-          Q4_ROWS_BATCH_ROW(w, \
-            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-            Q4_QUAD_ROWS_NIB(na, 0u, xa.x, xa.y) \
-            Q4_QUAD_ROWS_NIB(na, 4u, xa.z, xa.w)) \
-        } \
-      } \
+      Q4_ROWS_BATCH_STATE \
+      Q4_ROWS_BATCH_QUAD(wa[r], OUTGATE_XWORDS(x_row + w * 8u), x, y) \
+      Q4_ROWS_BATCH_QUAD(wa[r] >> 16u, OUTGATE_XWORDS(x_row + w * 8u), z, w) \
+      Q4_ROWS_BATCH_EPILOGUE \
     } \
   } \
 }

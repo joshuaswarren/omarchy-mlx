@@ -56,3 +56,26 @@ Candidate D: the batch kernel with the nibble conversions hoisted out of the row
 - Exactness requirement (checked before any speed is read): D output equals the shipped Batch4 kernel output bit for bit at T = 2..16 on every shape (the bench prints the difference), plus `omarchy_qmv_batch_tests` on the CT.
 - Bar: D beats the tile by 1.15x or more at some T in 8..16 on a chip, else stop; D beating the shipped Batch4 at T = 2..4 is a decode result in its own right (B = 2..4 decode batches use this kernel by default) and is reported separately with a decode A/B, not folded into the T = 8..16 claim.
 - Predictions before the run: marginal cost per row falls 2x to 3x on the 13-inch M1 (P 60 percent); D beats the tile by 1.15x at T = 8 on the 13-inch M1 (P 35 percent), on the 16-inch M1 Max (P 45 percent); D beats the tile at T = 16 anywhere (P 5 percent); outputs bit-identical to Batch4 (P 95 percent).
+
+## Amendment 3 (2026-10-29, about 21:15Z; written after the three-chip results of the hoist below and before any measurement of the per-quad form)
+
+Result of the whole-word hoist (head `c1422078`), decode ms per step, shipped against hoisted, ids hash identical on every chip:
+
+| chip | batch 2 | batch 3 | batch 4 |
+| --- | --- | --- | --- |
+| 16-inch M1 Max | 1.000x | 1.041x | 1.083x |
+| 13-inch M1 | 1.081x | 1.163x | 1.203x |
+| 14-inch M2 Max | 0.947x | 1.102x | 1.152x |
+
+The one loss is batch 2 on the 14-inch M2 Max. A diagnosis with the batch route on and off on that machine shows route off equal (28.03 against 28.13 ms) and route on slower (28.02 against 29.06 ms), so the loss comes from the hoisted kernel. The kernel microbenchmark at 2 rows shows no slowdown there (1.03x, 0.99x, 1.08x), so the cause is not the ALU work per call.
+
+Change under test: the hoist done per quad instead of per word. For each quad (four nibbles) the four conversions of each of the two columns are made once and reused by every row; the row loop moves inside the quad loop, and each row keeps its own `dot` and `input_sum` across the four quads of a step. Each (row, column) chain still adds the same products in the same order: bit-identical by the same argument.
+
+Live values, counted from the source: whole-word hoist, 32 conversion floats live across the row loop on the 512-wide path (2 columns x 16 nibbles of two words), 16 on the narrow path, plus 3 row values; per-quad, 8 conversion floats live (2 columns x 4) on both paths, plus 12 row values (4 rows x (2 dot + 1 input sum)). Total 20 against 35 on the 512-wide path.
+
+Prediction, written before the run:
+- Cause: register pressure and the occupancy it limits on the 14-inch M2 Max, not ALU work (the hoist does fewer conversions than the shipped kernel at 2 rows). At batch 2 the kernel does little work per call, so a lower occupancy costs more than the saved conversions gain.
+- 14-inch M2 Max, batch 2: the loss goes away (0.98x to 1.02x): P 55 percent. If the loss stays, register pressure is not the cause.
+- Batch 4 with the per-quad form: 16-inch M1 Max stays at or above 1.08x: P 50 percent (the per-quad form reloads the activation words once per quad and keeps 12 row values live, so it may give back part of the gain); 13-inch M1 stays above 1.15x: P 80 percent; 14-inch M2 Max stays above 1.10x: P 70 percent.
+- Output identical to the shipped kernel on every chip: P 95 percent.
+- Merge rule (Main): the per-quad form merges only if it removes the M2 batch-2 loss and keeps at least 1.08x at batch 4 on both M1 parts with identical ids; otherwise the whole-word form merges with the M2 batch-2 loss stated.
