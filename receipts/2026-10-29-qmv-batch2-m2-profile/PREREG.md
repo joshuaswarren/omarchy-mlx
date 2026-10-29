@@ -43,3 +43,22 @@ If the profile has no usable GPU timestamps on this chip (the 2026-10-03 prefill
 ## Not done in this experiment
 
 No kernel change, no routing change by row count, no new wheel behavior. A fix needs the cause first and goes in a separate pull request with its own preregistration amendment.
+
+## Amendment 1 (2026-10-29, about 23:40Z; written after a first profile run and before the second)
+
+What the first run (`t7b-b2prof.sh`, three rounds, kernel stock, GPU timestamps on) showed, and what went wrong with it:
+
+- The summarizer resolved kernel names with a line-by-line regex that skipped one enum entry, so the batch kernel (id 547) showed under the next name and `batch_kernel_ms` read 0 in every row. The raw profiles were deleted after summarizing. The run cannot answer H1, H2 or H3 and is not evidence for any of them. The summarizer now parses the enum as a whole and keeps the raw files.
+- Two facts from that run stand, since neither depends on the names: with the profiler on (one barrier per dispatch) a batch-2 step takes 69.3 ms for the hoisted wheel and 69.4 ms for the shipped wheel, so the profiler does not reproduce the 5.6 percent loss; and the batch-2 step has 1225 dispatches against 628 at batch 3, with the GPU busy for about a quarter of the window (17.5 ms of 69 ms).
+
+New observation, from the prompt lengths, not from a measurement: the four prompts are 12, 12, 13 and 13 tokens. Batch 2 uses the first two, which have equal length, so `BatchGenerator` pads nothing and passes no mask. Batches 3 and 4 include a 13-token prompt, so they are left padded and carry a mask. Batch 2 is therefore the only unpadded case in every table of this receipt. That may explain why batch 2 is slow in itself on this chip (28 ms against 17 ms at batch 3, 1522 against 883 dispatches).
+
+H4, the unpadded path is the heavy one: with a padded two-row set (prompts of 12 and 13 tokens) the step has about 600 to 900 dispatches and takes about the batch-3 time, and with an unpadded three-row set (12, 12, 12) the step has about 1200 to 1500 dispatches. P 75 percent for the first half, P 65 percent for the second. If H4 holds, the "batch 2 on the 14-inch M2 Max" regression is a regression of the unpadded two-row path, and the extra dispatches are the mask-free branch of the model or the cache code, which I then locate by kernel names.
+
+Second run (`t7b-b2prof2.sh`): shipped and hoisted diagnostics wheels, four row sets (E2 = prompts 0,1 unpadded; P2 = prompts 0,2 padded; E3 = prompts 0,1,4 unpadded, all 12 tokens; P3 = prompts 0,1,2 padded), three rounds, each cell once with GPU timestamps and once without (64 steps, step wall time only: the unprofiled pass is the one that can show the 5.6 percent loss, since the profiler serializes the dispatches). Predictions, before the run:
+
+- Unprofiled wall, hoisted against shipped: the loss shows in E2 (speed ratio 0.94 to 0.97, P 70 percent); P2 shows no loss (0.98 to 1.03, P 70 percent); E3 shows a loss smaller than or equal to E2's (P 55 percent); P3 is faster hoisted (1.08 to 1.12, P 80 percent).
+- Under the profiler the hoisted and shipped steps are equal within 0.5 ms in every set (P 75 percent), as in the first run.
+- If the unprofiled loss follows the unpadded sets, the cause is in what the unpadded path does around the batch kernel, and the profiled kernel table (batch kernel time per shape, hoisted against shipped) says whether the batch kernel itself is slower there.
+
+Not changed: no kernel change or routing change comes out of this experiment; a fix goes in its own pull request.
