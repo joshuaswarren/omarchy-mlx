@@ -208,6 +208,17 @@ array rows_one_by_one(const array& x, const Weight& q, Stream s) {
 TEST_CASE("short-pass GEMV rows match the single-row kernel bit for bit") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
+  {
+    Weight probe = make_weight(2048, 2048, s);
+    array x = astype(
+        random::normal(Shape{1, 2, 2048}, float32, std::nullopt, s), bfloat16, s);
+    x.eval();
+    if (!ran(traced_kernels([&] { short_pass(x, probe, "4", s); }),
+             omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16)) {
+      std::cout << "Skipping: the short-pass GEMV route does not engage here\n";
+      return;
+    }
+  }
   struct Cell {
     int k;
     int n;
