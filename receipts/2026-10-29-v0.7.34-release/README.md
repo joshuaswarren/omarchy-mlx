@@ -28,16 +28,16 @@ The draft assets were the only input. All exit codes 0.
 
 Attempts before these results. All failures came from the gate harness or from how it was run, not from the release:
 
-- First run on the M2: g2, g3, g4, g5, g10, g11, g12 and g14 failed. The raw-mode `flock` wrapper named no lock file, so `flock` tried to execute `-k` (`flock: failed to execute -k: No such file or directory` in the g2 server log). Fixed in #298. The second run held the lock with `flock -x` and `GPU_TURN_TICKET=1` and passed.
+- First run on the M2: g2 and g3 failed because the raw-mode `flock` wrapper named no lock file, so `flock` tried to execute `-k` (`flock: failed to execute -k: No such file or directory` in their server logs). g4 then failed with no local model snapshot, because g2 and g3 had not filled the cache, and g5 failed (its log gives no cause). g6 to g9 passed. g10 hit the same `flock` error and I stopped the run there; g11, g12 and g14 have the same wrapper line and were not reached. Fixed in #298. The second run held the lock with `flock -x` and `GPU_TURN_TICKET=1` and passed every local gate.
 - First ANE-host stage, run 1: the g13 and g15 build stage returned RC 1 with `REFUSING: build tree ... missing (build the wheel first)`, because the harness's `GATE_WORKTREE` named a tree that did not exist on the ANE host. The second attempt pointed it at the prepared tag tree there.
 - First g7c start: RC 137. The run was started by my own clock hold before the ANE host was free, and I killed its `ssh` session about 20 seconds in (SIGKILL), so 137 is that kill, not a timeout or an out-of-memory kill. g7c then ran to completion and passed (RC 0).
 - ANE build stage, run 2: g13 and g15 built without the Vulkan headers (cmake: `Could NOT find Vulkan`). I installed the `vulkan-headers` package (1:1.4.363.0-1) on the ANE host, and the g13 and g15 builds found the headers through a local include directory (`CMAKE_PREFIX_PATH`, a local `vksdk/include` tree), not the system package. They passed on the next attempt.
 
 ## Installed decode on the uploaded wheel
 
-The aarch64 wheel was installed offline from the vendored wheel set into a fresh venv on a 13-inch M1, then `scripts/bench_decode.py` ran with the wheel provenance check (`verified=match`, libmlx.so `sha256:7ca9b27ebb32c378`).
+The uploaded aarch64 wheel (sha256 `98b6d12e...`, also the copy inside the vendored wheel set) was installed into a fresh venv on a 13-inch M1 with `pip install --no-index --find-links` on the vendored wheel set, as the wrapper script (sha256 `c7de6be118b4754fac60e3820bdda91e16f087cb54dc159dd36f4d34dc63ab5d`) does; the decode log itself records the installed version `0.32.4.dev202610281952+5e40ecf9`, not the install command. Then `scripts/bench_decode.py` ran with the wheel provenance check (`verified=match`, libmlx.so `sha256:7ca9b27ebb32c378`).
 
-Qwen3.8-2B 4-bit (`SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b`), greedy, seed 0, 128 tokens requested with EOS suppressed, `MLX_DISABLE_COMPILE=1`:
+Qwen3.8-2B 4-bit (`SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b`), greedy (`--temp 0`, the script default), seed 0, 128 tokens requested with EOS suppressed. The wrapper script sets `MLX_DISABLE_COMPILE=1` for the runs, as `scripts/bench_decode.py` documents for its baseline; the log does not print the variable.
 
 | Run | decode tok/s over 127 tokens |
 | --- | --- |
