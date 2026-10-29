@@ -1,0 +1,25 @@
+arm            T max chunk  agree %  flips  ties       PPL   |dlogp|
+base-c4-r1       off     4   99.141     44    44   1.38878   0.00899
+base-c4-r2       off     4   99.141     44    44   1.38878   0.00899
+base-c4-r3       off     4   99.141     44    44   1.38878   0.00899
+base-c4-r4       off     4   99.141     44    44   1.38878   0.00899
+base-c4-r5       off     4   99.141     44    44   1.38878   0.00899
+base-c6-r1       off     6   99.141     44    44   1.38877   0.00899
+cand-c4-r1         6     4   99.082     47    47   1.38775   0.00885
+cand-c4-r2         6     4   99.082     47    47   1.38775   0.00885
+cand-c4-r3         6     4   99.082     47    47   1.38775   0.00885
+cand-c4-r4         6     4   99.082     47    47   1.38775   0.00885
+cand-c4-r5         6     4   99.082     47    47   1.38775   0.00885
+cand-c6-r1         6     6   99.082     47    47   1.38775   0.00885
+ref (cpu fp32)          64                         1.38817
+{
+ "positions": 5120,
+ "ppl_reference": 1.388173773256052,
+ "baseline_agree_with_ties_wilson_low_pct": 99.9250250046762,
+ "candidate_agree_with_ties_median_pct": 100.0,
+ "check2_token_choices": true,
+ "baseline_ppl_dev_median": 0.00043356120586380837,
+ "baseline_ppl_noise": 0.0,
+ "candidate_ppl_dev_median": 0.00030739046633248125,
+ "check3_perplexity": true
+}

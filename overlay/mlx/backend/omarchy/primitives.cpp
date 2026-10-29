@@ -3997,6 +3997,23 @@ static int decode_path_override(const char* name) {
   return (v[0] == '0' && v[1] == '\0') ? 0 : 1;
 }
 
+// Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
+// live): the largest pass length T (2..4) whose [1, T, K] bf16 x runs as
+// one batch-shared decode GEMV instead of the coopmat prefill tile. The cap
+// is 4 because above it a second GEMV block costs more than the tile on G13G
+// (PR #296). Unset, empty or 0 keeps the shipped route. Each row is
+// bit-identical to the single-row GEMV, not to the coopmat chain, so the
+// route is opt-in until a numerics decision
+// (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
+static int qmv_small_t_max_rows() {
+  const char* v = std::getenv("MLX_OMARCHY_QMV_SMALL_T");
+  if (v == nullptr || *v == '\0') {
+    return 0;
+  }
+  int rows = std::atoi(v);
+  return rows >= 2 ? std::min(rows, 4) : 0;
+}
+
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
   const std::string& name = encoder.device().capabilities().device_name;
   return name.find("G13") != std::string::npos &&
@@ -8229,13 +8246,25 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     int fma_n = transpose_ ? w.shape(-2) : w.shape(-1) * 32 / bits_;
     qmm_fma_reachable = (fma_k % 8 == 0) && (fma_n % 2 == 0);
   }
+  // Short-pass GEMV candidate (MLX_OMARCHY_QMV_SMALL_T): a batch-1 bf16
+  // [1, T, K] x with 2 <= T <= the env limit against one 2D 4-bit group-64
+  // transposed weight. Resolved before normalization because the GEMV reads
+  // x through the same 16-byte uvec4 view as the single-row route.
+  const int small_t_max = qmv_small_t_max_rows();
+  const int small_t_rows = x.ndim() >= 2 ? x.shape(-2) : 1;
+  bool small_t_candidate = small_t_max >= 2 && use_q4_word &&
+      out.dtype() == bfloat16 && small_t_rows >= 2 &&
+      small_t_rows <= small_t_max &&
+      x.size() == static_cast<size_t>(small_t_rows) * x.shape(-1) &&
+      w.ndim() == 2 && scales.ndim() == 2 && biases.ndim() == 2 &&
+      decode_path_override("MLX_OMARCHY_QMV_BATCH") != 0;
   // The f16 Q4 shader reads eight halves as one uvec4. Materialize only the
   // rare row-contiguous view whose element offset is not 16-byte aligned;
   // the coopmat word-pair reader extends the same rule to a 2-byte
   // alignment (an even f16 element offset).
   bool packed_q4_x = (use_q4_word || use_word_format) &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&
-      (x.ndim() < 2 || x.shape(-2) == 1);
+      (x.ndim() < 2 || x.shape(-2) == 1 || small_t_candidate);
   // 6-bit streaming decode (shaders/qmm_vec6.comp): transposed f16 or bf16
   // weights read x through uvec4 loads, so a view must start 16-byte aligned.
   static const bool qmm6_stream_disabled =
@@ -8473,6 +8502,39 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         1u,
         1u);
     return;
+  }
+  // Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T, default off): the rows of a
+  // batch-1 [1, T, K] x sit at the same strides as a [T, 1, K] decode batch,
+  // so the pass runs as one batch-shared GEMV of T <= 4 rows. Each row keeps
+  // the single-row chain bit for bit (tests/omarchy/test_qmv_batch.cpp).
+  if (small_t_candidate && batch == 1u && transpose_ &&
+      params.matrix_n <= omarchy::kMaxComputeGroupCountX * kGemvColumnsPerGroup) {
+    const auto& caps = encoder.device().capabilities();
+    bool subgroup_ready =
+        caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps,
+        subgroup_ready,
+        "QmmVec*Subgroup*",
+        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+         (encoder.device().hardware_capabilities().subgroup_operations &
+          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+    if (subgroup_ready) {
+      omarchy::ComputeParams pass = params;
+      pass.matrix_m = 1u;
+      pass.shape[0] = params.matrix_m;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+          bindings,
+          pass,
+          n_groups_qmm_vec,
+          1u,
+          1u);
+      return;
+    }
   }
   if (tile_path) {
     // bf16-activation coopmat prefill: the pinned mlx-community Qwen3.8
