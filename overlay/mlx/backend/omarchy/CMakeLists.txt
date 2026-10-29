@@ -357,6 +357,8 @@ omarchy_shader(qmm_vec_q4_word_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 # Batch-shared decode GEMV (default on, MLX_OMARCHY_QMV_BATCH=0 disables): up to four x rows
 # against one 2D weight, weight words read once per block.
 omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_BATCH=4)
+omarchy_shader(qmm_vec_q4_word_subgroup_batch8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_BATCH=8)
+omarchy_shader(qmm_vec_q4_word_subgroup_batch16_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_BATCH=16)
 # Multi-row word decode kernel for 4-bit group 32, 8-bit group 64 and
 # 8-bit group 32 affine weights (QBITS/QGROUP in qmm_vec.comp); the
 # 4-bit group-64 builds above are unchanged.

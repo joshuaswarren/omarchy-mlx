@@ -8523,7 +8523,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      constexpr uint32_t kBlockRows = 4u;
+      const char* block_env = std::getenv("MLX_OMARCHY_QMV_SMALL_T_BLOCK");
+      int block_cfg = block_env != nullptr ? std::atoi(block_env) : 4;
+      const uint32_t kBlockRows = block_cfg >= 16 ? 16u : (block_cfg >= 8 ? 8u : 4u);
       for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
         uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
         omarchy::ComputeParams block = params;
@@ -8533,7 +8535,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         block.lhs_offset = params.lhs_offset + row * params.matrix_k;
         block.output_offset = params.output_offset + row * params.matrix_n;
         encoder.dispatch_compute(
-            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            rows <= 4u ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16
+                       : (rows <= 8u
+                              ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16
+                              : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch16BF16),
             bindings,
             block,
             n_groups_qmm_vec,
