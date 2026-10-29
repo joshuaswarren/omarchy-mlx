@@ -4011,7 +4011,7 @@ static int qmv_small_t_max_rows() {
     return 0;
   }
   int rows = std::atoi(v);
-  return rows >= 2 ? std::min(rows, 4) : 0;
+  return rows >= 2 ? std::min(rows, 16) : 0;
 }
 
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
@@ -8523,16 +8523,23 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      omarchy::ComputeParams pass = params;
-      pass.matrix_m = 1u;
-      pass.shape[0] = params.matrix_m;
-      encoder.dispatch_compute(
-          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
-          bindings,
-          pass,
-          n_groups_qmm_vec,
-          1u,
-          1u);
+      constexpr uint32_t kBlockRows = 4u;
+      for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
+        uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
+        omarchy::ComputeParams block = params;
+        block.count = rows * params.matrix_n;
+        block.matrix_m = 1u;
+        block.shape[0] = rows;
+        block.lhs_offset = params.lhs_offset + row * params.matrix_k;
+        block.output_offset = params.output_offset + row * params.matrix_n;
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            bindings,
+            block,
+            n_groups_qmm_vec,
+            1u,
+            1u);
+      }
       return;
     }
   }
