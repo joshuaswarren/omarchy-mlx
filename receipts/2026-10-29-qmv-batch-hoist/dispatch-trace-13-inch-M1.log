@@ -1,0 +1,16 @@
+trace 13-inch M1 20261029T2052Z load 0.73 kernel 7.1.12-2-20261013.18-sep-ARCH
+-- arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+PROBE 1-row ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 410: 1} | 4-row batch-on ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 547: 1} | 4-row batch-off ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 410: 1}
+PROBE batch4 kernel id(s): [547]
+TRACE B=2 steps=8 batch4_per_step={547: 210.38} total_dispatches_per_step=2322.9 distinct_kernels=40 top8={469: 419.12, 9: 365.25, 58: 327.12, 547: 210.38, 416: 112.12, 20: 90.0, 504: 75.88, 10: 74.25}
+TRACE B=3 steps=8 batch4_per_step={547: 210.38} total_dispatches_per_step=2282.6 distinct_kernels=42 top8={469: 434.88, 9: 376.5, 58: 339.12, 547: 210.38, 416: 112.12, 20: 94.5, 10: 76.5, 504: 75.88}
+TRACE B=4 steps=8 batch4_per_step={547: 210.38} total_dispatches_per_step=2283.2 distinct_kernels=42 top8={469: 434.88, 9: 376.5, 58: 339.12, 547: 210.38, 416: 112.12, 20: 94.5, 10: 76.5, 504: 75.88}
+-- arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+PROBE 1-row ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 410: 1} | 4-row batch-on ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 547: 1} | 4-row batch-off ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 410: 1}
+PROBE batch4 kernel id(s): [547]
+TRACE B=2 steps=8 batch4_per_step={547: 210.38} total_dispatches_per_step=2322.9 distinct_kernels=40 top8={469: 419.12, 9: 365.25, 58: 327.12, 547: 210.38, 416: 112.12, 20: 90.0, 504: 75.88, 10: 74.25}
+TRACE B=3 steps=8 batch4_per_step={547: 210.38} total_dispatches_per_step=2282.6 distinct_kernels=42 top8={469: 434.88, 9: 376.5, 58: 339.12, 547: 210.38, 416: 112.12, 20: 94.5, 10: 76.5, 504: 75.88}
+TRACE B=4 steps=8 batch4_per_step={547: 210.38} total_dispatches_per_step=2283.2 distinct_kernels=42 top8={469: 434.88, 9: 376.5, 58: 339.12, 547: 210.38, 416: 112.12, 20: 94.5, 10: 76.5, 504: 75.88}
+done 20:53:06

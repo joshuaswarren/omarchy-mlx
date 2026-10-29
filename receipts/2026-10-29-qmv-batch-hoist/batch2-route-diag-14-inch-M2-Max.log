@@ -1,0 +1,26 @@
+b2diag 14-inch M2 Max 20261029T2100Z load 0.33 kernel 7.2.11-lab
+-- pair 1 cell A-on
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.357, 28.226, 27.941, 27.857, 27.704], "median_ms_per_step": 27.941, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 1 cell B-on
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.143, 28.451, 29.182, 28.498, 28.626], "median_ms_per_step": 28.626, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 1 cell A-off
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.008, 28.22, 28.151, 28.027, 28.053], "median_ms_per_step": 28.053, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 1 cell B-off
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.202, 28.051, 27.991, 28.279, 28.036], "median_ms_per_step": 28.051, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 2 cell B-off
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.034, 28.132, 28.621, 27.913, 28.496], "median_ms_per_step": 28.132, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 2 cell A-off
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [27.624, 27.734, 28.007, 28.436, 28.218], "median_ms_per_step": 28.007, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 2 cell B-on
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.576, 29.514, 28.981, 29.397, 29.446], "median_ms_per_step": 29.397, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 2 cell A-on
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.635, 28.017, 28.637, 27.858, 27.705], "median_ms_per_step": 28.017, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 3 cell A-on
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [27.652, 28.346, 28.129, 28.592, 28.011], "median_ms_per_step": 28.129, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 3 cell B-on
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.059, 29.07, 29.246, 28.795, 29.053], "median_ms_per_step": 29.059, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 3 cell A-off
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.029, 27.478, 27.836, 28.292, 28.078], "median_ms_per_step": 28.029, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- pair 3 cell B-off
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.333, 28.455, 28.247, 28.292, 27.911], "median_ms_per_step": 28.292, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+done 21:03:38

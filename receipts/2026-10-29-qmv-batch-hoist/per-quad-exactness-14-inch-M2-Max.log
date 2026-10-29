@@ -1,0 +1,47 @@
+exact 14-inch M2 Max 20261029T2118Z load 0.15 kernel 7.2.11-lab
+-- arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+CELL K=2048 N=6144 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 5d6a598919828ca2
+CELL K=2048 N=6144 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs e31f452af2936611
+CELL K=2048 N=6144 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 938a40852123f09d
+CELL K=6144 N=2048 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs a73ac82b890029ee
+CELL K=6144 N=2048 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs fb7d01e786831f2a
+CELL K=6144 N=2048 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 13ae73e8bbda1cc5
+CELL K=2048 N=520 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 1ab49843fd8d300d
+CELL K=2048 N=520 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs ec072ef6045cec6e
+CELL K=2048 N=520 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 9fbfef5a9a8fc09e
+CELL K=448 N=130 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 6db6ca7cc1dc221e
+CELL K=448 N=130 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 22b7baf04730f37a
+CELL K=448 N=130 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 37a0f2b948f6c802
+SUMMARY differing datasets 0; combined sha256 3fd525e19f0b7c79
+-- arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+CELL K=2048 N=6144 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 5d6a598919828ca2
+CELL K=2048 N=6144 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs e31f452af2936611
+CELL K=2048 N=6144 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 938a40852123f09d
+CELL K=6144 N=2048 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs a73ac82b890029ee
+CELL K=6144 N=2048 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs fb7d01e786831f2a
+CELL K=6144 N=2048 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 13ae73e8bbda1cc5
+CELL K=2048 N=520 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 1ab49843fd8d300d
+CELL K=2048 N=520 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs ec072ef6045cec6e
+CELL K=2048 N=520 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 9fbfef5a9a8fc09e
+CELL K=448 N=130 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 6db6ca7cc1dc221e
+CELL K=448 N=130 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 22b7baf04730f37a
+CELL K=448 N=130 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 37a0f2b948f6c802
+SUMMARY differing datasets 0; combined sha256 3fd525e19f0b7c79
+-- arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+CELL K=2048 N=6144 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 5d6a598919828ca2
+CELL K=2048 N=6144 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs e31f452af2936611
+CELL K=2048 N=6144 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 938a40852123f09d
+CELL K=6144 N=2048 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs a73ac82b890029ee
+CELL K=6144 N=2048 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs fb7d01e786831f2a
+CELL K=6144 N=2048 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 13ae73e8bbda1cc5
+CELL K=2048 N=520 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 1ab49843fd8d300d
+CELL K=2048 N=520 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs ec072ef6045cec6e
+CELL K=2048 N=520 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 9fbfef5a9a8fc09e
+CELL K=448 N=130 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 6db6ca7cc1dc221e
+CELL K=448 N=130 B=3: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 22b7baf04730f37a
+CELL K=448 N=130 B=4: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 37a0f2b948f6c802
+SUMMARY differing datasets 0; combined sha256 3fd525e19f0b7c79
+done 21:18:59
