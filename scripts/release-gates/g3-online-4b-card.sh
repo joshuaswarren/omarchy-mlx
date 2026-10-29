@@ -7,7 +7,7 @@ set -uo pipefail
 # server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
 # already holds the lock and nesting flock deadlocks, so exec the inner
 # command with no wrapper (LOCKER empty).
-LOCKER=(flock -x -w 300); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
+LOCKER=(flock -x -w 300 "$GPU_LOCK"); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
 LOG="$LOG_DIR/g3-online-4b.log"
 RUNNER="$GATES_DIR/gate3-card-runner.py"
 

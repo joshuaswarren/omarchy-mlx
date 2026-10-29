@@ -15,7 +15,7 @@ set -euo pipefail
 # server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
 # already holds the lock and nesting flock deadlocks, so exec the inner
 # command with no wrapper (LOCKER empty).
-LOCKER=(flock -x -w 900); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
+LOCKER=(flock -x -w 900 "$GPU_LOCK"); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
 LOG="$LOG_DIR/g14-routing.log"
 ASSIST_A="$GATE_ROOT/${TAG}-assist-route-on"
 ASSIST_B="$GATE_ROOT/${TAG}-assist-route-off"
