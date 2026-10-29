@@ -1,4 +1,4 @@
-exact 14-inch M2 Max 20261029T2118Z load 0.15 kernel 7.2.11-lab-e54bd23
+exact 14-inch M2 Max 20261029T2118Z load 0.15 kernel 7.2.11-lab
 -- arm A
 PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
 CELL K=2048 N=6144 B=2: datasets differing from the per-row kernel 0 of 12; sha256 of the batch outputs 5d6a598919828ca2

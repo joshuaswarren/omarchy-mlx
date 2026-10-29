@@ -1,4 +1,4 @@
-b2diag3 14-inch M2 Max 20261029T2119Z load 0.27 kernel 7.2.11-lab-e54bd23
+b2diag3 14-inch M2 Max 20261029T2119Z load 0.27 kernel 7.2.11-lab
 -- round 1 cell A-on
 BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.041, 28.452, 28.861, 27.983, 28.606], "median_ms_per_step": 28.452, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
 -- round 1 cell B-on

@@ -1,4 +1,4 @@
-trace 14-inch M2 Max 20261029T2100Z load 0.24 kernel 7.2.11-lab-7f91446
+trace 14-inch M2 Max 20261029T2100Z load 0.24 kernel 7.2.11-lab
 -- arm A
 PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
 PROBE 1-row ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 410: 1} | 4-row batch-on ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 547: 1} | 4-row batch-off ids {102: 2, 14: 1, 469: 5, 0: 2, 10: 1, 410: 1}

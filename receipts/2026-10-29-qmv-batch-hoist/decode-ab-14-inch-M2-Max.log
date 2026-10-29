@@ -1,4 +1,4 @@
-bgdecode 14-inch M2 Max 20261029T2017Z load 0.32 kernel 7.2.11-lab-7f91446
+bgdecode 14-inch M2 Max 20261029T2017Z load 0.32 kernel 7.2.11-lab
 -- B=2 pair 1 arm A
 PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
 BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [27.124, 27.42, 27.582, 26.777, 26.792], "median_ms_per_step": 27.124, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}

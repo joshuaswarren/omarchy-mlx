@@ -1,4 +1,4 @@
-qmm 1-16 rows block 4/8/16 16-inch-M1-Max 20261029T1831Z load 0.13 boot 6ee9f0f1-5eb3-4254-95ec-3ec0edd42577
+qmm 1-16 rows block 4/8/16 16-inch-M1-Max 20261029T1831Z load 0.13
 PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
 QMM mlp 2048x6144 T=1: ms tile 0.192  b4 0.193  b4h 0.191  b8h 0.192  b16h 0.193 | tile/b4 0.99  tile/b4h 1.01  tile/b8h 1.00  tile/b16h 0.99 | |tile-b4| 0  |tile-b4h| 0  |tile-b8h| 0  |tile-b16h| 0 | |b4-b4h| 0  |b4-b8h| 0  |b4-b16h| 0 | max|y| 169
 QMM mlp 2048x6144 T=2: ms tile 0.510  b4 0.270  b4h 0.281  b8h 0.281  b16h 0.281 | tile/b4 1.89  tile/b4h 1.82  tile/b8h 1.81  tile/b16h 1.81 | |tile-b4| 0.001953  |tile-b4h| 0.001953  |tile-b8h| 0.001953  |tile-b16h| 0.001953 | |b4-b4h| 0  |b4-b8h| 0  |b4-b16h| 0 | max|y| 180

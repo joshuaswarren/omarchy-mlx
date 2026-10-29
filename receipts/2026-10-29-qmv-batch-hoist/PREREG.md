@@ -46,14 +46,14 @@ Step-1 data on the 16-inch M1 Max (qmm16-16-inch-M1-Max-20261029T1359Z.log): the
 
 ## Amendment 2 (2026-10-29, about 15:55Z; written after the 13-inch M1 data (qmm16c-13-inch-M1-20261029T1544Z.log) and before any candidate D measurement)
 
-13-inch M1, boot 187849c2, per call median ms, tile vs the block route with 4, 8 and 16 rows per pass:
+13-inch M1, per call median ms, tile vs the block route with 4, 8 and 16 rows per pass:
 - Candidate C is dead on this chip: the 4-, 8- and 16-row passes cost the same within 2 percent at every T (b16/b4 between 0.983 and 1.021 over T = 2..16 on all three shapes). Reading the weights once instead of four times does nothing.
 - The cost per added row is the same constant at every width: 0.091 ms/row (2048x6144), 0.032 (2048x2048), 0.238 (2048x16384), i.e. in proportion to the weight bytes, about one 1-row weight stream (about 69 GB/s) per extra row. The tile route is flat in T (T=16 minus T=2: -0.008, -0.006, -0.053 ms).
 - The tile wins from T = 6 (mlp), 6 to 8 (proj), 4 (lm) upward on this chip; A (and C) win at T = 2 (1.6x to 1.8x) and T = 4 (1.05x to 1.24x).
 - Reading of the numbers, not yet shown: the per-row cost is ALU work, not memory. `Q4_QUAD_ROWS` recomputes the nibble-to-float conversion (`Q4_NIB`: shift, and, or, subtract) for every row inside the row loop, so each row pays about four conversion ops per multiply-add. Hoisting the 8 conversions per weight word and column out of the row loop leaves the arithmetic of every row unchanged (the same values enter the same `fma` chain), so outputs stay bit-identical to the shipped batch kernel.
 
 Candidate D: the batch kernel with the nibble conversions hoisted out of the row loop (`QMM_VEC_HOIST`), at 4, 8 and 16 rows per pass. `MLX_OMARCHY_QMV_SMALL_T_BLOCK` selects: 4 shipped Batch4, 5 Batch4 hoisted, 8 Batch8 hoisted, 16 Batch16 hoisted.
-- Exactness requirement (checked before any speed is read): D output equals the shipped Batch4 kernel output bit for bit at T = 2..16 on every shape (the bench prints the difference), plus `omarchy_qmv_batch_tests` on the CT.
+- Exactness requirement (checked before any speed is read): D output equals the shipped Batch4 kernel output bit for bit at T = 2..16 on every shape (the bench prints the difference), plus `omarchy_qmv_batch_tests` on the development machine.
 - Bar: D beats the tile by 1.15x or more at some T in 8..16 on a chip, else stop; D beating the shipped Batch4 at T = 2..4 is a decode result in its own right (B = 2..4 decode batches use this kernel by default) and is reported separately with a decode A/B, not folded into the T = 8..16 claim.
 - Predictions before the run: marginal cost per row falls 2x to 3x on the 13-inch M1 (P 60 percent); D beats the tile by 1.15x at T = 8 on the 13-inch M1 (P 35 percent), on the 16-inch M1 Max (P 45 percent); D beats the tile at T = 16 anywhere (P 5 percent); outputs bit-identical to Batch4 (P 95 percent).
 

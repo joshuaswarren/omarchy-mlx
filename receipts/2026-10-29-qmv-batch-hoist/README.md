@@ -1,6 +1,6 @@
 # Hoisted nibble conversions in the batch-shared 4-bit qmv kernel
 
-Result: the batch-shared bf16 GEMV that serves 2 to 4 row decode batches (`MLX_OMARCHY_QMV_BATCH`, on by default) now computes the eight nibble-to-float conversions of each weight word and column once and reuses them for every row. Every row keeps the same values in the same `fma` chain, and the output is bit-identical to the previous kernel in every check below. A batch-4 decode step of Qwen3.8-2B (4-bit) is faster on all three chips: 1.203x on a 13-inch M1, 1.152x on a 14-inch M2 Max, 1.083x on a 16-inch M1 Max. Batch 3 is 1.163x, 1.102x and 1.041x. Batch 2 is 1.081x on the 13-inch M1, unchanged on the 16-inch M1 Max, and **5.3 percent slower on the 14-inch M2 Max (0.947x, 29.1 ms instead of 27.6 ms per step)**. That regression is real and is not fixed here; see "Batch 2 on the 14-inch M2 Max".
+Result: the batch-shared bf16 GEMV that serves 2 to 4 row decode batches (`MLX_OMARCHY_QMV_BATCH`, on by default) now computes the eight nibble-to-float conversions of each weight word and column once and reuses them for every row. Every row keeps the same values in the same `fma` chain, and the output is bit-identical to the previous kernel in every check below. A batch-4 decode step of Qwen3.8-2B (4-bit) is faster on all three chips: 1.203x on a 13-inch M1, 1.152x on a 14-inch M2 Max, 1.083x on a 16-inch M1 Max. Batch 3 is 1.163x, 1.102x and 1.041x. Batch 2 is 1.081x on the 13-inch M1, unchanged on the 16-inch M1 Max, and **a 5.6 percent longer step on the 14-inch M2 Max (0.947x speed, 29.1 ms instead of 27.6 ms)**. That regression is real and is not fixed here; see "Batch 2 on the 14-inch M2 Max".
 
 ## What changed
 
@@ -15,7 +15,7 @@ Result: the batch-shared bf16 GEMV that serves 2 to 4 row decode batches (`MLX_O
 
 ## Speed
 
-Decode: kernel 7.1.12-2-20261029.2-lab-ARCH (16-inch M1 Max), 7.1.12-2-20261013.18-sep-ARCH (13-inch M1), 7.2.11-lab-7f91446 (14-inch M2 Max); `mlx_lm` 0.31.3 `BatchGenerator`, greedy, 64 new tokens per row, four short different prompts (left padded), median step time after the first step, 5 repetitions per run, 3 interleaved pairs per batch size (the order alternates), each run its own process. Arm A is the wheel built at `f91094a1` (shipped kernel on the decode path), arm B the wheel built at `c1422078` (this change). Absolute milliseconds are not comparable between chips or boots; only the in-process A/B ratios are used.
+Decode: kernel 7.1.12-2-20261029.2-lab-ARCH (16-inch M1 Max), 7.1.12-2-20261013.18-sep-ARCH (13-inch M1), 7.2.11-lab (14-inch M2 Max); `mlx_lm` 0.31.3 `BatchGenerator`, greedy, 64 new tokens per row, four short different prompts (left padded), median step time after the first step, 5 repetitions per run, 3 interleaved pairs per batch size (the order alternates), each run its own process. Arm A is the wheel built at `f91094a1` (shipped kernel on the decode path), arm B the wheel built at `c1422078` (this change). Absolute milliseconds are not comparable between chips or boots; only the in-process A/B ratios are used.
 
 | Chip | Batch | A, ms per step (3 runs) | B, ms per step (3 runs) | A / B (medians) |
 | --- | --- | --- | --- | --- |
@@ -37,13 +37,13 @@ Kernel level (one process, tile route / shipped 4-row / hoisted 4-row, 3 rounds 
 
 ## Batch 2 on the 14-inch M2 Max
 
-`batch2-route-diag-14-inch-M2-Max.log` (kernel 7.2.11-lab-7f91446, 3 interleaved pairs, median ms per step): shipped wheel, route on 28.02 and route off 28.03; this change, route on 29.06 and route off 28.13. With the route off the two wheels are equal, so the loss comes from the hoisted batch kernel and from nothing else in the wheel. On the 13-inch M1 the same four cells (`batch2-route-diag-13-inch-M1.log`) read 69.45 and 71.53 for the shipped wheel and 64.16 and 71.47 for this change: the route is worth 3 percent shipped and 11 percent hoisted there.
+`batch2-route-diag-14-inch-M2-Max.log` (kernel 7.2.11-lab, 3 interleaved pairs, median ms per step): shipped wheel, route on 28.02 and route off 28.03; this change, route on 29.06 and route off 28.13. With the route off the two wheels are equal, so the loss comes from the hoisted batch kernel and from nothing else in the wheel. On the 13-inch M1 the same four cells (`batch2-route-diag-13-inch-M1.log`) read 69.45 and 71.53 for the shipped wheel and 64.16 and 71.47 for this change: the route is worth 3 percent shipped and 11 percent hoisted there.
 
 The cause is not isolated. In isolation the hoisted kernel is not slower on the 14-inch M2 Max at 2 rows (above), and the shipped batch route gives no gain at batch 2 on that chip (28.02 against 28.03). The M2 batch-2 step also dispatches 1522 kernels against 883 at batch 3, with a different kernel mix, so it runs a different graph than batches 3 and 4.
 
 ### A per-quad variant did not fix it
 
-Written before any measurement (`PREREG.md`, Amendment 3), the hypothesis was that the whole-word form keeps 32 conversion floats live across the row loop and costs occupancy on the 14-inch M2 Max. The variant (`38ce0a37`) converts per quad, 8 conversion floats live, and runs the row loop inside the quad loop. It stays bit-identical (`per-quad-exactness-14-inch-M2-Max.log`: 0 of 144 datasets differ from the per-row kernel in all three wheels, same combined hash). On the 14-inch M2 Max (kernel 7.2.11-lab-e54bd23, `per-quad-decode-14-inch-M2-Max.log`, 3 interleaved triples per batch size, median ms per step, ids hash equal in all 27 runs):
+Written before any measurement (`PREREG.md`, Amendment 3), the hypothesis was that the whole-word form keeps 32 conversion floats live across the row loop and costs occupancy on the 14-inch M2 Max. The variant (`38ce0a37`) converts per quad, 8 conversion floats live, and runs the row loop inside the quad loop. It stays bit-identical (`per-quad-exactness-14-inch-M2-Max.log`: 0 of 144 datasets differ from the per-row kernel in all three wheels, same combined hash). On the 14-inch M2 Max (kernel 7.2.11-lab, `per-quad-decode-14-inch-M2-Max.log`, 3 interleaved triples per batch size, median ms per step, ids hash equal in all 27 runs):
 
 | Batch | shipped | this change | per-quad | this change / shipped | per-quad / shipped |
 | --- | --- | --- | --- | --- | --- |
@@ -60,7 +60,6 @@ It does not remove the batch-2 loss (0.970x), it loses the batch-3 gain (0.987x)
 - These logs do not record the Mesa build or the firmware.
 - The kernel-level exactness check compares the hoisted kernel with the shipped one through the `MLX_OMARCHY_QMV_SMALL_T` route (T = 2 to 16), which dispatches the same kernels; the decode check goes through the default batch route. `exact_fingerprint.py` checks the default route against the per-row kernel for the per-quad variant and does not prove the batch kernel ran in every cell.
 - Model: `Qwen3.8-2B-mlx-4Bit`, `model.safetensors` sha256 `b0d5de688567bf4acd5e421027acd410dabcdc255a5bd46fdbf06c75dc2e6863`.
-- Kernel release strings in the logs have an internal build label removed (for example `7.2.11-lab-7f91446`).
 
 ## Files
 
