@@ -1,0 +1,342 @@
+b2prof2 14-inch M2 Max 20261029T233306Z load 0.00 kernel 7.1.12-2-12.6-sep-ARCH free   25G
+venv-diag-s 0.32.4.dev202610292203+diag.a736744a
+venv-diag-h 0.32.4.dev202610292207+diag.42b30a2d
+-- S E2 round 1 23:33:06
+steps 28 wall 70.505 gpu 17.693 batch_kernel 2.332 other 15.341 gap 52.974 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.244 ms    210.0 disp
+  CastBF16F32                                       2.406 ms    150.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.332 ms    187.0 disp
+  CopyGeneralBF16                                   1.495 ms    108.0 disp
+  BinaryVecBF16                                     0.971 ms     72.0 disp
+  FastRmsNormAppleBF16                              0.816 ms     61.0 disp
+  UnaryVecBF16                                      0.793 ms     24.0 disp
+unprofiled wall median 29.217 ms over 60 steps
+-- H E2 round 1 23:33:16
+steps 28 wall 70.308 gpu 17.706 batch_kernel 2.308 other 15.417 gap 52.318 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.205 ms    210.0 disp
+  CastBF16F32                                       2.513 ms    150.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.308 ms    187.0 disp
+  CopyGeneralBF16                                   1.405 ms    108.0 disp
+  BinaryVecBF16                                     0.965 ms     72.0 disp
+  FastRmsNormAppleBF16                              0.877 ms     61.0 disp
+  UnaryVecBF16                                      0.797 ms     24.0 disp
+unprofiled wall median 28.855 ms over 60 steps
+-- S P2 round 1 23:33:26
+steps 28 wall 36.089 gpu 9.058 batch_kernel 2.343 other 6.732 gap 26.948 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.343 ms    187.0 disp
+  CopyGeneralBF16                                   1.407 ms     90.0 disp
+  BinaryVecBF16                                     0.758 ms     54.0 disp
+  CastBF16F32                                       0.756 ms     24.0 disp
+  FastRmsNormAppleBF16                              0.693 ms     61.0 disp
+  UnaryVecBF16                                      0.340 ms      6.0 disp
+  SwigluBF16                                        0.266 ms     24.0 disp
+unprofiled wall median 14.330 ms over 60 steps
+-- H P2 round 1 23:33:33
+steps 28 wall 35.788 gpu 8.560 batch_kernel 2.383 other 6.145 gap 27.211 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.383 ms    187.0 disp
+  CopyGeneralBF16                                   1.084 ms     90.0 disp
+  FastRmsNormAppleBF16                              0.795 ms     61.0 disp
+  BinaryVecBF16                                     0.706 ms     54.0 disp
+  CastBF16F32                                       0.391 ms     24.0 disp
+  ElementwiseI32                                    0.353 ms     18.0 disp
+  SwigluBF16                                        0.267 ms     24.0 disp
+unprofiled wall median 14.048 ms over 60 steps
+-- S E3 round 1 23:33:40
+steps 28 wall 72.321 gpu 16.658 batch_kernel 2.317 other 14.321 gap 55.591 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                2.895 ms    210.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.317 ms    187.0 disp
+  CastBF16F32                                       2.136 ms    150.0 disp
+  CopyGeneralBF16                                   1.559 ms    108.0 disp
+  BinaryVecBF16                                     0.955 ms     72.0 disp
+  ClearU32                                          0.763 ms     60.0 disp
+  FastRmsNormAppleBF16                              0.721 ms     61.0 disp
+unprofiled wall median 31.747 ms over 60 steps
+-- H E3 round 1 23:33:51
+steps 28 wall 71.121 gpu 16.989 batch_kernel 2.289 other 14.579 gap 54.156 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.071 ms    210.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.289 ms    187.0 disp
+  CastBF16F32                                       2.236 ms    150.0 disp
+  CopyGeneralBF16                                   1.576 ms    108.0 disp
+  BinaryVecBF16                                     0.855 ms     72.0 disp
+  FastRmsNormAppleBF16                              0.718 ms     61.0 disp
+  LogicalOrBool                                     0.700 ms     60.0 disp
+unprofiled wall median 30.294 ms over 60 steps
+-- S P3 round 1 23:34:01
+steps 28 wall 39.302 gpu 9.055 batch_kernel 2.641 other 6.370 gap 30.313 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.641 ms    187.0 disp
+  CopyGeneralBF16                                   1.090 ms     90.0 disp
+  FastRmsNormAppleBF16                              0.792 ms     61.0 disp
+  BinaryVecBF16                                     0.749 ms     54.0 disp
+  CastBF16F32                                       0.451 ms     24.0 disp
+  MatmulF32                                         0.329 ms     12.0 disp
+  ElementwiseI32                                    0.285 ms     18.0 disp
+unprofiled wall median 17.230 ms over 60 steps
+-- H P3 round 1 23:34:09
+steps 28 wall 37.593 gpu 8.809 batch_kernel 2.516 other 6.273 gap 28.853 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.516 ms    187.0 disp
+  CopyGeneralBF16                                   1.080 ms     90.0 disp
+  FastRmsNormAppleBF16                              0.769 ms     61.0 disp
+  BinaryVecBF16                                     0.751 ms     54.0 disp
+  CastBF16F32                                       0.393 ms     24.0 disp
+  ElementwiseI32                                    0.372 ms     18.0 disp
+  MatmulF32                                         0.318 ms     12.0 disp
+unprofiled wall median 15.796 ms over 60 steps
+-- H P3 round 2 23:34:16
+steps 28 wall 37.720 gpu 9.103 batch_kernel 2.573 other 6.543 gap 28.639 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.573 ms    187.0 disp
+  CopyGeneralBF16                                   1.365 ms     90.0 disp
+  BinaryVecBF16                                     0.838 ms     54.0 disp
+  FastRmsNormAppleBF16                              0.701 ms     61.0 disp
+  CastBF16F32                                       0.651 ms     24.0 disp
+  ClearU32                                          0.292 ms      6.0 disp
+  SwigluBF16                                        0.267 ms     24.0 disp
+unprofiled wall median 15.862 ms over 60 steps
+-- S P3 round 2 23:34:24
+steps 28 wall 39.158 gpu 8.935 batch_kernel 2.644 other 6.301 gap 30.205 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.644 ms    187.0 disp
+  CopyGeneralBF16                                   1.104 ms     90.0 disp
+  FastRmsNormAppleBF16                              0.798 ms     61.0 disp
+  BinaryVecBF16                                     0.743 ms     54.0 disp
+  CastBF16F32                                       0.417 ms     24.0 disp
+  MatmulF32                                         0.317 ms     12.0 disp
+  ElementwiseI32                                    0.304 ms     18.0 disp
+unprofiled wall median 17.285 ms over 60 steps
+-- H E3 round 2 23:34:31
+steps 28 wall 72.380 gpu 17.192 batch_kernel 2.297 other 14.818 gap 55.262 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.065 ms    210.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.297 ms    187.0 disp
+  CastBF16F32                                       2.194 ms    150.0 disp
+  CopyGeneralBF16                                   1.682 ms    108.0 disp
+  BinaryVecBF16                                     0.982 ms     72.0 disp
+  FastRmsNormAppleBF16                              0.721 ms     61.0 disp
+  ClearU32                                          0.721 ms     60.0 disp
+unprofiled wall median 30.394 ms over 60 steps
+-- S E3 round 2 23:34:42
+steps 28 wall 73.632 gpu 16.995 batch_kernel 2.355 other 14.591 gap 56.644 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                2.835 ms    210.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.355 ms    187.0 disp
+  CastBF16F32                                       2.213 ms    150.0 disp
+  CopyGeneralBF16                                   1.571 ms    108.0 disp
+  BinaryVecBF16                                     1.008 ms     72.0 disp
+  FastRmsNormAppleBF16                              0.763 ms     61.0 disp
+  LogicalOrBool                                     0.706 ms     60.0 disp
+unprofiled wall median 31.382 ms over 60 steps
+-- H P2 round 2 23:34:52
+steps 28 wall 35.437 gpu 8.550 batch_kernel 2.414 other 6.116 gap 26.835 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.414 ms    187.0 disp
+  CopyGeneralBF16                                   1.134 ms     90.0 disp
+  FastRmsNormAppleBF16                              0.705 ms     61.0 disp
+  BinaryVecBF16                                     0.627 ms     54.0 disp
+  CastBF16F32                                       0.370 ms     24.0 disp
+  SwigluBF16                                        0.267 ms     24.0 disp
+  ElementwiseLiteF32                                0.241 ms     12.0 disp
+unprofiled wall median 14.066 ms over 60 steps
+-- S P2 round 2 23:34:59
+steps 28 wall 36.005 gpu 9.106 batch_kernel 2.442 other 6.696 gap 26.932 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.442 ms    187.0 disp
+  CopyGeneralBF16                                   1.353 ms     90.0 disp
+  BinaryVecBF16                                     0.848 ms     54.0 disp
+  FastRmsNormAppleBF16                              0.694 ms     61.0 disp
+  CastBF16F32                                       0.675 ms     24.0 disp
+  SwigluBF16                                        0.266 ms     24.0 disp
+  ClearU32                                          0.264 ms      6.0 disp
+unprofiled wall median 14.399 ms over 60 steps
+-- H E2 round 2 23:35:06
+steps 28 wall 68.690 gpu 17.465 batch_kernel 2.325 other 15.075 gap 51.411 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.272 ms    210.0 disp
+  CastBF16F32                                       2.329 ms    150.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.325 ms    187.0 disp
+  CopyGeneralBF16                                   1.663 ms    108.0 disp
+  BinaryVecBF16                                     0.965 ms     72.0 disp
+  ClearU32                                          0.759 ms     60.0 disp
+  FastRmsNormAppleBF16                              0.750 ms     61.0 disp
+unprofiled wall median 29.645 ms over 60 steps
+-- S E2 round 2 23:35:16
+steps 28 wall 68.671 gpu 17.564 batch_kernel 2.305 other 15.213 gap 51.327 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.393 ms    210.0 disp
+  CastBF16F32                                       2.426 ms    150.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.305 ms    187.0 disp
+  CopyGeneralBF16                                   1.651 ms    108.0 disp
+  BinaryVecBF16                                     0.866 ms     72.0 disp
+  ClearU32                                          0.814 ms     60.0 disp
+  FastRmsNormAppleBF16                              0.725 ms     61.0 disp
+unprofiled wall median 29.202 ms over 60 steps
+-- S P2 round 3 23:35:26
+steps 28 wall 35.906 gpu 9.257 batch_kernel 2.438 other 6.825 gap 26.619 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.438 ms    187.0 disp
+  CopyGeneralBF16                                   1.508 ms     90.0 disp
+  BinaryVecBF16                                     0.940 ms     54.0 disp
+  FastRmsNormAppleBF16                              0.692 ms     61.0 disp
+  CastBF16F32                                       0.629 ms     24.0 disp
+  FastRopeBF16                                      0.338 ms     12.0 disp
+  SwigluBF16                                        0.267 ms     24.0 disp
+unprofiled wall median 14.346 ms over 60 steps
+-- H P2 round 3 23:35:33
+steps 28 wall 35.671 gpu 9.250 batch_kernel 2.436 other 6.803 gap 26.404 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.436 ms    187.0 disp
+  CopyGeneralBF16                                   1.518 ms     90.0 disp
+  BinaryVecBF16                                     0.951 ms     54.0 disp
+  FastRmsNormAppleBF16                              0.694 ms     61.0 disp
+  CastBF16F32                                       0.668 ms     24.0 disp
+  FastRopeBF16                                      0.303 ms     12.0 disp
+  SwigluBF16                                        0.266 ms     24.0 disp
+unprofiled wall median 14.196 ms over 60 steps
+-- S E2 round 3 23:35:40
+steps 28 wall 70.412 gpu 17.845 batch_kernel 2.358 other 15.541 gap 52.672 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.211 ms    210.0 disp
+  CastBF16F32                                       2.414 ms    150.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.358 ms    187.0 disp
+  CopyGeneralBF16                                   1.550 ms    108.0 disp
+  BinaryVecBF16                                     0.954 ms     72.0 disp
+  FastRmsNormAppleBF16                              0.887 ms     61.0 disp
+  UnaryVecBF16                                      0.772 ms     24.0 disp
+unprofiled wall median 28.781 ms over 60 steps
+-- H E2 round 3 23:35:50
+steps 28 wall 68.449 gpu 17.288 batch_kernel 2.302 other 14.936 gap 51.454 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.292 ms    210.0 disp
+  CastBF16F32                                       2.394 ms    150.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.302 ms    187.0 disp
+  CopyGeneralBF16                                   1.574 ms    108.0 disp
+  BinaryVecBF16                                     0.939 ms     72.0 disp
+  ClearU32                                          0.769 ms     60.0 disp
+  FastRmsNormAppleBF16                              0.725 ms     61.0 disp
+unprofiled wall median 29.359 ms over 60 steps
+-- H P3 round 3 23:36:00
+steps 28 wall 37.819 gpu 9.165 batch_kernel 2.569 other 6.636 gap 28.669 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.569 ms    187.0 disp
+  CopyGeneralBF16                                   1.529 ms     90.0 disp
+  BinaryVecBF16                                     0.884 ms     54.0 disp
+  FastRmsNormAppleBF16                              0.705 ms     61.0 disp
+  CastBF16F32                                       0.589 ms     24.0 disp
+  SwigluBF16                                        0.268 ms     24.0 disp
+  GatedDeltaDecodeBF16PfWide                        0.231 ms     18.0 disp
+unprofiled wall median 15.808 ms over 60 steps
+-- S P3 round 3 23:36:08
+steps 28 wall 39.134 gpu 9.431 batch_kernel 2.636 other 6.786 gap 29.640 disp 628.0 batch_disp 187.0
+  QmmVecQ4WordSubgroupBatch4BF16                    2.636 ms    187.0 disp
+  CopyGeneralBF16                                   1.444 ms     90.0 disp
+  CastBF16F32                                       0.813 ms     24.0 disp
+  BinaryVecBF16                                     0.749 ms     54.0 disp
+  FastRmsNormAppleBF16                              0.705 ms     61.0 disp
+  UnaryVecBF16                                      0.430 ms      6.0 disp
+  GatedDeltaDecodeBF16PfWide                        0.269 ms     18.0 disp
+unprofiled wall median 17.384 ms over 60 steps
+-- H E3 round 3 23:36:15
+steps 28 wall 72.337 gpu 17.242 batch_kernel 2.347 other 14.853 gap 55.214 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                3.030 ms    210.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.347 ms    187.0 disp
+  CastBF16F32                                       2.241 ms    150.0 disp
+  CopyGeneralBF16                                   1.735 ms    108.0 disp
+  BinaryVecBF16                                     0.991 ms     72.0 disp
+  ClearU32                                          0.776 ms     60.0 disp
+  FastRmsNormAppleBF16                              0.722 ms     61.0 disp
+unprofiled wall median 29.942 ms over 60 steps
+-- S E3 round 3 23:36:26
+steps 28 wall 73.444 gpu 16.732 batch_kernel 2.321 other 14.373 gap 56.579 disp 1225.0 batch_disp 187.0
+  ElementwiseLiteF32                                2.749 ms    210.0 disp
+  QmmVecQ4WordSubgroupBatch4BF16                    2.321 ms    187.0 disp
+  CastBF16F32                                       2.009 ms    150.0 disp
+  CopyGeneralBF16                                   1.608 ms    108.0 disp
+  BinaryVecBF16                                     1.110 ms     72.0 disp
+  LogicalOrBool                                     0.741 ms     60.0 disp
+  ClearU32                                          0.720 ms     60.0 disp
+unprofiled wall median 31.775 ms over 60 steps
+== compare E2: hoisted minus shipped
+arm A medians: {'wall_ms': 68.69, 'gpu_ms': 17.465, 'batch_kernel_ms': 2.308, 'other_ms': 15.075, 'gap_ms': 51.454, 'disp': 1225.0}
+arm B medians: {'wall_ms': 70.412, 'gpu_ms': 17.693, 'batch_kernel_ms': 2.332, 'other_ms': 15.341, 'gap_ms': 52.672, 'disp': 1225.0}
+A - B: {'wall_ms': -1.722, 'gpu_ms': -0.228, 'batch_kernel_ms': -0.023, 'other_ms': -0.266, 'gap_ms': -1.217, 'disp': 0.0}
+dWall -1.722 ms; dBatch/dWall 0.01; dOther/dWall 0.15; dGap/dWall 0.71
+  UnaryVecBF16                                   A-B   -0.107 ms per step
+  FillBF16                                       A-B   -0.086 ms per step
+  ElementwiseLiteF32                             A-B   -0.026 ms per step
+  BinaryVecBF16                                  A-B   +0.026 ms per step
+  FastRmsNormAppleBF16                           A-B   -0.025 ms per step
+  QmmVecQ4WordSubgroupBatch4BF16                 A-B   -0.020 ms per step
+  TakeU32                                        A-B   +0.019 ms per step
+  CopyGeneralBF16                                A-B   -0.018 ms per step
+  CastI32F32                                     A-B   -0.017 ms per step
+  TakeBF16                                       A-B   +0.011 ms per step
+== unprofiled E2
+hoisted [28.855, 29.645, 29.359] median 29.359; shipped [29.217, 29.202, 28.781] median 29.202; shipped/hoisted speed ratio 0.995
+== compare P2: hoisted minus shipped
+arm A medians: {'wall_ms': 35.671, 'gpu_ms': 8.56, 'batch_kernel_ms': 2.414, 'other_ms': 6.145, 'gap_ms': 26.835, 'disp': 628.0}
+arm B medians: {'wall_ms': 36.005, 'gpu_ms': 9.106, 'batch_kernel_ms': 2.438, 'other_ms': 6.732, 'gap_ms': 26.932, 'disp': 628.0}
+A - B: {'wall_ms': -0.333, 'gpu_ms': -0.546, 'batch_kernel_ms': -0.025, 'other_ms': -0.586, 'gap_ms': -0.096, 'disp': 0.0}
+dWall -0.333 ms; dBatch/dWall 0.07; dOther/dWall 1.76; dGap/dWall 0.29
+  CastBF16F32                                    A-B   -0.211 ms per step
+  CopyGeneralBF16                                A-B   -0.177 ms per step
+  UnaryVecBF16                                   A-B   -0.097 ms per step
+  BinaryVecBF16                                  A-B   -0.087 ms per step
+  ElementwiseI32                                 A-B   +0.051 ms per step
+  FastRmsNormAppleBF16                           A-B   +0.038 ms per step
+  LogicalOrBool                                  A-B   -0.036 ms per step
+  ElementwiseLiteF32                             A-B   +0.031 ms per step
+  MatmulF32                                      A-B   +0.030 ms per step
+  ClearU32                                       A-B   -0.027 ms per step
+== unprofiled P2
+hoisted [14.048, 14.066, 14.196] median 14.066; shipped [14.33, 14.399, 14.346] median 14.346; shipped/hoisted speed ratio 1.020
+== compare E3: hoisted minus shipped
+arm A medians: {'wall_ms': 72.337, 'gpu_ms': 17.192, 'batch_kernel_ms': 2.297, 'other_ms': 14.818, 'gap_ms': 55.214, 'disp': 1225.0}
+arm B medians: {'wall_ms': 73.444, 'gpu_ms': 16.732, 'batch_kernel_ms': 2.321, 'other_ms': 14.373, 'gap_ms': 56.579, 'disp': 1225.0}
+A - B: {'wall_ms': -1.107, 'gpu_ms': 0.46, 'batch_kernel_ms': -0.024, 'other_ms': 0.445, 'gap_ms': -1.365, 'disp': 0.0}
+dWall -1.107 ms; dBatch/dWall 0.02; dOther/dWall -0.40; dGap/dWall 1.23
+  ElementwiseLiteF32                             A-B   +0.229 ms per step
+  CastBF16F32                                    A-B   +0.105 ms per step
+  CopyGeneralBF16                                A-B   +0.085 ms per step
+  BinaryVecBF16                                  A-B   -0.082 ms per step
+  UnaryVecBF16                                   A-B   +0.052 ms per step
+  MatmulF32                                      A-B   -0.033 ms per step
+  QmmVecQ4WordSubgroupBatch4BF16                 A-B   -0.020 ms per step
+  FastRopeBF16                                   A-B   -0.019 ms per step
+  SelectF32                                      A-B   -0.018 ms per step
+  FastRmsNormAppleBF16                           A-B   -0.014 ms per step
+== unprofiled E3
+hoisted [30.294, 30.394, 29.942] median 30.294; shipped [31.747, 31.382, 31.775] median 31.747; shipped/hoisted speed ratio 1.048
+== compare P3: hoisted minus shipped
+arm A medians: {'wall_ms': 37.72, 'gpu_ms': 9.103, 'batch_kernel_ms': 2.569, 'other_ms': 6.543, 'gap_ms': 28.669, 'disp': 628.0}
+arm B medians: {'wall_ms': 39.158, 'gpu_ms': 9.055, 'batch_kernel_ms': 2.641, 'other_ms': 6.37, 'gap_ms': 30.205, 'disp': 628.0}
+A - B: {'wall_ms': -1.438, 'gpu_ms': 0.048, 'batch_kernel_ms': -0.072, 'other_ms': 0.172, 'gap_ms': -1.536, 'disp': 0.0}
+dWall -1.438 ms; dBatch/dWall 0.05; dOther/dWall -0.12; dGap/dWall 1.07
+  CopyGeneralBF16                                A-B   +0.112 ms per step
+  QmmVecQ4WordSubgroupBatch4BF16                 A-B   -0.088 ms per step
+  BinaryVecBF16                                  A-B   +0.078 ms per step
+  UnaryVecBF16                                   A-B   -0.071 ms per step
+  MatmulF32                                      A-B   -0.060 ms per step
+  ClearU32                                       A-B   +0.052 ms per step
+  FastRmsNormAppleBF16                           A-B   -0.040 ms per step
+  GatedDeltaDecodeBF16PfWide                     A-B   -0.028 ms per step
+  CastBF16F32                                    A-B   -0.016 ms per step
+  FastRopeBF16                                   A-B   -0.015 ms per step
+== unprofiled P3
+hoisted [15.796, 15.862, 15.808] median 15.808; shipped [17.23, 17.285, 17.384] median 17.285; shipped/hoisted speed ratio 1.093
+== compare hoisted: E2 minus P2
+arm A medians: {'wall_ms': 68.69, 'gpu_ms': 17.465, 'batch_kernel_ms': 2.308, 'other_ms': 15.075, 'gap_ms': 51.454, 'disp': 1225.0}
+arm B medians: {'wall_ms': 35.671, 'gpu_ms': 8.56, 'batch_kernel_ms': 2.414, 'other_ms': 6.145, 'gap_ms': 26.835, 'disp': 628.0}
+A - B: {'wall_ms': 33.019, 'gpu_ms': 8.905, 'batch_kernel_ms': -0.105, 'other_ms': 8.93, 'gap_ms': 24.619, 'disp': 597.0}
+dWall 33.019 ms; dBatch/dWall -0.00; dOther/dWall 0.27; dGap/dWall 0.75
+  ElementwiseLiteF32                             A-B   +3.074 ms per step
+  CastBF16F32                                    A-B   +1.936 ms per step
+  ClearU32                                       A-B   +0.628 ms per step
+  LogicalOrBool                                  A-B   +0.589 ms per step
+  UnaryVecBF16                                   A-B   +0.571 ms per step
+  ReduceF32                                      A-B   +0.498 ms per step
+  SelectF32                                      A-B   +0.411 ms per step
+  CopyGeneralBF16                                A-B   +0.302 ms per step
+  ElementwiseF32                                 A-B   +0.218 ms per step
+  GatedDeltaDecodeBF16PfWide                     A-B   -0.210 ms per step
+== compare hoisted: E3 minus P3
+arm A medians: {'wall_ms': 72.337, 'gpu_ms': 17.192, 'batch_kernel_ms': 2.297, 'other_ms': 14.818, 'gap_ms': 55.214, 'disp': 1225.0}
+arm B medians: {'wall_ms': 37.72, 'gpu_ms': 9.103, 'batch_kernel_ms': 2.569, 'other_ms': 6.543, 'gap_ms': 28.669, 'disp': 628.0}
+A - B: {'wall_ms': 34.617, 'gpu_ms': 8.089, 'batch_kernel_ms': -0.272, 'other_ms': 8.275, 'gap_ms': 26.545, 'disp': 597.0}
+dWall 34.617 ms; dBatch/dWall -0.01; dOther/dWall 0.24; dGap/dWall 0.77
+  ElementwiseLiteF32                             A-B   +2.903 ms per step
+  CastBF16F32                                    A-B   +1.680 ms per step
+  LogicalOrBool                                  A-B   +0.638 ms per step
+  ReduceF32                                      A-B   +0.609 ms per step
+  ClearU32                                       A-B   +0.570 ms per step
+  UnaryVecBF16                                   A-B   +0.452 ms per step
+  SelectF32                                      A-B   +0.425 ms per step
+  CopyGeneralBF16                                A-B   +0.340 ms per step
+  QmmVecQ4WordSubgroupBatch4BF16                 A-B   -0.242 ms per step
+  GatedDeltaDecodeBF16PfWide                     A-B   -0.240 ms per step
+done 23:36:36

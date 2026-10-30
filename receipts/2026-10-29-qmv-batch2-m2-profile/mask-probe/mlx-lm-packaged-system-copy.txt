@@ -1,0 +1,6 @@
+E2 lengths [12, 12]
+  B,T,mask_none,mask_shape,dtype,all_true (2, 1, False, (2, 1), 'mlx.core.bool', True) calls 36
+  B,T,mask_none,mask_shape,dtype,all_true (2, 11, True, None, None, None) calls 18
+P2 lengths [12, 13]
+  B,T,mask_none,mask_shape,dtype,all_true (2, 1, True, None, None, None) calls 36
+  B,T,mask_none,mask_shape,dtype,all_true (2, 12, False, (2, 12), 'mlx.core.bool', True) calls 18
