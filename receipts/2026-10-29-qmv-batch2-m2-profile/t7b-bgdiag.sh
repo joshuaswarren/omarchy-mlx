@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Wrapper: batch decode A/B/C (mlx_lm BatchGenerator, B = 2, 3, 4 rows, greedy, 64 tokens, Qwen3.8-2B 4-bit) on one Mac.
-#   t7b-bgdecode3.sh jw16|m2|jwm1
+#   t7b-bgdiag.sh hostB|m2|hostC
 # A = ~/t7/venv-diag-s (a736744a, shipped kernel), B = ~/t7/venv-diag-h (42b30a2d, whole-word hoist); diagnostics wheels run unprofiled (no MLX_OMARCHY_GPU_PROFILE).
 # Three interleaved pairs per B (the order rotates); every run is its own process; the row ids hash must be equal in all runs of one B.
 # GPU, no download, cap 25 min (expect 8). Apple Honeykrisp ICD only.
 set -u
 HOST=${1:?host}
 case "$HOST" in
-  jw16) MODEL="$HOME/scratch/w7q-model/q38-2b" ;;
-  m2|jwm1) MODEL=$(ls -d "$HOME"/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/* | head -1) ;;
+  hostB) MODEL="$HOME/scratch/model/q38-2b" ;;
+  m2|hostC) MODEL=$(ls -d "$HOME"/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/* | head -1) ;;
   *) echo "host?"; exit 64 ;;
 esac
 OUT="$HOME/t7/results"; mkdir -p "$OUT"

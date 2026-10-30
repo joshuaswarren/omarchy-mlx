@@ -1,6 +1,6 @@
 # Batch 2 on a 14-inch M2 Max with the hoisted qmv kernel (issue 304): where the time goes
 
-Result: the batch-2 step that #303 made 2 to 5 percent slower is an unpadded batch decoding through the composed gated-delta fallback, not a slow batch kernel. In the batch kernel the hoist is neutral to faster in every row set. The fallback comes from an all-true mask that the mlx-lm copy in the 0.7.28 system package passes at every decode step of a batch with no padded row; the current omarchy-mlx patch series passes none (CPU probes below). The GPU run that shows the current series removes the slowness has not run yet, so that part of the explanation is a prediction (`PREREG.md`, Amendment 3).
+Result: batch 2 in every #303 table is an unpadded batch, and an unpadded batch decodes through the composed gated-delta fallback (1225 dispatches and about twice the step time of a padded batch) when mlx-lm passes an all-true mask at every decode step, as the copy in the 0.7.28 system package does; the current omarchy-mlx patch series passes none (CPU probes below). The 2 to 5 percent batch-2 loss of #303 is **not explained**: the batch kernel is not slower in the profile in any row set (the medians put the hoisted kernel 0.02 to 0.07 ms faster per step, and the three rounds overlap in three of the four sets), the unprofiled profile-driver ratio at the unpadded 2-row set is 0.995, and the decode A/B on the same prompts is 0.978 in all three pairs. The GPU run that would show whether the current series removes the slowness and the loss has not run yet (`PREREG.md`, Amendment 3, predictions written first).
 
 Everything below ran on a 14-inch M2 Max, stock kernel 7.1.12-2-12.6-sep-ARCH, Qwen3.8-2B 4-bit, `mlx_lm` 0.31.3 from the 0.7.28 system package, two diagnostics wheels that differ only by #303 (shipped `a736744a`, hoisted `42b30a2d`), greedy decode, `MLX_DISABLE_COMPILE=1`.
 
@@ -27,7 +27,7 @@ Speed ratio, shipped over hoisted, unprofiled: E2 0.995, P2 1.020, E3 1.048, P3 
 
 - The unpadded sets run 1225 dispatches per step and take about twice the step time of the padded sets (E2 29.2 ms against P2 14.3 ms). The GPU is busy for about a quarter of the profiled window in every set; the rest is host time between dispatches.
 - The 600 extra dispatches are the composed gated-delta update: in the unpadded sets `GatedDeltaDecodeBF16PfWide` (18 layers, 18 dispatches) is absent, and `ElementwiseLiteF32` (+198 per step), `CastBF16F32` (+126), `ClearU32` and `LogicalOrBool` (+54 each), `ReduceF32` and `SelectF32` (+36 each) and smaller families appear instead.
-- The batch kernel (`QmmVecQ4WordSubgroupBatch4BF16`) takes 2.3 to 2.6 ms per step in every set, and the hoisted wheel is 0.02 to 0.09 ms faster per step than the shipped one in all four. No set shows the batch kernel slower.
+- The batch kernel (`QmmVecQ4WordSubgroupBatch4BF16`) takes 2.3 to 2.6 ms per step in every set, and the hoisted wheel is 0.02 to 0.07 ms faster per step than the shipped one in the medians of all four sets (0.024, 0.024, 0.024 and 0.072 ms; the three rounds overlap in E2, P2 and E3). No set shows the batch kernel slower in the medians.
 
 ## Same decode harness as #303, on the stock kernel (`stock-kernel-decode-ab.log`, `t7b-bgdiag.sh`)
 
@@ -66,4 +66,5 @@ The probe does not explain why the padded prefill mask has false entries in the 
 - `PREREG.md`: the plan and its three amendments, each written before the run it precedes.
 - `stock-kernel-profile/`: per-cell profiled summaries (`*-sum.json`), unprofiled step medians (`*-u-wall.json`) and the run log.
 - `stock-kernel-decode-ab.log`, `mask-probe/`: raw output.
-- `t7b-b2prof2.sh`, `t7b-bgdiag.sh`, `t7b-nopad2.sh`, `profile_batch_driver2.py`, `b2prof_summary.py`, `mask_probe.py`, `tabulate_stock_profile.py`: the scripts (host paths come from `$HOME`).
+- `mask-probe/make-mask-excerpts.txt`: `ArraysCache.make_mask` in the packaged copy and in the current patch series (the two test lines differ).
+- `t7b-b2prof2.sh`, `t7b-bgdiag.sh`, `t7b-nopad2.sh`, `profile_batch_driver2.py`, `b2prof_summary.py`, `mask_probe.py`, `tabulate_stock_profile.py`: the scripts (paths come from `$HOME`; host names (hostB, hostC) and private scratch-directory names are replaced by generic ones in these copies, the logic is unchanged).

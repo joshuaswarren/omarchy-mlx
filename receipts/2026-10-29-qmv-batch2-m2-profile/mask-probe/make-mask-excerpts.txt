@@ -1,0 +1,39 @@
+# Packaged copy (omarchy-mlx 0.7.28 system package), mlx_lm/models/cache.py, ArraysCache.make_mask:
+    def make_mask(self, N: int):
+        if (
+            _SSM_MASKLESS_UNPADDED
+            and self.left_padding is not None
+            and self.lengths is None
+            and self.left_padding_list is not None
+            and not any(self.left_padding_list)
+        ):
+            return None
+        if self.left_padding is not None:
+            pos = mx.arange(N)
+            return pos >= self.left_padding[:, None]
+        elif self.lengths is not None:
+            pos = mx.arange(N)
+            return pos < self.lengths[:, None]
+        else:
+            return None
+
+# Current patch series (scripts/patch-mlx-lm-ssm-maskless.py at 42b30a2d, applied to pristine mlx-lm 0.31.3), ArraysCache.make_mask:
+                self.left_padding_list = [p - N for p in mirror]
+
+    def make_mask(self, N: int):
+        if (
+            _SSM_MASKLESS_UNPADDED
+            and self.left_padding is not None
+            and self.lengths is None
+            and self.left_padding_list is not None
+            and all(p <= 0 for p in self.left_padding_list)
+        ):
+            return None
+        if self.left_padding is not None:
+            pos = mx.arange(N)
+            return pos >= self.left_padding[:, None]
+        elif self.lengths is not None:
+            pos = mx.arange(N)
+            return pos < self.lengths[:, None]
+        else:
+            return None

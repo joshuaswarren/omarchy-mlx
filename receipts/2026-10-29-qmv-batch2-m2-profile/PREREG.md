@@ -1,6 +1,6 @@
 # PREREG: why decode batch 2 takes longer on a 14-inch M2 Max with the hoisted batch qmv kernel (issue 304; nothing run yet)
 
-Written 2026-10-29 (about 22:10Z) before any measurement of this question.
+Written 2026-10-29 (committed 21:54Z) before any measurement of this question.
 
 ## Question
 
@@ -44,7 +44,7 @@ If the profile has no usable GPU timestamps on this chip (the 2026-10-03 prefill
 
 No kernel change, no routing change by row count, no new wheel behavior. A fix needs the cause first and goes in a separate pull request with its own preregistration amendment.
 
-## Amendment 1 (2026-10-29, about 23:40Z; written after a first profile run and before the second)
+## Amendment 1 (2026-10-29, committed 23:25Z; written after a first profile run, which ran 23:19 to 23:21Z, and before the second, which ran 23:33 to 23:36Z)
 
 What the first run (`t7b-b2prof.sh`, three rounds, kernel stock, GPU timestamps on) showed, and what went wrong with it:
 
@@ -63,9 +63,9 @@ Second run (`t7b-b2prof2.sh`): shipped and hoisted diagnostics wheels, four row 
 
 Not changed: no kernel change or routing change comes out of this experiment; a fix goes in its own pull request.
 
-## Amendment 2 (2026-10-30, about 00:30Z; written after the second run and a CPU probe, before the third)
+## Amendment 2 (2026-10-30, committed 00:13Z; written after the second run and a CPU probe, before the third)
 
-Results that are in (second run, stock kernel, `t7b-b2prof2.sh`): the unpadded sets E2 and E3 run 1225 dispatches per step and take 29.2 ms (E2) and about 30 to 32 ms (E3); the padded sets P2 and P3 run 628 dispatches and take 14.3 and 15.8 to 17.3 ms. H4 held. In the unpadded sets the 18 gated-delta layers show no `GatedDeltaDecodeBF16PfWide` dispatch (0 against 18 per step) and about 600 more dispatches of elementwise, cast, clear, logical-or, select and reduce kernels, which is the composed fallback. Hoisted against shipped, unprofiled, speed ratio: E2 0.995, P2 1.020, E3 1.048, P3 1.093. Under the profiler the batch kernel itself is not slower in any set (hoisted minus shipped 0.02 to 0.09 ms faster per step).
+Results that are in (second run, stock kernel, `t7b-b2prof2.sh`): the unpadded sets E2 and E3 run 1225 dispatches per step and take 29.2 ms (E2) and about 30 to 32 ms (E3); the padded sets P2 and P3 run 628 dispatches and take 14.3 and 15.8 to 17.3 ms. H4 held. In the unpadded sets the 18 gated-delta layers show no `GatedDeltaDecodeBF16PfWide` dispatch (0 against 18 per step) and about 600 more dispatches of elementwise, cast, clear, logical-or, select and reduce kernels, which is the composed fallback. Hoisted against shipped, unprofiled, speed ratio: E2 0.995, P2 1.020, E3 1.048, P3 1.093. Under the profiler the batch kernel itself is not slower in any set (hoisted minus shipped 0.02 to 0.07 ms faster per step).
 
 Cause, from a CPU probe of the arguments `gated_delta_update` receives (`mask_probe.py`, Qwen3.8-2B, mlx-lm 0.31.3): for two prompts of equal length every decode call carries an all-true mask of shape (2, 1); for prompts of 12 and 13 tokens decode calls carry `mask=None`. The backend takes the fused decode kernel at B > 1 only without a mask (`fused_ready` in `GatedDeltaUpdate::eval_gpu`: `B == 1 || (T == 1 && !has_mask)`). `BatchGenerator._process_prompts` calls `finalize()` on the caches only when some prompt was padded; `ArraysCache.finalize` is what drops the left padding, so an unpadded batch keeps a left padding of zeros and `make_mask` builds an all-true mask at every decode step.
 
@@ -77,15 +77,15 @@ Third run (`t7b-nopad.sh`): the same hoisted diagnostics wheel with and without 
 
 The finding does not change the status of #303: the hoisted kernel is faster in the padded sets and equal or slightly slower only in the unpadded path, where the step is dominated by the composed fallback. The extra dispatches and the 2x step time belong to the mask handling above and have their own fix.
 
-## Amendment 3 (2026-10-30, about 01:15Z; written after the CPU probes of three mlx-lm states and before the next GPU run)
+## Amendment 3 (2026-10-30, about 00:50Z; written after the CPU probes of three mlx-lm states and before the next GPU run)
 
 Amendment 2 proposed a one-block mlx-lm patch (`finalize()` on every batch). It is withdrawn. The omarchy-mlx patch series already carries the fix: `scripts/patch-mlx-lm-ssm-maskless.py` makes `ArraysCache.make_mask` return `None` for a batch with no padded row, and its current form tests `all(p <= 0 ...)` on a host copy of the left padding, which stays true after `advance()` lowers the padding below zero. The copy of mlx-lm in the 0.7.28 system package, which every measurement in this receipt used through the diagnostics venvs, carries an older form of the same patch (`not any(left_padding_list)`), true only before the first token. The CPU probes (`mask-probe/`) show what `gated_delta_update` receives in decode for two prompts of equal length: pristine mlx-lm 0.31.3, an all-true (2, 1) mask at every call; the packaged copy, an all-true mask at every decode call and none in prefill; the current patch series, no mask in prefill or decode. For prompts of 12 and 13 tokens every state gives no mask in decode.
 
-So the slow unpadded batch decode and the batch-2 loss belong to the older mlx-lm patch state, not to the wheel. What this receipt has not shown on a GPU is that the current series removes the slowness and what the hoist does at 2 rows under it. The next run (`t7b-nopad2.sh`) crosses the shipped and hoisted diagnostics wheels with the packaged mlx-lm (U) and the current patch series applied to a pristine 0.31.3 tree (F), for the unpadded (E2) and padded (P2) two-row sets, three rounds, profiled and unprofiled. Predictions, before the run:
+So the slow unpadded batch decode follows from the older mlx-lm patch state. The 2 to 5 percent batch-2 loss is not explained by it: the unprofiled profile-driver ratio at E2 is 0.995 and the decode A/B on the same prompts is 0.978 in all three pairs, and neither shows a mechanism. What this receipt has not shown on a GPU is that the current series removes the slowness and what the hoist does at 2 rows under it. The next run (`t7b-nopad2.sh`) crosses the shipped and hoisted diagnostics wheels with the packaged mlx-lm (U) and the current patch series applied to a pristine 0.31.3 tree (F), for the unpadded (E2) and padded (P2) two-row sets, three rounds, profiled and unprofiled. Predictions, before the run:
 
 - Under F, E2 runs the fused gated-delta decode kernel: `GatedDeltaDecodeBF16PfWide` 18 per step and about 628 dispatches (P 90 percent), and the unprofiled step is within 10 percent of the P2 step under F (P 80 percent).
 - Under U the run reproduces the second run: E2 1225 dispatches and no `PfWide` (P 95 percent).
-- Under F the hoisted wheel is not slower than the shipped wheel at E2: speed ratio 1.00 or more (P 70 percent). The 2.2 to 5.6 percent loss measured under U is then the hoisted kernel inside a host-bound fallback graph, not a property of the kernel.
+- Under F the hoisted wheel is not slower than the shipped wheel at E2: speed ratio 1.00 or more (P 70 percent). The 2.2 to 5.6 percent loss measured under U is then specific to the fallback graph; if it persists under F, it is unexplained.
 - P2: F and U give the same dispatch count and the same step time within 3 percent (P 85 percent), because both pass no mask there.
 
 If the first prediction fails, the all-true mask is not the whole cause and the cause stays open. Nothing here changes the code of #303.
