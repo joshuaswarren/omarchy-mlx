@@ -11,7 +11,7 @@ Tag `v0.7.35` at `42b30a2de2f8b42e673cc50eaca9f7b145f04ac6` (main, CI green at t
 | `omarchy-mlx-wheel-cp314-aarch64.whl` (same bytes) | 422425505 | `39671c8a1e34c52cb2d575514e3b6bb00b2d1d8bbd2b21ae2f5dfad9c19fba82` |
 | `omarchy-mlx-vendor-wheels-v0.7.35-cp314-aarch64.tar` | 467558400 | `568b312cb297f951200a2d341ede04ec3641ccab2fc3732f8ab7cbb50d1cc1a7` |
 | `omarchy-mlx-vendor-wheels-v0.7.35-cp314-aarch64.tar.sha256` | 118 | `57bd358daabcbbee350ae10dfb1cb50f8e8bb043859e472883881aa4bdf13877` |
-| `SHA256SUMS` (covers the other five) | 624 | recorded in the release |
+| `SHA256SUMS` (covers the other five) | 624 | `4e19a32808794893c6be3adb88e31c543b65e0c382980e8ad6da8706d9847eda` |
 
 The x86_64 wheel was built on the x86_64 development machine. The aarch64 wheel and the vendored wheel set were built on a 16-inch M1 Max from a detached checkout of the tag commit (`git status` empty, build log stamped `42b30a2d`). `python3 scripts/check-version-stability.py .work/mlx` passed for the x86_64 build.
 
@@ -32,7 +32,7 @@ Details of the M2 run: the fresh Hugging Face cache held 6,824,246,720 bytes aft
 
 g13 and g15 ran on the 16-inch M1 Max, not on the 13-inch M1 as for v0.7.34: the 13-inch M1 had about 6 GB of free disk and the wheel build tree that g13 and g15 compile in needs about 2 GB on top of the assets. The test binaries were built from the tag commit on the 16-inch M1 Max (`omarchy_gdn_maskless_correctness_tests`, `omarchy_eq_math_tests`, `omarchy_trig_reduction_tests`). The case and assertion counts equal the v0.7.34 run.
 
-Attempts before these results. All failures came from my harness, not from the release:
+Attempts before these results. All failures came from my harness, not from the release. The logs of the first two attempts were not kept; the third is in the run's own output:
 
 - First M2 battery run: the wrapper took the GPU lock with `flock` inside a queue ticket that already held it, waited its 600 second limit and exited 1 before any gate ran (no gate log, no download). The second run removed the nested lock and passed.
 - First g13 and g15 run: the queue admitted it before the test binaries existed (a reboot of the host had killed the detached build), so both gates refused ("binary not built"). The configure step then failed with `BLAS_INCLUDE_DIRS NOTFOUND` until `CMAKE_INCLUDE_PATH=/usr/include/openblas` was set, as in the v0.7.34 run on the other host. Both gates passed on the next run.
@@ -56,4 +56,4 @@ Median 72.16. Generated token ids identical in all five runs (`sha256:775bf034e1
 
 ## Known cost carried by this release
 
-Batch 2 with equal-length prompts on a 14-inch M2 Max takes 5.6 percent longer per step on two lab kernels and 2.2 percent longer on the stock kernel (`receipts/2026-10-29-qmv-batch-hoist/`). A batch of 2 with prompts of different length is 1.020x faster. The cause sits in mlx-lm (an all-true mask in every decode step of an unpadded batch), and issue 304 tracks the fix.
+Batch 2 on a 14-inch M2 Max takes 5.6 percent longer per step than with the previous kernel (29.1 ms against 27.6 ms, 0.947x speed; `receipts/2026-10-29-qmv-batch-hoist/`). The cause is not isolated; issue 304 tracks it.
