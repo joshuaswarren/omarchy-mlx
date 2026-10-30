@@ -62,3 +62,17 @@ Second run (`t7b-b2prof2.sh`): shipped and hoisted diagnostics wheels, four row 
 - If the unprofiled loss follows the unpadded sets, the cause is in what the unpadded path does around the batch kernel, and the profiled kernel table (batch kernel time per shape, hoisted against shipped) says whether the batch kernel itself is slower there.
 
 Not changed: no kernel change or routing change comes out of this experiment; a fix goes in its own pull request.
+
+## Amendment 2 (2026-10-30, about 00:30Z; written after the second run and a CPU probe, before the third)
+
+Results that are in (second run, stock kernel, `t7b-b2prof2.sh`): the unpadded sets E2 and E3 run 1225 dispatches per step and take 29.2 ms (E2) and about 30 to 32 ms (E3); the padded sets P2 and P3 run 628 dispatches and take 14.3 and 15.8 to 17.3 ms. H4 held. In the unpadded sets the 18 gated-delta layers show no `GatedDeltaDecodeBF16PfWide` dispatch (0 against 18 per step) and about 600 more dispatches of elementwise, cast, clear, logical-or, select and reduce kernels, which is the composed fallback. Hoisted against shipped, unprofiled, speed ratio: E2 0.995, P2 1.020, E3 1.048, P3 1.093. Under the profiler the batch kernel itself is not slower in any set (hoisted minus shipped 0.02 to 0.09 ms faster per step).
+
+Cause, from a CPU probe of the arguments `gated_delta_update` receives (`mask_probe.py`, Qwen3.8-2B, mlx-lm 0.31.3): for two prompts of equal length every decode call carries an all-true mask of shape (2, 1); for prompts of 12 and 13 tokens decode calls carry `mask=None`. The backend takes the fused decode kernel at B > 1 only without a mask (`fused_ready` in `GatedDeltaUpdate::eval_gpu`: `B == 1 || (T == 1 && !has_mask)`). `BatchGenerator._process_prompts` calls `finalize()` on the caches only when some prompt was padded; `ArraysCache.finalize` is what drops the left padding, so an unpadded batch keeps a left padding of zeros and `make_mask` builds an all-true mask at every decode step.
+
+Third run (`t7b-nopad.sh`): the same hoisted diagnostics wheel with and without a one-block mlx-lm patch that calls `finalize()` for every batch (`patches/mlx-lm-batch-finalize.patch`), row sets E2, P2, E3, P3, three rounds, profiled pass (dispatch counts) and unprofiled pass (64 steps, step wall time, token-stream hash). Predictions, before the run:
+
+- E2 and E3 patched: 628 dispatches per step and the batch kernel unchanged in count (P 90 percent); unprofiled step wall within 5 percent of the matching padded set (E2 patched about 14 to 15 ms; E3 patched about 16 to 18 ms) (P 80 percent).
+- P2 and P3 patched: identical to unpatched, dispatch counts equal and token-stream hash equal (P 95 percent).
+- Token-stream hash, E2 and E3, patched against unpatched: equal (P 60 percent). The fused decode kernel and the composed ops are not bit-equal in general; they may agree over 64 greedy tokens or not. A difference is reported, not treated as a failure.
+
+The finding does not change the status of #303: the hoisted kernel is faster in the padded sets and equal or slightly slower only in the unpadded path, where the step is dominated by the composed fallback. The extra dispatches and the 2x step time belong to the mask handling above and have their own fix.
