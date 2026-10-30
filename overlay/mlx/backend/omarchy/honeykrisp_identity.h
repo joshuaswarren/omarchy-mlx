@@ -341,4 +341,64 @@ inline const std::string& stock_driver_warning_recorded() {
   return detail::stock_driver_warning_slot();
 }
 
+
+// mlx-lm serve patches (docs/INSTALL.md). Stock mlx-lm 0.31.x runs the
+// gated-delta update of hybrid models (Qwen3.5, Qwen3.6, Qwen3.8 and others)
+// as a Python loop of tiny ops on a non-Metal GPU: one token, four dispatches
+// per linear-attention layer and a host synchronization per layer. The vendored
+// patch series routes it to mx.fast.gated_delta_update. On a 16-inch M1 Max the
+// Qwen3.6-35B-A3B 4-bit prefill reads 44 tokens per second on stock mlx-lm and
+// 181 with the series (receipts/2026-10-30-moe-prefill-35b). The unpatched
+// loop is never one primitive, so the backend cannot see it as a fallback;
+// the check reads the one file that decides it, beside the loaded libmlx.
+struct MlxLmPatchCheck {
+  bool warn{false};
+  std::string message;
+};
+
+// `lib_dir` is the directory of the loaded libmlx
+// (<site-packages>/mlx/lib). Silent when mlx-lm is not installed beside it,
+// when the file is unreadable, or when it carries the fused route.
+inline MlxLmPatchCheck mlx_lm_patch_warning(const std::string& lib_dir) {
+  MlxLmPatchCheck check;
+  if (lib_dir.empty()) {
+    return check;
+  }
+  const std::filesystem::path file = std::filesystem::path(lib_dir) / ".." /
+      ".." / "mlx_lm" / "models" / "gated_delta.py";
+  std::ifstream in(file);
+  if (!in) {
+    return check;
+  }
+  const std::string text(
+      (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (text.find("mx.fast.gated_delta_update") != std::string::npos) {
+    return check;
+  }
+  check.warn = true;
+  check.message =
+      "The mlx-lm in this environment has no omarchy serve patches. Hybrid"
+      " models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill and decode"
+      " several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B"
+      " prefill). Fix: install.sh --patch-venv <this venv>. Silence with"
+      " MLX_OMARCHY_NO_MLXLM_WARNING=1.";
+  return check;
+}
+
+// Prints the warning once per process, the first time a device identity is
+// resolved. `lib_dir` empty means the library path could not be determined.
+inline void note_mlx_lm_patches(const std::string& lib_dir) {
+  static std::once_flag once;
+  std::call_once(once, [&] {
+    const char* off = std::getenv("MLX_OMARCHY_NO_MLXLM_WARNING");
+    if (off != nullptr && off[0] != '\0' && off[0] != '0') {
+      return;
+    }
+    const MlxLmPatchCheck check = mlx_lm_patch_warning(lib_dir);
+    if (check.warn) {
+      std::fprintf(stderr, "[omarchy] warning: %s\n", check.message.c_str());
+    }
+  });
+}
+
 } // namespace mlx::core::omarchy
