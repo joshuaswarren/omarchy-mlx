@@ -378,7 +378,7 @@ inline MlxLmPatchCheck mlx_lm_patch_warning(const std::string& lib_dir) {
   check.warn = true;
   check.message =
       "The mlx-lm in this environment has no omarchy serve patches. Hybrid"
-      " models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill and decode"
+      " models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill"
       " several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B"
       " prefill). Fix: install.sh --patch-venv <this venv>. Silence with"
       " MLX_OMARCHY_NO_MLXLM_WARNING=1.";
