@@ -496,6 +496,43 @@ TEST_CASE("ANE lock files are created and repaired to world access") {
   std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("an mlx-lm without the omarchy gated-delta route warns once with the fix") {
+  using mlx::core::omarchy::mlx_lm_patch_warning;
+  namespace fs = std::filesystem;
+  // Layout of a venv: site-packages/mlx/lib/libmlx.so next to
+  // site-packages/mlx_lm/models/gated_delta.py. The check reads one file and
+  // never imports Python.
+  const fs::path root = fs::temp_directory_path() / "omarchy-mlxlm-check";
+  fs::remove_all(root);
+  const fs::path lib = root / "site-packages" / "mlx" / "lib";
+  const fs::path models = root / "site-packages" / "mlx_lm" / "models";
+  fs::create_directories(lib);
+  auto write = [&](const char* text) {
+    fs::create_directories(models);
+    std::ofstream(models / "gated_delta.py") << text;
+  };
+  // No mlx-lm in the venv (a plain MLX user): silent.
+  CHECK_FALSE(mlx_lm_patch_warning(lib.string()).warn);
+  // Stock mlx-lm 0.31.3: the composed per-token loop is the non-Metal path.
+  write(
+      "def gated_delta_update(q, k, v, a, b, A_log, dt_bias, state, mask):\n"
+      "    return gated_delta_ops(q, k, v, g, beta, state, mask)\n");
+  const auto stock = mlx_lm_patch_warning(lib.string());
+  CHECK(stock.warn);
+  CHECK(stock.message.find("--patch-venv") != std::string::npos);
+  CHECK(stock.message.find("Qwen3.5") != std::string::npos);
+  CHECK(stock.message.find("slower") != std::string::npos);
+  // The patched file routes to the fused primitive: silent.
+  write(
+      "def gated_delta_update(q, k, v, a, b, A_log, dt_bias, state, mask):\n"
+      "    out, st = mx.fast.gated_delta_update(q, k, v, g, beta, state, mask)\n");
+  CHECK_FALSE(mlx_lm_patch_warning(lib.string()).warn);
+  // An unreadable or missing library directory is silent, never an error.
+  CHECK_FALSE(mlx_lm_patch_warning("").warn);
+  CHECK_FALSE(mlx_lm_patch_warning((root / "nowhere").string()).warn);
+  fs::remove_all(root);
+}
+
 TEST_CASE("a stock system Mesa older than 26.2.4 warns on shift-heavy kernels") {
   using mlx::core::omarchy::stock_driver_warning;
   // The stock release strings report "Mesa <release> (git-<sha>)"; the

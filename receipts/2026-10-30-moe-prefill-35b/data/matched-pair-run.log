@@ -1,0 +1,31 @@
+moeprof2 hostB 20261030T222848Z load 0.96 kernel 7.1.12-2-20261029.2-lab-ARCH free   86G
+wheel 0.32.4.dev202610292207+diag.42b30a2d U0 mlx_lm ~/t7/venv-diag-h/lib/python3.14/site-packages/mlx_lm/__init__.py
+F  mlx_lm ~/scratch/mlxlm-series/mlx_lm/__init__.py
+-- U0-r1 22:28:49
+prefill 2048 tokens in 46.896 s over 4 chunks = 43.67 tok/s
+-- F-r1 22:29:53
+prefill 2048 tokens in 11.335 s over 4 chunks = 180.68 tok/s
+-- U0-r2 22:30:13
+prefill 2048 tokens in 46.358 s over 4 chunks = 44.18 tok/s
+-- F-r2 22:31:17
+prefill 2048 tokens in 11.336 s over 4 chunks = 180.66 tok/s
+-- FP 22:31:37
+prefill 2048 tokens in 12.087 s over 4 chunks = 169.43 tok/s
+steps 3 wall 3069.146 gpu 107.261 batch_kernel 0.000 other 107.261 gap 2961.574 disp 4986 batch_disp 0
+  ArgSortMergeU32                                  20.115 ms   1840.0 disp
+  ArangeU32                                        18.140 ms    120.0 disp
+  CopyGeneralU32                                   10.544 ms    240.0 disp
+  CopyGeneralBF16                                   7.186 ms    340.0 disp
+  QmmPrefillCoopmatBF16X32FullNLdsPad               6.751 ms    250.0 disp
+  CastBF16F32                                       5.446 ms    450.0 disp
+  GatherQmmTileBF16                                 5.286 ms    120.0 disp
+  BinaryVecBF16                                     2.707 ms    190.0 disp
+  TakeBF16                                          2.620 ms     82.0 disp
+  ElementwiseLiteBF16                               2.616 ms    120.0 disp
+  ArgSortU32                                        2.310 ms     80.0 disp
+  SortU32                                           2.269 ms     80.0 disp
+U0-r1 unprofiled wall median 11749.399 ms over 3 steps
+F-r1 unprofiled wall median 2876.081 ms over 3 steps
+U0-r2 unprofiled wall median 11645.454 ms over 3 steps
+F-r2 unprofiled wall median 2876.709 ms over 3 steps
+done 22:31:58

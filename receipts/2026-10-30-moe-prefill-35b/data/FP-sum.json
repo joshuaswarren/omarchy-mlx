@@ -1,0 +1,167 @@
+{
+ "label": "~/t7/results/moeprof2-20261030T222848Z/FP.ndjson",
+ "steady_steps": 3,
+ "batch": null,
+ "wall_ms": 3069.146137,
+ "gpu_ms": 107.26079100000034,
+ "batch_kernel_ms": 0.0,
+ "other_ms": 107.26079100000034,
+ "gap_ms": 2961.574234,
+ "disp": 4986,
+ "batch_kernel_dispatches": 0,
+ "by_name": {
+  "ArangeU32": {
+   "ms": 18.14046,
+   "n": 120
+  },
+  "ArgSortBF16": {
+   "ms": 1.1185869999999998,
+   "n": 40
+  },
+  "ArgSortMergeU32": {
+   "ms": 20.115216999999927,
+   "n": 1840
+  },
+  "ArgSortU32": {
+   "ms": 2.310334,
+   "n": 80
+  },
+  "BinaryVecBF16": {
+   "ms": 2.707418,
+   "n": 190
+  },
+  "CastBF16F32": {
+   "ms": 5.446493000000001,
+   "n": 450
+  },
+  "ConvDw1dBF16": {
+   "ms": 0.874337,
+   "n": 30
+  },
+  "CopyGeneralBF16": {
+   "ms": 7.186328999999999,
+   "n": 340
+  },
+  "CopyGeneralU32": {
+   "ms": 10.543790999999999,
+   "n": 240
+  },
+  "DequantBF16": {
+   "ms": 0.009958,
+   "n": 1
+  },
+  "ElementwiseBF16": {
+   "ms": 0.293374,
+   "n": 30
+  },
+  "ElementwiseLiteBF16": {
+   "ms": 2.615500000000001,
+   "n": 120
+  },
+  "ElementwiseLiteF32": {
+   "ms": 1.2976210000000004,
+   "n": 120
+  },
+  "ElementwiseU32": {
+   "ms": 0.4183330000000002,
+   "n": 40
+  },
+  "FastNormGatedBF16": {
+   "ms": 1.7704130000000002,
+   "n": 60
+  },
+  "FastNormGatedOnlyBF16": {
+   "ms": 0.883374,
+   "n": 30
+  },
+  "FastRmsNormBF16": {
+   "ms": 1.8190050000000004,
+   "n": 81
+  },
+  "FastRopeNormAppleBF16": {
+   "ms": 0.536209,
+   "n": 20
+  },
+  "GatedDeltaPrefillCoopmatHoistBF16": {
+   "ms": 1.0552450000000002,
+   "n": 30
+  },
+  "GatedDeltaPrefillKktqkt": {
+   "ms": 0.8586660000000003,
+   "n": 30
+  },
+  "GatherAxisBF16": {
+   "ms": 0.47091600000000006,
+   "n": 40
+  },
+  "GatherQmmTileBF16": {
+   "ms": 5.285923,
+   "n": 120
+  },
+  "MatmulF32CoopmatPvBF16": {
+   "ms": 0.381042,
+   "n": 10
+  },
+  "MatmulF32CoopmatQkBF16": {
+   "ms": 0.363249,
+   "n": 10
+  },
+  "QmmPrefillCoopmatBF16X32FullNLdsPad": {
+   "ms": 6.750992,
+   "n": 250
+  },
+  "QmmPrefillCoopmatM16BF16X32FullN": {
+   "ms": 1.1916230000000003,
+   "n": 60
+  },
+  "QmmPrefillCoopmatM16BF16X32FullNQ8G64": {
+   "ms": 1.140086,
+   "n": 40
+  },
+  "QmmPrefillCoopmatM16BF16X32Q8G64": {
+   "ms": 1.164669,
+   "n": 40
+  },
+  "QmmVecQ4WordSubgroupBF16": {
+   "ms": 0.032834,
+   "n": 1
+  },
+  "ReduceBF16": {
+   "ms": 0.591459,
+   "n": 40
+  },
+  "ReduceGeneralBF16": {
+   "ms": 0.8975820000000003,
+   "n": 40
+  },
+  "SoftmaxBF16": {
+   "ms": 0.4225400000000002,
+   "n": 40
+  },
+  "SoftmaxF32": {
+   "ms": 0.325832,
+   "n": 10
+  },
+  "SortU32": {
+   "ms": 2.2691270000000006,
+   "n": 80
+  },
+  "SwigluBF16": {
+   "ms": 1.5845449999999999,
+   "n": 80
+  },
+  "TakeBF16": {
+   "ms": 2.619585,
+   "n": 82
+  },
+  "TakeU32": {
+   "ms": 0.420333,
+   "n": 41
+  },
+  "UnaryVecBF16": {
+   "ms": 1.3480810000000003,
+   "n": 110
+  }
+ },
+ "batch_shapes": {}
+}

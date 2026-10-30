@@ -8,6 +8,8 @@
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/honeykrisp_identity.h"
 
+#include <dlfcn.h>
+
 #include <filesystem>
 
 #include <algorithm>
@@ -805,6 +807,17 @@ bool Runtime::init_impl() {
         info.caps.driver_info,
         info.caps.driver_sha,
         expected_sha);
+    {
+      // Directory of the loaded libmlx (<site-packages>/mlx/lib): where the
+      // venv's mlx_lm sits two levels up. Empty when it cannot be found.
+      Dl_info lib_info;
+      std::string lib_dir;
+      if (dladdr(reinterpret_cast<void*>(&note_stock_driver_identity), &lib_info) &&
+          lib_info.dli_fname != nullptr) {
+        lib_dir = std::filesystem::path(lib_info.dli_fname).parent_path().string();
+      }
+      note_mlx_lm_patches(lib_dir);
+    }
     info.hardware = info.caps;
     if (sim) {
       info.caps = capsim::apply(info.caps, *sim);
