@@ -31,3 +31,15 @@ On a 14-inch M2 Max, `mlx-community/Qwen3.6-35B-A3B-4bit` prefills at 13.4 to 13
 ## Stop rule
 
 If the profile has no usable timestamps on this chip (GPU busy above 100 percent of the window, or under 2 percent), I fall back to dispatch counts by kernel name plus wall time per chunk and say that the GPU split was not measured. I make no code change before this receipt names a kernel.
+
+## Amendment 1 (2026-10-30, committed 22:31Z; written after the first profile run, which ran 22:17 to 22:22Z, and before the second)
+
+First run (`t7b-moeprof.sh`, 16-inch M1 Max, diagnostics wheel `42b30a2d`): H4 holds and H1 to H3 do not. Per 512-token chunk the GPU runs about 83,600 dispatches for 3.2 s of GPU time inside a 19.5 s profiled window; the sorted-expert tile route is taken (`GatherQmmTileBF16`, 40 dispatches per chunk, 5 ms total GPU time; with `MLX_OMARCHY_GATHER_QMM_TILE=0` the unprofiled rate falls from 44.3 to 36.4 tokens per second). The bulk of the dispatches is 307,200 each of `CastBF16F32` (n 4096), `ElementwiseLiteF32` (n 524288) and `ReduceF32` (n 4096) over the five chunks of the run, which is 512 tokens x 30 linear-attention layers x 4 x 5 chunks: the composed per-token gated-delta loop of mlx-lm, with a host synchronization per layer. The venv of that run carries pristine mlx-lm 0.31.3 (no `.omarchy-serve-patches` record, no `mx.fast.gated_delta_update` route, no ssm-maskless patch), so the run measured the unpatched stack. The unprofiled rate on this chip with that stack is 44.3 tokens per second, not 13.
+
+Second run (`t7b-moeprof2.sh`): the same wheel, with the venv's own mlx-lm (U0) and with the current patch series applied to pristine 0.31.3 (F), two interleaved rounds, then one profiled F run. Predictions, before the run:
+- F is at least 3x faster than U0 in prefill tokens per second (P 80 percent) and the two U0 rounds agree within 3 percent, as do the two F rounds (P 85 percent).
+- In the profiled F run the dispatch count per 512-token chunk falls below 5,000 (P 80 percent) and GPU busy rises above 50 percent of the window (P 60 percent).
+- What is left in the profiled F run is the MoE block and the dense layers: the share of `GatherQmm*` kernels in GPU time is above 20 percent (P 55 percent).
+- Unprofiled F is between 150 and 450 tokens per second (P 60 percent). Above 450 would mean the M2's llama.cpp figure (293) is not a ceiling; below 150 would mean a second cost remains behind the gated-delta fallback and the next step is its own profile.
+
+The open question that decides what the fix is: the M2 rows that show 13 tokens per second may have run on an unpatched venv. The M2 is down and its venv cannot be read. The Darkmux server command names a venv `main-venv-fresh` with mlx-lm 0.31.3; whether the serve patch series was applied to it is not known to me.
