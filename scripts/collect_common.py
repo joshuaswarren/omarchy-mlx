@@ -528,12 +528,17 @@ def _cap_port_detail(port, redactor, max_bytes=PORT_DETAIL_MAX_BYTES):
       * pmgr_blocks: hard cap of 4 blocks, 256 children each (matches
         the source collector; `children_total` records the true count).
       * total serialized bytes: hard cap of `max_bytes`. Drop order is
-        by porting value: the runtime block first, then the phandle map
+        by porting value, in the order of the loop below: the phandle map
         (`iommus_resolved` already did that arithmetic for the reader),
-        then the AIC block, then the structured boot provenance, then
-        the ANE pmgr subset, then the full pmgr offset topology, then
-        DARTs; the ane nodes — the whole point of the capture, plus the
-        pmgr map a SET-base derivation needs — are protected last.
+        then the AIC block, the structured boot provenance, the SET-base
+        candidate, the pmgr domains, the pmgr blocks (the full pmgr
+        topology), the DARTs, the reserved-memory subtree and the mailbox
+        nodes; the ane nodes — the whole point of the capture — are
+        dropped last of all.
+        The runtime block outranks all of these (it carries the omarchy_ane
+        facts the promotion rule reads): it is kept whenever it fits beside
+        the devicetree trimmed to its minimum, and dropped (marked
+        `runtime:over_budget`) only when it cannot.
       * a macOS report carries `macos` instead of `devicetree` and is
         bounded at the source; if it somehow exceeds the budget the
         whole block is dropped.
