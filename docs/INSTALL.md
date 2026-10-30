@@ -79,6 +79,9 @@ python3.14 -m venv ~/.venvs/mlx
 ~/.venvs/mlx/bin/pip install "https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.7.10/mlx_omarchy-0.32.4.dev202610012048+6cff5ea-cp314-cp314-linux_aarch64.whl"
 ~/.venvs/mlx/bin/pip install --no-deps mlx-lm==0.31.3
 ~/.venvs/mlx/bin/pip install "transformers[sentencepiece]==5.16.1" numpy protobuf pyyaml jinja2 huggingface_hub soundfile
+# Required: apply the mlx-lm serve patches (see below). Without this line a hybrid model such as
+# Qwen3.6-35B-A3B reads its prompt about 4 times slower (44 against 181 tokens per second, 16-inch M1 Max).
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash -s -- --patch-venv ~/.venvs/mlx
 ```
 
 The `--no-deps` on `mlx-lm` matters. It depends on upstream `mlx`,
@@ -89,12 +92,11 @@ which would clobber this wheel. On x86_64 there is no ANE. Use Python
 The wheel includes the native runtime and aarch64 ANE assets. It does
 not include the mlx-lm serve patches. Those patches (the GDN fast routes,
 the greedy prune, and the rest of the installer's patch set) live in this
-repository. Without them, `mlx_lm.server` runs the stock upstream path.
-End the install with the installer's patch step:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash -s -- --patch-venv ~/.venvs/mlx
-```
+repository, and the last line of the block above applies them. Without
+them, `mlx_lm.server` runs the stock upstream path, and the backend prints
+`[omarchy] warning: The mlx-lm in this environment has no omarchy serve
+patches` the first time it opens the GPU. The warning reads one file
+beside the loaded library; `MLX_OMARCHY_NO_MLXLM_WARNING=1` silences it.
 
 `--patch-venv` downloads the patch series that matches the venv's mlx-lm
 (0.31.3, or 0.32.0 through 0.32.2) and applies it. It does not install launchers.
