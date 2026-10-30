@@ -44,7 +44,7 @@ Second run (`t7b-moeprof2.sh`): the same wheel, with the venv's own mlx-lm (U0) 
 
 The open question that decides what the fix is: the M2 rows that show 13 tokens per second may have run on an unpatched venv. The M2 is down and its venv cannot be read. The Darkmux server command names a venv `main-venv-fresh` with mlx-lm 0.31.3; whether the serve patch series was applied to it is not known to me.
 
-## Amendment 2 (2026-10-30, committed 22:40Z; after the matched-pair run, before this receipt was written)
+## Amendment 2 (2026-10-30, committed 22:36Z; after the matched-pair run, before this receipt was written)
 
 Correction to Amendment 1 and to the first status message: the profile summary reports the median per window (one window is one 512-token chunk), not a total over the run. The unpatched chunk therefore has 250,867 dispatches (`ElementwiseLiteF32` 107,640, `CastBF16F32` 77,311, `ReduceF32` 30,720, `CopyGeneralBF16` 15,680, `CastF32BF16` 15,390), not the 83,600 written above, and the patched chunk has 4,986: 50x fewer. The other figures in Amendment 1 (GPU time 3.2 s of a 19.5 s profiled window, tile route taken, 44.3 against 36.4 tokens per second with the tile route off) come from the same summary and stand.
 
