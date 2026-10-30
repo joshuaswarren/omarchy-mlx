@@ -642,12 +642,21 @@ def _cap_port_detail(port, redactor, max_bytes=PORT_DETAIL_MAX_BYTES):
 
     if isinstance(src_runtime, dict):
         bounded_runtime = _walk(src_runtime)
-        # Total budget check: include runtime only if it fits. We try
-        # with runtime first, then drop it if it pushes us over the cap.
-        candidate = dict(out)
-        candidate["runtime"] = bounded_runtime
-        if _size(candidate) <= max_bytes:
-            out = candidate
+        # The runtime block carries the omarchy_ane turn-on facts the
+        # promotion rule reads, so it outranks the devicetree bulk (an
+        # Ultra has 32 DARTs): keep it whenever it fits beside the
+        # devicetree trimmed to its minimum, and let the drop order
+        # below shrink the devicetree. Only a runtime that cannot fit
+        # even then is dropped.
+        minimal = dict(bounded)
+        minimal.update({"phandles": {}, "aic": None, "boot": None,
+                        "set_base_candidate": None, "pmgr_domains": [],
+                        "pmgr_blocks": [], "darts": {}, "mailbox": {},
+                        "reserved_memory": {"found": False, "child_count": 0,
+                                            "nodes": {}}})
+        if _size({"devicetree": minimal, "runtime": bounded_runtime}) <= max_bytes:
+            out = dict(out)
+            out["runtime"] = bounded_runtime
         else:
             truncated.append("runtime:over_budget")
 

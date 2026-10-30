@@ -1734,6 +1734,41 @@ class AnePortPayloadDetail(unittest.TestCase):
         self.assertIn("truncated", d)
         self.assertIn("runtime:over_budget", d["truncated"])
 
+    def test_detail_keeps_runtime_when_only_the_devicetree_is_fat(self):
+        """An Ultra row: 32 DARTs and a fat pmgr list push the detail over the
+        budget, but the runtime block (the omarchy_ane turn-on facts the
+        promotion rule reads) fits on its own. The devicetree bulk must be
+        trimmed first; the runtime must survive."""
+        quick = json.loads(json.dumps(BuildPayload.QUICK))
+        smoke = {"attempted": True, "sha256": ["ab" * 32] * 20,
+                 "golden_sha256": "ab" * 32, "errors": 0}
+        quick["ane_port"] = {
+            "available": True,
+            "devicetree": {
+                "ane_node_present": True,
+                "ane_nodes": {"ane@284000000": {"reg":
+                                                ["0x284000000/0x2000000"]}},
+                "darts": {f"iommu@{i:x}": {"compatible": "y" * 2100}
+                          for i in range(32)},
+                "pmgr_domains": [],
+                "aic": None,
+                "phandles": {},
+            },
+            "runtime": {"iomem": None, "module_version": "ae18911",
+                        "srcversion": None, "loaded": True, "dmesg": None,
+                        "omarchy_ane": {"check": {"status": "ready"},
+                                        "smoke": smoke}},
+        }
+        payload = cc.build_payload("quick", quick, {},
+                                   redactor=cc.Redactor())
+        d = payload["ane_port_detail"]
+        self.assertIn("runtime", d, "the runtime block must survive")
+        self.assertEqual(d["runtime"]["omarchy_ane"]["smoke"]["errors"], 0)
+        self.assertEqual(len(d["runtime"]["omarchy_ane"]["smoke"]["sha256"]), 20)
+        self.assertNotIn("runtime:over_budget", d.get("truncated", []))
+        self.assertIn("darts:over_budget", d["truncated"])
+        self.assertIn("ane@284000000", d["devicetree"]["ane_nodes"])
+
     def test_detail_re_redacts_string_leaves(self):
         # The probe already redacts, but the helper is belt-and-braces:
         # a string that somehow leaked through must still come out redacted.
