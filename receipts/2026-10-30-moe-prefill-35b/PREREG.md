@@ -32,7 +32,7 @@ On a 14-inch M2 Max, `mlx-community/Qwen3.6-35B-A3B-4bit` prefills at 13.4 to 13
 
 If the profile has no usable timestamps on this chip (GPU busy above 100 percent of the window, or under 2 percent), I fall back to dispatch counts by kernel name plus wall time per chunk and say that the GPU split was not measured. I make no code change before this receipt names a kernel.
 
-## Amendment 1 (2026-10-30, committed 22:31Z; written after the first profile run, which ran 22:17 to 22:22Z, and before the second)
+## Amendment 1 (2026-10-30, committed 22:27Z; written after the first profile run, which ran 22:17 to 22:22Z, and before the second)
 
 First run (`t7b-moeprof.sh`, 16-inch M1 Max, diagnostics wheel `42b30a2d`): H4 holds and H1 to H3 do not. Per 512-token chunk the GPU runs about 83,600 dispatches for 3.2 s of GPU time inside a 19.5 s profiled window; the sorted-expert tile route is taken (`GatherQmmTileBF16`, 40 dispatches per chunk, 5 ms total GPU time; with `MLX_OMARCHY_GATHER_QMM_TILE=0` the unprofiled rate falls from 44.3 to 36.4 tokens per second). The bulk of the dispatches is 307,200 each of `CastBF16F32` (n 4096), `ElementwiseLiteF32` (n 524288) and `ReduceF32` (n 4096) over the five chunks of the run, which is 512 tokens x 30 linear-attention layers x 4 x 5 chunks: the composed per-token gated-delta loop of mlx-lm, with a host synchronization per layer. The venv of that run carries pristine mlx-lm 0.31.3 (no `.omarchy-serve-patches` record, no `mx.fast.gated_delta_update` route, no ssm-maskless patch), so the run measured the unpatched stack. The unprofiled rate on this chip with that stack is 44.3 tokens per second, not 13.
 
