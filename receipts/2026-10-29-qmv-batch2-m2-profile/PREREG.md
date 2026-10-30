@@ -76,3 +76,16 @@ Third run (`t7b-nopad.sh`): the same hoisted diagnostics wheel with and without 
 - Token-stream hash, E2 and E3, patched against unpatched: equal (P 60 percent). The fused decode kernel and the composed ops are not bit-equal in general; they may agree over 64 greedy tokens or not. A difference is reported, not treated as a failure.
 
 The finding does not change the status of #303: the hoisted kernel is faster in the padded sets and equal or slightly slower only in the unpadded path, where the step is dominated by the composed fallback. The extra dispatches and the 2x step time belong to the mask handling above and have their own fix.
+
+## Amendment 3 (2026-10-30, about 01:15Z; written after the CPU probes of three mlx-lm states and before the next GPU run)
+
+Amendment 2 proposed a one-block mlx-lm patch (`finalize()` on every batch). It is withdrawn. The omarchy-mlx patch series already carries the fix: `scripts/patch-mlx-lm-ssm-maskless.py` makes `ArraysCache.make_mask` return `None` for a batch with no padded row, and its current form tests `all(p <= 0 ...)` on a host copy of the left padding, which stays true after `advance()` lowers the padding below zero. The copy of mlx-lm in the 0.7.28 system package, which every measurement in this receipt used through the diagnostics venvs, carries an older form of the same patch (`not any(left_padding_list)`), true only before the first token. The CPU probes (`mask-probe/`) show what `gated_delta_update` receives in decode for two prompts of equal length: pristine mlx-lm 0.31.3, an all-true (2, 1) mask at every call; the packaged copy, an all-true mask at every decode call and none in prefill; the current patch series, no mask in prefill or decode. For prompts of 12 and 13 tokens every state gives no mask in decode.
+
+So the slow unpadded batch decode and the batch-2 loss belong to the older mlx-lm patch state, not to the wheel. What this receipt has not shown on a GPU is that the current series removes the slowness and what the hoist does at 2 rows under it. The next run (`t7b-nopad2.sh`) crosses the shipped and hoisted diagnostics wheels with the packaged mlx-lm (U) and the current patch series applied to a pristine 0.31.3 tree (F), for the unpadded (E2) and padded (P2) two-row sets, three rounds, profiled and unprofiled. Predictions, before the run:
+
+- Under F, E2 runs the fused gated-delta decode kernel: `GatedDeltaDecodeBF16PfWide` 18 per step and about 628 dispatches (P 90 percent), and the unprofiled step is within 10 percent of the P2 step under F (P 80 percent).
+- Under U the run reproduces the second run: E2 1225 dispatches and no `PfWide` (P 95 percent).
+- Under F the hoisted wheel is not slower than the shipped wheel at E2: speed ratio 1.00 or more (P 70 percent). The 2.2 to 5.6 percent loss measured under U is then the hoisted kernel inside a host-bound fallback graph, not a property of the kernel.
+- P2: F and U give the same dispatch count and the same step time within 3 percent (P 85 percent), because both pass no mask there.
+
+If the first prediction fails, the all-true mask is not the whole cause and the cause stays open. Nothing here changes the code of #303.
