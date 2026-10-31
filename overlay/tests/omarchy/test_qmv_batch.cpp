@@ -306,8 +306,8 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   CHECK(ran(traced_kernels([&] { short_pass(x3, q, "3", s); }), batch4));
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "3", s); }), batch4));
   CHECK(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
-  // Values above 4 count as 4.
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x5, q, "8", s); }), batch4));
+  // On G13C, MLX_OMARCHY_QMV_SMALL_T=8 engages through 8 rows via 4-row blocks.
+  CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "8", s); }), batch4));
   setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
   unsetenv("MLX_OMARCHY_QMV_BATCH");
