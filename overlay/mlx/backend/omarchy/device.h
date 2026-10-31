@@ -32,6 +32,12 @@ constexpr uint32_t kAppleVendorId = 0x106b;
 // sync with vk.xml; the runtime Vulkan >= 1.3 requirement is unchanged.
 constexpr int32_t kMesaHoneykrispDriverId = 26;
 
+// VK_DRIVER_ID_AURORA_BOREALIS (Khronos registry value 35): Aurora Silicon's
+// Honeykrisp-derived driver (aurora-silicon/mesa), the only Vulkan driver that
+// admits the M4 (G16G) and newer GPUs. Its deviceName ("Apple M4 (G16G ..)")
+// names no driver and its vendorID is Mesa's, so the driver id is the signal.
+constexpr int32_t kAuroraBorealisDriverId = 35;
+
 // Result of the discovery policy applied to one physical device. The logic is
 // pure so tests can exercise it without a Vulkan loader or GPU.
 struct DeviceSupport {

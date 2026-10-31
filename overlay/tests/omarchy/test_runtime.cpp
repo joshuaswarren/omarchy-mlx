@@ -677,6 +677,19 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
     CHECK_FALSE(s.non_apple_dev);
   }
 
+  SUBCASE("M4 under Aurora Borealis is supported by driver identity") {
+    // aurora-silicon/mesa aurora-wip on the Mac mini M4: vendor 0x10005,
+    // name "Apple M4 (G16G 10)", driverID AURORA_BOREALIS (35).
+    auto s = classify(
+        "Apple M4 (G16G 10)",
+        0x10005,
+        VK_MAKE_API_VERSION(0, 1, 4, 0),
+        omarchy::kAuroraBorealisDriverId,
+        false);
+    CHECK(s.supported);
+    CHECK_FALSE(s.non_apple_dev);
+  }
+
   SUBCASE("Apple vendor remains an alternate signal") {
     auto s = classify(
         "Apple M1 (G13G B1)",
