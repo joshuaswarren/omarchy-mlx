@@ -24,4 +24,6 @@ if(MLX_OMARCHY_ANE_DEVICE AND NOT TARGET mlx-omarchy-ane-worker)
                                       INSTALL_RPATH "$ORIGIN/../lib")
   install(TARGETS mlx-omarchy-ane-worker
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/ane/mlx-omarchy-ane.conf
+          DESTINATION lib/tmpfiles.d)
 endif()

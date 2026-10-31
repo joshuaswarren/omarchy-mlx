@@ -246,6 +246,12 @@ python3 - "$wheel" "$VERIFY_DIR" <<'EOF'
 import sys, zipfile
 wheel, dest = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(wheel) as zf:
+    names = zf.namelist()
+    workers = [name for name in names if name.endswith("bin/mlx-omarchy-ane-worker")]
+    configs = [name for name in names if name.endswith("lib/tmpfiles.d/mlx-omarchy-ane.conf")]
+    if wheel.endswith(("_aarch64.whl", "_arm64.whl")) or workers:
+        if len(workers) != 1 or len(configs) != 1:
+            sys.exit("wheel does not contain exactly one ANE worker and tmpfiles policy")
     for name in zf.namelist():
         prefix = "/" + name
         if "/mlx/bin/" in prefix or "/mlx/share/mlx-omarchy/" in prefix:
