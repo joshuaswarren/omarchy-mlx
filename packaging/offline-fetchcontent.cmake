@@ -1,0 +1,24 @@
+# Use CMAKE_TOOLCHAIN_FILE: build-wheel.sh intentionally replaces CMAKE_ARGS.
+# Inputs are custody-verified source directories, never old build/cache/stamps.
+# Upstream pins: json 3.11.3, fmt 12.1.0, nanobind v3.1.0,
+# gguflib 8fa6eb65236618e28fd7710a0fba565f7faa1848 (enabled CPU-wheel closure).
+foreach(_dependency JSON FMT NANOBIND GGUFLIB)
+  set(_source "$ENV{FETCHCONTENT_SOURCE_DIR_${_dependency}}")
+  if(NOT IS_ABSOLUTE "${_source}" OR NOT IS_DIRECTORY "${_source}")
+    message(FATAL_ERROR "offline dependency ${_dependency}: require an absolute source directory")
+  endif()
+  if(_dependency STREQUAL "GGUFLIB")
+    set(_required_files gguflib.c fp16.c)
+  else()
+    set(_required_files CMakeLists.txt)
+  endif()
+  foreach(_file IN LISTS _required_files)
+    if(NOT EXISTS "${_source}/${_file}")
+      message(FATAL_ERROR "offline dependency ${_dependency}: missing ${_file}")
+    endif()
+  endforeach()
+  set(FETCHCONTENT_SOURCE_DIR_${_dependency} "${_source}" CACHE PATH "Sealed dependency source" FORCE)
+endforeach()
+set(FETCHCONTENT_FULLY_DISCONNECTED ON CACHE BOOL "No FetchContent downloads" FORCE)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "No FetchContent updates" FORCE)
+set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE NEVER CACHE STRING "Use bound sources only" FORCE)
