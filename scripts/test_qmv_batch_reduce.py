@@ -4,11 +4,12 @@ import ctypes
 import hashlib
 import json
 import struct
-import subprocess
 import sys
 import tempfile
 from fractions import Fraction
 from pathlib import Path
+
+from test_q4_affine_precision import compile_model
 
 ROOT = Path(__file__).resolve().parent.parent
 SHADER = ROOT / 'overlay/mlx/backend/omarchy/shaders/qmm_vec.comp'
@@ -30,39 +31,8 @@ def nearest(record):
 
 
 def compile_reduce(directory):
-    source = SHADER.read_text()
-    signature = 'float q4_batch_sum(uint base) {'
-    body = signature + source.split(signature, 1)[1].split('\n}', 1)[0] + '\n}'
-    cpp = Path(directory) / 'reduce.cpp'
-    library = Path(directory) / 'reduce.so'
-    cpp.write_text('''#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <cfenv>
-using uint = unsigned;
-using std::abs;
-using std::isinf;
-#define precise
-const uint LANES = 32;
-float reduce_scratch[256];
-''' + body + '''
-extern "C" uint32_t reduce(const uint32_t* bits, uint base) {
-  if (std::fegetround() != FE_TONEAREST || base > 96 || base % 32) __builtin_trap();
-  std::memcpy(reduce_scratch + base, bits, 32 * sizeof(float));
-  float result = q4_batch_sum(base);
-  uint32_t output;
-  std::memcpy(&output, &result, sizeof(output));
-  return output;
-}
-''')
-    subprocess.run(['c++', '-std=c++17', '-O2', '-shared', '-fPIC',
-                    '-fno-fast-math', '-ffp-contract=off', '-frounding-math',
-                    str(cpp), '-o', str(library)], check=True)
-    loaded = ctypes.CDLL(str(library))
-    function = loaded.reduce
-    function.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint]
-    function.restype = ctypes.c_uint32
-    return loaded, function
+    loaded = compile_model(directory)
+    return loaded, loaded.reduce
 
 
 def check_records(records, totals):
@@ -87,13 +57,17 @@ def main():
             totals = [reduce((ctypes.c_uint32 * 32)(*[int(b, 16) for b in r['lane_bits']]), base)
                       for r in records]
             check_records(records, totals)
+            broadcast = [_library.reduce_broadcast(
+                (ctypes.c_uint32 * 32)(*[int(b, 16) for b in r['lane_bits']]), base)
+                for r in records]
+            assert broadcast == totals, 'scratch/broadcast source fold mismatch'
         assert bf16(0x3f808000) == 0x3f80 and bf16(0x3f818000) == 0x3f82
         for bits, expected in (([0] * 32, 0), ([0x3f800000] + [0] * 31, 0x3f800000),
                                ([0x7f800000] + [0] * 31, 0x7f800000)):
             assert reduce((ctypes.c_uint32 * 32)(*bits), 0) == expected
         nan = reduce((ctypes.c_uint32 * 32)(0x7f800000, 0xff800000, *([0] * 30)), 0)
         assert nan & 0x7f800000 == 0x7f800000 and nan & 0x7fffff
-    print('PASS: production scalar fold; six native regressions in all four slots; RNE/zero/Inf/NaN.')
+    print('PASS: production scaled fold; six native regressions in all four slots; scratch/broadcast agree; RNE/zero/Inf/NaN.')
 
 
 if __name__ == '__main__':

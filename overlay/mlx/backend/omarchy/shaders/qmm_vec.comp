@@ -306,6 +306,23 @@ layout(push_constant) uniform Params {
 #if !defined(USE_SUBGROUP) || defined(QMM_VEC_BATCH)
 shared float reduce_scratch[256];
 #endif
+// bf16 affine 4-bit builds only (Q8 keeps its own arithmetic; f16/f32
+// have nothing to round at this width). Defined early so the fold
+// scratch below can key on it.
+#if defined(USE_BF16) && defined(QMM_VEC_Q4_WORD) && QBITS != 8 && \
+    (!defined(QGROUP) || QGROUP == 64)
+#define Q4_ACC_PAIR 1
+#endif
+#ifdef Q4_ACC_PAIR
+// The explicit-exponent fold keeps all three words of every lane's
+// accumulator; the sequential fold reads them back lane by lane.
+shared float reduce_scratch_lo[256];
+shared int reduce_scratch_exponent[256];
+#else
+#define Q4_ACC_TYPE precise float
+#define Q4_TOTAL_TYPE float
+#define Q4_ACC_ZERO 0.0
+#endif
 
 // Push-constant routing: operation carries bits (2, 3, 4, 5, 6, or 8),
 // reduce_size the group size, flags bit 0 the non-transposed layout.
@@ -447,6 +464,40 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // subtracting 2^23 returns n exactly.
 #define Q4_NIB(p, shift) \
   (uintBitsToFloat((((p) >> (shift)) & 0xfu) | 0x4B000000u) - 8388608.0)
+// bf16 pair build: one exact per-weight product term per element
+// (weight cast = q4_cast, the reference's fp32 dequant rounding), and a
+// shared four-element terms macro used by every walk shape.
+#ifdef Q4_ACC_PAIR
+#define Q4_SCALED_TERMS(dst, p, lo, hi, sc, bi) { \
+  float x0 = uintBitsToFloat(((lo) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((lo) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((hi) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((hi) & 0xFFFF0000u); \
+  (dst) = q4_scaled_add((dst), \
+      q4_product(x0, q4_cast((sc), Q4_NIB(p, 0u), (bi)))); \
+  (dst) = q4_scaled_add((dst), \
+      q4_product(x1, q4_cast((sc), Q4_NIB(p, 4u), (bi)))); \
+  (dst) = q4_scaled_add((dst), \
+      q4_product(x2, q4_cast((sc), Q4_NIB(p, 8u), (bi)))); \
+  (dst) = q4_scaled_add((dst), \
+      q4_product(x3, q4_cast((sc), Q4_NIB(p, 12u), (bi)))); \
+}
+#define Q4_CHUNK_STATE(w, S, B) \
+  uint q4_group = (w) / 8u; \
+  float q4_scale = LOAD_VALUE(S.values[scale_base + q4_group]); \
+  float q4_bias = LOAD_VALUE(B.values[bias_base + q4_group]);
+#define Q4_QUAD(packed, a, b) { \
+  uint p = (packed); \
+  Q4_SCALED_TERMS(accumulator, p, a, b, q4_scale, q4_bias) \
+}
+// One packed weight word and its eight x values.
+#define Q4_WORD(word, x_base) { \
+  uint word_value = (word); \
+  uvec4 x_words = OUTGATE_XWORDS(x_base); \
+  Q4_QUAD(word_value, x_words.x, x_words.y) \
+  Q4_QUAD(word_value >> 16u, x_words.z, x_words.w) \
+}
+#else
 #define Q4_QUAD(packed, a, b) { \
   Q4_QUAD_LOAD(a, b) \
   uint p = (packed); \
@@ -482,6 +533,204 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   precise float bias_term = input_sum * bias; \
   accumulator += fma(scale, dot, bias_term); \
 }
+#endif
+// The bf16 Q4 affine build sums reference-faithful per-weight products in
+// a normalized binary32 (hi, lo) pair with an explicit exponent. The
+// independent reference dequantizes each weight to fp32 FIRST
+// (fl32(fl32(scale*q) + bias), one rounding per multiply and add) and
+// then sums x*w; the per-code cast residual is nonlinear in q, so no
+// formula over (scale, sum x*q, bias, sum x) can reproduce it - the
+// factored affine epilogue family is disproven (q=(1,1) vs q=(0,2) share
+// all four epilogue arguments yet store 0x4000 vs 0x4001). Instead every
+// x*w product is an exact 32-bit unsigned significand times a power of
+// two (float(significand) never reaches 2^32 because 255*0xffffff < 2^32,
+// and the low word keeps the difference exactly), and the explicit
+// exponent keeps terms as small as 2^-150 alive (K*2^-150 = 2^-133 is the
+// smallest bf16 subnormal) where per-element fp32 products would flush to
+// zero. Accumulation aligns exponents and TwoSums the high words; the
+// store applies RNE directly on the normalized 48-bit mantissa at its own
+// exponent, never scaling the low word through fp32 first.
+#ifdef Q4_ACC_PAIR
+struct Q4Scaled { float hi; float lo; int exponent; };
+Q4Scaled q4_scaled_zero() {
+  return Q4Scaled(0.0, 0.0, 0);
+}
+// Canonical non-finite poison: non-finite inputs follow the NaN store
+// path; finite inputs follow the 48-bit-significand source hypothesis per
+// add (not a universal strict no-worse proof).
+Q4Scaled q4_scaled_nan() {
+  return Q4Scaled(uintBitsToFloat(0x7fc00000u), 0.0, 0);
+}
+Q4Scaled q4_normalize(float hi, float lo, int exponent) {
+  precise float rounded = hi + lo;
+  if (isnan(rounded)) {
+    return q4_scaled_nan();
+  }
+  if (isinf(rounded)) {
+    return Q4Scaled(rounded, 0.0, 0);
+  }
+  precise float virtual_low = rounded - hi;
+  precise float tail = (hi - (rounded - virtual_low)) + (lo - virtual_low);
+  if (rounded == 0.0) {
+    return Q4Scaled(0.0, 0.0, 0);
+  }
+  int shift;
+  float mantissa = frexp(rounded, shift);
+  return Q4Scaled(mantissa, ldexp(tail, -shift), exponent + shift);
+}
+// Exponent-aligned accumulate: high words TwoSum, low words plus the
+// carry error ride below, result renormalized to hi in [0.5, 1).
+// Infinities pass through with IEEE addition semantics.
+Q4Scaled q4_scaled_add(Q4Scaled a, Q4Scaled b) {
+  if (isnan(a.hi) || isnan(a.lo) || isnan(b.hi) || isnan(b.lo)) {
+    return q4_scaled_nan();
+  }
+  if (isinf(a.hi)) {
+    if (isinf(b.hi) && a.hi != b.hi) {
+      return q4_scaled_nan();
+    }
+    return a;
+  }
+  if (isinf(b.hi)) {
+    return b;
+  }
+  if (a.hi == 0.0) {
+    return b;
+  }
+  if (b.hi == 0.0) {
+    return a;
+  }
+  int exponent = max(a.exponent, b.exponent);
+  float ah = ldexp(a.hi, a.exponent - exponent);
+  float al = ldexp(a.lo, a.exponent - exponent);
+  float bh = ldexp(b.hi, b.exponent - exponent);
+  float bl = ldexp(b.lo, b.exponent - exponent);
+  precise float total = ah + bh;
+  precise float virtual_low = total - ah;
+  precise float error = (ah - (total - virtual_low)) + (bh - virtual_low);
+  precise float low = (al + bl) + error;
+  return q4_normalize(total, low, exponent);
+}
+// The reference's per-weight fp32 dequant: one rounding per multiply and
+// per add (precise keeps NIR from contracting this into an fma, which
+// would round once and disagree with the reference cast).
+float q4_cast(float scale, float q, float bias) {
+  precise float scaled = scale * q;
+  precise float weight = scaled + bias;
+  return weight;
+}
+// x (widened bf16) times the fp32-cast weight: exact 8x24 significand
+// product, sign, exponent; no fp32 product rounding and no under/overflow.
+// IEEE non-finite semantics are preserved: any NaN infects, Inf times zero
+// is NaN, Inf times finite nonzero keeps the sign.
+Q4Scaled q4_product(float x, float weight) {
+  uint xb = floatBitsToUint(x);
+  uint wb = floatBitsToUint(weight);
+  uint xe = (xb >> 23u) & 0xffu;
+  uint we = (wb >> 23u) & 0xffu;
+  bool negative = ((xb ^ wb) & 0x80000000u) != 0u;
+  if (xe == 0xffu || we == 0xffu) {
+    bool nan = (xe == 0xffu && (xb & 0x7fffffu) != 0u)
+        || (we == 0xffu && (wb & 0x7fffffu) != 0u);
+    bool x_zero = xe == 0u && (xb & 0x7fffffffu) == 0u;
+    bool w_zero = we == 0u && (wb & 0x7fffffffu) == 0u;
+    bool x_inf = xe == 0xffu && !nan;
+    bool w_inf = we == 0xffu && !nan;
+    if (nan || (x_inf && w_zero) || (w_inf && x_zero)) {
+      return q4_scaled_nan();
+    }
+    return Q4Scaled(uintBitsToFloat((negative ? 0xff800000u : 0x7f800000u)),
+                    0.0, 0);
+  }
+  uint xm = ((xb >> 16u) & 0x7fu) | (xe == 0u ? 0u : 0x80u);
+  uint wm = (wb & 0x7fffffu) | (we == 0u ? 0u : 0x800000u);
+  uint significand = xm * wm;
+  if (significand == 0u) {
+    return Q4Scaled(0.0, 0.0, 0);
+  }
+  float high = float(significand);
+  uint high_units = uint(high);
+  // float(significand) can round UP, so uint(high) may exceed the
+  // significand; the residual keeps its sign (subtract magnitudes).
+  float low = significand >= high_units
+      ? float(significand - high_units)
+      : -float(high_units - significand);
+  int exponent = (xe == 0u ? -133 : int(xe) - 134)
+      + (we == 0u ? -149 : int(we) - 150) + 32;
+  float signed_high = negative ? -ldexp(high, -32) : ldexp(high, -32);
+  float signed_low = negative ? -ldexp(low, -32) : ldexp(low, -32);
+  return q4_normalize(signed_high, signed_low, exponent);
+}
+// RNE bf16 store straight off the normalized (hi, lo, exponent): normal
+// quant mantissa*256, subnormal mantissa*2^(exponent+133), guard and
+// sticky from the low word, exponent < -133 rounds to zero, exponent
+// > 128 saturates to infinity. The low word never travels through fp32
+// scaling before the rounding decision, so no double rounding occurs.
+uint16_t q4_scaled_store(Q4Scaled pair) {
+  Q4Scaled n = q4_normalize(pair.hi, pair.lo, pair.exponent);
+  if (isnan(n.hi)) {
+    return uint16_t(0x7fc0u);
+  }
+  if (isinf(n.hi)) {
+    return uint16_t(floatBitsToUint(n.hi) >> 16);
+  }
+  bool negative = n.hi < 0.0;
+  uint sign = negative ? 0x8000u : 0u;
+  float hi = negative ? -n.hi : n.hi;
+  float lo = negative ? -n.lo : n.lo;
+  int exponent = n.exponent;
+  if (hi == 0.0 || exponent < -133) {
+    return uint16_t(sign);
+  }
+  if (exponent > 128) {
+    return uint16_t(sign | 0x7f80u);
+  }
+  bool normal = exponent >= -125;
+  int shift = normal ? 8 : exponent + 133;
+  float units = ldexp(hi, shift);
+  float tail = ldexp(lo, shift);
+  int integer = int(units);
+  precise float fractional = units - float(integer);
+  bool increment = fractional > 0.5
+      || (fractional == 0.5
+          && (tail > 0.0 || (tail == 0.0 && (integer & 1) == 1)));
+  int result = integer + (increment ? 1 : 0);
+  if (normal) {
+    result += ((exponent + 126) << 7) - 128;
+  }
+  return uint16_t(sign | uint(result));
+}
+#define Q4_ACC_TYPE Q4Scaled
+#define Q4_TOTAL_TYPE Q4Scaled
+#define Q4_ACC_ZERO Q4Scaled(0.0, 0.0, 0)
+#endif
+// The one deterministic lane fold for every consumer: i ascending,
+// acc = add(acc, lane i). The scratch and broadcast routes run the
+// identical q4_scaled_add sequence, so batch4, single-row, multi-weight,
+// token and greedy rows store identical bits for identical rows.
+#ifdef Q4_ACC_PAIR
+#ifdef USE_SUBGROUP
+// One nonzero lane makes the copy exact in any add order; no BALLOT feature.
+#define Q4_SCALED_FOLD_BROADCAST(total, mine) { \
+  Q4Scaled q4_fold_source = (mine); \
+  (total) = q4_scaled_zero(); \
+  for (uint i = 0u; i < LANES; ++i) { \
+    (total) = q4_scaled_add((total), Q4Scaled( \
+        subgroupAdd(lane_in_slot == i ? q4_fold_source.hi : 0.0), \
+        subgroupAdd(lane_in_slot == i ? q4_fold_source.lo : 0.0), \
+        int(subgroupAdd(lane_in_slot == i ? uint(q4_fold_source.exponent) : 0u)))); \
+  } \
+}
+#endif
+#define Q4_SCALED_FOLD_SCRATCH(total, base) { \
+  (total) = q4_scaled_zero(); \
+  for (uint i = 0u; i < LANES; ++i) { \
+    (total) = q4_scaled_add((total), Q4Scaled(reduce_scratch[(base) + i], \
+        reduce_scratch_lo[(base) + i], \
+        reduce_scratch_exponent[(base) + i])); \
+  } \
+}
+#endif
 // One output column of one transposed 4-bit/group-64 weight, native qmv
 // arithmetic (metal/kernels/quantized.h qmv_impl / qmv_fast_impl +
 // load_vector + qdot, T=half, U=float): a lane owns one word (two when
@@ -498,6 +747,23 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // no runtime-count inner loop sits between the loads and the math.
 // Expects w_base, scale_base, bias_base, x_row, words_per_row, n and
 // lane_in_slot in scope and accumulates into `accumulator`.
+#ifdef Q4_ACC_PAIR
+#define Q4_ROW(W, S, B) { \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+    for (uint w = lane_in_slot * 2u; w < words_per_row; \
+         w += LANES * 2u) { \
+      Q4_CHUNK_STATE(w, S, B) \
+      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
+      Q4_WORD(W.values[w_base + w + 1u], x_row + w * 8u + 8u) \
+    } \
+  } else { \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      Q4_CHUNK_STATE(w, S, B) \
+      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
+    } \
+  } \
+}
+#else
 #define Q4_ROW(W, S, B) { \
   if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
     for (uint w = lane_in_slot * 2u; w < words_per_row; \
@@ -517,6 +783,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
   } \
 }
+#endif
 #if ROWS_PER_SLOT > 1
 // Multi-row form of Q4_ROW: ROWS_PER_SLOT rows starting at `column`
 // (rows past n are clamped to row n - 1 and their results discarded, so
@@ -546,6 +813,10 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #define Q8_BYTE(p, shift) \
   (uintBitsToFloat((((p) >> (shift)) & 0xffu) | 0x4B000000u) - 8388608.0)
 #endif
+#if !defined(Q4_ACC_PAIR)
+// Block epilogue: result += fma(scale, dot, sum * bias) with the group
+// of word w (every word of a lane's block sits in one group). The bf16
+// pair build folds per element instead and never calls this.
 #define Q4_ROWS_FINISH(w, S, B) { \
   uint group = Q4_ROWS_GROUP(w); \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -557,6 +828,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     acc[r] += fma(scale, dot[r], bias_term); \
   } \
 }
+#endif
 #if QBITS == 8
 // 8-bit twin of Q4_ROWS in native qmv_fast order (metal quantized.h,
 // bits == 8: values_per_thread = 8, block_size = 256): a lane owns one
@@ -617,6 +889,55 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #else
+#ifdef Q4_ACC_PAIR
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+    for (uint w = lane_in_slot * 2u; w < words_per_row; \
+         w += LANES * 2u) { \
+      uint wa[ROWS_PER_SLOT]; \
+      uint wb[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      } \
+      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+      uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+      uint group = Q4_ROWS_GROUP(w); \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        float scale_r = \
+            LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
+        float bias_r = \
+            LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
+        Q4_SCALED_TERMS(acc[r], wa[r], xa.x, xa.y, scale_r, bias_r) \
+        Q4_SCALED_TERMS(acc[r], wa[r] >> 16u, xa.z, xa.w, scale_r, bias_r) \
+        Q4_SCALED_TERMS(acc[r], wb[r], xb.x, xb.y, scale_r, bias_r) \
+        Q4_SCALED_TERMS(acc[r], wb[r] >> 16u, xb.z, xb.w, scale_r, bias_r) \
+      } \
+    } \
+  } else { \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+      } \
+      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+      uint group = Q4_ROWS_GROUP(w); \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        float scale_r = \
+            LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
+        float bias_r = \
+            LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
+        Q4_SCALED_TERMS(acc[r], wa[r], xa.x, xa.y, scale_r, bias_r) \
+        Q4_SCALED_TERMS(acc[r], wa[r] >> 16u, xa.z, xa.w, scale_r, bias_r) \
+      } \
+    } \
+  } \
+}
+#else
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -659,30 +980,15 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #endif
+#endif
 // Multi-token (verify / small-batch) forms: the token (query-row)
 // dimension sits INSIDE the k walk so one weight-word load feeds every
 // token. Per token and slot column the chain is instruction-for-
-// instruction Q4_ROWS': same quad order into dot, same per-column
-// input_sum chain, same block epilogue fma, same subgroupAdd tree, same
-// rounding - so each row's result is bit-identical to that row computed
-// alone. params.matrix_m carries the live token count (1..M_TOKENS);
-// rows at or past it do no work (loads and stores are guarded, not
-// clamped). bf16 only: x quad words widen exactly like Q4_QUAD_LOAD_T.
-#define Q4_QUAD_LOAD_T(a, b, isum) \
-  float x0 = uintBitsToFloat(((a) & 0xFFFFu) << 16u); \
-  float x1 = uintBitsToFloat((a) & 0xFFFF0000u); \
-  float x2 = uintBitsToFloat(((b) & 0xFFFFu) << 16u); \
-  float x3 = uintBitsToFloat((b) & 0xFFFF0000u); \
-  isum += ((x0 + x1) + x2) + x3;
-#define Q4_TOK_DOT(dst, p) \
-  (dst) += fma(x3, Q4_NIB(p, 12u), \
-      fma(x2, Q4_NIB(p, 8u), \
-          fma(x1, Q4_NIB(p, 4u), \
-              x0 * Q4_NIB(p, 0u))))
-// One block (one or two weight words per lane step) for all tokens:
-// weight words load once, x quads load once per token and are shared by
-// every slot column; dot and input_sum accumulate per (column, token)
-// exactly as the single-token kernel's per-column chain does.
+// instruction the single-column pair build's: same per-element
+// weight cast and exact product term order, so each row's result is
+// bit-identical to that row computed alone. params.matrix_m carries the
+// live token count (1..M_TOKENS); rows at or past it do no work (loads
+// and stores are guarded, not clamped). bf16 only.
 #define Q4_TOK_BLOCK(W, S, B, words_this_step) { \
   uint wa[ROWS_PER_SLOT]; \
   uint wb[ROWS_PER_SLOT]; \
@@ -692,14 +998,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
     } \
   } \
-  precise float dot_t[ROWS_PER_SLOT][M_TOKENS]; \
-  precise float input_sum_t[ROWS_PER_SLOT][M_TOKENS]; \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    for (uint m = 0u; m < M_TOKENS; ++m) { \
-      dot_t[r][m] = 0.0; \
-      input_sum_t[r][m] = 0.0; \
-    } \
-  } \
+  uint group = w / 8u; \
   for (uint m = 0u; m < M_TOKENS; ++m) { \
     if (m >= token_count) { \
       continue; \
@@ -711,30 +1010,16 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       xb = input_x.values[(x_row_m + w * 8u + 8u) / 8u]; \
     } \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-      { Q4_QUAD_LOAD_T(xa.x, xa.y, input_sum_t[r][m]) \
-        uint p = wa[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
-      { Q4_QUAD_LOAD_T(xa.z, xa.w, input_sum_t[r][m]) \
-        uint p = wa[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
-      if ((words_this_step) == 2u) { \
-        { Q4_QUAD_LOAD_T(xb.x, xb.y, input_sum_t[r][m]) \
-          uint p = wb[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
-        { Q4_QUAD_LOAD_T(xb.z, xb.w, input_sum_t[r][m]) \
-          uint p = wb[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
-      } \
-    } \
-  } \
-  uint group = w / 8u; \
-  for (uint m = 0u; m < M_TOKENS; ++m) { \
-    if (m >= token_count) { \
-      continue; \
-    } \
-    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
       float scale = \
           LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
       float bias = \
           LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
-      precise float bias_term = input_sum_t[r][m] * bias; \
-      acc_t[m][r] += fma(scale, dot_t[r][m], bias_term); \
+      Q4_SCALED_TERMS(acc_t[m][r], wa[r], xa.x, xa.y, scale, bias) \
+      Q4_SCALED_TERMS(acc_t[m][r], wa[r] >> 16u, xa.z, xa.w, scale, bias) \
+      if ((words_this_step) == 2u) { \
+        Q4_SCALED_TERMS(acc_t[m][r], wb[r], xb.x, xb.y, scale, bias) \
+        Q4_SCALED_TERMS(acc_t[m][r], wb[r] >> 16u, xb.z, xb.w, scale, bias) \
+      } \
     } \
   } \
 }
@@ -761,10 +1046,31 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #else
 #define ROUND_STORAGE(f) (f)
 #endif
+// The stored-output bf16 of a finished Q4 accumulator: the scaled store
+// decides the value (exponent-aware RNE); widening it back is exact.
+#ifdef Q4_ACC_PAIR
+#define Q4_ROUND_OUT(p) (LOAD_VALUE(q4_scaled_store(p)))
+#else
+#define Q4_ROUND_OUT(p) (ROUND_STORAGE(p))
+#endif
 // Workgroup reduction of `accumulator` into `total`, both flavors.
 // The paired SwiGLU epilogue (flags bit 16) runs it twice per
 // workgroup (gate, then up); the barrier rounds stay uniform because
 // the fold flag is workgroup-uniform.
+#ifdef Q4_ACC_PAIR
+#ifdef USE_SUBGROUP
+#define Q4_REDUCE(total) { Q4_SCALED_FOLD_BROADCAST(total, accumulator) }
+#else
+#define Q4_REDUCE(total) { \
+  reduce_scratch[lane] = accumulator.hi; \
+  reduce_scratch_lo[lane] = accumulator.lo; \
+  reduce_scratch_exponent[lane] = accumulator.exponent; \
+  barrier(); \
+  Q4_SCALED_FOLD_SCRATCH(total, lane - lane_in_slot) \
+  barrier(); \
+}
+#endif
+#else
 #ifdef USE_SUBGROUP
 #define Q4_REDUCE(total) { (total) = subgroupAdd(accumulator); }
 #else
@@ -779,6 +1085,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
   (total) = reduce_scratch[lane]; \
 }
+#endif
 #endif
 #define Q4_MULTI_STORE(I, rounded) { \
   output##I.values[column] = STORE_VALUE(rounded); \
@@ -860,36 +1167,34 @@ void main() {
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
     row_base[r] = min(column + r, n - 1u);
   }
-  precise float acc_t[M_TOKENS][ROWS_PER_SLOT];
+  Q4_ACC_TYPE acc_t[M_TOKENS][ROWS_PER_SLOT];
   for (uint m = 0u; m < M_TOKENS; ++m) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-      acc_t[m][r] = 0.0;
+      acc_t[m][r] = Q4_ACC_ZERO;
     }
   }
 #ifdef USE_SUBGROUP
 #define Q4_TOK_REDUCE() { \
     for (uint m = 0u; m < M_TOKENS; ++m) { \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        acc_t[m][r] = subgroupAdd(acc_t[m][r]); \
+        Q4Scaled q4_mine = acc_t[m][r]; \
+        Q4_SCALED_FOLD_BROADCAST(acc_t[m][r], q4_mine) \
       } \
     } \
   }
 #else
-// The plain build's five-round shared tree per (token, column), the same
-// order Q4_REDUCE runs for the single-token column; the slot lead lane
-// holds the total exactly like the single-token store contract.
+// The plain build folds the same sequential lane order through the
+// shared scratch (triple word per lane); the slot lead lane holds the
+// total exactly like the single-token store contract.
 #define Q4_TOK_REDUCE() { \
     for (uint m = 0u; m < M_TOKENS; ++m) { \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        reduce_scratch[lane] = acc_t[m][r]; \
+        reduce_scratch[lane] = acc_t[m][r].hi; \
+        reduce_scratch_lo[lane] = acc_t[m][r].lo; \
+        reduce_scratch_exponent[lane] = acc_t[m][r].exponent; \
         barrier(); \
-        for (uint offset = 1u; offset < LANES; offset <<= 1u) { \
-          if ((lane_in_slot & (2u * offset - 1u)) == 0u) { \
-            reduce_scratch[lane] += reduce_scratch[lane + offset]; \
-          } \
-          barrier(); \
-        } \
-        acc_t[m][r] = reduce_scratch[lane]; \
+        Q4_SCALED_FOLD_SCRATCH(acc_t[m][r], lane - lane_in_slot) \
+        barrier(); \
       } \
     } \
   }
@@ -917,12 +1222,12 @@ void main() {
     Q4_TOK_REDUCE()
     for (uint m = 0u; m < M_TOKENS; ++m) {
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-        gate_rounded[m][r] = ROUND_STORAGE(acc_t[m][r]);
+        gate_rounded[m][r] = Q4_ROUND_OUT(acc_t[m][r]);
       }
     }
     for (uint m = 0u; m < M_TOKENS; ++m) {
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-        acc_t[m][r] = 0.0;
+        acc_t[m][r] = Q4_ACC_ZERO;
       }
     }
     Q4_TOK_ROWS(input_w1, scales1, biases1)
@@ -934,7 +1239,7 @@ void main() {
         }
         for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
           if (column + r < n) {
-            float up_rounded = ROUND_STORAGE(acc_t[m][r]);
+            float up_rounded = Q4_ROUND_OUT(acc_t[m][r]);
             float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded[m][r])));
             float silu = ROUND_STORAGE(gate_rounded[m][r] * sig);
             output0.values[m * n + column + r] =
@@ -963,7 +1268,7 @@ void main() {
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
         uint column_r = column + r;
         if (column_r < n) {
-          float rounded = ROUND_STORAGE(acc_t[m][r]);
+          float rounded = Q4_ROUND_OUT(acc_t[m][r]);
           uint out_index = (row0 + m) * n + column_r;
           if (which == 0u) {
             output0.values[out_index] = STORE_VALUE(rounded);
@@ -1003,14 +1308,23 @@ void main() {
 // Multi-row main: same workgroup -> weight partition and fold contract as
 // the single-row main below (COLUMNS_PER_GROUP now spans every slot's
 // rows), each slot owning ROWS_PER_SLOT consecutive columns.
+#ifdef Q4_ACC_PAIR
+#define Q4_ROWS_REDUCE(total) { \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    Q4Scaled q4_mine = acc[r]; \
+    Q4_SCALED_FOLD_BROADCAST((total)[r], q4_mine) \
+  } \
+}
+#else
 #define Q4_ROWS_REDUCE(total) { \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
     (total)[r] = subgroupAdd(acc[r]); \
   } \
 }
+#endif
 #define Q4_ROWS_ZERO() { \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    acc[r] = 0.0; \
+    acc[r] = Q4_ACC_ZERO; \
   } \
 }
 void main() {
@@ -1054,8 +1368,8 @@ void main() {
   uint s_base = 0u;
   uint b_base = 0u;
   uint x_row = params.lhs_offset;
-  precise float acc[ROWS_PER_SLOT];
-  float total[ROWS_PER_SLOT];
+  Q4_ACC_TYPE acc[ROWS_PER_SLOT];
+  Q4_TOTAL_TYPE total[ROWS_PER_SLOT];
   if ((params.flags & 65536u) != 0u) {
     float gate_rounded[ROWS_PER_SLOT];
     Q4_ROWS_ZERO()
@@ -1064,7 +1378,7 @@ void main() {
     }
     Q4_ROWS_REDUCE(total)
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-      gate_rounded[r] = ROUND_STORAGE(total[r]);
+      gate_rounded[r] = Q4_ROUND_OUT(total[r]);
     }
     Q4_ROWS_ZERO()
     if (column_active) {
@@ -1074,7 +1388,7 @@ void main() {
     if (lane_in_slot == 0u) {
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
         if (column + r < n) {
-          float up_rounded = ROUND_STORAGE(total[r]);
+          float up_rounded = Q4_ROUND_OUT(total[r]);
           float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded[r])));
           float silu = ROUND_STORAGE(gate_rounded[r] * sig);
           output0.values[column + r] =
@@ -1102,7 +1416,7 @@ void main() {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
       uint column = column_first + r;
       if (column < n) {
-        float rounded = ROUND_STORAGE(total[r]);
+        float rounded = Q4_ROUND_OUT(total[r]);
         if (which == 0u) {
           Q4_MULTI_STORE(0, rounded)
         } else if (which == 1u) {
@@ -1165,7 +1479,7 @@ void main() {
   }
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot;
   bool column_active = column < n;
-  precise float accumulator = 0.0;
+  Q4_ACC_TYPE accumulator = Q4_ACC_ZERO;
   if ((params.flags & 65536u) != 0u) {
     float gate_rounded = 0.0;
     float up_rounded = 0.0;
@@ -1178,10 +1492,10 @@ void main() {
       uint x_row = params.lhs_offset;
       Q4_ROW(input_w0, scales0, biases0)
     }
-    float gate_total;
+    Q4_TOTAL_TYPE gate_total;
     Q4_REDUCE(gate_total)
-    gate_rounded = ROUND_STORAGE(gate_total);
-    accumulator = 0.0;
+    gate_rounded = Q4_ROUND_OUT(gate_total);
+    accumulator = Q4_ACC_ZERO;
     if (column_active) {
       uint words_per_row = params.matrix_k / 8u;
       uint groups_per_row = params.matrix_k / 64u;
@@ -1191,9 +1505,9 @@ void main() {
       uint x_row = params.lhs_offset;
       Q4_ROW(input_w1, scales1, biases1)
     }
-    float up_total;
+    Q4_TOTAL_TYPE up_total;
     Q4_REDUCE(up_total)
-    up_rounded = ROUND_STORAGE(up_total);
+    up_rounded = Q4_ROUND_OUT(up_total);
     if (lane_in_slot == 0u && column_active) {
       float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded)));
       float silu = ROUND_STORAGE(gate_rounded * sig);
@@ -1219,10 +1533,10 @@ void main() {
       Q4_ROW(input_w3, scales3, biases3)
     }
   }
-  float total;
+  Q4_TOTAL_TYPE total;
   Q4_REDUCE(total)
   if (lane_in_slot == 0u && column_active) {
-    float rounded = ROUND_STORAGE(total);
+    float rounded = Q4_ROUND_OUT(total);
     if (which == 0u) {
       Q4_MULTI_STORE(0, rounded)
     } else if (which == 1u) {
@@ -1320,12 +1634,18 @@ float greedy_exact(uint column, uint lane_in_slot) {
   uint words_per_row = params.matrix_k / 8u;
   uint groups_per_row = params.matrix_k / 64u;
   uint x_row = params.lhs_offset;
-  precise float accumulator = 0.0;
+  Q4_ACC_TYPE accumulator = Q4_ACC_ZERO;
   uint w_base = params.rhs_offset + column * words_per_row;
   uint scale_base = params.aux_offset + column * groups_per_row;
   uint bias_base = params.aux_size + column * groups_per_row;
   Q4_ROW(input_w, scales, biases)
+#ifdef Q4_ACC_PAIR
+  Q4Scaled total;
+  Q4_SCALED_FOLD_BROADCAST(total, accumulator)
+  return LOAD_VALUE(q4_scaled_store(total));
+#else
   return LOAD_VALUE(STORE_VALUE(subgroupAdd(accumulator)));
+#endif
 }
 
 void main() {
@@ -1652,42 +1972,10 @@ void main() {
 #error "ROWS_PER_SLOT > 1 builds on QMM_VEC_Q4_WORD"
 #endif
 #if defined(QMM_VEC_BATCH)
-// Recover cancellation lost by the ordinary final fp32 subgroup reduction.
-float q4_batch_sum(uint base) {
-  precise float total = 0.0;
-  precise float correction = 0.0;
-  for (uint i = 0u; i < LANES; ++i) {
-    float value = reduce_scratch[base + i];
-    precise float next = total + value;
-    if (!isinf(next)) {
-      precise float residual = abs(total) >= abs(value)
-          ? (total - next) + value : (value - next) + total;
-      correction += residual;
-    }
-    total = next;
-  }
-  precise float result = total + correction;
-  return result;
-}
-
 // Batch-shared form (MLX_OMARCHY_QMV_BATCH, default on): params.shape[0] = B <=
 // QMM_VEC_BATCH x rows against ONE 2D weight (no per-batch weight or param
-// stride). Each block loads its weight words, scales and biases once and runs
-// every row's unchanged local Q4_ROWS chain on them. The final lane sum is
-// compensated before the unchanged storage rounding.
-#define Q4_ROWS_BATCH_ROW(w, X_WORDS) { \
-  uint x_row = params.lhs_offset + bt * params.matrix_k; \
-  precise float dot[ROWS_PER_SLOT]; \
-  precise float input_sum = 0.0; \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    dot[r] = 0.0; \
-  } \
-  X_WORDS \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    precise float bias_term = input_sum * bias_r[r]; \
-    acc[bt][r] += fma(scale_r[r], dot[r], bias_term); \
-  } \
-}
+// stride). Each block loads its weight words, scales and biases once and
+// runs every row's scaled per-weight-product terms on them.
 #define Q4_ROWS_BATCH_PARAMS(w, S, B) \
   float scale_r[ROWS_PER_SLOT]; \
   float bias_r[ROWS_PER_SLOT]; \
@@ -1697,26 +1985,6 @@ float q4_batch_sum(uint base) {
     bias_r[r] = \
         LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + (w) / 8u]); \
   }
-// The eight nibble-to-float conversions of each weight word and column are
-// computed once per word and reused by every row (they used to be recomputed
-// per row, so every added row cost about one weight stream of ALU work).
-// Q4_NIB(p, 4 * j) of the word equals Q4_NIB(word >> 16, 4 * (j - 4)) for the
-// second quad, and each row's fma chain takes the same values in the same
-// order as the single-row chain, so every row matches it bit for bit.
-#define Q4_NIB_WORD(p, n) \
-  for (uint j = 0u; j < 8u; ++j) { \
-    n[j] = uintBitsToFloat((((p) >> (4u * j)) & 0xfu) | 0x4B000000u) - \
-        8388608.0; \
-  }
-#define Q4_QUAD_ROWS_NIB(NB, OFF, a, b) { \
-  Q4_QUAD_LOAD(a, b) \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    dot[r] += fma(x3, NB[r][(OFF) + 3u], \
-        fma(x2, NB[r][(OFF) + 2u], \
-            fma(x1, NB[r][(OFF) + 1u], \
-                x0 * NB[r][(OFF)]))); \
-  } \
-}
 #define Q4_ROWS_BATCH(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -1725,41 +1993,42 @@ float q4_batch_sum(uint base) {
   if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
     for (uint w = lane_in_slot * 2u; w < words_per_row; \
          w += LANES * 2u) { \
-      float na[ROWS_PER_SLOT][8]; \
-      float nb[ROWS_PER_SLOT][8]; \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint wa = W.values[w_base + row_base[r] * words_per_row + w]; \
-        uint wb = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
-        Q4_NIB_WORD(wa, na[r]) \
-        Q4_NIB_WORD(wb, nb[r]) \
-      } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
+      uint wa[ROWS_PER_SLOT]; \
+      uint wb[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      } \
       for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
         if (bt < batch) { \
-          Q4_ROWS_BATCH_ROW(w, \
-            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-            uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
-            Q4_QUAD_ROWS_NIB(na, 0u, xa.x, xa.y) \
-            Q4_QUAD_ROWS_NIB(na, 4u, xa.z, xa.w) \
-            Q4_QUAD_ROWS_NIB(nb, 0u, xb.x, xb.y) \
-            Q4_QUAD_ROWS_NIB(nb, 4u, xb.z, xb.w)) \
+          uint x_row = params.lhs_offset + bt * params.matrix_k; \
+          uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+          uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+            Q4_SCALED_TERMS(acc[bt][r], wa[r], xa.x, xa.y, scale_r[r], bias_r[r]) \
+            Q4_SCALED_TERMS(acc[bt][r], wa[r] >> 16u, xa.z, xa.w, scale_r[r], bias_r[r]) \
+            Q4_SCALED_TERMS(acc[bt][r], wb[r], xb.x, xb.y, scale_r[r], bias_r[r]) \
+            Q4_SCALED_TERMS(acc[bt][r], wb[r] >> 16u, xb.z, xb.w, scale_r[r], bias_r[r]) \
+          } \
         } \
       } \
     } \
   } else { \
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
-      float na[ROWS_PER_SLOT][8]; \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint wa = W.values[w_base + row_base[r] * words_per_row + w]; \
-        Q4_NIB_WORD(wa, na[r]) \
-      } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+      } \
       for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
         if (bt < batch) { \
-          Q4_ROWS_BATCH_ROW(w, \
-            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-            Q4_QUAD_ROWS_NIB(na, 0u, xa.x, xa.y) \
-            Q4_QUAD_ROWS_NIB(na, 4u, xa.z, xa.w)) \
+          uint x_row = params.lhs_offset + bt * params.matrix_k; \
+          uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+            Q4_SCALED_TERMS(acc[bt][r], wa[r], xa.x, xa.y, scale_r[r], bias_r[r]) \
+            Q4_SCALED_TERMS(acc[bt][r], wa[r] >> 16u, xa.z, xa.w, scale_r[r], bias_r[r]) \
+          } \
         } \
       } \
     } \
@@ -1776,10 +2045,10 @@ void main() {
   bool column_active = column < n;
   uint words_per_row = params.matrix_k / 8u;
   uint groups_per_row = params.matrix_k / 64u;
-  precise float acc[QMM_VEC_BATCH][ROWS_PER_SLOT];
+  Q4Scaled acc[QMM_VEC_BATCH][ROWS_PER_SLOT];
   for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-      acc[bt][r] = 0.0;
+      acc[bt][r] = Q4Scaled(0.0, 0.0, 0);
     }
   }
   if (column_active) {
@@ -1790,12 +2059,15 @@ void main() {
   }
   for (uint bt = 0u; bt < batch; ++bt) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-      reduce_scratch[lane] = acc[bt][r];
+      reduce_scratch[lane] = acc[bt][r].hi;
+      reduce_scratch_lo[lane] = acc[bt][r].lo;
+      reduce_scratch_exponent[lane] = acc[bt][r].exponent;
       barrier();
       if (lane_in_slot == 0u && column + r < n) {
-        float total = q4_batch_sum(lane);
+        Q4Scaled total;
+        Q4_SCALED_FOLD_SCRATCH(total, lane)
         output_data.values[params.output_offset + bt * params.matrix_n +
-            column + r] = STORE_VALUE(total);
+            column + r] = q4_scaled_store(total);
       }
       barrier();
     }
@@ -1822,9 +2094,9 @@ void main() {
   uint row_words = params.matrix_k / 4u;
 #endif
   for (uint b = 0u; b < batch; ++b) {
-    precise float acc[ROWS_PER_SLOT];
+    Q4_ACC_TYPE acc[ROWS_PER_SLOT];
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-      acc[r] = 0.0;
+      acc[r] = Q4_ACC_ZERO;
     }
     if (column_active) {
       uint w_base = params.rhs_offset + b * w_batch_words;
@@ -1834,11 +2106,20 @@ void main() {
       Q4_ROWS(input_w, scales, biases)
     }
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+#ifdef Q4_ACC_PAIR
+      Q4Scaled total;
+      Q4_SCALED_FOLD_BROADCAST(total, acc[r])
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + b * params.matrix_n +
+            column + r] = q4_scaled_store(total);
+      }
+#else
       float total = subgroupAdd(acc[r]);
       if (lane_in_slot == 0u && column + r < n) {
         output_data.values[params.output_offset + b * params.matrix_n +
             column + r] = STORE_VALUE(total);
       }
+#endif
     }
   }
 }
@@ -1861,7 +2142,7 @@ void main() {
   uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
   bool column_active = column < params.matrix_n;
   for (uint b = 0u; b < batch; ++b) {
-    precise float accumulator = 0.0;
+    Q4_ACC_TYPE accumulator = Q4_ACC_ZERO;
     if (column_active) {
       uint w_row = params.rhs_offset + b * w_batch_words;
       uint p_base = params.aux_offset + b * param_batch;
@@ -2049,6 +2330,14 @@ void main() {
     // (accumulator 0), so the barriers stay uniform across the
     // workgroup.
 #ifdef USE_SUBGROUP
+#ifdef Q4_ACC_PAIR
+    Q4Scaled total;
+    Q4_SCALED_FOLD_BROADCAST(total, accumulator)
+    if (lane_in_slot == 0u && column_active) {
+      output_data.values[params.output_offset + b * params.matrix_n +
+          column] = q4_scaled_store(total);
+    }
+#else
     // Subgroup reduction path. Each 32-lane slot is one hardware
     // subgroup; subgroupAdd folds the per-lane accumulators inside the
     // subgroup without shared-memory scratch or barriers, pairing lanes
@@ -2059,6 +2348,23 @@ void main() {
     if (lane_in_slot == 0u && column_active) {
       output_data.values[params.output_offset + b * params.matrix_n +
           column] = STORE_VALUE(total);
+    }
+#endif
+#else
+#ifdef Q4_ACC_PAIR
+    // Tree reduction path, scaled form: the triple word per lane goes to
+    // the shared scratch once, then every lane folds the same sequential
+    // lane order the subgroup builds run.
+    reduce_scratch[lane] = accumulator.hi;
+    reduce_scratch_lo[lane] = accumulator.lo;
+    reduce_scratch_exponent[lane] = accumulator.exponent;
+    barrier();
+    Q4Scaled total;
+    Q4_SCALED_FOLD_SCRATCH(total, lane - lane_in_slot)
+    barrier();
+    if (lane_in_slot == 0u && column_active) {
+      output_data.values[params.output_offset + b * params.matrix_n +
+          column] = q4_scaled_store(total);
     }
 #else
     // Tree reduction path (default). Five rounds of barrier-synchronized
@@ -2078,6 +2384,7 @@ void main() {
       output_data.values[params.output_offset + b * params.matrix_n +
           column] = STORE_VALUE(reduce_scratch[lane]);
     }
+#endif
 #endif
   }
 }
