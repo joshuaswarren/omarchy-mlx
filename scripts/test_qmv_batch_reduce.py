@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Compile the production scalar reduction on CPU; never model the old GPU tree."""
 import ctypes
-from fractions import Fraction
 import hashlib
 import json
-from pathlib import Path
 import struct
 import subprocess
 import sys
 import tempfile
+from fractions import Fraction
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SHADER = ROOT / 'overlay/mlx/backend/omarchy/shaders/qmm_vec.comp'
@@ -82,7 +82,7 @@ def main():
         return
     assert not sys.argv[1:], 'only --observed-original is supported'
     with tempfile.TemporaryDirectory() as directory:
-        library, reduce = compile_reduce(directory)
+        _library, reduce = compile_reduce(directory)
         for base in (0, 32, 64, 96):
             totals = [reduce((ctypes.c_uint32 * 32)(*[int(b, 16) for b in r['lane_bits']]), base)
                       for r in records]

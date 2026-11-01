@@ -303,7 +303,7 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-#ifndef USE_SUBGROUP
+#if !defined(USE_SUBGROUP) || defined(QMM_VEC_BATCH)
 shared float reduce_scratch[256];
 #endif
 
@@ -1652,14 +1652,29 @@ void main() {
 #error "ROWS_PER_SLOT > 1 builds on QMM_VEC_Q4_WORD"
 #endif
 #if defined(QMM_VEC_BATCH)
+// Recover cancellation lost by the ordinary final fp32 subgroup reduction.
+float q4_batch_sum(uint base) {
+  precise float total = 0.0;
+  precise float correction = 0.0;
+  for (uint i = 0u; i < LANES; ++i) {
+    float value = reduce_scratch[base + i];
+    precise float next = total + value;
+    if (!isinf(next)) {
+      precise float residual = abs(total) >= abs(value)
+          ? (total - next) + value : (value - next) + total;
+      correction += residual;
+    }
+    total = next;
+  }
+  precise float result = total + correction;
+  return result;
+}
+
 // Batch-shared form (MLX_OMARCHY_QMV_BATCH, default on): params.shape[0] = B <=
 // QMM_VEC_BATCH x rows against ONE 2D weight (no per-batch weight or param
 // stride). Each block loads its weight words, scales and biases once and runs
-// every row's chain on them. Per row that chain is Q4_ROWS exactly: the same
-// quads in the same order into dot, the same input_sum, the same block
-// epilogue and the same subgroup reduction, so each row matches the
-// batch-outer main below bit for bit while the weight bytes are read once
-// instead of B times.
+// every row's unchanged local Q4_ROWS chain on them. The final lane sum is
+// compensated before the unchanged storage rounding.
 #define Q4_ROWS_BATCH_ROW(w, X_WORDS) { \
   uint x_row = params.lhs_offset + bt * params.matrix_k; \
   precise float dot[ROWS_PER_SLOT]; \
@@ -1775,11 +1790,14 @@ void main() {
   }
   for (uint bt = 0u; bt < batch; ++bt) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-      float total = subgroupAdd(acc[bt][r]);
+      reduce_scratch[lane] = acc[bt][r];
+      barrier();
       if (lane_in_slot == 0u && column + r < n) {
+        float total = q4_batch_sum(lane);
         output_data.values[params.output_offset + bt * params.matrix_n +
             column + r] = STORE_VALUE(total);
       }
+      barrier();
     }
   }
 }
