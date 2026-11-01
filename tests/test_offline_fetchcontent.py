@@ -85,6 +85,36 @@ class OfflineFetchContentTest(unittest.TestCase):
         self.assertEqual(report[1:], [str(self.sources[name]) for name in DEPS])
         self.assertTrue((build / 'CMakeCache.txt').is_file())
 
+    def test_ccache_disabled_before_upstream_launcher_selection(self):
+        ccache = self.bin / 'ccache'
+        ccache.write_text('#!/bin/sh\nexit 97\n')
+        ccache.chmod(0o755)
+        # Pinned MLX CMakeLists.txt option46 and launcher block81-89, executed without a compiler.
+        upstream = (
+            'option(MLX_USE_CCACHE "Use CCache for compilation cache when available" ON)\n'
+            'if(MLX_USE_CCACHE)\n'
+            '  find_program(CCACHE_PROGRAM ccache)\n'
+            '  if(CCACHE_PROGRAM)\n'
+            '    message(STATUS "Found CCache: ${CCACHE_PROGRAM}")\n'
+            '    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")\n'
+            '    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")\n'
+            '    set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")\n'
+            '  endif()\n'
+            'endif()\n'
+        )
+        (self.source / 'CMakeLists.txt').write_text(
+            self.project + upstream +
+            'file(WRITE "${CMAKE_BINARY_DIR}/launchers" "${MLX_USE_CCACHE};'
+            '${CMAKE_C_COMPILER_LAUNCHER};${CMAKE_CXX_COMPILER_LAUNCHER};'
+            '${CMAKE_CUDA_COMPILER_LAUNCHER}")\n')
+        result, build = self.configure()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_no_download()
+        report = (build / 'report').read_text().splitlines()
+        self.assertEqual(report[0], 'ON;ON;NEVER;ON;OFF;OFF')
+        self.assertEqual(report[1:], [str(self.sources[name]) for name in DEPS])
+        self.assertEqual((build / 'launchers').read_text(), 'OFF;;;')
+
     def test_missing_each_source_refuses_before_fetch(self):
         for name in DEPS:
             with self.subTest(dependency=name):
