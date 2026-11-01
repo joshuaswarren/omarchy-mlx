@@ -1811,6 +1811,21 @@ void main() {
     bias_r[r] = \
         LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + (w) / 8u]); \
   }
+// Reference-cast weights are row-invariant; reuse them without changing each row's product/add order.
+#define Q4_ROWS_BATCH_PREPARE(nw, word, sc, bi) \
+  for (uint j = 0u; j < 8u; ++j) { \
+    (nw)[j] = q4_cast((sc), Q4_NIB((word), 4u * j), (bi)); \
+  }
+#define Q4_ROWS_BATCH_TERMS(dst, nw, off, xlo, xhi) { \
+  float x0 = uintBitsToFloat(((xlo) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((xlo) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((xhi) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((xhi) & 0xFFFF0000u); \
+  (dst) = q4_scaled_add((dst), q4_product(x0, (nw)[(off)])); \
+  (dst) = q4_scaled_add((dst), q4_product(x1, (nw)[(off) + 1u])); \
+  (dst) = q4_scaled_add((dst), q4_product(x2, (nw)[(off) + 2u])); \
+  (dst) = q4_scaled_add((dst), q4_product(x3, (nw)[(off) + 3u])); \
+}
 #define Q4_ROWS_BATCH(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -1822,9 +1837,13 @@ void main() {
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
       uint wa[ROWS_PER_SLOT]; \
       uint wb[ROWS_PER_SLOT]; \
+      float na[ROWS_PER_SLOT][8]; \
+      float nb[ROWS_PER_SLOT][8]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
         wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+        Q4_ROWS_BATCH_PREPARE(na[r], wa[r], scale_r[r], bias_r[r]) \
+        Q4_ROWS_BATCH_PREPARE(nb[r], wb[r], scale_r[r], bias_r[r]) \
       } \
       for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
         if (bt < batch) { \
@@ -1832,10 +1851,10 @@ void main() {
           uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
           uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
           for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-            Q4_SCALED_TERMS(acc[bt][r], wa[r], xa.x, xa.y, scale_r[r], bias_r[r]) \
-            Q4_SCALED_TERMS(acc[bt][r], wa[r] >> 16u, xa.z, xa.w, scale_r[r], bias_r[r]) \
-            Q4_SCALED_TERMS(acc[bt][r], wb[r], xb.x, xb.y, scale_r[r], bias_r[r]) \
-            Q4_SCALED_TERMS(acc[bt][r], wb[r] >> 16u, xb.z, xb.w, scale_r[r], bias_r[r]) \
+            Q4_ROWS_BATCH_TERMS(acc[bt][r], na[r], 0u, xa.x, xa.y) \
+            Q4_ROWS_BATCH_TERMS(acc[bt][r], na[r], 4u, xa.z, xa.w) \
+            Q4_ROWS_BATCH_TERMS(acc[bt][r], nb[r], 0u, xb.x, xb.y) \
+            Q4_ROWS_BATCH_TERMS(acc[bt][r], nb[r], 4u, xb.z, xb.w) \
           } \
         } \
       } \
@@ -1844,16 +1863,18 @@ void main() {
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
       uint wa[ROWS_PER_SLOT]; \
+      float na[ROWS_PER_SLOT][8]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        Q4_ROWS_BATCH_PREPARE(na[r], wa[r], scale_r[r], bias_r[r]) \
       } \
       for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
         if (bt < batch) { \
           uint x_row = params.lhs_offset + bt * params.matrix_k; \
           uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
           for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-            Q4_SCALED_TERMS(acc[bt][r], wa[r], xa.x, xa.y, scale_r[r], bias_r[r]) \
-            Q4_SCALED_TERMS(acc[bt][r], wa[r] >> 16u, xa.z, xa.w, scale_r[r], bias_r[r]) \
+            Q4_ROWS_BATCH_TERMS(acc[bt][r], na[r], 0u, xa.x, xa.y) \
+            Q4_ROWS_BATCH_TERMS(acc[bt][r], na[r], 4u, xa.z, xa.w) \
           } \
         } \
       } \

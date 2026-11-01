@@ -15,6 +15,7 @@ import hashlib
 import json
 import struct
 import subprocess
+import sys
 import tempfile
 from fractions import Fraction
 from pathlib import Path
@@ -91,6 +92,149 @@ def extract_macro(source, marker):
     raise AssertionError(marker)
 
 
+# Test-only instrument: the extracted production macros keep calling q4_cast
+# by name, the forwarder counts each execution and the untouched header
+# function performs the arithmetic. Nothing in production sees this.
+CAST_INSTRUMENT = '''
+static long g_q4_cast_calls = 0;
+static float (*const q4_cast_perform)(float, float, float) = &q4_cast;
+#define q4_cast(scale, q, bias) \\
+    (++g_q4_cast_calls, q4_cast_perform((scale), (q), (bias)))
+'''
+
+# Batch4 harness: production batch-build shape (ROWS_PER_SLOT 2, batch 4),
+# default (non-outgate) x-word route, scales/biases pre-widened to f32 like
+# every other adapter here. The wrapper transcribes main()'s accumulator
+# init, sequential lane fold, and store around the verbatim macro text.
+BATCH_PRELUDE = '''
+#define ROWS_PER_SLOT 2
+#define SLOTS_PER_GROUP 4
+#define QMM_VEC_BATCH 4
+#define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
+using std::min;
+'''
+
+BATCH_WRAPPER = '''
+static struct {
+  uint matrix_k, matrix_n, lhs_offset, rhs_offset, aux_offset, aux_size,
+      output_offset;
+  uint shape[1];
+} params;
+
+extern "C" long batch4_run(const float* x, const uint* wq, const float* s,
+                           const float* b, uint k, uint n, uint shape0,
+                           uint column, uint32_t* out_stored, uint32_t* acc_hi,
+                           uint32_t* acc_lo, int32_t* acc_exp) {
+  if (std::fegetround() != FE_TONEAREST) __builtin_trap();
+  const uint batch = min(shape0, uint(QMM_VEC_BATCH));
+  const uint rows = uint(ROWS_PER_SLOT);
+  const uint lhs_offset = 64u, rhs_offset = 3u, aux_offset = 5u,
+             aux_size = 7u, output_offset = 11u;
+  const uint words_per_row = k / 8u, groups_per_row = k / 64u;
+  input_x.values.assign((lhs_offset + uint(QMM_VEC_BATCH) * k) / 8u,
+      CpuQuad{0x7fc07fc0u, 0x7fc07fc0u, 0x7fc07fc0u, 0x7fc07fc0u});
+  for (uint bt = 0u; bt < batch; ++bt) {
+    for (uint w = 0u; w < words_per_row; ++w) {
+      input_x.values[(lhs_offset + bt * k) / 8u + w] = CpuQuad{
+          (fbits(x[bt * k + w * 8u]) >> 16) |
+              (fbits(x[bt * k + w * 8u + 1u]) & 0xffff0000u),
+          (fbits(x[bt * k + w * 8u + 2u]) >> 16) |
+              (fbits(x[bt * k + w * 8u + 3u]) & 0xffff0000u),
+          (fbits(x[bt * k + w * 8u + 4u]) >> 16) |
+              (fbits(x[bt * k + w * 8u + 5u]) & 0xffff0000u),
+          (fbits(x[bt * k + w * 8u + 6u]) >> 16) |
+              (fbits(x[bt * k + w * 8u + 7u]) & 0xffff0000u)};
+    }
+  }
+  input_w.values.assign(rhs_offset, 0xffffffffu);
+  scales.values.assign(aux_offset, u2f(0x7fc00000));
+  biases.values.assign(aux_size, u2f(0x7fc00000));
+  const uint weight_rows = min(column + (rows - 1u), n - 1u) + 1u;
+  for (uint r = 0u; r < weight_rows; ++r) {
+    input_w.values.insert(input_w.values.end(), wq + r * words_per_row,
+                          wq + (r + 1u) * words_per_row);
+    scales.values.insert(scales.values.end(), s + r * groups_per_row,
+                         s + (r + 1u) * groups_per_row);
+    biases.values.insert(biases.values.end(), b + r * groups_per_row,
+                         b + (r + 1u) * groups_per_row);
+  }
+  params.matrix_k = k;
+  params.matrix_n = n;
+  params.lhs_offset = lhs_offset;
+  params.rhs_offset = rhs_offset;
+  params.aux_offset = aux_offset;
+  params.aux_size = aux_size;
+  params.output_offset = output_offset;
+  params.shape[0] = shape0;
+  struct { std::vector<uint16_t> values; } output_data;
+  output_data.values.assign(output_offset + batch * n + rows + 1u, 0x7fc0);
+  std::vector<bool> written(output_data.values.size(), false);
+  long casts = 0;
+  Q4Scaled lane_acc[32][ROWS_PER_SLOT][QMM_VEC_BATCH];
+  for (uint lane_in_slot = 0u; lane_in_slot < LANES; ++lane_in_slot) {
+    Q4Scaled acc[QMM_VEC_BATCH][ROWS_PER_SLOT];
+    for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) {
+      for (uint r = 0u; r < rows; ++r) {
+        acc[bt][r] = Q4Scaled(0.0, 0.0, 0);
+      }
+    }
+    const uint w_base = params.rhs_offset;
+    const uint s_base = params.aux_offset;
+    const uint b_base = params.aux_size;
+    g_q4_cast_calls = 0;
+    Q4_ROWS_BATCH(input_w, scales, biases)
+    casts += g_q4_cast_calls;
+    for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) {
+      for (uint r = 0u; r < rows; ++r) {
+        lane_acc[lane_in_slot][r][bt] = acc[bt][r];
+      }
+    }
+  }
+  for (uint bt = 0u; bt < batch; ++bt) {
+    for (uint r = 0u; r < rows; ++r) {
+      for (uint lane = 0u; lane < LANES; ++lane) {
+        reduce_scratch[lane] = lane_acc[lane][r][bt].hi;
+        reduce_scratch_lo[lane] = lane_acc[lane][r][bt].lo;
+        reduce_scratch_exponent[lane] = lane_acc[lane][r][bt].exponent;
+      }
+      Q4Scaled total;
+      Q4_SCALED_FOLD_SCRATCH(total, 0)
+      if (column + r < n) {
+        const uint index = params.output_offset + bt * params.matrix_n + column + r;
+        output_data.values[index] = q4_scaled_store(total);
+        written[index] = true;
+      }
+    }
+  }
+  for (uint bt = 0u; bt < batch; ++bt) {
+    for (uint r = 0u; r < rows; ++r) {
+      out_stored[bt * rows + r] =
+          output_data.values[params.output_offset + bt * params.matrix_n +
+              column + r];
+      for (uint lane = 0u; lane < LANES; ++lane) {
+        acc_hi[(bt * rows + r) * LANES + lane] =
+            fbits(lane_acc[lane][r][bt].hi);
+        acc_lo[(bt * rows + r) * LANES + lane] =
+            fbits(lane_acc[lane][r][bt].lo);
+        acc_exp[(bt * rows + r) * LANES + lane] =
+            lane_acc[lane][r][bt].exponent;
+      }
+    }
+  }
+  for (uint i = 0u; i < output_data.values.size(); ++i) {
+    if (!written[i] && output_data.values[i] != 0x7fc0) __builtin_trap();
+  }
+  return casts;
+}
+
+extern "C" const float* batch_scratch(void) { return reduce_scratch; }
+extern "C" const float* batch_scratch_lo(void) { return reduce_scratch_lo; }
+extern "C" const int* batch_scratch_exponent(void) {
+  return reduce_scratch_exponent;
+}
+'''
+
+
 def compile_model(directory):
     source = SHADER.read_text()
     math_source = MATH_HEADER.read_text()
@@ -119,6 +263,16 @@ def compile_model(directory):
     broadcast_fold = extract_macro(math_source, '#define Q4_SCALED_FOLD_BROADCAST(total, mine)')
     terms = extract_macro(source, '#define Q4_NIB(p, shift)') + '\n' + \
         extract_macro(math_source, '#define Q4_SCALED_TERMS(dst, p, lo, hi, sc, bi)')
+    batch_params_macro = extract_macro(source, '#define Q4_ROWS_BATCH_PARAMS(w, S, B)')
+    batch_prepare_macro = batch_terms_macro = ''
+    try:
+        batch_prepare_macro = extract_macro(
+            source, '#define Q4_ROWS_BATCH_PREPARE(nw, word, sc, bi)')
+        batch_terms_macro = extract_macro(
+            source, '#define Q4_ROWS_BATCH_TERMS(dst, nw, off, xlo, xhi)')
+    except ValueError:
+        pass  # pre-hoist head: the batch macro calls Q4_SCALED_TERMS directly
+    batch_macro = extract_macro(source, '#define Q4_ROWS_BATCH(W, S, B)')
     gather_word = extract_macro(GATHER_SHADER.read_text(), '#define Q4_WORD_AT(widx)')
     # One nonzero lane + zeros is an exact copy for any ARITHMETIC reduction order.
     for field in ('hi', 'lo'):
@@ -155,7 +309,7 @@ static float q4_nib(uint p, uint shift) {
   return u2f((((p) >> (shift)) & 0xfu) | 0x4B000000u) - 8388608.0f;
 }
 static uint fbits(float f) { uint v; memcpy(&v, &f, 4); return v; }
-''' + helpers + '''
+''' + helpers + CAST_INSTRUMENT + '''
 const uint LANES = 32;
 float reduce_scratch[256];
 float reduce_scratch_lo[256];
@@ -336,7 +490,8 @@ extern "C" uint32_t run_gather(const float* x, const uint* wq, const float* s,
   Q4_SCALED_FOLD_BROADCAST(total, cpu_lanes[0])
   return q4_scaled_store(total);
 }
-''')
+''' + BATCH_PRELUDE + batch_params_macro + '\n' + batch_prepare_macro + '\n' +
+    batch_terms_macro + '\n' + batch_macro + '\n' + BATCH_WRAPPER)
     subprocess.run(['c++', '-std=c++20', '-O2', '-shared', '-fPIC',
                     '-fno-fast-math', '-ffp-contract=off', '-frounding-math',
                     str(cpp), '-o', str(library)], check=True)
@@ -360,6 +515,16 @@ extern "C" uint32_t run_gather(const float* x, const uint* wq, const float* s,
         function = getattr(loaded, name)
         function.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint]
         function.restype = ctypes.c_uint32
+    loaded.batch4_run.restype = ctypes.c_long
+    loaded.batch4_run.argtypes = [
+        ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+        ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_int32)]
+    for name in ('batch_scratch', 'batch_scratch_lo'):
+        getattr(loaded, name).restype = ctypes.POINTER(ctypes.c_float)
+    loaded.batch_scratch_exponent.restype = ctypes.POINTER(ctypes.c_int32)
     return loaded
 
 
@@ -554,13 +719,132 @@ def check_old48(library):
           f'vs nearest retained references (no regressions)')
 
 
+def batch_call(library, x, wq, s, b, k, n, batch, column):
+    out = (ctypes.c_uint32 * 16)()
+    hi = (ctypes.c_uint32 * 512)()
+    lo = (ctypes.c_uint32 * 512)()
+    exp = (ctypes.c_int32 * 512)()
+    casts = library.batch4_run(
+        x.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        wq.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        s.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        b.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        k, n, batch, column, out, hi, lo, exp)
+    return list(out), hi, lo, exp, int(casts)
+
+
+def scratch_bits(library):
+    scratch = library.batch_scratch()
+    scratch_lo = library.batch_scratch_lo()
+    exponent = library.batch_scratch_exponent()
+    return (struct.pack('<32f', *[scratch[i] for i in range(32)]),
+            struct.pack('<32f', *[scratch_lo[i] for i in range(32)]),
+            struct.pack('<32i', *[exponent[i] for i in range(32)]))
+
+
+def check_batch4_invariant(library):
+    captured = json.loads(pinned(RAW / 'manifest.json', RAW_MANIFEST_SHA))
+    observed = json.loads(pinned(OBS / 'manifest.json', OBS_MANIFEST_SHA))
+    record = next(r for r in captured['records'] if r['key'] == [2048, 520, 5, 15])
+    old = next(r for r in observed['records'] if r['key'] == [2048, 520, 5, 15])
+    arrays = arrays_of(record, old)
+    cut = 1984  # 1984 % 512 != 0: drives the production one-word walk
+    pattern = np.tile(np.array([1.0, -1.0], dtype='<f4'), 224)
+    cases = [
+        dict(name='witness two-word walk', k=2048, n=520, columns=(8, 518),
+             x=np.ascontiguousarray(arrays['x'][0, :4]),
+             wq=arrays['wq'], s=arrays['s'], b=arrays['b']),
+        dict(name='witness one-word walk with clamped tail', k=cut, n=519, columns=(8, 518),
+             x=np.ascontiguousarray(arrays['x'][0, :4, :cut]),
+             wq=np.ascontiguousarray(arrays['wq'][:, :cut // 8]),
+             s=np.ascontiguousarray(arrays['s'][:, :cut // 64]),
+             b=np.ascontiguousarray(arrays['b'][:, :cut // 64])),
+        dict(name='cancellation and subnormal-range fixture one-word walk',
+             k=448, n=7, columns=(2, 6),
+             x=np.stack([pattern, -pattern, pattern * 2.0 ** -75,
+                         pattern * 2.0 ** -80]),
+             wq=np.tile(np.full(56, 0x88888888, dtype='<u4'), (8, 1)),
+             s=np.tile(np.array([1.0] * 4 + [2.0 ** -70] * 4, dtype='<f4')
+                       .reshape(8, 1), (1, 7)),
+             b=np.tile(np.array([2.0 ** -24] * 4 + [0.0] * 4, dtype='<f4')
+                       .reshape(8, 1), (1, 7))),
+    ]
+    checked = 0
+    rows = 2  # ROWS_PER_SLOT of the shipped batch4 build
+    for case in cases:
+        words = case['k'] // 8
+        step = 2 if case['k'] % 512 == 0 and case['n'] % 8 == 0 else 1
+        budget = rows * words * 8  # one q4_cast per weight nibble
+        for column in case['columns']:
+            row_base = [min(column + r, case['n'] - 1) for r in range(rows)]
+            height = max(row_base) + 1  # the macro indexes weight rows absolutely
+            wq_rows = np.ascontiguousarray(case['wq'][:height])
+            s_rows = np.ascontiguousarray(case['s'][:height])
+            b_rows = np.ascontiguousarray(case['b'][:height])
+            runs = {batch: batch_call(library, case['x'], wq_rows, s_rows,
+                                      b_rows, case['k'], case['n'], batch,
+                                      column)
+                    for batch in (1, 2, 3, 4)}
+            for batch in (1, 2, 3, 4):
+                stored, hi, lo, exp, _ = runs[batch]
+                for bt in range(batch):
+                    for r in range(rows):
+                        ref = call(library.run_new, case['x'][bt],
+                                   wq_rows[row_base[r]], s_rows[row_base[r]],
+                                   b_rows[row_base[r]], step)
+                        expected = ref if column + r < case['n'] else 0x7fc0
+                        assert stored[bt * rows + r] == expected, (
+                            f'batch {batch} row {bt} slot {r} column {column} '
+                            f'{case["name"]}: store {stored[bt * rows + r]:04x} vs '
+                            f'single-row source or inactive-slot canary {expected:04x}')
+                        base = (bt * rows + r) * 32
+                        lane_bits = (
+                            struct.pack('<32I', *hi[base:base + 32]),
+                            struct.pack('<32I', *lo[base:base + 32]),
+                            struct.pack('<32i', *exp[base:base + 32]))
+                        assert lane_bits == scratch_bits(library), (
+                            f'batch {batch} row {bt} slot {r} column {column} '
+                            f'{case["name"]}: pre-store accumulator (hi, lo, '
+                            f'exponent) bits differ from the single-row walk')
+                if batch > 1:
+                    for bt in range(batch - 1):
+                        for r in range(rows):
+                            assert stored[bt * rows + r] == \
+                                runs[batch - 1][0][bt * rows + r], (
+                                f'batch {batch} row {bt} slot {r} column '
+                                f'{column} {case["name"]}: store changed with '
+                                f'batch size')
+                checked += 1
+            counts = ', '.join(f'batch {batch}: {runs[batch][4]}'
+                               for batch in (1, 2, 3, 4))
+            print(f'batch4 {case["name"]} column {column}: once-per-weight '
+                  f'budget {budget} ({counts})')
+            for batch in (1, 2, 3, 4):
+                assert runs[batch][4] == budget, (
+                    f'cast budget violated at batch {batch}, column {column}, '
+                    f'{case["name"]}: {runs[batch][4]} q4_cast executions '
+                    f'against the once-per-weight budget {budget} (rows {rows} '
+                    f'x words {words} x 8 nibbles); batch-invariant cast work is '
+                    f'recomputed per batch row')
+    print(f'PASS focused Batch4 extraction: {checked} batch/column/batch runs '
+          f'bit-identical to the single-row source (stores and pre-store '
+          f'accumulator bits) at exactly the once-per-weight q4_cast budget')
+
+
 def main():
+    batch_only = sys.argv[1:] == ['--batch-only']
+    assert batch_only or not sys.argv[1:], 'only --batch-only is supported'
     with tempfile.TemporaryDirectory() as directory:
         library = compile_model(directory)
+        if batch_only:
+            check_batch4_invariant(library)
+            print('PASS --batch-only: focused Batch4 invariant check green.')
+            return
         check_witnesses(library)
         check_fixtures(library)
         check_complete_max_seeds(library)
         check_old48(library)
+        check_batch4_invariant(library)
     print('PASS: production scaled Q4 bf16 affine extraction; witnesses, '
           'counterexamples and all 50 captured cases green; old interpretation RED retained.')
 
