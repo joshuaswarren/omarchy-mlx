@@ -1388,20 +1388,22 @@ class PairManagerTests(BasePairTest):
         self.manager.setup("everyday", approve_download=True)
         self.manager.start()
         chat_pid = self.manager._children["chat"].popen.pid
-        with mock.patch.object(managed, "terminate", return_value=False):
-            report = self.manager.stop()
-        self.assertFalse(report["stopped"])
-        self.assertFalse(report["children"]["chat"]["confirmed_dead"])
-        self.assertCountEqual(report["retained"], [CHAT_SMALL_ID, DECISION_ID])
-        # fail closed: the memory of an unverifiable worker stays counted...
-        self.assertEqual(set(budget.load_reservations(self.home)),
-                         {CHAT_SMALL_ID, DECISION_ID})
-        # ...and a retry while the survivor still cannot be verified is
-        # refused with the record named, not silently leaked
-        with mock.patch.object(managed, "terminate", return_value=False):
-            with self.assertRaises(pairs.PairError) as ctx:
-                self.manager.start()
-        self.assertIn(CHAT_SMALL_ID, str(ctx.exception))
+        # Keep lifetime-pipe EOF from killing workers while exit is deliberately unverifiable.
+        with mock.patch.object(self.manager, "_close_lifetime"):
+            with mock.patch.object(managed, "terminate", return_value=False):
+                report = self.manager.stop()
+            self.assertFalse(report["stopped"])
+            self.assertFalse(report["children"]["chat"]["confirmed_dead"])
+            self.assertCountEqual(report["retained"], [CHAT_SMALL_ID, DECISION_ID])
+            # fail closed: the memory of an unverifiable worker stays counted...
+            self.assertEqual(set(budget.load_reservations(self.home)),
+                             {CHAT_SMALL_ID, DECISION_ID})
+            # ...and a retry while the survivor still cannot be verified is
+            # refused with the record named, not silently leaked
+            with mock.patch.object(managed, "terminate", return_value=False):
+                with self.assertRaises(pairs.PairError) as ctx:
+                    self.manager.start()
+            self.assertIn(CHAT_SMALL_ID, str(ctx.exception))
         # once termination verifies again, start() settles the retained
         # survivor itself: verified exit releases the record, admission
         # proceeds, and the fresh pair is ready
