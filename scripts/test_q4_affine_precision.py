@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Focused Q4 bf16 affine precision regression.
 
-Extracts the production scaled-accumulator helpers (q4_normalize,
-q4_scaled_add, q4_cast, q4_product, q4_scaled_store) VERBATIM from
-qmm_vec.comp into C++ and drives the retained real witnesses plus the
+Extracts the production shared-header helpers and dense/gathered term/fold
+macros into C++ and drives the retained real witnesses plus the
 range/cast/RNE counterexamples through the production walk shape
 (per-element weight cast, exact 8x24 significand product, exponent-aligned
 accumulation, sequential lane fold, exponent-aware bf16 RNE store).
 The old production interpretation (fma chunk epilogues, sequential float
 lane adds, compensated float fold, fp32-only store) runs beside it as the
-honest RED. No MLX/backend/provider/target/native use; pure CPU source math.
+honest RED. Local C++ scalar arithmetic only; no MLX/backend/provider/target.
 """
 import ctypes
 import hashlib
@@ -24,6 +23,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 SHADER = ROOT / 'overlay/mlx/backend/omarchy/shaders/qmm_vec.comp'
+MATH_HEADER = SHADER.with_name('q4_bf16_precision.h')
+GATHER_SHADER = SHADER.with_name('gather_qmm_word.comp')
 RAW = Path('/home/joshuawarren/scratch/w7N/a615-two-max-seed-generation-20261101T121517Z/output-copy/raw')
 OBS = Path('/home/joshuawarren/scratch/w7N/a615-max-seed-observation-20261101T115117Z/output-copy/raw')
 OLD48 = Path('/home/joshuawarren/scratch/w7N/issue305-diagnostic-controls-r2-20261031/output-copy/out/base.json')
@@ -92,6 +93,7 @@ def extract_macro(source, marker):
 
 def compile_model(directory):
     source = SHADER.read_text()
+    math_source = MATH_HEADER.read_text()
     depth = 0
     for line in source.splitlines():
         stripped = line.strip()
@@ -102,7 +104,7 @@ def compile_model(directory):
         assert depth >= 0, 'unbalanced #endif'
     assert depth == 0, 'unbalanced #if'
     parts = [extract_function(
-        source, 'struct Q4Scaled { float hi; float lo; int exponent; };') + ';']
+        math_source, 'struct Q4Scaled { float hi; float lo; int exponent; };') + ';']
     for marker in ('Q4Scaled q4_scaled_zero() {',
                    'Q4Scaled q4_scaled_nan() {',
                    'Q4Scaled q4_normalize(float hi, float lo, int exponent) {',
@@ -110,13 +112,14 @@ def compile_model(directory):
                    'float q4_cast(float scale, float q, float bias) {',
                    'Q4Scaled q4_product(float x, float weight) {',
                    'uint16_t q4_scaled_store(Q4Scaled pair) {'):
-        parts.append(extract_function(source, marker))
+        parts.append(extract_function(math_source, marker))
     helpers = '\n'.join(parts)
     helpers = helpers.replace('frexp(', 'glsl_frexp(').replace('ldexp(', 'std::ldexp(')
     scratch_fold = extract_macro(source, '#define Q4_SCALED_FOLD_SCRATCH(total, base)')
-    broadcast_fold = extract_macro(source, '#define Q4_SCALED_FOLD_BROADCAST(total, mine)')
+    broadcast_fold = extract_macro(math_source, '#define Q4_SCALED_FOLD_BROADCAST(total, mine)')
     terms = extract_macro(source, '#define Q4_NIB(p, shift)') + '\n' + \
-        extract_macro(source, '#define Q4_SCALED_TERMS(dst, p, lo, hi, sc, bi)')
+        extract_macro(math_source, '#define Q4_SCALED_TERMS(dst, p, lo, hi, sc, bi)')
+    gather_word = extract_macro(GATHER_SHADER.read_text(), '#define Q4_WORD_AT(widx)')
     # One nonzero lane + zeros is an exact copy for any ARITHMETIC reduction order.
     for field in ('hi', 'lo'):
         expression = f'subgroupAdd(lane_in_slot == i ? q4_fold_source.{field} : 0.0)'
@@ -295,6 +298,44 @@ extern "C" uint32_t reduce_broadcast(const uint32_t* words, uint base) {
   Q4_SCALED_FOLD_BROADCAST(total, cpu_lanes[0])
   return uint32_t(q4_scaled_store(total)) << 16;
 }
+''' + '''
+struct CpuQuad { uint x, y, z, w; };
+using uvec4 = CpuQuad;
+struct { std::vector<CpuQuad> values; } input_x;
+struct { std::vector<uint> values; } input_w;
+struct { std::vector<float> values; } scales, biases;
+#define LOAD_VALUE(value) (value)
+''' + gather_word + '''
+extern "C" uint32_t run_gather(const float* x, const uint* wq, const float* s,
+                               const float* b, uint k, uint step) {
+  const uint x_row = 8, w_base = 1, s_base = 1, b_base = 2;
+  const uint words = k / 8, groups = k / 64;
+  input_x.values.assign(words + 1, CpuQuad{0x7fc07fc0u, 0x7fc07fc0u, 0x7fc07fc0u, 0x7fc07fc0u});
+  for (uint w = 0; w < words; ++w) {
+    input_x.values[w + 1] = CpuQuad{
+      (fbits(x[w * 8]) >> 16) | (fbits(x[w * 8 + 1]) & 0xffff0000u),
+      (fbits(x[w * 8 + 2]) >> 16) | (fbits(x[w * 8 + 3]) & 0xffff0000u),
+      (fbits(x[w * 8 + 4]) >> 16) | (fbits(x[w * 8 + 5]) & 0xffff0000u),
+      (fbits(x[w * 8 + 6]) >> 16) | (fbits(x[w * 8 + 7]) & 0xffff0000u)};
+  }
+  input_w.values.assign(1, 0xffffffffu);
+  input_w.values.insert(input_w.values.end(), wq, wq + words);
+  scales.values.assign(1, u2f(0x7fc00000));
+  scales.values.insert(scales.values.end(), s, s + groups);
+  biases.values.assign(2, u2f(0x7fc00000));
+  biases.values.insert(biases.values.end(), b, b + groups);
+  for (uint lane = 0; lane < 32; ++lane) {
+    Q4Scaled accumulator = q4_scaled_zero();
+    for (uint w = lane * step; w < words; w += 32 * step) {
+      Q4_WORD_AT(w)
+      if (step == 2) { Q4_WORD_AT(w + 1) }
+    }
+    cpu_lanes[lane] = accumulator;
+  }
+  Q4Scaled total;
+  Q4_SCALED_FOLD_BROADCAST(total, cpu_lanes[0])
+  return q4_scaled_store(total);
+}
 ''')
     subprocess.run(['c++', '-std=c++20', '-O2', '-shared', '-fPIC',
                     '-fno-fast-math', '-ffp-contract=off', '-frounding-math',
@@ -310,6 +351,8 @@ extern "C" uint32_t reduce_broadcast(const uint32_t* words, uint base) {
     loaded.run_old.argtypes = loaded.run_new.argtypes
     loaded.run_new_broadcast.restype = ctypes.c_uint32
     loaded.run_new_broadcast.argtypes = loaded.run_new.argtypes
+    loaded.run_gather.restype = ctypes.c_uint32
+    loaded.run_gather.argtypes = loaded.run_new.argtypes
     loaded.run_products.restype = ctypes.c_uint32
     loaded.run_products.argtypes = [ctypes.POINTER(ctypes.c_float),
                                    ctypes.POINTER(ctypes.c_float), ctypes.c_uint32]
@@ -374,6 +417,8 @@ def check_witnesses(library):
                 f'{label}: got {got:04x} want {want:04x} parent {reference_hex}'
             assert call(library.run_new_broadcast, x, wq_column, s, b, step) == got, \
                 f'{label}: scratch/subgroup consumer mismatch'
+            assert call(library.run_gather, x, wq_column, s, b, step) == got, \
+                f'{label}: gathered-word consumer/offset mismatch'
             checked += 1
         old_two = call(library.run_old, x, wq_column, s, b, 2)
         assert old_two == native, \
@@ -385,6 +430,7 @@ def check_witnesses(library):
     print(f'PASS actual witnesses: 16/16 new-model checks match retained '
           f'references (both word walks); old model reproduces native bits and '
           f'remains RED on {len(OLD_RED)} retained witnesses')
+    print('PASS gathered-word production macro: dense reference witnesses and nonzero buffer offsets')
 
 
 def check_fixtures(library):
