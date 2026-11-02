@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 //
 // Single-query SDPA in native Metal's decode arithmetic order
-// (mlx/backend/metal/kernels/sdpa_vector.h). One 1024-thread workgroup owns
-// one query head. Short and mid decode reproduce sdpa_vector's 32
+// (mlx/backend/metal/kernels/sdpa_vector.h). One workgroup (1024 threads;
+// 256 in the bf16 arm) owns one query head. Short and mid decode reproduce sdpa_vector's 32
 // interleaved online streams and final SIMD reduction. At native's
 // long-context crossover the route switches to the native-shape two-pass
 // pair (sdpa_decode_native_p1.comp + _p2.comp), so this kernel always runs
@@ -29,7 +29,15 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
+#ifdef BF16_IO
+// The composition-exact arm needs lanes 0..255 (softmax trees) and
+// 0..SDPA_DIM-1 (outputs, SDPA_DIM <= 256); scores stride the keys by the
+// workgroup width, each key's chain unchanged. 256 lanes instead of 1024
+// put a quarter of the threads at every workgroup barrier.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#else
 layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+#endif
 #ifdef BF16_IO
 // bf16 storage rides a uint16 word view: loads widen exactly (the bf16
 // bits are the f32 top half), stores round-to-nearest-even like every
@@ -180,9 +188,9 @@ void main() {
   //   4. output = ascending-key `acc += a * b` over 16-wide tiles with
   //      exact-zero tail padding, drained by 1.0f (matmul.comp), stored
   //      through the cast.comp RNE bf16 pair.
-  // Threads 256..1023 share every barrier but do no phase work; the
-  // reduction trees only involve lanes 0..255, exactly as the 256-thread
-  // softmax kernel computes them.
+  // The workgroup is 256 lanes: the reduction trees involve all of them,
+  // exactly as the 256-thread softmax kernel computes them, and the score
+  // pass strides the keys by 256.
   // ------------------------------------------------------------------
   uint thread = gl_LocalInvocationID.x;
   uint head = gl_WorkGroupID.x;
@@ -226,7 +234,7 @@ void main() {
   barrier();
 
   // Scores over every key: ascending-d accumulation, matmul.comp order.
-  for (uint key = thread; key < key_end; key += 1024u) {
+  for (uint key = thread; key < key_end; key += 256u) {
     uint k_base = k_batch + kv_head * params.shape[1] +
         key * params.shape[2];
     float accumulator = 0.0;

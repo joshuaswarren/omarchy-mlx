@@ -27,11 +27,14 @@
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/capability_sim.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/trace.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
+#include "mlx/random.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
 
@@ -46,6 +49,8 @@ constexpr const char* kSubgroup64 = "subgroup-size-64";
 constexpr const char* kSmallSmem = "small-shared-memory";
 constexpr const char* kNoCoopmat = "no-cooperative-matrix";
 constexpr const char* kG13Legacy = "m1-g13-legacy";
+constexpr const char* kWorkgroup256 = "workgroup-256";
+constexpr const char* kWorkgroup128 = "workgroup-128";
 
 std::string g_profile;
 
@@ -328,6 +333,13 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK_EQ(c.subgroup_size, h.subgroup_size);
     CHECK(c.cooperative_matrix_f32_8 == h.cooperative_matrix_f32_8);
     CHECK(c.subgroup_operations == h.subgroup_operations);
+    CHECK_EQ(c.max_compute_shared_memory_size, h.max_compute_shared_memory_size);
+  } else if (profile_is(kWorkgroup256) || profile_is(kWorkgroup128)) {
+    const uint32_t limit = profile_is(kWorkgroup256) ? 256u : 128u;
+    CHECK_EQ(c.max_compute_work_group_invocations, limit);
+    CHECK_EQ(c.max_compute_work_group_size[0], limit);
+    CHECK_EQ(c.subgroup_size, h.subgroup_size);
+    CHECK(c.cooperative_matrix_f32_8 == h.cooperative_matrix_f32_8);
     CHECK_EQ(c.max_compute_shared_memory_size, h.max_compute_shared_memory_size);
   } else {
     FAIL("unhandled profile ", g_profile);
@@ -709,6 +721,99 @@ TEST_CASE("sdpa decode routes per the profile") {
             << " (backed=" << coopmat_backed() << ")\n";
 }
 
+// The composition-exact bf16 decode SDPA arm (sdpa_decode_native.comp
+// -DBF16_IO, 256 lanes) is admitted on a device whose workgroup limits
+// reach 256 invocations and 256 in x and whose shared memory holds the
+// arm's (width + 7168 + 256)-float stream; anything less composes. Under
+// every profile, each leg (one query token; batch 2; four causal query
+// rows; a 7100-key cache near the 7168-key stream limit) must dispatch
+// the arm exactly when that gate holds and store the composition's bits
+// either way. The split-K route is held off so the leg sees this gate
+// alone; f16 keeps its own case above.
+TEST_CASE("bf16 decode sdpa arm routes per the workgroup and shared-memory gate") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& c = caps();
+  constexpr int width = 128;
+  const size_t shared_needed = (width + 7168 + 256) * sizeof(float);
+  const bool arm_ready = c.max_compute_work_group_invocations >= 256u &&
+      c.max_compute_work_group_size[0] >= 256u &&
+      c.max_compute_shared_memory_size >= shared_needed;
+  setenv("MLX_OMARCHY_SDPA_DECODE_SPLIT", "0", 1);
+  struct Leg {
+    const char* label;
+    int batch, q_len, keys;
+    bool causal;
+    omarchy::ComputeKernel kernel;
+  };
+  const Leg legs[] = {
+      {"decode", 1, 1, 300, false,
+       omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd128},
+      {"batch2", 2, 1, 300, false,
+       omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd128},
+      {"rows4", 1, 4, 300, true,
+       omarchy::ComputeKernel::SdpaDecodeRowsBF16Hd128},
+      {"keys7100", 1, 1, 7100, false,
+       omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd128},
+  };
+  for (const auto& leg : legs) {
+    INFO("leg=", leg.label, " profile=", g_profile);
+    constexpr int heads = 4;
+    constexpr int kv_heads = 2;
+    array q = astype(
+        random::normal(Shape{leg.batch, heads, leg.q_len, width}, float32,
+                       std::nullopt, stream),
+        bfloat16, stream);
+    array k = astype(
+        random::normal(Shape{leg.batch, kv_heads, leg.keys, width}, float32,
+                       std::nullopt, stream),
+        bfloat16, stream);
+    array v = astype(
+        random::normal(Shape{leg.batch, kv_heads, leg.keys, width}, float32,
+                       std::nullopt, stream),
+        bfloat16, stream);
+    eval({q, k, v});
+    omarchy::get_command_encoder(stream).synchronize();
+    auto attend = [&](const char* native) {
+      setenv("MLX_OMARCHY_SDPA_DECODE_NATIVE", native, 1);
+      array out = fast::scaled_dot_product_attention(
+          q, k, v, 1.0f / std::sqrt(float(width)), leg.causal ? "causal" : "",
+          {}, std::nullopt, false, stream);
+      std::string error = evaluation_error(out);
+      REQUIRE_MESSAGE(error.empty(), error);
+      omarchy::get_command_encoder(stream).synchronize();
+      return std::make_pair(
+          out, omarchy::trace::counters().last_dispatched_kernel.load());
+    };
+    auto [routed, kernel] = attend("1");
+    auto [composed, composed_kernel] = attend("0");
+    unsetenv("MLX_OMARCHY_SDPA_DECODE_NATIVE");
+    std::cout << "[capsim bf16-sdpa] profile=" << g_profile
+              << " leg=" << leg.label << " arm_ready=" << arm_ready
+              << " kernel=" << kernel << "\n";
+    if (arm_ready) {
+      CHECK_EQ(kernel, static_cast<int64_t>(leg.kernel));
+    } else {
+      CHECK_NE(kernel, static_cast<int64_t>(leg.kernel));
+    }
+    CHECK_NE(composed_kernel, static_cast<int64_t>(leg.kernel));
+    auto a = readback_f32(stream, routed);
+    auto b = readback_f32(stream, composed);
+    REQUIRE_EQ(a.size(), b.size());
+    size_t differ = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+      uint32_t ab, bb;
+      std::memcpy(&ab, &a[i], sizeof(ab));
+      std::memcpy(&bb, &b[i], sizeof(bb));
+      differ += ab != bb ? 1 : 0;
+    }
+    CHECK_EQ(differ, size_t{0});
+  }
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}
+
 // NormApple: the Apple row-reduction kernels may be selected only under
 // subgroup_size == 32 + subgroup ARITHMETIC, and only at the measured
 // (width, rows) shapes. Under every profile the result must be the
@@ -840,9 +945,10 @@ int main(int argc, char** argv) {
     }
     unsetenv("MLX_OMARCHY_CAPS_SIM");
 
-    // Registry sanity: the six documented profiles exist.
+    // Registry sanity: the documented profiles exist.
     for (const char* name : {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem,
-                             kNoCoopmat, kG13Legacy}) {
+                             kNoCoopmat, kG13Legacy, kWorkgroup256,
+                             kWorkgroup128}) {
       if (omarchy::capsim::find(name) == nullptr) {
         std::cerr << "unit: profile missing from registry: " << name
                   << "\n";
@@ -896,6 +1002,20 @@ int main(int argc, char** argv) {
         legacy.subgroup_operations != VK_SUBGROUP_FEATURE_BASIC_BIT) {
       std::cerr << "unit: m1-g13-legacy delta wrong\n";
       return 1;
+    }
+    for (const char* name : {kWorkgroup256, kWorkgroup128}) {
+      hw_report.max_compute_work_group_invocations = 1024;
+      hw_report.max_compute_work_group_size[0] = 1024;
+      auto wg = omarchy::capsim::apply(
+          hw_report, *omarchy::capsim::find(name));
+      const uint32_t limit = std::string(name) == kWorkgroup256 ? 256u : 128u;
+      if (wg.max_compute_work_group_invocations != limit ||
+          wg.max_compute_work_group_size[0] != limit ||
+          wg.subgroup_size != 64 ||
+          wg.max_compute_shared_memory_size != 65536) {
+        std::cerr << "unit: " << name << " delta wrong\n";
+        return 1;
+      }
     }
     std::cout << "unit: profile registry + apply() deltas OK\n";
   }
