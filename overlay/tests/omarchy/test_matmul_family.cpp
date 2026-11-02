@@ -6621,3 +6621,158 @@ TEST_CASE("gather_qmm bf16 2-bit decode is opt-in and within 1.5 bf16 steps of f
     }
   }
 }
+
+TEST_CASE("bf16 linear-layer FMA over the cooperative matrix: the part rule") {
+  // Pure and per call: alternating parts in either order never inherits
+  // an earlier answer.
+  for (int round = 0; round < 2; ++round) {
+    CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M4 (G16G B1)"));
+    CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  }
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(
+      omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(
+      omarchy::matmul_bf16_fma_over_coopmat_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part(""));
+}
+
+// The rule through dispatch_matmul: on a part of
+// matmul_bf16_fma_over_coopmat_part whose driver exposes the cooperative
+// matrix, a bf16 linear layer (row-major lhs, transposed rhs) runs
+// MatmulBf16Fma, and the non-transposed orientation keeps
+// MatmulBF16Coopmat. Small-integer operands keep every partial sum exact,
+// so both routes must equal the host reference after one bf16 rounding.
+TEST_CASE("bf16 linear-layer matmul takes the FMA kernel over the cooperative matrix on G16G") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  std::cout << "[provenance] device=" << caps.device_name
+            << " cooperative_matrix_f32_8="
+            << (caps.cooperative_matrix_f32_8 ? 1 : 0)
+            << " subgroup_size=" << caps.subgroup_size << "\n";
+  if (!omarchy::matmul_bf16_fma_over_coopmat_part(caps.device_name) ||
+      !caps.cooperative_matrix_f32_8 || caps.subgroup_size != 32 ||
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") ||
+      omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_FMA")) {
+    skip("needs a G16G part with the cooperative matrix and both routes on");
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int m = 64, k = 256, n = 128;
+  std::mt19937 rng(20261101);
+  std::uniform_int_distribution<int> small(-4, 4);
+  auto integers = [&](size_t count) {
+    std::vector<float> values(count);
+    for (auto& v : values) {
+      v = static_cast<float>(small(rng));
+    }
+    return values;
+  };
+  auto a_values = integers(static_cast<size_t>(m) * k);
+  auto b_values = integers(static_cast<size_t>(k) * n); // (k, n)
+  std::vector<float> expected(static_cast<size_t>(m) * n);
+  {
+    auto sums = host_matmul_bf16_reference(a_values, b_values, 1, m, k, n);
+    for (size_t i = 0; i < sums.size(); ++i) {
+      expected[i] = host_bf16_round(sums[i]);
+    }
+  }
+  std::vector<float> b_t_values(b_values.size()); // (n, k)
+  for (int r = 0; r < k; ++r) {
+    for (int c = 0; c < n; ++c) {
+      b_t_values[static_cast<size_t>(c) * k + r] =
+          b_values[static_cast<size_t>(r) * n + c];
+    }
+  }
+  array a = astype(array(a_values.begin(), Shape{m, k}, float32), bfloat16, stream);
+  array b = astype(array(b_values.begin(), Shape{k, n}, float32), bfloat16, stream);
+  array w = astype(array(b_t_values.begin(), Shape{n, k}, float32), bfloat16, stream);
+  eval({a, b, w});
+  omarchy::get_command_encoder(stream).synchronize();
+  struct Leg {
+    const char* label;
+    array rhs;
+    omarchy::ComputeKernel kernel;
+  };
+  const Leg legs[] = {
+      {"linear a @ w.T", transpose(w, {1, 0}, stream),
+       omarchy::ComputeKernel::MatmulBf16Fma},
+      {"a @ b", b, omarchy::ComputeKernel::MatmulBF16Coopmat},
+  };
+  for (const auto& leg : legs) {
+    array out = matmul(a, leg.rhs, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t dispatched =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    INFO(leg.label);
+    CHECK_EQ(dispatched, static_cast<int64_t>(leg.kernel));
+    std::vector<float> got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), expected.size());
+    float max_abs_err = 0.0f;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      max_abs_err = std::max(max_abs_err, std::fabs(got[i] - expected[i]));
+    }
+    CHECK_EQ(max_abs_err, 0.0f);
+  }
+
+  // Fractional operands on the bf16 grid, both routes, the dense test's
+  // documented anchor bound against the double reference:
+  // |got - exact| <= P * (k / 8 * 4.5 * 2^-23 + 2^-7) + 2^-7, P the largest
+  // partial-sum magnitude.
+  std::uniform_real_distribution<float> frac(-2.0f, 2.0f);
+  auto grid = [&](size_t count) {
+    std::vector<float> values(count);
+    for (auto& v : values) {
+      v = host_bf16_round(frac(rng));
+    }
+    return values;
+  };
+  auto fa = grid(static_cast<size_t>(m) * k);
+  auto fb = grid(static_cast<size_t>(k) * n);
+  auto sums = host_matmul_bf16_reference(fa, fb, 1, m, k, n);
+  float partial_max = 0.0f;
+  for (float v : sums) {
+    partial_max = std::max(partial_max, std::fabs(v));
+  }
+  const float bound = partial_max *
+          (static_cast<float>(k / 8) * 4.5f * 0x1p-23f + 2.0f / 256.0f) +
+      2.0f / 256.0f;
+  std::vector<float> fb_t(fb.size());
+  for (int r = 0; r < k; ++r) {
+    for (int c = 0; c < n; ++c) {
+      fb_t[static_cast<size_t>(c) * k + r] = fb[static_cast<size_t>(r) * n + c];
+    }
+  }
+  array fa_dev = astype(array(fa.begin(), Shape{m, k}, float32), bfloat16, stream);
+  array fb_dev = astype(array(fb.begin(), Shape{k, n}, float32), bfloat16, stream);
+  array fw_dev = astype(array(fb_t.begin(), Shape{n, k}, float32), bfloat16, stream);
+  eval({fa_dev, fb_dev, fw_dev});
+  omarchy::get_command_encoder(stream).synchronize();
+  const std::pair<array, omarchy::ComputeKernel> frac_legs[] = {
+      {transpose(fw_dev, {1, 0}, stream), omarchy::ComputeKernel::MatmulBf16Fma},
+      {fb_dev, omarchy::ComputeKernel::MatmulBF16Coopmat},
+  };
+  for (const auto& [rhs, kernel] : frac_legs) {
+    array out = matmul(fa_dev, rhs, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    CHECK_EQ(omarchy::trace::counters().last_dispatched_kernel.load(),
+             static_cast<int64_t>(kernel));
+    std::vector<float> got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), sums.size());
+    float max_err = 0.0f;
+    for (size_t i = 0; i < sums.size(); ++i) {
+      REQUIRE(std::isfinite(got[i]));
+      max_err = std::max(max_err, std::fabs(got[i] - sums[i]));
+    }
+    std::cout << "[matmul-bf16-route] kernel=" << static_cast<int>(kernel)
+              << " fractional max_err=" << max_err << " bound=" << bound
+              << "\n";
+    CHECK(max_err <= bound);
+  }
+}

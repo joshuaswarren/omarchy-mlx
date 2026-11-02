@@ -719,7 +719,7 @@ void dispatch_matmul(
   // same way the qmm route does instead of assuming it.
   constexpr uint32_t kMatmulCoopmatBf16SharedBytes =
       (32u * 16u + 16u * 32u) * sizeof(float);
-  const bool coopmat = !sdpa && coopmat_base && coopmat_alpha &&
+  bool coopmat = !sdpa && coopmat_base && coopmat_alpha &&
       (kernel == omarchy::ComputeKernel::MatmulF32 ||
        (kernel == omarchy::ComputeKernel::MatmulBF16 && bf16_aligned &&
         (params.matrix_k % 8u) == 0u && params.matrix_m >= 32u &&
@@ -729,7 +729,16 @@ void dispatch_matmul(
   // scalar-FMA kernel (783.7 vs 629.9 GFLOP/s at the dominant gate_up
   // cell); where it does not (stock Mesa) the FMA kernel triples the
   // shipped staged-tile fallback (645.2 vs 195.0). The FMA pick is
-  // therefore reserved for drivers without the cooperative matrix.
+  // therefore reserved for drivers without the cooperative matrix, except
+  // on the parts of omarchy::matmul_bf16_fma_over_coopmat_part (G16G),
+  // where the FMA kernel beats the cooperative-matrix tile in every
+  // linear-layer cell measured and keeps the linear-layer orientation.
+  // Per call, for the device this encoder executes on.
+  const bool bf16_fma_over_coopmat =
+      omarchy::matmul_bf16_fma_over_coopmat_part(caps.device_name);
+  if (bf16_fma && coopmat && bf16_fma_over_coopmat) {
+    coopmat = false;
+  }
   bf16_fma = bf16_fma && !coopmat && !sdpa;
   // Bit 8 tells matmul_coopmat_bf16.comp its operands are 8-byte
   // aligned, so the two word-adjacent orientations stage with uvec2
