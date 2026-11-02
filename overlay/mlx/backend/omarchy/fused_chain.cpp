@@ -1917,7 +1917,10 @@ bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (std::getenv(variable) != nullptr) {
     return env_flag(variable);
   }
-  return !fused_decode_off_default_part(device_name);
+  if (std::strcmp(variable, "MLX_OMARCHY_FUSED_GEMV") == 0) {
+    return !fused_gemv_off_default_part(device_name);
+  }
+  return true;
 }
 
 bool fused_gemv_enabled(const Device& device) {
