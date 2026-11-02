@@ -14,9 +14,9 @@
 - [@techmore](https://github.com/techmore)
 - [@thebytorsnowdog](https://github.com/thebytorsnowdog)
 - [@wickthumb](https://github.com/wickthumb)
-
-_Listed are GitHub accounts only. Anonymous (email-only) commit authors
-cannot be enumerated through the GitHub API and are credited by hand in
+_Linked GitHub accounts only. Anonymous (unlinked) commit authors are
+enumerable through the API (anon=true) but are identified there only by
+name/email, which this registry does not publish; credit them by hand in
 the sections above where known._
 
 <!-- END GENERATED CONTRIBUTORS -->
