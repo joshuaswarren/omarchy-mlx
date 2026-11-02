@@ -85,3 +85,15 @@ capsim-no-cooperative-matrix rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    
 capsim-m1-g13-legacy rc=0 secs=1 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2467 | 2467 passed | 0 failed |
 BATTERY_DONE 2026-11-02T06:09:40Z
 
+### p1n (this version, code commit f333327)
+
+battery p1n 2026-11-02T21:37:39Z commit=f333327 extra_env=none
+omarchy_fused_chain_tests rc=0 secs=13 new_gpu_kernel_errors=0 test cases:     42 |     42 passed | 0 failed | 0 skipped assertions: 351053 | 351053 passed | 0 failed |
+omarchy_kv_ops_tests rc=0 secs=249 new_gpu_kernel_errors=0 test cases:  16 |  16 passed | 0 failed | 0 skipped assertions: 781 | 781 passed | 0 failed |
+capsim-m1-honeykrisp-fork rc=0 secs=250 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2468 | 2468 passed | 0 failed |
+capsim-m1-stock-no-coopmat rc=0 secs=40 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2466 | 2466 passed | 0 failed |
+capsim-subgroup-size-64 rc=0 secs=2 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2466 | 2466 passed | 0 failed |
+capsim-small-shared-memory rc=0 secs=1 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2466 | 2466 passed | 0 failed |
+capsim-no-cooperative-matrix rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2468 | 2468 passed | 0 failed |
+capsim-m1-g13-legacy rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2467 | 2467 passed | 0 failed |
+BATTERY_DONE 2026-11-02T21:46:54Z

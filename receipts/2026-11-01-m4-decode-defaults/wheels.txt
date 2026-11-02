@@ -3,3 +3,7 @@ p1-perf: wheel mlx_omarchy-0.32.4.dev202611020412+9d32f27-cp314-cp314-linux_aarc
 p1: wheel mlx_omarchy-0.32.4.dev202611020555+34d0153-cp314-cp314-linux_aarch64.whl sha256=d32c23f3569cfe07225d7215c47e6e78124cf35c7630923b3a76aebb0e2cf301
 main-diag: wheel mlx_omarchy-0.32.4.dev202611020210+diag.a69d9e6-cp314-cp314-linux_aarch64.whl sha256=06caf64be21fbdc8b1ad7a78390aac4538ff7aed132383a454abf8d8703a3c82
 int-diag: wheel mlx_omarchy-0.32.4.dev202611020423+diag.749902d-cp314-cp314-linux_aarch64.whl sha256=d8e4e5b7901e4045fb90d86f5b7dd915b790b0b6749231a175ffbff1d8f97a52
+main-rebuild-2026-11-02: wheel mlx_omarchy-0.32.4.dev202611021803+a69d9e6-cp314-cp314-linux_aarch64.whl sha256=8382ab7602054a28a056c8fc427909ae963e13eee93fb4678739a9313e9f6774
+main-diag-rebuild-2026-11-02: wheel mlx_omarchy-0.32.4.dev202611021812+diag.a69d9e6-cp314-cp314-linux_aarch64.whl sha256=a524360bd46a67acf8fd6186df251b131f392c1d7f8af55d2460a2125cf3590b
+p1n: wheel mlx_omarchy-0.32.4.dev202611022131+f333327-cp314-cp314-linux_aarch64.whl sha256=b537bb06031a22c92586934bcebc902f36e59673eebc46c3505493d13cd98968
+p1n-diag: wheel mlx_omarchy-0.32.4.dev202611022135+diag.f333327-cp314-cp314-linux_aarch64.whl sha256=bda768d5f36a72392b091cf71673a302cfe098000c9c6700f4b34190cd54a996
