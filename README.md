@@ -57,11 +57,12 @@ plus Laya, and it needs a 96 GB machine.
 | M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
-| M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
+| M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port | Data-only; h16 bring-up module |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
-this project measures on. On an M3 or M4 Mac, run the tester kit,
+this project measures on. The M4 row needs the out-of-tree G16G driver
+stack named in its receipt. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
 to send us the numbers and ANE state that only real silicon gives.
 

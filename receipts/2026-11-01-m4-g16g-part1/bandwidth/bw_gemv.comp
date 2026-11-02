@@ -1,0 +1,93 @@
+#version 450
+// Memory-access mimic of the 4-bit decode GEMV (qmm_vec Q4 word subgroup,
+// ROWS_PER_SLOT 2, 4 slots per 128-thread workgroup), with the arithmetic
+// replaced by xor so only the access mix is timed. Every access is a device
+// load, as in the kernel: weights stream, x and the scale/bias words come
+// from small regions that stay cached.
+//   WIDE=0: per iteration a lane loads 2 words (uvec2) per row, 16 x values
+//           (2 x uvec4), one 16-bit scale and one bias per row.
+//   WIDE=1: 4 words (uvec4) per row, 32 x values (4 x uvec4), one scale and
+//           bias per row: the same weight bytes in half the iterations.
+// Binding 0 is the streamed weight buffer (vkbw times its bytes); x and
+// scales are read through aliased views of its first kilobytes. vkbw pushes
+// the buffer size in 32-bit words and the row count is derived from it, so
+// the vec argument given to vkbw cannot change the bytes read. Every component of every loaded vector
+// feeds the result, so no load can be dropped as unused. This is a synthetic
+// access mix: it has the GEMV's load widths, strides and per-row scale and
+// bias reads, not its dequantization, reduction or store.
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#ifndef WIDE
+#define WIDE 0
+#endif
+// EXTRA live registers per thread, touched every iteration (register-pressure
+// knob; 0 keeps the plain access mimic).
+#ifndef EXTRA
+#define EXTRA 0
+#endif
+// ALU dependent float ops per loaded row word (models the dequant/fma work
+// that consumes each load before the next iteration's load issues).
+#ifndef ALU
+#define ALU 0
+#endif
+layout(local_size_x = 128) in;
+layout(set = 0, binding = 0) readonly buffer W2 { uvec2 w2[]; };
+layout(set = 0, binding = 0) readonly buffer W4 { uvec4 w4[]; };
+layout(set = 0, binding = 0) readonly buffer WH { uint16_t wh[]; };
+layout(set = 0, binding = 1) writeonly buffer O { uint o[]; };
+layout(push_constant) uniform P { uint n; } p;
+const uint K = 2048u;
+const uint WORDS = K / 8u;     // packed words per row
+const uint GROUPS = K / 64u;   // scale groups per row
+void main() {
+  uint lane = gl_LocalInvocationID.x & 31u;
+  uint slot = gl_LocalInvocationID.x >> 5u;
+  uint rows = p.n / WORDS;
+  uint acc = 0u;
+#if EXTRA
+  uint keep[EXTRA];
+  for (uint e = 0u; e < EXTRA; ++e) keep[e] = gl_GlobalInvocationID.x * (e + 1u);
+#endif
+  for (uint row = (gl_WorkGroupID.x * 4u + slot) * 2u; row + 1u < rows;
+       row += gl_NumWorkGroups.x * 8u) {
+#if WIDE
+    for (uint it = lane; it < WORDS / 4u; it += 32u) {
+      uvec4 xa = w4[it * 4u], xb = w4[it * 4u + 1u], xc = w4[it * 4u + 2u], xd = w4[it * 4u + 3u];
+      uint g = it / 2u;
+      for (uint r = 0u; r < 2u; ++r) {
+        uvec4 v = w4[(row + r) * (WORDS / 4u) + it];
+        uint s = uint(wh[((row + r) & 255u) * GROUPS + g]);
+        uint b = uint(wh[8192u + ((row + r) & 255u) * GROUPS + g]);
+        acc ^= v.x ^ v.y ^ v.z ^ v.w ^ s ^ b;
+      }
+      acc ^= xa.x ^ xa.y ^ xa.z ^ xa.w ^ xb.x ^ xb.y ^ xb.z ^ xb.w ^
+             xc.x ^ xc.y ^ xc.z ^ xc.w ^ xd.x ^ xd.y ^ xd.z ^ xd.w;
+    }
+#else
+    for (uint it = lane; it < WORDS / 2u; it += 32u) {
+      uvec4 xa = w4[it * 2u], xb = w4[it * 2u + 1u];
+      uint g = it / 4u;
+      for (uint r = 0u; r < 2u; ++r) {
+        uvec2 v = w2[(row + r) * (WORDS / 2u) + it];
+        uint s = uint(wh[((row + r) & 255u) * GROUPS + g]);
+        uint b = uint(wh[8192u + ((row + r) & 255u) * GROUPS + g]);
+        acc ^= v.x ^ v.y ^ s ^ b;
+#if ALU
+        float f = uintBitsToFloat((v.x & 0x007fffffu) | 0x3f800000u);
+        float g2 = uintBitsToFloat((v.y & 0x007fffffu) | 0x3f800000u);
+        for (uint a = 0u; a < uint(ALU); ++a) { f = fma(f, 0.999f, g2); g2 = fma(g2, 1.001f, f); }
+        acc ^= floatBitsToUint(f + g2);
+#endif
+#if EXTRA
+        for (uint e = 0u; e < EXTRA; ++e) keep[e] += v.x >> e;
+#endif
+      }
+      acc ^= xa.x ^ xa.y ^ xa.z ^ xa.w ^ xb.x ^ xb.y ^ xb.z ^ xb.w;
+    }
+#endif
+  }
+#if EXTRA
+  for (uint e = 0u; e < EXTRA; ++e) acc ^= keep[e];
+#endif
+  o[gl_GlobalInvocationID.x] = acc;
+}
