@@ -149,6 +149,34 @@ doctest_discover_tests(omarchy_ane_tile_layout_tests)
 add_test(NAME omarchy_ane_tile_layout_tests
          COMMAND omarchy_ane_tile_layout_tests)
 
+# Lane 3 (ABI 3, H16): the host section builder against the kernel's
+# add-128 fixture, and the device behind a fake driver at the syscall seam.
+# Neither touches /dev/accel.
+add_executable(omarchy_ane_h16_sections_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_h16_sections.cpp)
+target_link_libraries(omarchy_ane_h16_sections_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_ane_h16_sections_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_h16_sections_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_h16_sections_tests)
+add_test(NAME omarchy_ane_h16_sections_tests
+         COMMAND omarchy_ane_h16_sections_tests)
+
+add_executable(omarchy_ane_h16_device_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_worker_h16.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/ane/worker_h16.cpp)
+target_link_libraries(omarchy_ane_h16_device_tests PRIVATE mlx doctest)
+target_compile_definitions(omarchy_ane_h16_device_tests
+                           PRIVATE MLX_OMARCHY_ANE_DEVICE=1)
+target_compile_options(omarchy_ane_h16_device_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_h16_device_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_h16_device_tests)
+add_test(NAME omarchy_ane_h16_device_tests
+         COMMAND omarchy_ane_h16_device_tests)
+
 
 if(TARGET mlx-omarchy-ane-worker)
   add_executable(mlx-omarchy-ane-smoke

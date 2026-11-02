@@ -92,6 +92,12 @@ class LibaneDevice : public AneDevice {
   }
 
   void load(const AneValidatedProgram& program) override {
+    if (program.format != AneProgramFormat::anec) {
+      throw AneDeviceError(
+          "libane cannot load HWX program " +
+          std::to_string(program.manifest_index) +
+          "; schema-5 bundles run on the ABI 3 device (--device h16)");
+    }
     if (networks_.count(program.manifest_index)) {
       throw AneDeviceError("program already loaded");
     }
