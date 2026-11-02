@@ -1,5 +1,8 @@
 # omarchy-mlx
 
+**No Mac? [Start here](docs/ANY-GPU.md)** for NVIDIA, Intel, AMD and software
+Vulkan development paths.
+
 MLX on the Apple GPU under Linux, and Core ML models on the
 Apple Neural Engine.
 
@@ -156,6 +159,30 @@ The mlx-community Muse Spark Open checkpoints load through the adapter in `serve
 ## How it works
 
 See [docs/DRIVER-AND-KERNEL.md](docs/DRIVER-AND-KERNEL.md#how-it-works).
+
+## COMMUNITY — 2026-11-02
+
+GitHub data fetched **2026-11-02 00:59:21–01:00:41 UTC**:
+
+- **98 [GitHub stars](https://github.com/joshuaswarren/omarchy-mlx/stargazers)**.
+- **15 [GitHub forks](https://github.com/joshuaswarren/omarchy-mlx/forks)**.
+- **12 non-owner commit-contributor accounts** in GitHub's
+  [contributor list](https://github.com/joshuaswarren/omarchy-mlx/graphs/contributors).
+- **17 non-owner issue-author accounts**, across **21 issues**
+  ([open and closed](https://github.com/joshuaswarren/omarchy-mlx/issues?q=is%3Aissue)).
+- **13 non-owner pull-request author accounts**, across **15 pull requests**
+  ([open and closed](https://github.com/joshuaswarren/omarchy-mlx/pulls?q=is%3Apr)).
+
+Participation counts use distinct GitHub API `User` accounts, excluding the
+repository owner (`joshuaswarren`), API `Bot` accounts and logins ending in
+`[bot]`. Accounts can appear in more than one role; do not add the role
+counts together. These are repository and account counts, not user or
+installation counts.
+
+Sources: [repository API](https://api.github.com/repos/joshuaswarren/omarchy-mlx),
+[contributors API](https://api.github.com/repos/joshuaswarren/omarchy-mlx/contributors?anon=false&per_page=100)
+and [issues/PRs API](https://api.github.com/repos/joshuaswarren/omarchy-mlx/issues?state=all&per_page=100),
+with all pages counted. Issues and pull requests include open and closed items.
 
 ## Contribute hardware data
 
