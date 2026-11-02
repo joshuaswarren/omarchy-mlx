@@ -3,7 +3,9 @@
 # surface at all. libane is dlopen'd at runtime from the path the
 # caller passes (--libane), so only its header is needed at build time;
 # the vendored libane/ane.h matches the pinned omarchy-ane 6fa243ac
-# checkout the shipped libane-strict.so is built from.
+# checkout the shipped libane-strict.so is built from. Lane 3 (--device h16,
+# worker_h16.cpp) needs no library: its ABI 3 uapi header is vendored under
+# mlx/backend/omarchy/ane/uapi/.
 if(MLX_OMARCHY_ANE_DEVICE AND NOT TARGET mlx-omarchy-ane-worker)
   set(OMARCHY_ANE_INCLUDE_DIR "" CACHE PATH
       "omarchy-ane libane headers (default: the vendored pinned copy)")
@@ -13,6 +15,7 @@ if(MLX_OMARCHY_ANE_DEVICE AND NOT TARGET mlx-omarchy-ane-worker)
   add_executable(
     mlx-omarchy-ane-worker
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/ane/worker_h16.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/ane/worker_libane.cpp)
   target_link_libraries(mlx-omarchy-ane-worker PRIVATE mlx ${CMAKE_DL_LIBS})
   target_include_directories(
