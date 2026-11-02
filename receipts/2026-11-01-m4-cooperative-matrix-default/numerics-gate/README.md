@@ -1,6 +1,4 @@
-# Numerics gate (docs/numerics-gate.md) for #317: INCOMPLETE: gate not yet evaluated
-
-This directory is a checkpoint of a run in progress. Nothing here is a gate result until every check has run; `RESUME.md` lists what is done and the exact commands for the rest.
+# Numerics gate (docs/numerics-gate.md) for #317: evaluated, every check ran
 
 ## Protocol (fixed before the run)
 
@@ -20,9 +18,34 @@ This directory is a checkpoint of a run in progress. Nothing here is a gate resu
 
 | model | harness check | baseline runs | candidate runs | reference | checks 2, 3 | check 1 |
 |---|---|---:|---:|---|---|---|
-| Llama-3.2-1B-Instruct-bf16 | pass | 5/5 | 5/5 | 4/10 segments | not run | not run |
+| Llama-3.2-1B-Instruct-bf16 | pass | 5/5 | 5/5 | done | done | done |
 
 Harness check Llama-3.2-1B-Instruct-bf16: S=1 PPL 7.53524, one-pass PPL 7.54124, relative difference 7.95e-04 (pass).
+
+## Result
+
+**Gate: passed.** Every check passes on every model.
+
+### Llama-3.2-1B-Instruct-bf16
+
+| arm | runs | top-1 vs reference (median) | flips | near ties | PPL (median) | mean abs dlogprob |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline `a69d9e6` | 5 | 98.164% | 94 | 82 | 8.45240 | 0.03982 |
+| candidate `91d9f8a` | 5 | 98.164% | 94 | 82 | 8.45240 | 0.03982 |
+| reference (stock MLX CPU fp32) | 1 | | | | 8.44250 | |
+
+Every run of an arm gave the same values (deterministic), so the five-run PPL noise is 0 and check 3 allows no difference from the baseline's deviation.
+- Check 2: candidate agreement with near ties 99.766% against the baseline Wilson lower bound 99.591% (baseline median 99.766%): **pass**.
+- Check 3: candidate PPL deviation 0.001171 against baseline 0.001171 + noise 0.000000: **pass**.
+- Old against new (information): 5120/5120 top-1 the same (100.00%).
+- Check 1: candidate no worse in 21 of 21 cells (worst candidate/baseline ratio 1.000000): **pass** (`perop/score-317-Llama-3.2-1B-Instruct-bf16.txt`).
+
+## Deviations from docs/numerics-gate.md, and notes
+
+- Pass shape (a deviation from the document's wording). `docs/numerics-gate.md` check 3 names route-sensitive S=1 perplexity. This change's route runs only on multi-row bf16 linear passes, so an S=1 pass would run the same kernels in both arms. The arms therefore use teacher-forced 128-token passes (each 512-token segment as four passes sharing one cache) for checks 2 and 3. The harness check is the documented one: S=1 against one pass, on the baseline wheel. The reference ran in 64-token passes on the CPU in float32; it is the same reference used for every PR in this series.
+- The arms are bit-identical. All ten runs give the same values at all 5,120 positions (PPL 8.45240; reference 8.44250), and both wheels give identical outputs in every per-op cell. The gate passes because the candidate's error equals the baseline's, not because it is smaller.
+- The changed route did run. `diag-route/` (a diagnostic run after the gate, not one of the three checks) repeats the four Llama-3.2-1B linear shapes at 128 rows on this change's wheel with the route on (the default) and off (`MLX_OMARCHY_NO_MATMUL_FMA=1`, which selects the cooperative-matrix kernel on the same driver), and on `main`. The output bytes are identical in all three. Route-on calls are faster at the two largest shapes: 4.98 against 6.50 and 6.47 ms at 8192x2048, and 5.60 against 7.20 and 7.20 ms at 2048x8192 (route off, `main`), medians of 20 single calls including dispatch overhead. So a different kernel produced the same bits. The kernel names come from the receipt's dispatch trace, not from these timings: `linear-trace-*.txt` (`bf16_linear.py` on the profiling build of the six-change integration) shows `MatmulBf16Fma` for every product with the route on and `MatmulBF16Coopmat` with it off.
+- Nothing else departs from the protocol fixed before the run: five runs per arm, all with exit status 0 and no new GPU driver error, no run repeated or dropped, and the thresholds as documented.
 
 ## Files
 

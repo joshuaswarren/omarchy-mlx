@@ -61,8 +61,14 @@ The rule names G16G only; every other part keeps the cooperative-matrix pick (re
 
 ## Numerics gate
 
-`numerics-gate/README.md`: docs/numerics-gate.md for this change against a stock upstream MLX CPU fp32 reference (teacher-forced agreement, S=1 or route-shaped PPL, per-op error, harness check). Its first line states whether the gate has been evaluated; until it says complete, `numerics-gate/RESUME.md` lists what remains.
+**Gate: passed** (`numerics-gate/README.md`). `docs/numerics-gate.md` against stock upstream MLX 0.32.3 on the CPU in float32 with the same weights and text: Llama-3.2-1B-Instruct-bf16, 5,120 teacher-forced positions, five runs per arm, `main` `a69d9e6` against `91d9f8a`, harness check passed (S=1 PPL 7.53524 against one-pass 7.54124).
+
+- Check 1 (per-op, fp64 forward of captured operands): no worse in 21 of 21 cells.
+- Check 2 (token choices): 99.766% agreement with near ties against the baseline's Wilson lower bound of 99.591%.
+- Check 3 (perplexity): deviation 0.001171 against the baseline's 0.001171 plus noise 0 (PPL 8.45240 in both arms, reference 8.44250).
+
+The passes are 128 tokens, not S=1, because this route runs only on multi-row passes; an S=1 pass would compare `main` with itself. The two arms are bit-identical. `numerics-gate/diag-route/` shows that the route does run at these shapes and returns the cooperative-matrix kernel's bits. The gate README lists every departure from the documented protocol.
 
 ## Files
 
-`host.txt`, `wheels.txt`, `battery.txt`, `bits-p2-vs-main.log`, `perf-p2.jsonl`, `perf-p2-summary.txt`, `perf-p2-linear.jsonl`, `linear-trace-*.txt`, `reopen.log`, `scripts/`, `SHA256SUMS`.
+`host.txt`, `wheels.txt`, `battery.txt`, `bits-p2-vs-main.log`, `perf-p2.jsonl`, `perf-p2-summary.txt`, `perf-p2-linear.jsonl`, `linear-trace-*.txt`, `reopen.log`, `numerics-gate/`, `scripts/`, `SHA256SUMS`.
