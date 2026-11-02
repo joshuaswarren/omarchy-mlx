@@ -76,10 +76,10 @@ class FetchAllTests(unittest.TestCase):
         self.assertEqual(len(items), 201)
         self.assertEqual(items.count({"login": "c"}), 1)
 
-    def test_full_page_without_next_link_fails_closed(self):
+    def test_full_page_without_next_link_is_complete(self):
         api = FakeApi([page([{"login": "a"}] * 100)])
-        with self.assertRaises(uc.ApiError):
-            uc.fetch_all(api.get_json, "repos/o/r/x")
+        items = uc.fetch_all(api.get_json, "repos/o/r/x")
+        self.assertEqual(len(items), 100)
 
     def test_http_error_fails_closed(self):
         api = FakeApi([(403, {"message": "rate limited"}, None)])
@@ -151,7 +151,7 @@ class EndToEndTests(unittest.TestCase):
     def test_main_check_mode_reports_change_without_writing(self):
         api = FakeApi([
             page([{"login": "alice"}]),
-            page([{"login": "joshuaswarren"}], None),
+            page([{"user": {"login": "joshuaswarren"}, "merged_at": "2026-01-01T00:00:00Z"}]),
             page([{"login": "alice"}]),
             page([{"login": "bob"}]),
         ])
@@ -169,7 +169,7 @@ class EndToEndTests(unittest.TestCase):
     def test_main_updates_file(self):
         api = FakeApi([
             page([{"login": "alice"}]),
-            page([{"user": {"login": "bob"}}]),
+            page([{"user": {"login": "bob"}, "merged_at": "2026-01-01T00:00:00Z"}]),
         ])
         target = os.path.join(tempfile.mkdtemp(), "CONTRIBUTORS.md")
         rc, text, changed = uc.main(["prog"], api.get_json,
@@ -308,7 +308,7 @@ class RefinementTests(unittest.TestCase):
         import io
         api = FakeApi([
             page([{"login": "alice"}]),
-            page([{"user": {"login": "bob"}}]),
+            page([{"user": {"login": "bob"}, "merged_at": "2026-01-01T00:00:00Z"}]),
         ])
         existing = "x\n" + uc.render_registry(["alice", "bob"]) + "\n"
         buffer = io.StringIO()
@@ -351,13 +351,20 @@ class LinkHeaderTests(unittest.TestCase):
 class GhostIdentityTests(unittest.TestCase):
     def test_ghost_pr_author_and_blank_login_skipped(self):
         pulls = [
-            {"user": {"login": "realone"}},
-            {"user": None},
-            {"body": "no user"},
+            {"user": {"login": "realone"}, "merged_at": "2026-01-01T00:00:00Z"},
+            {"user": None, "merged_at": "2026-01-01T00:00:00Z"},
+            {"body": "no user", "merged_at": "2026-01-01T00:00:00Z"},
         ]
         contributors = [{"contributions": 5}, {"login": "realone"}]
         out = uc.collect_authors(contributors, uc._pr_author_logins(pulls), "o", set())
         self.assertEqual(out, ["realone"])
+
+    def test_closed_unmerged_pr_authors_excluded(self):
+        pulls = [
+            {"user": {"login": "rejected"}, "merged_at": None},
+            {"user": {"login": "accepted"}, "merged_at": "2026-01-01T00:00:00Z"},
+        ]
+        self.assertEqual(uc._pr_author_logins(pulls), ["accepted"])
 
 
 class BotTypeTests(unittest.TestCase):

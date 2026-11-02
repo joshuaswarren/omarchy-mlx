@@ -45,8 +45,10 @@ def _fetch(get_json, url):
 
 
 def fetch_all(get_json, path):
-    """Collect every page. Full page without a next Link, or a short page
-    with one, is treated as a truncated/inconsistent listing and fails."""
+    """Collect every page. GitHub sends a Link rel="next" header whenever
+    another page exists, so a full page with no next link is a complete
+    listing (total is an exact multiple of the page size). A SHORT page
+    carrying a next link is inconsistent and fails closed."""
     separator = "&" if "?" in path else "?"
     url = "%s/%s%sper_page=%d" % (API_ROOT, path, separator, PER_PAGE)
     items = []
@@ -58,9 +60,7 @@ def fetch_all(get_json, path):
                 raise ApiError("%s: short page with a next link" % path)
             return items
         if not nxt:
-            raise ApiError(
-                "%s: full page without a next link; refusing a possibly truncated list" % path
-            )
+            return items
         url = nxt
 
 
@@ -181,10 +181,14 @@ def _load_existing(path):
 
 
 def _pr_author_logins(pulls):
-    """PR objects carry the author under user.login; ghosted users are skipped."""
+    """PR objects carry the author under user.login. Only MERGED pull
+    requests count; rejected/closed-unmerged authors are not contributors.
+    Ghosted users are skipped."""
     logins = []
     for pull in pulls:
-        user = pull.get("user") if isinstance(pull, dict) else None
+        if not isinstance(pull, dict) or not pull.get("merged_at"):
+            continue
+        user = pull.get("user")
         if isinstance(user, dict) and user.get("login"):
             logins.append(user["login"])
     return logins

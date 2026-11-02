@@ -8,7 +8,6 @@
 - [@invaliddayta](https://github.com/invaliddayta)
 - [@khasinski](https://github.com/khasinski)
 - [@ram2600](https://github.com/ram2600)
-- [@ranjanrishikesh](https://github.com/ranjanrishikesh)
 - [@satchlj](https://github.com/satchlj)
 - [@scottjones](https://github.com/scottjones)
 - [@sharmis-tp](https://github.com/sharmis-tp)
