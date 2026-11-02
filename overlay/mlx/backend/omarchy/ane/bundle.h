@@ -45,11 +45,32 @@ struct AneBundleNotFound : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+enum class AneProgramFormat { anec, hwx };
+
+// One H16 surface as the manifest binds it, in HWX segment order: the exact
+// byte count H16_LOAD must report and H16_EXEC must receive, and the
+// direction (1 input, 2 output). The validator has already matched every
+// entry against the HWX.
+struct AneH16SurfaceContract {
+  uint64_t bytes{0};
+  uint32_t direction{0};
+};
+
 struct AneValidatedProgram {
   size_t manifest_index{0};
   AneAnecHeader anec_header;
   std::filesystem::path anec;
   uint64_t tile_shift{kAneTileShiftDefault};
+  // Schema 5 (ABI 3) programs: the original HWX instead of an ANEC. `anec`
+  // and `anec_header` stay empty for them.
+  AneProgramFormat format{AneProgramFormat::anec};
+  std::filesystem::path hwx;
+  std::vector<AneH16SurfaceContract> h16_surfaces;
+  uint32_t h16_tasks{0};
+
+  const std::filesystem::path& payload_path() const {
+    return format == AneProgramFormat::hwx ? hwx : anec;
+  }
 };
 
 struct AneBundle {

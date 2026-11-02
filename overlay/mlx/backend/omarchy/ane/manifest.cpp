@@ -186,9 +186,12 @@ AneTensor parse_tensor(
         " does not match dtype geometry " + std::to_string(expected));
   }
   if (tensor.stride < tensor.byte_size || tensor.stride % tile_alignment != 0) {
+    // Schema 5 passes alignment 1: an H16 surface has no tile unit.
     throw manifest_error(
-        where + " stride must cover byte_size and be " +
-        std::to_string(tile_alignment) + "-aligned");
+        where + " stride must cover byte_size" +
+        (tile_alignment > 1
+             ? " and be " + std::to_string(tile_alignment) + "-aligned"
+             : std::string()));
   }
   return tensor;
 }
@@ -303,16 +306,20 @@ void validate_logical_results(const AneManifest& manifest) {
   }
 }
 
+// `index_field` is "channel" (schema 4, libane channel) or "surface"
+// (schema 5, H16 surface in HWX segment order); either lands in
+// AneProgramBinding::channel.
 AneProgramBinding parse_binding(
     const nlohmann::json& value,
     const std::string& where,
-    uint64_t tile_alignment) {
+    uint64_t tile_alignment,
+    const char* index_field) {
   if (!value.is_object()) {
     throw manifest_error(where + " must be an object");
   }
   reject_unknown_fields(
       value,
-      {"tensor", "channel", "dtype", "shape", "nchw", "logical_bytes",
+      {"tensor", index_field, "dtype", "shape", "nchw", "logical_bytes",
        "allocation_bytes", "element_offset", "element_count", "physical_elements",
        "raw"});
 
@@ -325,7 +332,7 @@ AneProgramBinding parse_binding(
     AneProgramBinding binding;
     binding.raw = true;
     binding.tensor = require_non_empty_string(value, "tensor");
-    binding.channel = require_unsigned(value, "channel");
+    binding.channel = require_unsigned(value, index_field);
     binding.dtype = require_non_empty_string(value, "dtype");
     binding.logical_bytes = require_positive(value, "logical_bytes");
     binding.allocation_bytes = require_positive(value, "allocation_bytes");
@@ -349,7 +356,7 @@ AneProgramBinding parse_binding(
 
   AneProgramBinding binding;
   binding.tensor = require_non_empty_string(value, "tensor");
-  binding.channel = require_unsigned(value, "channel");
+  binding.channel = require_unsigned(value, index_field);
   binding.dtype = require_non_empty_string(value, "dtype");
   binding.shape = require_shape(value, "shape", where);
   const auto& nchw = required_field(value, "nchw");
@@ -412,7 +419,8 @@ std::vector<AneProgramBinding> parse_bindings(
     const char* field,
     uint64_t tile_alignment,
     size_t program_index,
-    bool require_non_empty) {
+    bool require_non_empty,
+    const char* index_field) {
   const auto& values = required_field(program, field);
   std::string prefix = "programs[" + std::to_string(program_index) + "]." + field;
   if (!values.is_array() || (require_non_empty && values.empty())) {
@@ -423,9 +431,10 @@ std::vector<AneProgramBinding> parse_bindings(
   std::set<uint64_t> channels;
   for (size_t i = 0; i < values.size(); ++i) {
     AneProgramBinding binding = parse_binding(
-        values[i], prefix + "[" + std::to_string(i) + "]", tile_alignment);
+        values[i], prefix + "[" + std::to_string(i) + "]", tile_alignment,
+        index_field);
     if (!channels.insert(binding.channel).second) {
-      throw manifest_error(prefix + " has duplicate channel");
+      throw manifest_error(prefix + " has duplicate " + index_field);
     }
     bindings.push_back(std::move(binding));
   }
@@ -435,7 +444,8 @@ std::vector<AneProgramBinding> parse_bindings(
 AneProgram parse_program(
     const nlohmann::json& value,
     size_t index,
-    uint64_t tile_alignment) {
+    uint64_t tile_alignment,
+    bool hwx) {
   std::string where = "programs[" + std::to_string(index) + "]";
   if (!value.is_object()) {
     throw manifest_error(where + " must be an object");
@@ -450,13 +460,23 @@ AneProgram parse_program(
   program.encoder = require_non_empty_string(value, "encoder");
   program.task_descriptors = require_positive(value, "task_descriptors");
   program.scratch_bytes = require_unsigned(value, "scratch_bytes");
-  program.inputs = parse_bindings(value, "inputs", tile_alignment, index, false);
+  const char* index_field = hwx ? "surface" : "channel";
+  program.inputs =
+      parse_bindings(value, "inputs", tile_alignment, index, hwx, index_field);
   program.outputs =
-      parse_bindings(value, "outputs", tile_alignment, index, true);
+      parse_bindings(value, "outputs", tile_alignment, index, true, index_field);
+  // An H16 program has inputs and exactly one output (H16_LOAD refuses any
+  // other surface set; h16-sections.py refuses it on the host too).
+  if (hwx && program.outputs.size() != 1) {
+    throw manifest_error(where + ".outputs must bind exactly one H16 output surface");
+  }
   return program;
 }
 
-AnePayload parse_payload(const nlohmann::json& value, size_t position) {
+AnePayload parse_payload(
+    const nlohmann::json& value,
+    size_t position,
+    bool hwx) {
   std::string where = "payloads[" + std::to_string(position) + "]";
   if (!value.is_object()) {
     throw manifest_error(where + " must be an object");
@@ -464,7 +484,12 @@ AnePayload parse_payload(const nlohmann::json& value, size_t position) {
   reject_unknown_fields(value, {"role", "path", "sha256", "byte_size"});
   AnePayload payload;
   payload.role = require_non_empty_string(value, "role");
-  if (payload.role != "anec" && payload.role != "weights") {
+  // Schema 5 carries original HWX files only: an HWX holds its own
+  // constants, so a separate weights payload would have no consumer.
+  if (hwx && payload.role != "hwx") {
+    throw manifest_error(where + " field 'role' must be 'hwx'");
+  }
+  if (!hwx && payload.role != "anec" && payload.role != "weights") {
     throw manifest_error(where + " field 'role' must be 'anec' or 'weights'");
   }
   payload.path = require_non_empty_string(value, "path");
@@ -477,7 +502,10 @@ AnePayload parse_payload(const nlohmann::json& value, size_t position) {
   return payload;
 }
 
-void parse_compiler(const nlohmann::json& value, AneManifest& manifest) {
+void parse_compiler(
+    const nlohmann::json& value,
+    AneManifest& manifest,
+    bool hwx) {
   if (!value.is_object()) {
     throw manifest_error("field 'compiler' must be an object");
   }
@@ -485,6 +513,15 @@ void parse_compiler(const nlohmann::json& value, AneManifest& manifest) {
   manifest.compiler.host_build = require_non_empty_string(value, "host_build");
   manifest.compiler.toolchain = require_non_empty_string(value, "toolchain");
   manifest.compiler.target = require_non_empty_string(value, "target");
+  if (hwx) {
+    if (manifest.compiler.target != kAneCompilerTargetH16G) {
+      throw manifest_error(
+          "field 'compiler.target' must be exactly '" +
+          std::string(kAneCompilerTargetH16G) + "' in schema " +
+          std::to_string(kAneManifestVersionHwx));
+    }
+    return;
+  }
   if (manifest.compiler.target != kAneCompilerTargetH13 &&
       manifest.compiler.target != kAneCompilerTargetH14) {
     throw manifest_error(
@@ -578,14 +615,17 @@ void validate_bindings(AneManifest& manifest) {
     throw manifest_error("field 'task_descriptors' does not equal the program total");
   }
 
+  const bool hwx = manifest.manifest_version == kAneManifestVersionHwx;
   std::set<std::string> anec_payloads;
   for (const auto& payload : manifest.payloads) {
-    if (payload.role == "anec") {
+    if (payload.role == (hwx ? "hwx" : "anec")) {
       anec_payloads.insert(payload.path);
     }
   }
   if (anec_payloads != program_payloads) {
-    throw manifest_error("program payload mapping does not bind every ANEC payload exactly once");
+    throw manifest_error(
+        std::string("program payload mapping does not bind every ") +
+        (hwx ? "HWX" : "ANEC") + " payload exactly once");
   }
 
   for (const auto& [name, record] : tensors) {
@@ -672,25 +712,39 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
   if (!root.is_object()) {
     throw manifest_error("root must be an object");
   }
-  reject_unknown_fields(
-      root,
-      {"manifest_version", "tile_shift", "name", "graph_hash",
-       "task_descriptors", "inputs", "outputs", "logical_results", "state",
-       "intermediates", "programs", "dispatch_plan", "payloads", "compiler",
-       "driver_abi_major", "provenance", "release_asset"});
-
   AneManifest manifest;
   const auto& version = required_field(root, "manifest_version");
-  bool supported_version =
-      (version.is_number_unsigned() && version.get<uint64_t>() == kAneManifestVersion) ||
-      (version.is_number_integer() && !version.is_number_unsigned() &&
-       version.get<int64_t>() == kAneManifestVersion);
-  if (!supported_version) {
+  auto version_is = [&](int expected) {
+    return (version.is_number_unsigned() &&
+            version.get<uint64_t>() == static_cast<uint64_t>(expected)) ||
+        (version.is_number_integer() && !version.is_number_unsigned() &&
+         version.get<int64_t>() == expected);
+  };
+  const bool hwx = version_is(kAneManifestVersionHwx);
+  if (!hwx && !version_is(kAneManifestVersion)) {
     throw manifest_error(
         "unsupported manifest_version (expected " +
-        std::to_string(kAneManifestVersion) + ")");
+        std::to_string(kAneManifestVersion) + " or " +
+        std::to_string(kAneManifestVersionHwx) + ")");
   }
-  manifest.manifest_version = kAneManifestVersion;
+  // Schema 5 has no tile_shift: H16 surfaces are sized by the HWX, not by
+  // ANEC tile counts.
+  if (hwx) {
+    reject_unknown_fields(
+        root,
+        {"manifest_version", "name", "graph_hash", "task_descriptors",
+         "inputs", "outputs", "logical_results", "state", "intermediates",
+         "programs", "dispatch_plan", "payloads", "compiler",
+         "driver_abi_major", "provenance", "release_asset"});
+  } else {
+    reject_unknown_fields(
+        root,
+        {"manifest_version", "tile_shift", "name", "graph_hash",
+         "task_descriptors", "inputs", "outputs", "logical_results", "state",
+         "intermediates", "programs", "dispatch_plan", "payloads", "compiler",
+         "driver_abi_major", "provenance", "release_asset"});
+  }
+  manifest.manifest_version = hwx ? kAneManifestVersionHwx : kAneManifestVersion;
   // Optional per-bundle tile-count unit: log2 of the byte unit the ANEC
   // header's tiles[] counts are denominated in. Absent means shift 14, the
   // H13 island unit, so every pre-existing manifest parses unchanged.
@@ -704,7 +758,8 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
           std::to_string(kAneTileShiftWholeProgram) + ")");
     }
   }
-  const uint64_t tile_alignment = uint64_t{1} << manifest.tile_shift;
+  const uint64_t tile_alignment =
+      hwx ? uint64_t{1} : uint64_t{1} << manifest.tile_shift;
   manifest.name = require_non_empty_string(root, "name");
   manifest.graph_hash = require_hex(root, "graph_hash", 64, "a graph SHA-256 digest");
   manifest.task_descriptors = require_positive(root, "task_descriptors");
@@ -719,7 +774,8 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
     throw manifest_error("field 'programs' must be a non-empty array");
   }
   for (size_t i = 0; i < programs.size(); ++i) {
-    manifest.programs.push_back(parse_program(programs[i], i, tile_alignment));
+    manifest.programs.push_back(
+        parse_program(programs[i], i, tile_alignment, hwx));
   }
 
   const auto& dispatch = required_field(root, "dispatch_plan");
@@ -743,21 +799,30 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
   size_t anec_count = 0;
   size_t weights_count = 0;
   for (size_t i = 0; i < payloads.size(); ++i) {
-    AnePayload payload = parse_payload(payloads[i], i);
+    AnePayload payload = parse_payload(payloads[i], i, hwx);
     if (!paths.insert(payload.path).second) {
       throw manifest_error("duplicate payload path '" + payload.path + "'");
     }
-    anec_count += payload.role == "anec";
+    anec_count += payload.role == (hwx ? "hwx" : "anec");
     weights_count += payload.role == "weights";
     manifest.payloads.push_back(std::move(payload));
   }
   if (anec_count == 0 || weights_count > 1) {
-    throw manifest_error("payloads require at least one ANEC and at most one weights file");
+    throw manifest_error(
+        hwx ? "payloads require at least one HWX"
+            : "payloads require at least one ANEC and at most one weights file");
   }
 
-  parse_compiler(required_field(root, "compiler"), manifest);
+  parse_compiler(required_field(root, "compiler"), manifest, hwx);
   manifest.driver_abi_major = require_unsigned(root, "driver_abi_major");
-  if (manifest.driver_abi_major != kAneDriverAbiMajor &&
+  if (hwx && manifest.driver_abi_major != kAneDriverAbiMajorH16) {
+    throw manifest_error(
+        "compiler.target '" + std::string(kAneCompilerTargetH16G) +
+        "' requires driver_abi_major " +
+        std::to_string(kAneDriverAbiMajorH16) + ", found " +
+        std::to_string(manifest.driver_abi_major));
+  }
+  if (!hwx && manifest.driver_abi_major != kAneDriverAbiMajor &&
       manifest.driver_abi_major != kAneDriverAbiMajorAbl) {
     throw manifest_error(
         "unsupported driver_abi_major " +

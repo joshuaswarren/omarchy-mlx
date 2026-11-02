@@ -300,7 +300,7 @@ TEST_CASE("ANE runtime rejects old schema before worker initialization") {
   RuntimeBundle bundle(3);
   CHECK_THROWS_WITH_AS(
       AneRuntime::load(bundle.path(), std::chrono::seconds(1), {}),
-      "[omarchy-ane] manifest: unsupported manifest_version (expected 4).",
+      "[omarchy-ane] manifest: unsupported manifest_version (expected 4 or 5).",
       std::runtime_error);
 }
 
