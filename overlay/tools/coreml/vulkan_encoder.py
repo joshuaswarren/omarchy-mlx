@@ -61,6 +61,7 @@ import mlx.core as mx
 import numpy as np
 
 from trace_abi import trace_snapshot  # shared ctypes mirror + ABI size guard
+import ane_lane  # which ANE lane this host has (lane 3 = ABI 3 H16 node)
 
 BLOB_MAGIC = 0xDEADBEEF
 
@@ -249,6 +250,12 @@ RESIDENT_BUNDLES = (
 # directory, the bundles share, or a compiled-cache entry) the encoder runner
 # sends the whole graph in one ANE submit; otherwise it falls back to the
 # island path unchanged. MLX_OMARCHY_WHOLE_ENCODER=0 forces the islands.
+#
+# Lane 3 (an ABI 3 H16 node, ane_lane.h16_node()): only the schema-5 HWX
+# bundle parakeet-encoder-whole-h16 qualifies, it runs through the worker's
+# --device h16, and there are no island bundles; without that bundle the
+# encoder runs on the GPU. Schema-5 bundles never qualify on lanes 1 and 2,
+# schema-4 bundles never on lane 3.
 WHOLE_ENCODER_OP = "whole-encoder"
 
 
@@ -290,21 +297,44 @@ def _pin_declares_whole_bundle() -> bool:
     return False
 
 
-def _discover_whole_bundle() -> Path | None:
+def _cache_pins(bundle: Path) -> dict[str, str]:
+    """File digests a compiled-cache entry recorded for its bundle."""
+    try:
+        record = json.loads((bundle.parent / "cache.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    pins = {}
+    for artifact in record.get("bundle_artifacts", []) if isinstance(record, dict) else []:
+        if isinstance(artifact, dict) and "/" not in str(artifact.get("path", "/")):
+            pins[str(artifact["path"])] = str(artifact.get("sha256", ""))
+    return pins
+
+
+def _whole_bundle_for_lane(manifest_path: Path, lane3: bool) -> bool:
+    if _manifest_operation(manifest_path) != WHOLE_ENCODER_OP:
+        return False
+    lane = ane_lane.bundle_lane(manifest_path)
+    return lane == 3 if lane3 else lane in (1, 2)
+
+
+def _discover_whole_bundle(lane3: bool = False) -> Path | None:
     """Locate the whole-program encoder bundle, cheapest source first.
 
     The worker re-verifies every payload digest against its manifest on
     every open, so discovery only names a directory; integrity stays with
-    the loader and the compiled cache's stored digests.
+    the loader and the compiled cache's stored digests. `lane3` selects
+    the schema-5 HWX bundle of an ABI 3 H16 node instead of the schema-4
+    ANEC bundles of lanes 1 and 2.
     """
     override = os.environ.get("MLX_OMARCHY_WHOLE_ENCODER_BUNDLE", "")
     if override:
         path = Path(override)
-        if _manifest_operation(path / "manifest.json") == WHOLE_ENCODER_OP:
+        if _whole_bundle_for_lane(path / "manifest.json", lane3):
             return path
         raise EncoderRunError(
             f"MLX_OMARCHY_WHOLE_ENCODER_BUNDLE {override} is not a "
-            f"whole-encoder bundle directory"
+            f"whole-encoder bundle directory for "
+            f"{'lane 3 (schema 5, ABI 3)' if lane3 else 'lanes 1/2 (schema 4)'}"
         )
     roots = [
         Path(__file__).resolve().parents[2] / "mlx-omarchy-parakeet" / "share" /
@@ -324,8 +354,12 @@ def _discover_whole_bundle() -> Path | None:
         if not root.is_dir():
             continue
         for manifest_path in sorted(root.rglob("manifest.json")):
-            if _manifest_operation(manifest_path) == WHOLE_ENCODER_OP:
+            if _whole_bundle_for_lane(manifest_path, lane3):
                 return manifest_path.parent
+    if lane3:
+        # The runtime pin names the lanes 1/2 bundle; on lane 3 a missing
+        # HWX bundle is the GPU fallback, not an incomplete install.
+        return None
     # Fail loud: when the runtime pin declares the whole-encoder bundle
     # as a required asset, a missing discovery is no longer a quiet
     # fallback to the split-island path -- the installed wheel was
@@ -517,9 +551,33 @@ class AneIsland:
         # resolved directory so the launch path can pass it directly; the
         # resident session registers it by manifest name.
         self.whole_bundle: Path | None = None
-        if os.environ.get("MLX_OMARCHY_WHOLE_ENCODER", "1").strip().lower() \
+        # Lane 3: the worker drives the ABI 3 node with --device h16 (no
+        # library), and only the whole-encoder HWX bundle exists for it.
+        self.lane3 = ane_lane.h16_node() is not None
+        # An H16 machine whose driver has no ABI 3 node yet runs no ANE
+        # program at all: no lanes 1/2 bundle may be picked up there.
+        self.h16 = self.lane3 or ane_lane.h16_machine()
+        self.device = "h16" if self.lane3 else None
+        if self.h16:
+            self.resident_bundles = set()
+        if (self.lane3 or not self.h16) and os.environ.get(
+                "MLX_OMARCHY_WHOLE_ENCODER", "1").strip().lower() \
                 not in ("", "0", "off", "false", "no"):
-            self.whole_bundle = _discover_whole_bundle()
+            self.whole_bundle = _discover_whole_bundle(self.lane3)
+
+    def encoder_island(self) -> "AneIsland | None":
+        """The island an EncoderRunner should use: None on an H16 machine
+        without the lane-3 whole-encoder bundle, so the encoder runs on the
+        GPU (there are no H16 island bundles)."""
+        if self.h16 and self.whole_bundle is None:
+            return None
+        return self
+
+    @property
+    def encoder_path(self) -> str:
+        if self.whole_bundle is not None:
+            return "h16-whole-encoder" if self.lane3 else "whole-encoder"
+        return "gpu" if self.h16 else "islands"
 
     def close(self) -> None:
         """End this pass's batch scope; a shared session stays resident."""
@@ -565,6 +623,21 @@ class AneIsland:
             return {}
         pinned_bundles = self.seal_assets.get("bundles", {})
         seal_expects: dict[str, dict[str, str]] = {}
+        if self.lane3:
+            # The lane-3 bundle is built on the host into the compiled
+            # cache; the pin is the cache entry's verified file digests
+            # (cache.json bundle_artifacts) unless the approved assets name
+            # it. No device library exists to pin.
+            for name, path in bundles.items():
+                files = pinned_bundles.get(Path(path).name) or _cache_pins(Path(path))
+                if not files:
+                    raise EncoderRunError(
+                        f"lane-3 bundle {name} ({path}) is neither covered by "
+                        "the approved assets nor a compiled-cache entry; "
+                        "refusing to load unpinned ANE programs"
+                    )
+                seal_expects[name] = {str(k): str(v) for k, v in files.items()}
+            return {"seal_expects": seal_expects}
         for name, path in bundles.items():
             files = pinned_bundles.get(Path(path).name)
             if not files:
@@ -596,7 +669,7 @@ class AneIsland:
         bundles = self._session_bundles()
         identity = (
             str(self.worker),
-            str(self.libane),
+            str(self.device or self.libane),
             tuple(sorted((name, str(path)) for name, path in bundles.items())),
             self.deadline_ms,
             self._batch_deadline_ms,
@@ -617,6 +690,7 @@ class AneIsland:
                 bundles=bundles,
                 scratch=Path(self.scratch),
                 deadline_ms=self.deadline_ms,
+                device=self.device,
                 **self._seal_kwargs(bundles),
             )
             session.start()
@@ -721,7 +795,8 @@ class AneIsland:
         argv = [
             str(self.worker),
             "--bundle", str(bundle),
-            "--libane", str(self.libane),
+            *(["--device", self.device] if self.device
+              else ["--libane", str(self.libane)]),
             "--deadline-ms", str(self.deadline_ms),
             "--iterations", "1",
         ]
@@ -809,7 +884,18 @@ class EncoderRunner:
             self.whole_manifest = json.loads(
                 (island.whole_bundle / "manifest.json").read_text()
             )
-        if self.whole_manifest is None:
+        # Lane 3's HWX program returns encoder_hidden only (the ABI 3 driver
+        # takes one output per program); the MIL is still parsed so the
+        # encoder_mask chain runs on the GPU from the same graph, and no
+        # island is placed.
+        self.whole_lane3 = (
+            self.whole_manifest is not None
+            and self.whole_manifest.get("manifest_version")
+            == ane_lane.HWX_MANIFEST_VERSION
+        )
+        if self.whole_lane3:
+            placed = frozenset()
+        if self.whole_manifest is None or self.whole_lane3:
             self.text = mil_path.read_text()
         else:
             self.text = ""
@@ -1918,7 +2004,51 @@ class EncoderRunner:
             )
         return keep
 
+    def _run_whole_h16(self, inputs: dict, wanted: set[str]) -> dict:
+        """Lane 3: encoder_hidden from one H16_EXEC, the mask on the GPU."""
+        features = np.asarray(inputs["input_features"], dtype=np.float32)
+        features = np.ascontiguousarray(features.reshape(3000, 128)).astype(
+            np.float16
+        )
+        results = self.island.submit_whole(
+            "whole-encoder",
+            {"input_features": features.tobytes()},
+            {"encoder_hidden": (self.WHOLE_HIDDEN_SHAPE, "fp16")},
+        )
+        self.executed += 1
+        keep = {}
+        if "encoder_hidden" in wanted:
+            hidden = np.asarray(results["encoder_hidden"], dtype=np.float16)
+            keep["encoder_hidden"] = mx.array(
+                hidden.astype(np.float32).reshape(self.WHOLE_HIDDEN_SHAPE)
+            )
+        if "encoder_mask" in wanted:
+            # Only the statements encoder_mask depends on (the mask
+            # arithmetic over attention_mask) execute, through ensure().
+            if not (CONST_CACHE_ENABLED and self.const_values):
+                for stmt in self.statements:
+                    stmt.done = False
+                self.values = {}
+            else:
+                self.values = dict(self.const_values)
+                for stmt in self.statements:
+                    if stmt.op != "const":
+                        stmt.done = False
+            for name, value in inputs.items():
+                self.values[name] = value
+            self.ensure("encoder_mask")
+            keep["encoder_mask"] = self.values["encoder_mask"]
+            mx.eval(keep["encoder_mask"])
+        missing = wanted - set(keep)
+        if missing:
+            raise EncoderRunError(
+                f"lane-3 whole-encoder run did not produce {sorted(missing)}"
+            )
+        return keep
+
     def run(self, inputs: dict, wanted: set[str], stop_after: str) -> dict:
+        if self.whole_lane3:
+            return self._run_whole_h16(inputs, wanted)
         if self.whole_manifest is not None:
             return self._run_whole(inputs, wanted)
         if CONST_CACHE_ENABLED and self.const_values:
