@@ -5,6 +5,7 @@
 #include "doctest/doctest.h"
 
 #include "mlx/backend/omarchy/ane/bundle.h"
+#include "h16_test_hwx.h"
 #include "json.hpp"
 
 #include <algorithm>
@@ -1601,4 +1602,339 @@ TEST_CASE("root-owned read-only chain takes the source-fd fast path") {
   for (const AneSealedFile& image : sealed) {
     CHECK_FALSE(fd_is_sealed_memfd(image.fd));
   }
+}
+
+
+// ---------------------------------------------------------------------
+// Schema 5: HWX programs for driver ABI 3 (lane 3, H16_LOAD/H16_EXEC).
+
+namespace {
+
+constexpr uint64_t kAdd128Bytes = 32768;
+
+nlohmann::json h16_tensor(const std::string& name, uint64_t index) {
+  return {
+      {"name", name},
+      {"index", index},
+      {"dtype", "float16"},
+      {"shape", {16384}},
+      {"byte_size", kAdd128Bytes},
+      {"stride", kAdd128Bytes},
+  };
+}
+
+nlohmann::json h16_binding(const std::string& name, uint64_t surface) {
+  return {
+      {"tensor", name},
+      {"surface", surface},
+      {"dtype", "float16"},
+      {"shape", {16384}},
+      {"nchw", {1, 1, 1, 16384, kAdd128Bytes, kAdd128Bytes}},
+      {"logical_bytes", kAdd128Bytes},
+      {"allocation_bytes", kAdd128Bytes},
+      {"element_offset", 0},
+      {"element_count", 16384},
+      {"physical_elements", 16384},
+  };
+}
+
+// The pinned add-128 HWX (fixtures/h16-add128) as a schema-5 bundle: kernel
+// surface order input a, output y, input b.
+struct H16Fixture {
+  TempDir dir;
+  std::string hwx;
+  nlohmann::json manifest;
+
+  explicit H16Fixture(std::string bytes = {}) {
+    if (bytes.empty()) {
+      const auto raw = h16_test::read_all(h16_test::add128_dir() / "model.hwx");
+      bytes.assign(raw.begin(), raw.end());
+    }
+    hwx = std::move(bytes);
+    manifest = {
+        {"manifest_version", 5},
+        {"name", "h16g-add-128"},
+        {"graph_hash", hex(64, '2')},
+        {"task_descriptors", 1},
+        {"inputs", {h16_tensor("a", 0), h16_tensor("b", 1)}},
+        {"outputs", {h16_tensor("y", 0)}},
+        {"logical_results",
+         {{{"name", "y"}, {"dtype", "float16"}, {"shape", {16384}},
+           {"tensor", "y"}, {"element_offset", 0}, {"element_count", 16384},
+           {"conversion", "identity"}}}},
+        {"state", nlohmann::json::array()},
+        {"intermediates", nlohmann::json::array()},
+        {"programs",
+         {{{"payload", "model.hwx"},
+           {"operation", "add"},
+           {"encoder", "mil-hwxc-h16g"},
+           {"task_descriptors", 1},
+           {"scratch_bytes", 0},
+           {"inputs", {h16_binding("a", 0), h16_binding("b", 2)}},
+           {"outputs", {h16_binding("y", 1)}}}}},
+        {"dispatch_plan", {0}},
+        {"payloads",
+         {{{"role", "hwx"},
+           {"path", "model.hwx"},
+           {"sha256", digest()},
+           {"byte_size", hwx.size()}}}},
+        {"compiler",
+         {{"host_build", "macOS test host"},
+          {"toolchain", "mil-hwx-compiler prepare_alu"},
+          {"target", "h16g"}}},
+        {"driver_abi_major", 3},
+        {"provenance",
+         {{"source_repo", "joshuaswarren/omarchy-mlx"},
+          {"source_commit", hex(40, 'd')},
+          {"exported_at", "2026-11-02"}}},
+        {"release_asset", {{"model", "h16g-add-128"}, {"model_sha256", ""}}},
+    };
+    refresh();
+  }
+
+  std::string digest() const {
+    return sha256_hex(reinterpret_cast<const uint8_t*>(hwx.data()), hwx.size());
+  }
+
+  void refresh() {
+    manifest["payloads"][0]["sha256"] = digest();
+    manifest["payloads"][0]["byte_size"] = hwx.size();
+    manifest["release_asset"]["model_sha256"] =
+        payload_collection_identity(manifest["payloads"]);
+  }
+
+  void write() const {
+    write_file(dir.path() / "model.hwx", hwx);
+    write_file(dir.path() / "manifest.json", manifest.dump(2) + "\n");
+  }
+};
+
+std::string as_string(const std::vector<uint8_t>& bytes) {
+  return std::string(bytes.begin(), bytes.end());
+}
+
+} // namespace
+
+TEST_CASE("schema 5 HWX bundle loads and records the H16 surface contract") {
+  H16Fixture fixture;
+  fixture.write();
+  const AneBundle bundle = load_bundle(fixture.dir.path());
+  CHECK(bundle.manifest.manifest_version == kAneManifestVersionHwx);
+  CHECK(bundle.manifest.driver_abi_major == kAneDriverAbiMajorH16);
+  CHECK(bundle.manifest.compiler.target == "h16g");
+  CHECK(!bundle.weights);
+  REQUIRE(bundle.programs.size() == 1);
+  const AneValidatedProgram& program = bundle.programs[0];
+  CHECK(program.format == AneProgramFormat::hwx);
+  CHECK(program.hwx.filename() == "model.hwx");
+  CHECK(program.anec.empty());
+  CHECK(program.payload_path() == program.hwx);
+  CHECK(program.h16_tasks == 1);
+  REQUIRE(program.h16_surfaces.size() == 3);
+  CHECK(program.h16_surfaces[0].bytes == kAdd128Bytes);
+  CHECK(program.h16_surfaces[0].direction == 1);
+  CHECK(program.h16_surfaces[1].direction == 2);
+  CHECK(program.h16_surfaces[2].direction == 1);
+  // The surface index travels in the binding's channel field.
+  CHECK(bundle.manifest.programs[0].inputs[1].channel == 2);
+  CHECK(bundle.manifest.programs[0].outputs[0].channel == 1);
+}
+
+TEST_CASE("schema 5 refuses the ANEC vocabulary") {
+  SUBCASE("tile_shift") {
+    H16Fixture fixture;
+    fixture.manifest["tile_shift"] = 14;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); }, "unknown field 'tile_shift'");
+  }
+  SUBCASE("channel instead of surface") {
+    H16Fixture fixture;
+    auto& input = fixture.manifest["programs"][0]["inputs"][0];
+    input.erase("surface");
+    input["channel"] = 0;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); }, "unknown field 'channel'");
+  }
+  SUBCASE("ANEC payload role") {
+    H16Fixture fixture;
+    fixture.manifest["payloads"][0]["role"] = "anec";
+    fixture.refresh();
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); }, "field 'role' must be 'hwx'");
+  }
+  SUBCASE("a weights payload") {
+    H16Fixture fixture;
+    fixture.manifest["payloads"].push_back(
+        {{"role", "weights"}, {"path", "weights.bin"}, {"sha256", hex(64, 'e')},
+         {"byte_size", 16}});
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); }, "field 'role' must be 'hwx'");
+  }
+  SUBCASE("an ABI 1/2 compiler target") {
+    H16Fixture fixture;
+    fixture.manifest["compiler"]["target"] = "h14";
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "field 'compiler.target' must be exactly 'h16g' in schema 5");
+  }
+  SUBCASE("an ABI 1/2 driver major") {
+    H16Fixture fixture;
+    fixture.manifest["driver_abi_major"] = 2;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "compiler.target 'h16g' requires driver_abi_major 3, found 2");
+  }
+  SUBCASE("two outputs") {
+    H16Fixture fixture;
+    fixture.manifest["programs"][0]["outputs"].push_back(h16_binding("y", 3));
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "programs[0].outputs must bind exactly one H16 output surface");
+  }
+}
+
+TEST_CASE("schema 4 keeps refusing the ABI 3 pair and other versions") {
+  Fixture fixture;
+  SUBCASE("h16g target") {
+    fixture.manifest["compiler"]["target"] = "h16g";
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "field 'compiler.target' must be exactly 'h13' or 'h14'");
+  }
+  SUBCASE("driver ABI 3") {
+    fixture.manifest["driver_abi_major"] = 3;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "unsupported driver_abi_major 3 (expected 1 or 2)");
+  }
+  SUBCASE("unknown version") {
+    fixture.manifest["manifest_version"] = 6;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "unsupported manifest_version (expected 4 or 5)");
+  }
+}
+
+TEST_CASE("schema 5 bindings must match the HWX surfaces") {
+  SUBCASE("surface index past the program") {
+    H16Fixture fixture;
+    fixture.manifest["programs"][0]["inputs"][1]["surface"] = 3;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 input b names surface 3, the HWX has 3");
+  }
+  SUBCASE("input bound to the output surface") {
+    H16Fixture fixture;
+    fixture.manifest["programs"][0]["inputs"][0]["surface"] = 1;
+    fixture.manifest["programs"][0]["outputs"][0]["surface"] = 0;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 input a names surface 1, which is an HWX output");
+  }
+  SUBCASE("a surface left unbound") {
+    H16Fixture fixture;
+    fixture.manifest["inputs"] = {h16_tensor("a", 0)};
+    fixture.manifest["programs"][0]["inputs"] = {h16_binding("a", 0)};
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 binds 2 surfaces; the HWX has 3");
+  }
+  SUBCASE("duplicate surface") {
+    H16Fixture fixture;
+    fixture.manifest["programs"][0]["inputs"][1]["surface"] = 0;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "programs[0].inputs has duplicate surface");
+  }
+  SUBCASE("allocation differs from the surface") {
+    H16Fixture fixture;
+    fixture.manifest["programs"][0]["inputs"][0] = {
+        {"tensor", "a"}, {"surface", 0}, {"dtype", "float16"}, {"raw", true},
+        {"logical_bytes", 16384}, {"allocation_bytes", 16384}};
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 input a allocation_bytes does not match HWX surface 0 size 32768");
+  }
+  SUBCASE("task count") {
+    H16Fixture fixture;
+    fixture.manifest["task_descriptors"] = 2;
+    fixture.manifest["programs"][0]["task_descriptors"] = 2;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 task_descriptors does not match the HWX task count 1");
+  }
+  SUBCASE("scratch size") {
+    H16Fixture fixture;
+    fixture.manifest["programs"][0]["scratch_bytes"] = 4096;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 scratch_bytes does not match the HWX __DATA,__bss size 0");
+  }
+}
+
+TEST_CASE("a digest-valid but malformed HWX is refused before any device") {
+  SUBCASE("bad magic") {
+    H16Fixture fixture;
+    fixture.hwx[0] = '\0';
+    fixture.refresh();
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 HWX refused: not an H16G or H17 HWX");
+  }
+  SUBCASE("an H17 program") {
+    h16_test::Spec spec;
+    spec.subtype = 9;
+    spec.surfaces = {
+        {"a", 1, 0x30000000, kAdd128Bytes, 1, 0x2000},
+        {"y", 2, 0x30010000, kAdd128Bytes, 1, 0x2000},
+        {"b", 1, 0x30020000, kAdd128Bytes, 1, 0x2000}};
+    H16Fixture fixture(as_string(h16_test::build(spec)));
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); },
+                "program 0 HWX has CPU subtype 9; compiler.target 'h16g' requires 7");
+  }
+  SUBCASE("digest mismatch is still checked first") {
+    H16Fixture fixture;
+    fixture.hwx[0] = '\0';
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); }, "sha256 mismatch");
+  }
+}
+
+TEST_CASE("schema 5 accepts a program with kernel-owned scratch") {
+  h16_test::Spec spec;
+  spec.scratch = {{0x40000000, 0x10000}};
+  spec.slots = {{3, 0x40000000}, {6, 0x30000000}, {7, 0x30010000}, {8, 0x30020000}};
+  spec.surfaces = {
+      {"a", 1, 0x30000000, kAdd128Bytes, 1, 0x2000},
+      {"y", 2, 0x30010000, kAdd128Bytes, 1, 0x2000},
+      {"b", 1, 0x30020000, kAdd128Bytes, 1, 0x2000}};
+  H16Fixture fixture(as_string(h16_test::build(spec)));
+  fixture.manifest["programs"][0]["scratch_bytes"] = 0x10000;
+  fixture.manifest["programs"][0]["inputs"] = {h16_binding("a", 0), h16_binding("b", 2)};
+  fixture.write();
+  const AneBundle bundle = load_bundle(fixture.dir.path());
+  REQUIRE(bundle.programs.size() == 1);
+  // The scratch is kernel-owned, not a surface.
+  CHECK(bundle.programs[0].h16_surfaces.size() == 3);
+}
+
+TEST_CASE("the sealed load hands the HWX over as its sealed image") {
+  H16Fixture fixture;
+  fixture.write();
+  const std::string manifest = read_bytes(fixture.dir.path() / "manifest.json");
+  std::map<std::string, std::string> pin{
+      {"manifest.json",
+       sha256_hex(reinterpret_cast<const uint8_t*>(manifest.data()), manifest.size())},
+      {"model.hwx", fixture.digest()}};
+  std::vector<AneSealedFile> sealed;
+  const AneBundle bundle = load_bundle_sealed(fixture.dir.path(), pin, sealed);
+  REQUIRE(bundle.programs.size() == 1);
+  CHECK(bundle.programs[0].hwx.string().rfind("/proc/self/fd/", 0) == 0);
+  CHECK(bundle.programs[0].h16_surfaces.size() == 3);
+  pin["model.hwx"] = hex(64, '0');
+  sealed.clear();
+  check_error(
+      [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+      "does not match the pin");
 }
