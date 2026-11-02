@@ -3,6 +3,8 @@
 **No Mac? [Start here](docs/ANY-GPU.md)** for NVIDIA, Intel, AMD and software
 Vulkan development paths.
 
+Results so far: [docs/TESTED-HARDWARE.md](docs/TESTED-HARDWARE.md).
+
 MLX on the Apple GPU under Linux, and Core ML models on the
 Apple Neural Engine.
 
