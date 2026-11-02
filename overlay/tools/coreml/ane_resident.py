@@ -157,6 +157,7 @@ class ResidentAneWorker:
         seal_libane_sha: str | None = None,
         daemon_socket: str | os.PathLike[str] | None = None,
         daemon_connect_ms: int = 1000,
+        device: str | None = None,
     ):
         if not bundles:
             raise ResidentWorkerError("a resident session needs at least one bundle")
@@ -166,6 +167,15 @@ class ResidentAneWorker:
             )
         self.worker = Path(worker)
         self.libane = Path(libane)
+        # Lane 3: "h16" runs the worker with --device h16 (the in-kernel
+        # ABI 3 node) instead of --libane; there is no library to pin.
+        if device is not None and device != "h16":
+            raise ResidentWorkerError(f"unknown ANE device {device!r}")
+        if device is not None and seal_libane_sha is not None:
+            raise ResidentWorkerError(
+                "--device h16 loads no library; a libane pin cannot apply"
+            )
+        self.device = device
         self.bundles = {name: Path(path) for name, path in bundles.items()}
         self.scratch = Path(scratch)
         self.deadline_ms = deadline_ms
@@ -319,7 +329,8 @@ class ResidentAneWorker:
         argv = [
             str(self.worker),
             "--relay-bypass" if self.relay_bypass else "--serve",
-            "--libane", str(self.libane),
+            *(["--device", self.device] if self.device
+              else ["--libane", str(self.libane)]),
             "--deadline-ms", str(self.deadline_ms),
             "--iterations", str(self.iterations),
         ]

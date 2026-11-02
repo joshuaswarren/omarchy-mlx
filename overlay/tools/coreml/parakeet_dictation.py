@@ -390,7 +390,7 @@ class DictationTranscriber:
         )
         self._island = island
         self._runner = EncoderRunner(
-            source / "model.mil", source / "model-root", island,
+            source / "model.mil", source / "model-root", island.encoder_island(),
         )
         decoder = load_decoder(cache_dir / "decoder.mlpackage")
         self._packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
