@@ -896,7 +896,7 @@ AneWorkerReport AneWorker::open(
             std::fprintf(
                 stderr,
                 "[omarchy-ane] child load program %zu (%s) %.1f ms\n",
-                loaded, program.anec.filename().string().c_str(),
+                loaded, program.payload_path().filename().string().c_str(),
                 stall(load_started));
           }
           ++loaded;
