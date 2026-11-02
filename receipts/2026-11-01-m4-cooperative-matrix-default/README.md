@@ -67,7 +67,7 @@ The rule names G16G only; every other part keeps the cooperative-matrix pick (re
 - Check 2 (token choices): 99.766% agreement with near ties against the baseline's Wilson lower bound of 99.591%.
 - Check 3 (perplexity): deviation 0.001171 against the baseline's 0.001171 plus noise 0 (PPL 8.45240 in both arms, reference 8.44250).
 
-The passes are 128 tokens, not S=1, because this route runs only on multi-row passes; an S=1 pass would compare `main` with itself. The two arms are bit-identical. `numerics-gate/diag-route/` shows that the route does run at these shapes and returns the cooperative-matrix kernel's bits. The gate README lists every departure from the documented protocol.
+The passes are 128 tokens, not S=1, because this route runs only on multi-row passes; an S=1 pass would compare `main` with itself. The two arms are bit-identical, and the changed kernel did run. On profiling builds, the per-op cells dispatched `MatmulBF16Coopmat` on `main` and `MatmulBf16Fma` on this change, and `numerics-gate/diag-route/` shows the two kernels return the same bytes at the 128-row Llama shapes. The gate README lists every departure from the documented protocol.
 
 ## Files
 
