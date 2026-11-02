@@ -1,0 +1,180 @@
+env VK_ICD_FILENAMES=~/gpu/mesa-install/share/vulkan/icd.d/asahi_icd.aarch64.json AGX_APPLE9_MAX_SHARED=32768
+date 2026-11-02T06:31:13Z kernel 7.1.13-1-20-ARCH glslc 2026.4 gcc 16.1.1
+$ gcc -O2 -I~/gpu/vkinc -o ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/bw/vkbw.c -lvulkan
+rc=0
+$ gcc -O2 -I~/gpu/vkinc -o ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/bw/vkchain.c -lvulkan
+rc=0
+$ gcc -O2 -pthread -o ~/gpu/upr/logs/bw/cpubw ~/gpu/upr/bw/cpubw.c
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DVEC=1 -DUNROLL=4 ~/gpu/upr/bw/bw_read.comp -o ~/gpu/upr/logs/bw/read_v1.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DVEC=2 -DUNROLL=4 ~/gpu/upr/bw/bw_read.comp -o ~/gpu/upr/logs/bw/read_v2.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DVEC=4 -DUNROLL=4 ~/gpu/upr/bw/bw_read.comp -o ~/gpu/upr/logs/bw/read_v4.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DWIDE=0 ~/gpu/upr/bw/bw_gemv.comp -o ~/gpu/upr/logs/bw/gemv_w0.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DWIDE=1 ~/gpu/upr/bw/bw_gemv.comp -o ~/gpu/upr/logs/bw/gemv_w1.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DWIDE=0 -DALU=16 ~/gpu/upr/bw/bw_gemv.comp -o ~/gpu/upr/logs/bw/gemv_w0_alu16.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DWIDE=0 -DALU=64 ~/gpu/upr/bw/bw_gemv.comp -o ~/gpu/upr/logs/bw/gemv_w0_alu64.spv
+rc=0
+$ glslc -O --target-env=vulkan1.3 -DWIDE=0 -DEXTRA=32 ~/gpu/upr/bw/bw_gemv.comp -o ~/gpu/upr/logs/bw/gemv_w0_extra32.spv
+rc=0
+spv gemv_w0.spv bytes=3312 sha256=1aa2ab048e6e00bf
+spv gemv_w0_alu16.spv bytes=3848 sha256=0516d1e24e8ff9f5
+spv gemv_w0_alu64.spv bytes=3848 sha256=2c200414179a05e3
+spv gemv_w0_extra32.spv bytes=4092 sha256=5a5b6a5023fe70cc
+spv gemv_w1.spv bytes=3648 sha256=db24d271d5d1c484
+spv icl_1000.spv bytes=1576 sha256=357be3f10b23b683
+spv icl_2000.spv bytes=1576 sha256=1c859f9f3689618b
+spv icl_250.spv bytes=1576 sha256=c5b346ccae36edf7
+spv icl_4000.spv bytes=1576 sha256=c2ab869adf945494
+spv icl_500.spv bytes=1576 sha256=163f04da5b7f6dda
+spv icu_1000.spv bytes=92980 sha256=f19500e7be029d4a
+spv icu_2000.spv bytes=184980 sha256=526b5da00a12e30f
+spv icu_250.spv bytes=23980 sha256=8aa7e29c5f327743
+spv icu_4000.spv bytes=368980 sha256=8f7fe6ced35c1aa0
+spv icu_500.spv bytes=46980 sha256=cc2564ef7029c825
+spv read_v1.spv bytes=1840 sha256=1b0ef1d52c47a3c6
+spv read_v2.spv bytes=1988 sha256=f8096ef742f60404
+spv read_v4.spv bytes=2060 sha256=e40b6b4e1c52e756
+OpLoad count read_v1: 5
+OpLoad count read_v2: 5
+OpLoad count read_v4: 5
+OpLoad count gemv_w0: 10
+OpLoad count gemv_w1: 12
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v1.spv 1 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=1 groups=1280 threads=327680 MiB=1024    15.19 ms    70.7 GB/s
+storage16=1 type=1 flags=DVC- vec=1 groups=1280 threads=327680 MiB=1024    15.24 ms    70.5 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v2.spv 2 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=1280 threads=327680 MiB=1024    13.62 ms    78.8 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=1280 threads=327680 MiB=1024    13.65 ms    78.7 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v4.spv 4 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=4 groups=1280 threads=327680 MiB=1024    13.10 ms    82.0 GB/s
+storage16=1 type=1 flags=DVC- vec=4 groups=1280 threads=327680 MiB=1024    13.11 ms    81.9 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v1.spv 1 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=1 groups=1280 threads=327680 MiB=1024    15.28 ms    70.3 GB/s
+storage16=1 type=1 flags=DVC- vec=1 groups=1280 threads=327680 MiB=1024    15.27 ms    70.3 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v2.spv 2 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=1280 threads=327680 MiB=1024    13.63 ms    78.7 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=1280 threads=327680 MiB=1024    13.67 ms    78.6 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v4.spv 4 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=4 groups=1280 threads=327680 MiB=1024    13.12 ms    81.8 GB/s
+storage16=1 type=1 flags=DVC- vec=4 groups=1280 threads=327680 MiB=1024    13.07 ms    82.1 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v1.spv 1 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=1 groups=1280 threads=327680 MiB=1024    15.25 ms    70.4 GB/s
+storage16=1 type=1 flags=DVC- vec=1 groups=1280 threads=327680 MiB=1024    15.24 ms    70.5 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v2.spv 2 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=1280 threads=327680 MiB=1024    13.67 ms    78.5 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=1280 threads=327680 MiB=1024    13.68 ms    78.5 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/read_v4.spv 4 1280 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=4 groups=1280 threads=327680 MiB=1024    13.14 ms    81.7 GB/s
+storage16=1 type=1 flags=DVC- vec=4 groups=1280 threads=327680 MiB=1024    13.13 ms    81.8 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    12.72 ms    84.4 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    12.73 ms    84.4 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w1.spv 4 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=4 groups=640 threads=163840 MiB=1024    12.35 ms    86.9 GB/s
+storage16=1 type=1 flags=DVC- vec=4 groups=640 threads=163840 MiB=1024    12.37 ms    86.8 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0_alu16.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    12.41 ms    86.6 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    12.35 ms    87.0 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0_alu64.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    57.14 ms    18.8 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    57.15 ms    18.8 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0_extra32.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    12.43 ms    86.4 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    12.42 ms    86.4 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    12.73 ms    84.3 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    12.73 ms    84.3 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w1.spv 4 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=4 groups=640 threads=163840 MiB=1024    12.35 ms    86.9 GB/s
+storage16=1 type=1 flags=DVC- vec=4 groups=640 threads=163840 MiB=1024    12.39 ms    86.6 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0_alu16.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    12.41 ms    86.5 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    12.37 ms    86.8 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0_alu64.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    57.15 ms    18.8 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    57.15 ms    18.8 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkbw ~/gpu/upr/logs/bw/gemv_w0_extra32.spv 2 640 -1 1024 5
+storage16=1 type=0 flags=DVC$ vec=2 groups=640 threads=163840 MiB=1024    12.42 ms    86.5 GB/s
+storage16=1 type=1 flags=DVC- vec=2 groups=640 threads=163840 MiB=1024    12.42 ms    86.5 GB/s
+rc=0
+$ ~/gpu/upr/logs/bw/cpubw
+threads= 1 read   35.2 GB/s
+threads= 2 read   42.9 GB/s
+threads= 4 read   55.7 GB/s
+threads= 6 read   61.9 GB/s
+threads= 8 read   68.9 GB/s
+threads=10 read   70.9 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icu_250.spv 1 4 -1 1 5 300 1
+chain=300 barrier=1 groups=4 MiB=1     10.90 us/dispatch    96.2 GB/s  type=0 flags=DVC$ vec=1 groups=4 threads=1024 MiB=1     3.27 ms     0.3 GB/s
+chain=300 barrier=1 groups=4 MiB=1     10.13 us/dispatch   103.5 GB/s  type=1 flags=DVC- vec=1 groups=4 threads=1024 MiB=1     3.04 ms     0.3 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icl_250.spv 1 4 -1 1 5 300 1
+chain=300 barrier=1 groups=4 MiB=1      7.31 us/dispatch   143.5 GB/s  type=0 flags=DVC$ vec=1 groups=4 threads=1024 MiB=1     2.19 ms     0.5 GB/s
+chain=300 barrier=1 groups=4 MiB=1      7.27 us/dispatch   144.3 GB/s  type=1 flags=DVC- vec=1 groups=4 threads=1024 MiB=1     2.18 ms     0.5 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icu_1000.spv 1 4 -1 1 5 300 1
+chain=300 barrier=1 groups=4 MiB=1     32.12 us/dispatch    32.6 GB/s  type=0 flags=DVC$ vec=1 groups=4 threads=1024 MiB=1     9.64 ms     0.1 GB/s
+chain=300 barrier=1 groups=4 MiB=1     35.44 us/dispatch    29.6 GB/s  type=1 flags=DVC- vec=1 groups=4 threads=1024 MiB=1    10.63 ms     0.1 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icl_1000.spv 1 4 -1 1 5 300 1
+chain=300 barrier=1 groups=4 MiB=1     11.83 us/dispatch    88.6 GB/s  type=0 flags=DVC$ vec=1 groups=4 threads=1024 MiB=1     3.55 ms     0.3 GB/s
+chain=300 barrier=1 groups=4 MiB=1     11.91 us/dispatch    88.1 GB/s  type=1 flags=DVC- vec=1 groups=4 threads=1024 MiB=1     3.57 ms     0.3 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icu_4000.spv 1 4 -1 1 5 300 1
+chain=300 barrier=1 groups=4 MiB=1    125.98 us/dispatch     8.3 GB/s  type=0 flags=DVC$ vec=1 groups=4 threads=1024 MiB=1    37.80 ms     0.0 GB/s
+chain=300 barrier=1 groups=4 MiB=1    127.98 us/dispatch     8.2 GB/s  type=1 flags=DVC- vec=1 groups=4 threads=1024 MiB=1    38.39 ms     0.0 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icl_4000.spv 1 4 -1 1 5 300 1
+chain=300 barrier=1 groups=4 MiB=1     39.34 us/dispatch    26.7 GB/s  type=0 flags=DVC$ vec=1 groups=4 threads=1024 MiB=1    11.80 ms     0.1 GB/s
+chain=300 barrier=1 groups=4 MiB=1     39.74 us/dispatch    26.4 GB/s  type=1 flags=DVC- vec=1 groups=4 threads=1024 MiB=1    11.92 ms     0.1 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icu_250.spv 1 160 -1 1 5 300 1
+chain=300 barrier=1 groups=160 MiB=1     28.92 us/dispatch    36.3 GB/s  type=0 flags=DVC$ vec=1 groups=160 threads=40960 MiB=1     8.68 ms     0.1 GB/s
+chain=300 barrier=1 groups=160 MiB=1     27.43 us/dispatch    38.2 GB/s  type=1 flags=DVC- vec=1 groups=160 threads=40960 MiB=1     8.23 ms     0.1 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icl_250.spv 1 160 -1 1 5 300 1
+chain=300 barrier=1 groups=160 MiB=1     29.44 us/dispatch    35.6 GB/s  type=0 flags=DVC$ vec=1 groups=160 threads=40960 MiB=1     8.83 ms     0.1 GB/s
+chain=300 barrier=1 groups=160 MiB=1     29.50 us/dispatch    35.5 GB/s  type=1 flags=DVC- vec=1 groups=160 threads=40960 MiB=1     8.85 ms     0.1 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icu_1000.spv 1 160 -1 1 5 300 1
+chain=300 barrier=1 groups=160 MiB=1     93.11 us/dispatch    11.3 GB/s  type=0 flags=DVC$ vec=1 groups=160 threads=40960 MiB=1    27.93 ms     0.0 GB/s
+chain=300 barrier=1 groups=160 MiB=1     93.13 us/dispatch    11.3 GB/s  type=1 flags=DVC- vec=1 groups=160 threads=40960 MiB=1    27.94 ms     0.0 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icl_1000.spv 1 160 -1 1 5 300 1
+chain=300 barrier=1 groups=160 MiB=1    102.76 us/dispatch    10.2 GB/s  type=0 flags=DVC$ vec=1 groups=160 threads=40960 MiB=1    30.83 ms     0.0 GB/s
+chain=300 barrier=1 groups=160 MiB=1    102.73 us/dispatch    10.2 GB/s  type=1 flags=DVC- vec=1 groups=160 threads=40960 MiB=1    30.82 ms     0.0 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icu_4000.spv 1 160 -1 1 5 300 1
+chain=300 barrier=1 groups=160 MiB=1    373.58 us/dispatch     2.8 GB/s  type=0 flags=DVC$ vec=1 groups=160 threads=40960 MiB=1   112.07 ms     0.0 GB/s
+chain=300 barrier=1 groups=160 MiB=1    372.35 us/dispatch     2.8 GB/s  type=1 flags=DVC- vec=1 groups=160 threads=40960 MiB=1   111.71 ms     0.0 GB/s
+rc=0
+$ flock /tmp/m1-gpu.lock ~/gpu/upr/logs/bw/vkchain ~/gpu/upr/logs/bw/icl_4000.spv 1 160 -1 1 5 300 1
+chain=300 barrier=1 groups=160 MiB=1    394.68 us/dispatch     2.7 GB/s  type=0 flags=DVC$ vec=1 groups=160 threads=40960 MiB=1   118.41 ms     0.0 GB/s
+chain=300 barrier=1 groups=160 MiB=1    394.60 us/dispatch     2.7 GB/s  type=1 flags=DVC- vec=1 groups=160 threads=40960 MiB=1   118.38 ms     0.0 GB/s
+rc=0
+DONE
