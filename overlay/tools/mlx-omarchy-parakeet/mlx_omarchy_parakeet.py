@@ -423,6 +423,14 @@ def _check_ane_capability(module_dir: Path | None = None) -> None:
             "product has no non-ANE encoder path, so transcribe refuses "
             "instead of falling back"
         )
+    # H16 (M4 Pro): lane 3 runs the HWX whole encoder on the in-kernel
+    # ABI 3 node when its bundle is present; otherwise the encoder runs on
+    # the GPU (AneIsland.encoder_island). The libane module checks below
+    # are for lanes 1 and 2 only.
+    from coreml import ane_lane
+
+    if ane_lane.h16_node() is not None or ane_lane.h16_machine():
+        return
     accel = Path(os.environ.get("MLX_OMARCHY_ACCEL_DEV", "/dev/accel/accel0"))
     if not accel.exists():
         raise TranscribeRefusal(
@@ -763,7 +771,7 @@ def _open_encoder(args, pin, lock, cache_dir, worker, share,
     )
     source = _ensure_encoder_source(lock, pin, cache_dir)
     runner = encoder_module.EncoderRunner(
-        source / "model.mil", source / "model-root", island,
+        source / "model.mil", source / "model-root", island.encoder_island(),
     )
 
     return island, source, runner
@@ -1134,7 +1142,7 @@ def _pin_checks(pinned, expected, contract, tdt, transcript, mel_host,
               _npy_sha(hidden_host) == expected_hidden_sha,
               {"expected": expected_hidden_sha,
                "actual": _npy_sha(hidden_host),
-               "encoder_path": "whole-encoder" if whole_path else "islands"})
+               "encoder_path": island.encoder_path})
         check("emissions", len(actual_tokens) == expected["emissions"],
               {"expected": expected["emissions"], "actual": len(actual_tokens)})
         check("token_ids", actual_tokens == native_tokens,
