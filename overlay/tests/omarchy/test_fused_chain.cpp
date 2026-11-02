@@ -1537,7 +1537,7 @@ TEST_CASE("eager q4 decode gemv swiglu epilogue env gate off keeps the chain") {
   CHECK_EQ(n_on, 2);
   CHECK_GT(n_off, n_on);
   CHECK_GE(n_master_off, n_off);
-  const bool part_on = !omarchy::fused_decode_off_default_part(
+  const bool part_on = !omarchy::fused_gemv_off_default_part(
       omarchy::get_command_encoder(stream).device().capabilities().device_name);
   CHECK_EQ(n_unset, part_on ? n_on : n_off);
   expect_bit_exact(off, on, stream);
@@ -1887,19 +1887,20 @@ TEST_CASE("token-multi q4 gemv kill switch restores the single-row fence") {
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
 
-TEST_CASE("fused decode default: the part rule") {
-  CHECK(omarchy::fused_decode_off_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::fused_decode_off_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::fused_decode_off_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::fused_decode_off_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::fused_decode_off_default_part(""));
+TEST_CASE("fused gemv default: the part rule") {
+  CHECK(omarchy::fused_gemv_off_default_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::fused_gemv_off_default_part(""));
 }
 
 // The gates through fused_route_enabled: the decision is made per call
 // for the device name passed in, so alternating parts in one process (both
-// orders) never inherit an earlier answer, and an explicit 1 or 0 wins on
-// every part. MLX_OMARCHY_FUSED_CHAIN=0 turns both routes off.
-TEST_CASE("fused decode default: per device, either order, a setting wins") {
+// orders) never inherit an earlier answer. Unset, only the GEMV route
+// follows the part rule; the trio is on on every part. An explicit 1 or 0
+// wins on every part, and MLX_OMARCHY_FUSED_CHAIN=0 turns both routes off.
+TEST_CASE("fused gemv and trio defaults: per device, either order, a setting wins") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_FUSED_GEMV",
       "MLX_OMARCHY_FUSED_TRIO"};
@@ -1913,9 +1914,10 @@ TEST_CASE("fused decode default: per device, either order, a setting wins") {
   const std::string m1 = "Apple M1 (G13G B1)";
   for (const char* var : {"MLX_OMARCHY_FUSED_GEMV", "MLX_OMARCHY_FUSED_TRIO"}) {
     INFO(var);
-    CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
+    const bool m4_unset = std::strcmp(var, "MLX_OMARCHY_FUSED_TRIO") == 0;
+    CHECK_EQ(omarchy::fused_route_enabled(var, m4), m4_unset);
     CHECK(omarchy::fused_route_enabled(var, m1));
-    CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
+    CHECK_EQ(omarchy::fused_route_enabled(var, m4), m4_unset);
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "1", 1);
     CHECK(omarchy::fused_route_enabled(var, m4));
@@ -1930,8 +1932,9 @@ TEST_CASE("fused decode default: per device, either order, a setting wins") {
     unsetenv("MLX_OMARCHY_FUSED_CHAIN");
     unsetenv(var);
   }
-  // The trio gate does not depend on the GEMV gate.
+  // The trio gate does not depend on the GEMV gate, set or unset.
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   for (size_t i = 0; i < saved.size(); ++i) {
