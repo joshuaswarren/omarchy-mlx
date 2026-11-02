@@ -55,8 +55,14 @@ Where the cooperative route is reachable (the M1/M2 fork driver, this M4 driver 
 
 ## Numerics gate
 
-`numerics-gate/README.md`: docs/numerics-gate.md for this change against a stock upstream MLX CPU fp32 reference (teacher-forced agreement, S=1 or route-shaped PPL, per-op error, harness check). Its first line states whether the gate has been evaluated; until it says complete, `numerics-gate/RESUME.md` lists what remains.
+**Gate: passed** (`numerics-gate/README.md`). `docs/numerics-gate.md` against stock upstream MLX 0.32.3 on the CPU in float32 with the same weights and text: granite-4.0-1b-4bit, 5,120 teacher-forced positions, five runs per arm, `main` `a69d9e6` (the tile route) against `89b54a0`, both arms with the cooperative matrix hidden (`HK_APPLE9_COOPMAT=0`), harness check passed (S=1 PPL 6.54881 against one-pass 6.56134).
+
+- Check 1 (per-op, fp64 forward of captured operands): no worse in 21 of 21 cells.
+- Check 2 (token choices): 99.648% agreement with near ties against the baseline's Wilson lower bound of 99.445%.
+- Check 3 (perplexity): deviation 0.000707 against the baseline's 0.000707 plus noise 0 (PPL 7.58016 in both arms, reference 7.58552).
+
+The passes are 64 tokens, not S=1, because this route runs only on multi-row passes without the cooperative route; an S=1 pass would take the decode GEMV in both arms. The two arms are bit-identical, and the changed kernel did run: on profiling builds, the per-op cells dispatched `QmmTileBF16` on `main` and `QmmPrefillFmaBF16` on this change. This holds for the M4 only; a stock-Mesa M1/M2 run is still needed to show whether the route keeps the tile kernel's bits there. The gate README lists every departure from the documented protocol.
 
 ## Files
 
-`host.txt`, `wheels.txt`, `battery.txt`, `bits-p6-vs-main.log`, `bits-selftest.log`, `qmmfma-arms.jsonl`, `qmmfma-fma.log`, `qmmfma-tile.log`, `engage-qmm_fma-kernels.txt`, `perf-p6.jsonl`, `perf-p6-summary.txt`, `reopen.log`, `scripts/`, `SHA256SUMS`.
+`host.txt`, `wheels.txt`, `battery.txt`, `bits-p6-vs-main.log`, `bits-selftest.log`, `qmmfma-arms.jsonl`, `qmmfma-fma.log`, `qmmfma-tile.log`, `engage-qmm_fma-kernels.txt`, `perf-p6.jsonl`, `perf-p6-summary.txt`, `reopen.log`, `numerics-gate/`, `scripts/`, `SHA256SUMS`.

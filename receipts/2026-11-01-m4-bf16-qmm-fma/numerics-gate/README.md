@@ -1,6 +1,4 @@
-# Numerics gate (docs/numerics-gate.md) for #321: INCOMPLETE: gate not yet evaluated
-
-This directory is a checkpoint of a run in progress. Nothing here is a gate result until every check has run; `RESUME.md` lists what is done and the exact commands for the rest.
+# Numerics gate (docs/numerics-gate.md) for #321: evaluated, every check ran
 
 ## Protocol (fixed before the run)
 
@@ -20,12 +18,37 @@ This directory is a checkpoint of a run in progress. Nothing here is a gate resu
 
 | model | harness check | baseline runs | candidate runs | reference | checks 2, 3 | check 1 |
 |---|---|---:|---:|---|---|---|
-| granite-4.0-1b-4bit | pass | 0/5 | 0/5 | done | not run | not run |
+| granite-4.0-1b-4bit | pass | 5/5 | 5/5 | done | done | done |
 
 Harness check granite-4.0-1b-4bit: S=1 PPL 6.54881, one-pass PPL 6.56134, relative difference 1.91e-03 (pass).
+
+## Result
+
+**Gate: passed.** Every check passes on every model.
+
+### granite-4.0-1b-4bit
+
+| arm | runs | top-1 vs reference (median) | flips | near ties | PPL (median) | mean abs dlogprob |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline `a69d9e6` | 5 | 97.266% | 140 | 122 | 7.58016 | 0.07272 |
+| candidate `89b54a0` | 5 | 97.266% | 140 | 122 | 7.58016 | 0.07272 |
+| reference (stock MLX CPU fp32) | 1 | | | | 7.58552 | |
+
+Every run of an arm gave the same values (deterministic), so the five-run PPL noise is 0 and check 3 allows no difference from the baseline's deviation.
+- Check 2: candidate agreement with near ties 99.648% against the baseline Wilson lower bound 99.445% (baseline median 99.648%): **pass**.
+- Check 3: candidate PPL deviation 0.000707 against baseline 0.000707 + noise 0.000000: **pass**.
+- Old against new (information): 5120/5120 top-1 the same (100.00%).
+- Check 1: candidate no worse in 21 of 21 cells (worst candidate/baseline ratio 1.000000): **pass** (`perop/score-321-granite-4.0-1b-4bit.txt`).
+
+## Deviations from docs/numerics-gate.md, and notes
+
+- Pass shape and environment (a deviation from the document's wording). `docs/numerics-gate.md` check 3 names route-sensitive S=1 perplexity. This change's route runs only on multi-row bf16 4-bit passes where the cooperative-matrix qmm route is unavailable. An S=1 pass takes the decode GEMV instead, and on this host's driver the cooperative route is available by default, so neither would reach the change. Both arms therefore ran teacher-forced 64-token passes (each 512-token segment as eight passes sharing one cache) with `HK_APPLE9_COOPMAT=0`, which hides the driver's cooperative matrix. The baseline arm is the tile route `QmmTileBF16`, the original arm this change replaces. The harness check is the documented one on the baseline wheel, run with the matrix both exposed and hidden (`validate-*.json`). The reference ran in 64-token passes on the CPU in float32; it is the same reference used for every PR in this series.
+- The arms are bit-identical. All ten runs give the same values at all 5,120 positions (PPL 7.58016; reference 7.58552), and both wheels give identical outputs in every per-op cell. The gate passes because the candidate's error equals the baseline's, not because it is smaller. This matches the receipt's `qmm_fma_bits.py` result (21/21 bit-identical to the tile route on this host).
+- The changed route ran. The per-op cells of check 1, repeated on profiling builds of both commits with the same environment, dispatched `QmmTileBF16` on `main` and `QmmPrefillFmaBF16` on this change, 42 times each (`perop/321-*-dmain.kernels.txt`, `perop/321-*-dp6.kernels.txt`; `scripts/run_gatek.sh`). Each profiling build's 84 outputs equal its release build's bit for bit (`perop/321-*-release-vs-profiling.txt`). This is evidence for the M4 with this compiler only. On stock-Mesa M1/M2 this becomes the default bf16 Q4 prefill route, and whether it keeps the tile kernel's bits there is not measured here.
+- Nothing else departs from the protocol fixed before the run: five runs per arm, all with exit status 0 and no new GPU driver error, no run repeated or dropped, and the thresholds as documented. The main-arm runs took about 250 s each against 40 s for this change (the tile kernel is slow); that is the run time of the harness, not a speed measurement.
 
 ## Files
 
 - `scripts/`: the harness (`gate_tf.py`), per-op check (`perop.py`), analyzer (`analyze_gate.py`), the phase script as run (`run_gate.sh`; `run_gate.v1.sh` ran the facts, harness-check and first reference phases), the runners, `ref_setup.sh`, `setup.sh` (host rebuild of the wheels) and `opprobe.py`. `ab.py`, `once.py` and `prov.py` are in the receipt's `scripts/`.
 - Records: `runs/<pr>-<model>/*.json.gz` (one per GPU run, compare_tf9 format), `ref-<model>.json.gz`, `ab-*.jsonl` (each process: stamp, environment, load, temperatures, provenance line), `validate*.json*`, `teacher-*.json`, `gate-*.txt|json`, `perop/`.
-- Host: `host.txt`, `wheels.txt`, `commits.txt`, `model-sha256.txt`.
+- Host: `host.txt`, `wheels.txt`, `commits.txt` (the first round's builds), `wheels-all.txt`, `commits-all.txt` (every build used on 2026-11-02, including the profiling builds `dp2` and `dp6` for the per-op kernel lists and the narrowed #316 builds `p1n`/`dp1n`), `model-sha256.txt`.
