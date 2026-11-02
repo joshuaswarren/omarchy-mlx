@@ -217,3 +217,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 MIT, see [LICENSE](LICENSE). Prepared MLX source keeps Apple's MIT
 license and copyright notices. Other bundled components keep their
 own notices under [LICENSES](LICENSES). Not affiliated with Apple.
+
+## Contributors
+
+Everyone credited so far: [CONTRIBUTORS.md](CONTRIBUTORS.md).
