@@ -15461,6 +15461,14 @@ void RoPE::eval_gpu(
       // the input binding.
       binding(norm_weight)};
   omarchy::ComputeKernel kernel;
+  // The half-split form (flags bits 1 traditional and 3 passthrough clear)
+  // has builds with the other branches folded away: the general kernel's
+  // code size dominates a decode-sized RoPE on G16 (Apple M4), which
+  // fetches a short kernel's code cold at each dispatch.
+  static const bool half_split_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT");
+  const bool half_split =
+      !half_split_disabled && (params.flags & 0xau) == 0u;
   if (fuse_norm) {
     // row_length rides reduce_size (== D) and the row count is B*N*T; the
     // shared shape guard keeps the fused kernel's row-reduction order
@@ -15472,8 +15480,14 @@ void RoPE::eval_gpu(
         ? omarchy::ComputeKernel::FastRopeNormAppleBF16
         : omarchy::ComputeKernel::FastRopeNormBF16;
   } else if (direct_bf16) {
-    kernel = with_freqs ? omarchy::ComputeKernel::FastRopeFreqsBF16
-                        : omarchy::ComputeKernel::FastRopeBF16;
+    kernel = half_split
+        ? (with_freqs ? omarchy::ComputeKernel::FastRopeFreqsHalfSplitBF16
+                      : omarchy::ComputeKernel::FastRopeHalfSplitBF16)
+        : (with_freqs ? omarchy::ComputeKernel::FastRopeFreqsBF16
+                      : omarchy::ComputeKernel::FastRopeBF16);
+  } else if (half_split && rope_output.dtype() == float16) {
+    kernel = with_freqs ? omarchy::ComputeKernel::FastRopeFreqsHalfSplitF16
+                        : omarchy::ComputeKernel::FastRopeHalfSplitF16;
   } else {
     kernel = select_float_kernel(
         rope_output.dtype(),

@@ -28,6 +28,7 @@
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/cpu/device_info.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -4186,6 +4187,74 @@ TEST_CASE("fused rope_rms_norm writes every row past the one-dispatch clamp") {
       INFO("fused rope_rms_norm row ", r, " col ", c, ": ", pg[c],
            " vs composed ", pw[c]);
       CHECK_EQ(pg[c], pw[c]);
+    }
+  }
+}
+
+// Route pin for the half-split builds (fast_rope.comp -DROPE_HALF_SPLIT_ONLY):
+// a forward RoPE whose flags select the half-split form (neither traditional
+// nor passthrough) with bf16 or f16 output runs FastRope{,Freqs}HalfSplit*,
+// and the traditional and passthrough forms keep the general builds. The
+// values are pinned by the bit-for-bit and f64 cases above, which run
+// through the same dispatch.
+TEST_CASE("fused rope half-split form runs the half-split builds") {
+  if (!compute_available()) {
+    return;
+  }
+  if (omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT")) {
+    skip("MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1 keeps the general builds");
+    return;
+  }
+  using K = omarchy::ComputeKernel;
+  Stream stream = gpu_stream();
+  array offset = array(5, int32);
+  array freqs = exp(
+      multiply(
+          arange(0, -8, -1, float32, stream),
+          array(std::log(10000.0f) / 8, float32),
+          stream),
+      stream);
+  eval({offset, freqs});
+  for (auto dtype : {float16, bfloat16}) {
+    for (bool traditional : {false, true}) {
+      for (bool with_freqs : {false, true}) {
+        for (int dims : {16, 8}) {
+          if (with_freqs && dims != 16) {
+            continue;
+          }
+          Shape shape{1, 4, 1, 16};
+          array x = astype(rope_input(shape, 307), dtype, stream);
+          eval(x);
+          omarchy::get_command_encoder(stream).synchronize();
+          array out = fast::rope(
+              x,
+              dims,
+              traditional,
+              with_freqs ? std::nullopt : std::optional<float>(10000.0f),
+              1.0f,
+              offset,
+              with_freqs ? std::optional<array>(freqs) : std::nullopt,
+              stream);
+          out.eval();
+          omarchy::get_command_encoder(stream).synchronize();
+          const int64_t dispatched =
+              omarchy::trace::counters().last_dispatched_kernel.load();
+          const bool half_split = !traditional && dims == 16;
+          const bool bf16 = dtype == bfloat16;
+          K expected = half_split
+              ? (with_freqs
+                     ? (bf16 ? K::FastRopeFreqsHalfSplitBF16
+                             : K::FastRopeFreqsHalfSplitF16)
+                     : (bf16 ? K::FastRopeHalfSplitBF16
+                             : K::FastRopeHalfSplitF16))
+              : (with_freqs ? (bf16 ? K::FastRopeFreqsBF16 : K::FastRopeFreqsF16)
+                            : (bf16 ? K::FastRopeBF16 : K::FastRopeF16));
+          INFO("dtype=" << (bf16 ? "bf16" : "f16")
+                        << " traditional=" << traditional
+                        << " freqs=" << with_freqs << " dims=" << dims);
+          CHECK_EQ(dispatched, static_cast<int64_t>(expected));
+        }
+      }
     }
   }
 }

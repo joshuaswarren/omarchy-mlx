@@ -1072,6 +1072,14 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1R4BF16Hd256,
   SdpaDecodeSplitP1R8BF16Hd256,
   SdpaDecodeSplitP2BF16Hd256,
+  // FastRope{,Freqs}{BF16,F16} built with only the half-split branch
+  // (shaders/fast_rope.comp -DROPE_HALF_SPLIT_ONLY): decode RoPE, whose
+  // cost on G16 follows code size. Appended to keep profile kernel ids
+  // stable.
+  FastRopeHalfSplitBF16,
+  FastRopeHalfSplitF16,
+  FastRopeFreqsHalfSplitF16,
+  FastRopeFreqsHalfSplitBF16,
   Count,
 };
 

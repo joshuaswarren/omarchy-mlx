@@ -249,6 +249,10 @@
 #include "fused_chain_f16.h"
 #include "fused_chain_bf16.h"
 #include "fast_rope_bf16.h"
+#include "fast_rope_halfsplit_bf16.h"
+#include "fast_rope_halfsplit_f16.h"
+#include "fast_rope_freqs_halfsplit_f16.h"
+#include "fast_rope_freqs_halfsplit_bf16.h"
 #include "fast_rope_f16.h"
 #include "fast_rope_f32.h"
 #include "fast_rope_freqs_bf16.h"
@@ -1253,6 +1257,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rope_f16, fast_rope_f16_size};
     case ComputeKernel::FastRopeBF16:
       return {fast_rope_bf16, fast_rope_bf16_size};
+    case ComputeKernel::FastRopeHalfSplitBF16:
+      return {fast_rope_halfsplit_bf16, fast_rope_halfsplit_bf16_size};
+    case ComputeKernel::FastRopeHalfSplitF16:
+      return {fast_rope_halfsplit_f16, fast_rope_halfsplit_f16_size};
+    case ComputeKernel::FastRopeFreqsHalfSplitF16:
+      return {fast_rope_freqs_halfsplit_f16, fast_rope_freqs_halfsplit_f16_size};
+    case ComputeKernel::FastRopeFreqsHalfSplitBF16:
+      return {fast_rope_freqs_halfsplit_bf16, fast_rope_freqs_halfsplit_bf16_size};
     case ComputeKernel::FastRopeFreqsF32:
       return {fast_rope_freqs_f32, fast_rope_freqs_f32_size};
     case ComputeKernel::FastRopeFreqsF16:
