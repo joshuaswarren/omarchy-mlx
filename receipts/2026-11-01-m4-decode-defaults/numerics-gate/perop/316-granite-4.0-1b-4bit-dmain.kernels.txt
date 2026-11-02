@@ -1,0 +1,9 @@
+end: {"k": "end", "t": 5935693526366, "dispatches": 702, "dropped": 0, "submissions": 360, "joins": 1, "barriers": 834, "barriers_skipped": 228}
+    322 CastBF16F32
+     72 FastRmsNormAppleBF16
+     72 QmmVecQ4MultiSubgroupBF16
+     72 QmmVecQ4WordSubgroupBF16
+     72 FastRopeBF16
+     36 SwigluBF16
+     36 ElementwiseLiteBF16
+     18 CastF32BF16

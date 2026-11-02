@@ -1,0 +1,1222 @@
+{
+ "gate": {
+  "positions": 5120,
+  "reference_ppl": 7.406372848726922,
+  "reference": {
+   "reference": "stock upstream MLX, CPU stream, float32",
+   "mlx": "0.32.3",
+   "mlx_cpu": "0.32.3",
+   "mlx_lm": "0.31.3",
+   "chunk": 64
+  },
+  "baseline_agree_with_ties_median_pct": 100.0,
+  "baseline_agree_with_ties_wilson_low_pct": 99.9250250046762,
+  "candidate_agree_with_ties_median_pct": 100.0,
+  "check2_token_choices": true,
+  "baseline_ppl_dev_median": 5.2364822476807366e-05,
+  "baseline_ppl_noise": 0.0,
+  "candidate_ppl_dev_median": 0.0002250825054943122,
+  "check3_perplexity": false,
+  "old_vs_new_top1_same": 5089,
+  "old_vs_new_top1_pct": 99.39453125
+ },
+ "baseline_runs": [
+  {
+   "file": "s1-a69d9e6-1793646585442968645.json",
+   "commit": "a69d9e6",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5092,
+   "agree_pct": 99.453125,
+   "flips": 28,
+   "near_ties": 28,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.064,
+    0.24,
+    1.12,
+    0.274,
+    0.964,
+    0.417,
+    0.0,
+    0.389,
+    0.236,
+    0.022,
+    0.075,
+    0.263,
+    0.231,
+    0.375,
+    0.116,
+    0.288,
+    0.11,
+    0.027,
+    0.171,
+    0.006,
+    0.06,
+    1.355,
+    0.008,
+    0.804,
+    0.815,
+    0.003,
+    0.984
+   ],
+   "ppl": 7.405985025481738,
+   "ppl_dev": 5.2364822476807366e-05,
+   "mean_abs_dlogprob": 0.011557767260819673,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 4.902805673708514
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.814355371463086
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.201127727700632
+    },
+    {
+     "segment": 3,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.548632028113643
+    },
+    {
+     "segment": 4,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 11.291907127789898
+    },
+    {
+     "segment": 5,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 7.219995919011821
+    },
+    {
+     "segment": 6,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.232893210955494
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.337262137585748
+    },
+    {
+     "segment": 8,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 4.001554418891824
+    },
+    {
+     "segment": 9,
+     "agree": 507,
+     "flips": 5,
+     "near_ties": 5,
+     "ppl": 5.07835971830272
+    }
+   ]
+  },
+  {
+   "file": "s1-a69d9e6-1793647034673832469.json",
+   "commit": "a69d9e6",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5092,
+   "agree_pct": 99.453125,
+   "flips": 28,
+   "near_ties": 28,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.064,
+    0.24,
+    1.12,
+    0.274,
+    0.964,
+    0.417,
+    0.0,
+    0.389,
+    0.236,
+    0.022,
+    0.075,
+    0.263,
+    0.231,
+    0.375,
+    0.116,
+    0.288,
+    0.11,
+    0.027,
+    0.171,
+    0.006,
+    0.06,
+    1.355,
+    0.008,
+    0.804,
+    0.815,
+    0.003,
+    0.984
+   ],
+   "ppl": 7.405985025481738,
+   "ppl_dev": 5.2364822476807366e-05,
+   "mean_abs_dlogprob": 0.011557767260819673,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 4.902805673708514
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.814355371463086
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.201127727700632
+    },
+    {
+     "segment": 3,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.548632028113643
+    },
+    {
+     "segment": 4,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 11.291907127789898
+    },
+    {
+     "segment": 5,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 7.219995919011821
+    },
+    {
+     "segment": 6,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.232893210955494
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.337262137585748
+    },
+    {
+     "segment": 8,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 4.001554418891824
+    },
+    {
+     "segment": 9,
+     "agree": 507,
+     "flips": 5,
+     "near_ties": 5,
+     "ppl": 5.07835971830272
+    }
+   ]
+  },
+  {
+   "file": "s1-a69d9e6-1793647154780874001.json",
+   "commit": "a69d9e6",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5092,
+   "agree_pct": 99.453125,
+   "flips": 28,
+   "near_ties": 28,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.064,
+    0.24,
+    1.12,
+    0.274,
+    0.964,
+    0.417,
+    0.0,
+    0.389,
+    0.236,
+    0.022,
+    0.075,
+    0.263,
+    0.231,
+    0.375,
+    0.116,
+    0.288,
+    0.11,
+    0.027,
+    0.171,
+    0.006,
+    0.06,
+    1.355,
+    0.008,
+    0.804,
+    0.815,
+    0.003,
+    0.984
+   ],
+   "ppl": 7.405985025481738,
+   "ppl_dev": 5.2364822476807366e-05,
+   "mean_abs_dlogprob": 0.011557767260819673,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 4.902805673708514
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.814355371463086
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.201127727700632
+    },
+    {
+     "segment": 3,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.548632028113643
+    },
+    {
+     "segment": 4,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 11.291907127789898
+    },
+    {
+     "segment": 5,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 7.219995919011821
+    },
+    {
+     "segment": 6,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.232893210955494
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.337262137585748
+    },
+    {
+     "segment": 8,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 4.001554418891824
+    },
+    {
+     "segment": 9,
+     "agree": 507,
+     "flips": 5,
+     "near_ties": 5,
+     "ppl": 5.07835971830272
+    }
+   ]
+  },
+  {
+   "file": "s1-a69d9e6-1793647595703127567.json",
+   "commit": "a69d9e6",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5092,
+   "agree_pct": 99.453125,
+   "flips": 28,
+   "near_ties": 28,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.064,
+    0.24,
+    1.12,
+    0.274,
+    0.964,
+    0.417,
+    0.0,
+    0.389,
+    0.236,
+    0.022,
+    0.075,
+    0.263,
+    0.231,
+    0.375,
+    0.116,
+    0.288,
+    0.11,
+    0.027,
+    0.171,
+    0.006,
+    0.06,
+    1.355,
+    0.008,
+    0.804,
+    0.815,
+    0.003,
+    0.984
+   ],
+   "ppl": 7.405985025481738,
+   "ppl_dev": 5.2364822476807366e-05,
+   "mean_abs_dlogprob": 0.011557767260819673,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 4.902805673708514
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.814355371463086
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.201127727700632
+    },
+    {
+     "segment": 3,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.548632028113643
+    },
+    {
+     "segment": 4,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 11.291907127789898
+    },
+    {
+     "segment": 5,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 7.219995919011821
+    },
+    {
+     "segment": 6,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.232893210955494
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.337262137585748
+    },
+    {
+     "segment": 8,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 4.001554418891824
+    },
+    {
+     "segment": 9,
+     "agree": 507,
+     "flips": 5,
+     "near_ties": 5,
+     "ppl": 5.07835971830272
+    }
+   ]
+  },
+  {
+   "file": "s1-a69d9e6-1793647747702512645.json",
+   "commit": "a69d9e6",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5092,
+   "agree_pct": 99.453125,
+   "flips": 28,
+   "near_ties": 28,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.064,
+    0.24,
+    1.12,
+    0.274,
+    0.964,
+    0.417,
+    0.0,
+    0.389,
+    0.236,
+    0.022,
+    0.075,
+    0.263,
+    0.231,
+    0.375,
+    0.116,
+    0.288,
+    0.11,
+    0.027,
+    0.171,
+    0.006,
+    0.06,
+    1.355,
+    0.008,
+    0.804,
+    0.815,
+    0.003,
+    0.984
+   ],
+   "ppl": 7.405985025481738,
+   "ppl_dev": 5.2364822476807366e-05,
+   "mean_abs_dlogprob": 0.011557767260819673,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 4.902805673708514
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.814355371463086
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.201127727700632
+    },
+    {
+     "segment": 3,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.548632028113643
+    },
+    {
+     "segment": 4,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 11.291907127789898
+    },
+    {
+     "segment": 5,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 7.219995919011821
+    },
+    {
+     "segment": 6,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 9.232893210955494
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.337262137585748
+    },
+    {
+     "segment": 8,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 4.001554418891824
+    },
+    {
+     "segment": 9,
+     "agree": 507,
+     "flips": 5,
+     "near_ties": 5,
+     "ppl": 5.07835971830272
+    }
+   ]
+  }
+ ],
+ "candidate_runs": [
+  {
+   "file": "s1-34d0153-1793646728439638236.json",
+   "commit": "34d0153",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5093,
+   "agree_pct": 99.47265625,
+   "flips": 27,
+   "near_ties": 27,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.24,
+    0.265,
+    1.12,
+    0.059,
+    0.135,
+    0.042,
+    0.274,
+    0.086,
+    0.417,
+    0.334,
+    0.669,
+    0.389,
+    0.022,
+    0.273,
+    0.05,
+    0.224,
+    0.171,
+    0.181,
+    0.06,
+    0.605,
+    0.109,
+    1.161,
+    0.062,
+    0.804,
+    0.815,
+    0.003
+   ],
+   "ppl": 7.404705991366758,
+   "ppl_dev": 0.0002250825054943122,
+   "mean_abs_dlogprob": 0.012100252229720354,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 505,
+     "flips": 7,
+     "near_ties": 7,
+     "ppl": 4.901679493893855
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.80298867646577
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.205665777839267
+    },
+    {
+     "segment": 3,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 9.552754187503794
+    },
+    {
+     "segment": 4,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 11.286838116285743
+    },
+    {
+     "segment": 5,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 7.221496191310645
+    },
+    {
+     "segment": 6,
+     "agree": 510,
+     "flips": 2,
+     "near_ties": 2,
+     "ppl": 9.222979887543422
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.336709264082707
+    },
+    {
+     "segment": 8,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 4.0012528626189665
+    },
+    {
+     "segment": 9,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 5.082554677008905
+    }
+   ]
+  },
+  {
+   "file": "s1-34d0153-1793646876367631619.json",
+   "commit": "34d0153",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5093,
+   "agree_pct": 99.47265625,
+   "flips": 27,
+   "near_ties": 27,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.24,
+    0.265,
+    1.12,
+    0.059,
+    0.135,
+    0.042,
+    0.274,
+    0.086,
+    0.417,
+    0.334,
+    0.669,
+    0.389,
+    0.022,
+    0.273,
+    0.05,
+    0.224,
+    0.171,
+    0.181,
+    0.06,
+    0.605,
+    0.109,
+    1.161,
+    0.062,
+    0.804,
+    0.815,
+    0.003
+   ],
+   "ppl": 7.404705991366758,
+   "ppl_dev": 0.0002250825054943122,
+   "mean_abs_dlogprob": 0.012100252229720354,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 505,
+     "flips": 7,
+     "near_ties": 7,
+     "ppl": 4.901679493893855
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.80298867646577
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.205665777839267
+    },
+    {
+     "segment": 3,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 9.552754187503794
+    },
+    {
+     "segment": 4,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 11.286838116285743
+    },
+    {
+     "segment": 5,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 7.221496191310645
+    },
+    {
+     "segment": 6,
+     "agree": 510,
+     "flips": 2,
+     "near_ties": 2,
+     "ppl": 9.222979887543422
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.336709264082707
+    },
+    {
+     "segment": 8,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 4.0012528626189665
+    },
+    {
+     "segment": 9,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 5.082554677008905
+    }
+   ]
+  },
+  {
+   "file": "s1-34d0153-1793647301599628856.json",
+   "commit": "34d0153",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5093,
+   "agree_pct": 99.47265625,
+   "flips": 27,
+   "near_ties": 27,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.24,
+    0.265,
+    1.12,
+    0.059,
+    0.135,
+    0.042,
+    0.274,
+    0.086,
+    0.417,
+    0.334,
+    0.669,
+    0.389,
+    0.022,
+    0.273,
+    0.05,
+    0.224,
+    0.171,
+    0.181,
+    0.06,
+    0.605,
+    0.109,
+    1.161,
+    0.062,
+    0.804,
+    0.815,
+    0.003
+   ],
+   "ppl": 7.404705991366758,
+   "ppl_dev": 0.0002250825054943122,
+   "mean_abs_dlogprob": 0.012100252229720354,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 505,
+     "flips": 7,
+     "near_ties": 7,
+     "ppl": 4.901679493893855
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.80298867646577
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.205665777839267
+    },
+    {
+     "segment": 3,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 9.552754187503794
+    },
+    {
+     "segment": 4,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 11.286838116285743
+    },
+    {
+     "segment": 5,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 7.221496191310645
+    },
+    {
+     "segment": 6,
+     "agree": 510,
+     "flips": 2,
+     "near_ties": 2,
+     "ppl": 9.222979887543422
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.336709264082707
+    },
+    {
+     "segment": 8,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 4.0012528626189665
+    },
+    {
+     "segment": 9,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 5.082554677008905
+    }
+   ]
+  },
+  {
+   "file": "s1-34d0153-1793647445231301527.json",
+   "commit": "34d0153",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5093,
+   "agree_pct": 99.47265625,
+   "flips": 27,
+   "near_ties": 27,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.24,
+    0.265,
+    1.12,
+    0.059,
+    0.135,
+    0.042,
+    0.274,
+    0.086,
+    0.417,
+    0.334,
+    0.669,
+    0.389,
+    0.022,
+    0.273,
+    0.05,
+    0.224,
+    0.171,
+    0.181,
+    0.06,
+    0.605,
+    0.109,
+    1.161,
+    0.062,
+    0.804,
+    0.815,
+    0.003
+   ],
+   "ppl": 7.404705991366758,
+   "ppl_dev": 0.0002250825054943122,
+   "mean_abs_dlogprob": 0.012100252229720354,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 505,
+     "flips": 7,
+     "near_ties": 7,
+     "ppl": 4.901679493893855
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.80298867646577
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.205665777839267
+    },
+    {
+     "segment": 3,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 9.552754187503794
+    },
+    {
+     "segment": 4,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 11.286838116285743
+    },
+    {
+     "segment": 5,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 7.221496191310645
+    },
+    {
+     "segment": 6,
+     "agree": 510,
+     "flips": 2,
+     "near_ties": 2,
+     "ppl": 9.222979887543422
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.336709264082707
+    },
+    {
+     "segment": 8,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 4.0012528626189665
+    },
+    {
+     "segment": 9,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 5.082554677008905
+    }
+   ]
+  },
+  {
+   "file": "s1-34d0153-1793647874085128485.json",
+   "commit": "34d0153",
+   "chunk": 1,
+   "env": {
+    "AGX_APPLE9_MAX_SHARED": "32768",
+    "MLX_OMARCHY_BATCH_WORK": "120000"
+   },
+   "agree": 5093,
+   "agree_pct": 99.47265625,
+   "flips": 27,
+   "near_ties": 27,
+   "agree_with_ties": 5120,
+   "agree_with_ties_pct": 100.0,
+   "flip_margins_bf16_ulp": [
+    0.263,
+    0.24,
+    0.265,
+    1.12,
+    0.059,
+    0.135,
+    0.042,
+    0.274,
+    0.086,
+    0.417,
+    0.334,
+    0.669,
+    0.389,
+    0.022,
+    0.273,
+    0.05,
+    0.224,
+    0.171,
+    0.181,
+    0.06,
+    0.605,
+    0.109,
+    1.161,
+    0.062,
+    0.804,
+    0.815,
+    0.003
+   ],
+   "ppl": 7.404705991366758,
+   "ppl_dev": 0.0002250825054943122,
+   "mean_abs_dlogprob": 0.012100252229720354,
+   "per_segment": [
+    {
+     "segment": 0,
+     "agree": 505,
+     "flips": 7,
+     "near_ties": 7,
+     "ppl": 4.901679493893855
+    },
+    {
+     "segment": 1,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 6.80298867646577
+    },
+    {
+     "segment": 2,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 12.205665777839267
+    },
+    {
+     "segment": 3,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 9.552754187503794
+    },
+    {
+     "segment": 4,
+     "agree": 511,
+     "flips": 1,
+     "near_ties": 1,
+     "ppl": 11.286838116285743
+    },
+    {
+     "segment": 5,
+     "agree": 512,
+     "flips": 0,
+     "near_ties": 0,
+     "ppl": 7.221496191310645
+    },
+    {
+     "segment": 6,
+     "agree": 510,
+     "flips": 2,
+     "near_ties": 2,
+     "ppl": 9.222979887543422
+    },
+    {
+     "segment": 7,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 8.336709264082707
+    },
+    {
+     "segment": 8,
+     "agree": 509,
+     "flips": 3,
+     "near_ties": 3,
+     "ppl": 4.0012528626189665
+    },
+    {
+     "segment": 9,
+     "agree": 508,
+     "flips": 4,
+     "near_ties": 4,
+     "ppl": 5.082554677008905
+    }
+   ]
+  }
+ ]
+}
