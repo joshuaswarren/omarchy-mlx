@@ -28,6 +28,13 @@ constexpr uint64_t kAneDriverAbiMajor = 1;
 constexpr uint64_t kAneDriverAbiMajorAbl = 2;
 constexpr const char* kAneCompilerTargetH13 = "h13";
 constexpr const char* kAneCompilerTargetH14 = "h14";
+// Schema 5 is the HWX sibling of schema 4 for ABI version 3 (H16, the
+// in-kernel accel/ane H16_LOAD/H16_EXEC path): programs are original HWX
+// files, bindings name H16 surfaces instead of libane channels, and the only
+// target/ABI pair is h16g <-> 3. Schema 4 keeps its own pairs unchanged.
+constexpr int kAneManifestVersionHwx = 5;
+constexpr uint64_t kAneDriverAbiMajorH16 = 3;
+constexpr const char* kAneCompilerTargetH16G = "h16g";
 
 struct AneTensor {
   std::string name;
@@ -49,6 +56,8 @@ struct AneLogicalResult {
 
 struct AneProgramBinding {
   std::string tensor;
+  // Schema 4: the libane channel index. Schema 5: the H16 surface index in
+  // HWX segment order (the order H16_LOAD reports), from the "surface" key.
   uint64_t channel{0};
   // Raw staging: selector-addressed surface; staged bytes move to and from
   // the channel verbatim (no dense<->tile placement). Whole-program
@@ -99,6 +108,7 @@ struct AneReleaseAsset {
 };
 
 struct AneManifest {
+  // kAneManifestVersion (ANEC programs) or kAneManifestVersionHwx (HWX).
   int manifest_version{0};
   uint64_t tile_shift{kAneTileShiftDefault};
   std::string name;
