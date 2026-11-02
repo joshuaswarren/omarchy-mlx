@@ -43,6 +43,19 @@ This is not an all-green battery. On this host `main` fails 34 of 762 cases and 
 
 `prefill_bench.py <repo> <n> 4`: fixed synthetic prompt, fresh cache, one warm-up then 4 timed full forwards, median. Decode does not take this route: granite-4.0-1b-4bit 38.78 -> 38.80 tok/s with identical token ids (`decode_bench.py <repo> 64 4`).
 
+Current head (`perf-p6h-summary.txt`, raw `perf-p6h.jsonl`, `scripts/speed321h.sh`, run 2026-11-02 23:07 to 23:32 UTC): the same cells re-measured on the head's code commit `89b54a0` against `main` `a69d9e6`, with the same protocol (two interleaved pairs, load below 0.5 and 20 s idle before each process). Two cells were added with the driver's default, where the cooperative matrix is exposed and this route is not taken, as a no-regression check. Every process exited 0 with no new GPU driver error.
+
+| cell | A main | B `89b54a0` | B/A | argmax or token ids |
+|---|---:|---:|---:|---|
+| granite prefill 128, matrix hidden | 21.5 | 181.75 | 8.45 | equal |
+| granite prefill 512, matrix hidden | 21.1 | 171.9 | 8.15 | equal |
+| Qwen3.5-2B prefill 512, matrix hidden | 15.7 | 63.55 | 4.05 | equal |
+| granite decode 64, matrix hidden | 38.80 | 38.80 | 1.000 | identical |
+| granite prefill 512, driver default | 374.75 | 374.8 | 1.000 | equal |
+| granite decode 64, driver default | 38.855 | 38.855 | 1.000 | identical |
+
+The head's numbers match the `95a3849` measurement above in every shared cell. With the driver's default the route is not taken, and prefill and decode are unchanged.
+
 Kernel (`qmmfma-arms.jsonl`, `qmm_fma_bits.py` timing, 5 calls per case): the FMA build runs 709 to 842 GFLOP/s at 512 to 1500 rows (N 1000 to 3072, K 1024 or 2048) against 69 to 72 for the tile kernel, 243 to 565 against 60 to 69 at 64 to 130 rows, and 18 to 44 against 11 to 19 at 5 rows; both arms compare bit-identical to `main`'s tile dump.
 
 ## Device reopen
@@ -65,4 +78,4 @@ The passes are 64 tokens, not S=1, because this route runs only on multi-row pas
 
 ## Files
 
-`host.txt`, `wheels.txt`, `battery.txt`, `bits-p6-vs-main.log`, `bits-selftest.log`, `qmmfma-arms.jsonl`, `qmmfma-fma.log`, `qmmfma-tile.log`, `engage-qmm_fma-kernels.txt`, `perf-p6.jsonl`, `perf-p6-summary.txt`, `reopen.log`, `numerics-gate/`, `scripts/`, `SHA256SUMS`.
+`host.txt`, `wheels.txt`, `battery.txt`, `bits-p6-vs-main.log`, `bits-selftest.log`, `qmmfma-arms.jsonl`, `qmmfma-fma.log`, `qmmfma-tile.log`, `engage-qmm_fma-kernels.txt`, `perf-p6.jsonl`, `perf-p6-summary.txt`, `perf-p6h.jsonl`, `perf-p6h-summary.txt`, `reopen.log`, `numerics-gate/`, `scripts/`, `SHA256SUMS`.
