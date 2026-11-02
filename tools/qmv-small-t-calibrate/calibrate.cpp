@@ -111,7 +111,8 @@ void clean_route_environment() {
 void run_case(unsigned k, unsigned n, unsigned t, const fs::path& out, Stream stream) {
   auto& encoder = om::get_command_encoder(stream);
   const auto block_plan = calibration::plan(k, n, t, guard, guard);
-  random::seed(7919u * k + 31u * n + 101u * t);
+  const uint32_t rng_seed = 7919u * k + 31u * n + 101u * t;
+  random::seed(rng_seed);
   auto w = multiply(random::normal(Shape{int(n), int(k)}, float32,
                                    std::nullopt, stream), array(0.05f), stream);
   auto q = quantize(w, 64, 4, "affine", std::nullopt, stream);
@@ -192,7 +193,8 @@ void run_case(unsigned k, unsigned n, unsigned t, const fs::path& out, Stream st
   result.precision(17);
   result << "{\"purpose\":\"calibration_only\",\"production_engagement\":false,"
                "\"arm\":\"" << calibration::arm << "\",\"k\":" << k
-            << ",\"n\":" << n << ",\"t\":" << t << ",\"seed\":0,\"two_word\":"
+            << ",\"n\":" << n << ",\"t\":" << t << ",\"dataset_seed\":0,\"rng_seed\":"
+            << rng_seed << ",\"two_word\":"
             << (calibration::two_word(k, n) ? "true" : "false")
             << ",\"differing_bf16_elements\":" << differing
             << ",\"x_shape\":[1," << t << ',' << k << "],\"wq_shape\":["
@@ -200,6 +202,7 @@ void run_case(unsigned k, unsigned n, unsigned t, const fs::path& out, Stream st
             << "],\"x_scales_biases_dtype\":\"bfloat16\",\"wq_dtype\":\"uint32\","
                "\"layout\":\"row_major\",\"lhs_base_elements\":8,\"output_guard_elements\":8,"
                "\"timing\":\"paired_host_wall_with_sync_and_output_copy\","
+               "\"direct_arm_canary_overhead_included\":true,"
                "\"rounds\":[";
   for (unsigned round = 0; round < 3; ++round) {
     double times[2]{};
