@@ -584,4 +584,13 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) and the trio (MLX_OMARCHY_FUSED_TRIO) with the variable unset: the parts where both
+// routes default off because the per-node GEMV and the standalone trio kernels were measured faster than the fused groups:
+//   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-decode-defaults.
+// Keyed on the device name so an unmeasured part keeps both routes on; callers pass the executing device's name
+// (fused_route_enabled). An explicit setting of either variable wins. Pure.
+inline bool fused_decode_off_default_part(const std::string& device_name) {
+  return device_name.find("G16G") != std::string::npos;
+}
+
 } // namespace mlx::core::omarchy

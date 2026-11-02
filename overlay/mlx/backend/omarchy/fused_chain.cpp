@@ -556,7 +556,7 @@ void dispatch_chain(
     params.operation = chain.leaf_offsets[leaves->first];
     params.lhs_size = chain.leaf_offsets[leaves->second];
     params.rhs_size = materialize_nodes ? 1u : 0u;
-    if (out.dtype() == float16 && fused_trio_enabled()) {
+    if (out.dtype() == float16 && fused_trio_enabled(encoder.device())) {
       // The trio pipeline keeps the same near-copied swiglu arithmetic
       // on the shared decode pipeline; out rides binding 4 and the
       // materialized intermediates bindings 5/6 (the fast_trio.comp
@@ -1148,6 +1148,27 @@ DirectPlan plan_values_window(
   return plan;
 }
 
+// The device that executes a tape node: its primitive's stream decides,
+// not the default device index. Nodes on a CPU stream have none, and no
+// fused route plans them.
+const Device* stream_device(const array& node) {
+  const Stream& stream = node.primitive().stream();
+  if (stream.device.type != mlx::core::Device::gpu) {
+    return nullptr;
+  }
+  return &device(stream.device.index);
+}
+
+bool node_gemv_enabled(const array& node) {
+  const Device* d = stream_device(node);
+  return d != nullptr && fused_gemv_enabled(*d);
+}
+
+bool node_trio_enabled(const array& node) {
+  const Device* d = stream_device(node);
+  return d != nullptr && fused_trio_enabled(*d);
+}
+
 } // namespace
 
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
@@ -1224,7 +1245,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         claimed.count(inner->id()) || claimed.count(sigmoid->id())) {
       continue;
     }
-    if (up != nullptr && fused_gemv_swiglu_enabled() &&
+    if (up != nullptr && stream_device(tail) != nullptr &&
+        fused_gemv_swiglu_enabled(*stream_device(tail)) &&
         tail.dtype() != float32) {
       swiglu_plans.push_back(SwigluPlan{
           gate.id(), up->id(), sigmoid->id(), inner->id(), tail});
@@ -1305,11 +1327,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     ++i;
   }
 
-  if (!fused_gemv_enabled()) {
-    return;
-  }
-
-  // Decode GEMV groups. Candidates: affine transposed 4-bit/group-64
+  // Decode GEMV groups (per node: MLX_OMARCHY_FUSED_GEMV for the device
+  // that executes the node; the trio plan below does not depend on it). Candidates: affine transposed 4-bit/group-64
   // QuantizedMatmul nodes whose x is a single row and whose weight,
   // scale, and bias inputs were evaluated before this eval began (the
   // group dispatches when its FIRST member evaluates, so a later
@@ -1331,7 +1350,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   std::vector<std::uintptr_t> x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(QuantizedMatmul)) ||
-        node.inputs().size() != 4 || claimed.count(node.id())) {
+        node.inputs().size() != 4 || claimed.count(node.id()) ||
+        !node_gemv_enabled(node)) {
       continue;
     }
     auto [group_size, bits, mode, transpose] =
@@ -1349,7 +1369,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
                 static_cast<size_t>(x.shape(-1))) {
       continue;
     }
-    if (x.shape(-2) > 1 && !gemv_token_multi_enabled()) {
+    if (x.shape(-2) > 1 && !gemv_token_multi_enabled(*stream_device(node))) {
       continue;
     }
     // The multi-token Add epilogue fold has one deterministic divergence
@@ -1579,7 +1599,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   std::vector<std::uintptr_t> dense_x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(Matmul)) || node.inputs().size() != 2 ||
-        node.dtype() != bfloat16 || claimed.count(node.id())) {
+        node.dtype() != bfloat16 || claimed.count(node.id()) ||
+        !node_gemv_enabled(node)) {
       continue;
     }
     const array& x = node.inputs()[0];
@@ -1622,8 +1643,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // both producers store their rows straight into the updated cache
   // copies and the merged pair dispatch is deleted. Any structural
   // mismatch keeps the ordinary plan; runtime aborts unwind to it as
-  // well.
-  if (kv_direct_enabled()) {
+  // well. The values side is a GEMV group, so there is nothing to plan
+  // without one.
+  if (kv_direct_enabled() &&
+      (!state->gemv_groups.empty() || !state->dense_gemv_groups.empty())) {
     for (size_t index = 0; index < state->slice_update_pairs.size();
          ++index) {
       auto& pair = state->slice_update_pairs[index];
@@ -1742,7 +1765,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // and both nodes take the ordinary RoPE path unchanged.
   // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
   // not by this f16-only rope-pair plan.)
-  if (fused_trio_enabled()) {
+  // Per node: MLX_OMARCHY_FUSED_TRIO for the device that executes it,
+  // independent of MLX_OMARCHY_FUSED_GEMV.
+  {
     RopePairScanTrace trace;
     // The RoPE nodes of one decode step are NOT tape-adjacent: each
     // rope call materializes its scalar offset between them and the
@@ -1750,7 +1775,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // tape order and pair consecutive members (query, key).
     std::vector<const array*> rope_nodes;
     for (const auto& node : tape) {
-      if (!is_op(&node, typeid(fast::RoPE))) {
+      if (!is_op(&node, typeid(fast::RoPE)) || !node_trio_enabled(node)) {
         continue;
       }
       if (node.inputs().size() != 2) {
@@ -1885,16 +1910,25 @@ bool outgate_fold_enabled() {
   return !legacy_g13;
 }
 
-bool fused_gemv_enabled() {
-  return fused_chain_enabled() &&
-      (std::getenv("MLX_OMARCHY_FUSED_GEMV") == nullptr ||
-       env_flag("MLX_OMARCHY_FUSED_GEMV"));
+bool fused_route_enabled(const char* variable, const std::string& device_name) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  if (std::getenv(variable) != nullptr) {
+    return env_flag(variable);
+  }
+  return !fused_decode_off_default_part(device_name);
+}
+
+bool fused_gemv_enabled(const Device& device) {
+  return fused_route_enabled(
+      "MLX_OMARCHY_FUSED_GEMV", device.capabilities().device_name);
 }
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue off
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
-bool fused_gemv_swiglu_enabled() {
-  return fused_gemv_enabled() &&
+bool fused_gemv_swiglu_enabled(const Device& device) {
+  return fused_gemv_enabled(device) &&
       (std::getenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
        env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
 }
@@ -1902,16 +1936,15 @@ bool fused_gemv_swiglu_enabled() {
 // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1 opts the grouped GEMV planner into
 // rows 2..16 (the token column; OFF by default on AGX pending the
 // data-dependent divergence bisect).
-bool gemv_token_multi_enabled() {
+bool gemv_token_multi_enabled(const Device& device) {
   const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
-  return fused_gemv_enabled() && env != nullptr && env[0] != '\0' &&
+  return fused_gemv_enabled(device) && env != nullptr && env[0] != '\0' &&
       std::strcmp(env, "0") != 0;
 }
 
-bool fused_trio_enabled() {
-  return fused_chain_enabled() &&
-      (std::getenv("MLX_OMARCHY_FUSED_TRIO") == nullptr ||
-       env_flag("MLX_OMARCHY_FUSED_TRIO"));
+bool fused_trio_enabled(const Device& device) {
+  return fused_route_enabled(
+      "MLX_OMARCHY_FUSED_TRIO", device.capabilities().device_name);
 }
 
 bool kv_direct_enabled() {

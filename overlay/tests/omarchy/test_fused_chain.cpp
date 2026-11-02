@@ -16,16 +16,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/compile.h"
+#include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/random.h"
 #include "mlx/stream.h"
@@ -1501,22 +1506,43 @@ TEST_CASE("eager q4 decode gemv swiglu epilogue env gate off keeps the chain") {
     return std::vector<array>{
         g, u, multiply(multiply(g, sigmoid(g, stream), stream), u, stream)};
   };
+  // Each case names the GEMV route explicitly (1, 0, unset) or turns the
+  // master gate off, so the dispatch counts below measure the route the
+  // case asks for on every part.
+  auto run = [&](const char* gemv, const char* chain) {
+    if (gemv) {
+      setenv("MLX_OMARCHY_FUSED_GEMV", gemv, 1);
+    } else {
+      unsetenv("MLX_OMARCHY_FUSED_GEMV");
+    }
+    setenv("MLX_OMARCHY_FUSED_CHAIN", chain, 1);
+    auto out = forward();
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({out[2]});
+    sync_stream(stream);
+    return std::make_pair(
+        out[2], counters().vk_compute_dispatches.load() - before);
+  };
   setenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU", "0", 1);
-  auto candidate = forward();
-  uint64_t before = counters().vk_compute_dispatches.load();
-  eval({candidate[2]});
-  sync_stream(stream);
+  auto [on, n_on] = run("1", "1");
+  auto [off, n_off] = run("0", "1");
+  auto [unset, n_unset] = run(nullptr, "1");
+  auto [master_off, n_master_off] = run("1", "0");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  enable_fusion();
   // Gate/up group (1) plus the standalone swiglu chain (1): the fold
   // is off, so the chain dispatch exists and the projections keep
   // their own buffers.
-  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 2);
-  unsetenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
-  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
-  auto baseline = forward();
-  eval({baseline[2]});
-  sync_stream(stream);
-  expect_bit_exact(baseline[2], candidate[2], stream);
-  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  CHECK_EQ(n_on, 2);
+  CHECK_GT(n_off, n_on);
+  CHECK_GE(n_master_off, n_off);
+  const bool part_on = !omarchy::fused_decode_off_default_part(
+      omarchy::get_command_encoder(stream).device().capabilities().device_name);
+  CHECK_EQ(n_unset, part_on ? n_on : n_off);
+  expect_bit_exact(off, on, stream);
+  expect_bit_exact(off, unset, stream);
+  expect_bit_exact(off, master_off, stream);
 }
 
 TEST_CASE("eager q4 decode gemv group refuses an addend it has not computed") {
@@ -1859,4 +1885,168 @@ TEST_CASE("token-multi q4 gemv kill switch restores the single-row fence") {
   expect_bit_exact(composed[0], switched[0], stream);
   unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+TEST_CASE("fused decode default: the part rule") {
+  CHECK(omarchy::fused_decode_off_default_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::fused_decode_off_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::fused_decode_off_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::fused_decode_off_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::fused_decode_off_default_part(""));
+}
+
+// The gates through fused_route_enabled: the decision is made per call
+// for the device name passed in, so alternating parts in one process (both
+// orders) never inherit an earlier answer, and an explicit 1 or 0 wins on
+// every part. MLX_OMARCHY_FUSED_CHAIN=0 turns both routes off.
+TEST_CASE("fused decode default: per device, either order, a setting wins") {
+  const char* names[] = {
+      "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_FUSED_GEMV",
+      "MLX_OMARCHY_FUSED_TRIO"};
+  std::vector<std::optional<std::string>> saved;
+  for (const char* var : names) {
+    const char* v = std::getenv(var);
+    saved.push_back(v ? std::optional<std::string>(v) : std::nullopt);
+    unsetenv(var);
+  }
+  const std::string m4 = "Apple M4 (G16G B1)";
+  const std::string m1 = "Apple M1 (G13G B1)";
+  for (const char* var : {"MLX_OMARCHY_FUSED_GEMV", "MLX_OMARCHY_FUSED_TRIO"}) {
+    INFO(var);
+    CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
+    CHECK(omarchy::fused_route_enabled(var, m1));
+    CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
+    CHECK(omarchy::fused_route_enabled(var, m1));
+    setenv(var, "1", 1);
+    CHECK(omarchy::fused_route_enabled(var, m4));
+    CHECK(omarchy::fused_route_enabled(var, m1));
+    setenv(var, "0", 1);
+    CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
+    CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
+    setenv(var, "1", 1);
+    setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+    CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
+    CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
+    unsetenv("MLX_OMARCHY_FUSED_CHAIN");
+    unsetenv(var);
+  }
+  // The trio gate does not depend on the GEMV gate.
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
+  for (size_t i = 0; i < saved.size(); ++i) {
+    if (saved[i]) {
+      setenv(names[i], saved[i]->c_str(), 1);
+    } else {
+      unsetenv(names[i]);
+    }
+  }
+}
+
+// MLX_OMARCHY_FUSED_TRIO=1 reaches the RoPE-pair planner with the GEMV
+// route off: the f16 query/key RoPE pair of one decode step runs as one
+// FastTrioRopePairF16 dispatch, and its outputs equal the standalone
+// RoPE kernel's bit for bit.
+TEST_CASE("fused trio override plans the rope pair with the gemv route off") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  array q = astype(
+      random::normal(Shape{1, 8, 1, 64}, float32, std::nullopt, stream),
+      float16, stream);
+  array k = astype(
+      random::normal(Shape{1, 2, 1, 64}, float32, std::nullopt, stream),
+      float16, stream);
+  array offset = array(17, int32);
+  eval({q, k, offset});
+  sync_stream(stream);
+  auto run = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    array qr = fast::rope(
+        q, 64, false, 10000.0f, 1.0f, offset, std::nullopt, stream);
+    array kr = fast::rope(
+        k, 64, false, 10000.0f, 1.0f, offset, std::nullopt, stream);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({qr, kr});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, kr, counters().vk_compute_dispatches.load() - before,
+        counters().last_dispatched_kernel.load());
+  };
+  auto [q_pair, k_pair, n_pair, last_pair] = run("1");
+  auto [q_solo, k_solo, n_solo, last_solo] = run("0");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  CHECK_EQ(n_pair, 1);
+  CHECK_EQ(last_pair,
+      static_cast<int64_t>(omarchy::ComputeKernel::FastTrioRopePairF16));
+  CHECK_EQ(n_solo, 2);
+  CHECK_NE(last_solo,
+      static_cast<int64_t>(omarchy::ComputeKernel::FastTrioRopePairF16));
+  expect_bit_exact(q_solo, q_pair, stream);
+  expect_bit_exact(k_solo, k_pair, stream);
+}
+
+// The planner decides per node from the node's own stream: in one eval
+// that mixes the GPU stream and a CPU stream, CPU nodes of the shapes the
+// fused routes plan on the GPU (a single-row 4-bit projection, a
+// single-row dense bf16 projection and an f16 SwiGLU chain) are left to
+// the CPU, and both streams' results agree.
+TEST_CASE("fused planner leaves CPU-stream nodes to the CPU") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream gpu = gpu_stream();
+  Stream cpu = default_stream(Device::cpu);
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  array w = random::normal(Shape{256, 256}, float32, std::nullopt, cpu);
+  auto q = quantize(w, 64, 4, "affine", std::nullopt, cpu);
+  array x = random::normal(Shape{1, 1, 256}, float32, std::nullopt, cpu);
+  array wb = astype(w, bfloat16, cpu);
+  array xb = astype(x, bfloat16, cpu);
+  array g = astype(
+      random::normal(Shape{1, 1, 512}, float32, std::nullopt, cpu), float16,
+      cpu);
+  array u = astype(
+      random::normal(Shape{1, 1, 512}, float32, std::nullopt, cpu), float16,
+      cpu);
+  eval({w, q[0], q[1], q[2], x, wb, xb, g, u});
+  auto legs = [&](const Stream& s) {
+    return std::vector<array>{
+        quantized_matmul(x, q[0], q[1], q[2], true, 64, 4, "affine", s),
+        matmul(xb, transpose(wb, {1, 0}, s), s),
+        multiply(multiply(g, sigmoid(g, s), s), u, s)};
+  };
+  auto on_gpu = legs(gpu);
+  auto on_cpu = legs(cpu);
+  std::vector<array> all = on_gpu;
+  all.insert(all.end(), on_cpu.begin(), on_cpu.end());
+  std::string error;
+  try {
+    eval(all);
+  } catch (const std::exception& e) {
+    error = e.what();
+  }
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  REQUIRE_MESSAGE(error.empty(), error);
+  sync_stream(gpu);
+  const float tolerance[] = {1e-3f, 0.5f, 2e-2f};
+  for (size_t i = 0; i < on_gpu.size(); ++i) {
+    array d = max(
+        abs(subtract(astype(on_gpu[i], float32, cpu),
+                     astype(on_cpu[i], float32, cpu), cpu),
+            cpu),
+        cpu);
+    d.eval();
+    INFO("leg ", i);
+    CHECK(d.item<float>() < tolerance[i]);
+  }
 }

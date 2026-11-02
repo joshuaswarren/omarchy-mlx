@@ -8,6 +8,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "mlx/array.h"
@@ -228,10 +229,21 @@ void commit_values_kv_write(const array& sum_node);
 // dispatch (the MLX_OMARCHY_FUSED_CHAIN gate also covers it).
 bool kv_direct_enabled();
 
+class Device;
+
+// One fused decode route variable (MLX_OMARCHY_FUSED_GEMV or
+// MLX_OMARCHY_FUSED_TRIO) for a device name: the MLX_OMARCHY_FUSED_CHAIN
+// master gate must be on; then a set variable wins (any value other than
+// "0" is on), and an unset one is on except on the parts of
+// fused_decode_off_default_part (device.h). Reads the environment on every
+// call and caches nothing, so each caller decides for its own device.
+bool fused_route_enabled(const char* variable, const std::string& device_name);
+
 // MLX_OMARCHY_FUSED_GEMV=0 keeps every QuantizedMatmul, dense BF16
 // decode GEMV group, and Add on the per-node path (the
-// MLX_OMARCHY_FUSED_CHAIN gate also covers it).
-bool fused_gemv_enabled();
+// MLX_OMARCHY_FUSED_CHAIN gate also covers it). Unset, it follows
+// fused_route_enabled for the device that executes the work.
+bool fused_gemv_enabled(const Device& device);
 
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; default off on G13 parts other
 // than G13C (see fused_chain.cpp).
@@ -240,17 +252,21 @@ bool outgate_fold_enabled();
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
-bool fused_gemv_swiglu_enabled();
+bool fused_gemv_swiglu_enabled(const Device& device);
 
 // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1 opts the grouped GEMV planner into
 // rows 2..16 (the token column; OFF by default on AGX pending the
 // data-dependent divergence bisect).
-bool gemv_token_multi_enabled();
+bool gemv_token_multi_enabled(const Device& device);
 
-// Decode trio: MLX_OMARCHY_FUSED_TRIO=0 keeps f16 RMSNorm rows, the
-// fused SwiGLU chain dispatch, and RoPE pairs on their standalone
-// kernels and paths (the MLX_OMARCHY_FUSED_CHAIN gate also covers it).
-bool fused_trio_enabled();
+// Trio: MLX_OMARCHY_FUSED_TRIO=0 keeps f16 RMSNorm rows, the fused
+// SwiGLU chain dispatch, and RoPE pairs on their standalone kernels and
+// paths (the MLX_OMARCHY_FUSED_CHAIN gate also covers it). The RMSNorm
+// and SwiGLU legs have no row-count guard, so the gate reaches f16
+// prefill as well as decode. Unset, it follows fused_route_enabled for
+// the device that executes the work; it is independent of
+// MLX_OMARCHY_FUSED_GEMV.
+bool fused_trio_enabled(const Device& device);
 
 // Validates a planned (query, key) RoPE pair against the FastTrioRopePairF16
 // rope-pair contract, allocates the outputs, prepares the keys-side
