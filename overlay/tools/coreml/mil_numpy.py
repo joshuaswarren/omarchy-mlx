@@ -58,13 +58,10 @@ DTYPES = {
     "bool": np.bool_,
 }
 
+_RESULT_DECL = r"(?:tensor<[^>]*>|string|int32|bool|fp16|fp32)\s+[A-Za-z_][A-Za-z0-9_@]*"
 STMT = re.compile(
-    r"^\s*(?P<type>tensor<[^>]*>|string|int32|bool|fp16|fp32)\s+"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_@]*)\s*=\s*"
-    r"(?P<op>[a-z_][a-z_0-9]*)\((?P<args>.*)\)\s*(?:\[(?P<attrs>.*)\])?;\s*$"
-)
-TUPLE_STMT = re.compile(
-    r"^\s*\((?P<results>tensor<[^)]*)\)\s*=\s*"
+    rf"^\s*(?P<open>\()?\s*(?P<results>{_RESULT_DECL}(?:\s*,\s*{_RESULT_DECL})*)"
+    r"\s*(?(open)\))\s*=\s*"
     r"(?P<op>[a-z_][a-z_0-9]*)\((?P<args>.*)\)\s*(?:\[(?P<attrs>.*)\])?;\s*$"
 )
 TYPE = re.compile(r"^tensor<\s*(?P<dtype>\w+)\s*,\s*\[(?P<shape>[^\]]*)\]\s*>$")
@@ -201,23 +198,21 @@ class Program:
                 for dtype, shape, name in FUNC_INPUT.findall(stripped):
                     self.inputs[name] = (dtype, parse_type(f"tensor<{dtype}, [{shape}]>")[1])
                 continue
-            tup = TUPLE_STMT.match(line)
-            if tup is not None:
-                names, dtypes, shapes = [], [], []
-                for item in split_top(tup.group("results")):
-                    decl, name = item.rsplit(" ", 1)
-                    dtype, shape = parse_type(decl)
-                    names.append(name)
-                    dtypes.append(dtype)
-                    shapes.append(shape)
-                op, args, attrs = tup.group("op"), tup.group("args"), tup.group("attrs")
-            else:
-                match = STMT.match(line)
-                if match is None:
-                    continue
-                dtype, shape = parse_type(match.group("type"))
-                names, dtypes, shapes = [match.group("name")], [dtype], [shape]
-                op, args, attrs = match.group("op"), match.group("args"), match.group("attrs")
+            match = STMT.match(line)
+            if match is None:
+                if re.match(r"^\s*\(?\s*(?:tensor<|\w+\s+\w+)", line):
+                    raise MilError(f"unparsed MIL result declaration: {stripped[:120]}")
+                continue
+            names, dtypes, shapes = [], [], []
+            for item in split_top(match.group("results")):
+                decl, name = item.rsplit(" ", 1)
+                dtype, shape = parse_type(decl)
+                if dtype not in DTYPES and dtype != "string":
+                    raise MilError(f"unsupported result dtype {dtype!r}")
+                names.append(name)
+                dtypes.append(dtype)
+                shapes.append(shape)
+            op, args, attrs = match.group("op"), match.group("args"), match.group("attrs")
             stmt = Statement(
                 len(self.statements), names, op, parse_kwargs(args), attrs or "", dtypes, shapes
             )

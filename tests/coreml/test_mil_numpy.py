@@ -177,3 +177,34 @@ tensor<fp16, [1, 1, 1, 1]> y = conv(x = x, weight = w, strides = steps, dilation
     got = program.run({}, {"y"})["y"]
     assert got.dtype == np.float16 and got.shape == (1, 1, 1, 1)
     assert got.item() == 5
+
+
+@pytest.mark.parametrize("parenthesized", [False, True], ids=["original", "adapter"])
+def test_split_outputs_feed_both_glu_consumers(tmp_path, parenthesized):
+    results = "tensor<fp16, [1, 2, 2]> left, tensor<fp16, [1, 2, 2]> right"
+    if parenthesized:
+        results = f"({results})"
+    program = _program(tmp_path, f"""
+tensor<fp16, [1, 4, 2]> x = const()[val = tensor<fp16, [1, 4, 2]>([2, 4, 6, 8, 0, 0, 0, 0])];
+int32 axis = const()[val = int32(1)];
+int32 count = const()[val = int32(2)];
+{results} = split(axis = axis, num_splits = count, x = x)[name = string("split")];
+tensor<fp16, [1, 2, 2]> gate = sigmoid(x = right);
+tensor<fp16, [1, 2, 2]> y = mul(x = left, y = gate);
+""")
+    got = program.run({}, {"left", "right", "y"})
+    np.testing.assert_array_equal(got["left"], np.array([[[2, 4], [6, 8]]], dtype=np.float16))
+    np.testing.assert_array_equal(got["right"], np.zeros((1, 2, 2), dtype=np.float16))
+    np.testing.assert_array_equal(got["y"], np.array([[[1, 2], [3, 4]]], dtype=np.float16))
+    assert all(value.dtype == np.float16 for value in got.values())
+
+
+@pytest.mark.parametrize("declaration", [
+    "(tensor<fp16, [1]> left, tensor<fp16, [1]> right",
+    "tensor<fp16, [1]> left, tensor<fp16, [1]> right)",
+    "tensor<fp64, [1]> y",
+    "uint64 y",
+])
+def test_unsupported_result_declaration_fails_before_execution(tmp_path, declaration):
+    with pytest.raises(MilError, match="declaration|dtype"):
+        _program(tmp_path, f"{declaration} = split(x = missing);")
