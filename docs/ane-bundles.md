@@ -211,11 +211,68 @@ Vulkan or ANE device. On success it prints the graph identity, tensor lists,
 
 ## Tests
 
-`tools/ci/run-ane-bundle-tests.sh` runs the real-package Python adapter tests
-and the host-only C++ loader suite. The tests cover schema rejection, exact ABI,
+`tools/ci/run-ane-bundle-tests.sh` runs the real-package Python adapter tests,
+the host-only C++ loader suite and the two lane-3 suites
+(`omarchy_ane_h16_sections_tests`, `omarchy_ane_h16_device_tests`). The tests cover schema rejection, exact ABI,
 program/payload mapping, dispatch order, tensor ranges, zero ordinary tensors,
 allocation and channel mismatches, digest ordering, unknown files, symlink
 entries, and the not-found contract.
+
+## Manifest schema 5: HWX programs (lane 3)
+
+Schema 5 is the sibling of schema 4 for driver ABI 3: the in-kernel
+`accel/ane` H16 node (T6041 family, M4 Pro), which takes the original HWX
+through `DRM_IOCTL_ANE_H16_LOAD` and runs it with `DRM_IOCTL_ANE_H16_EXEC`.
+Schema 4 is unchanged; a schema-4 manifest that names `h16g` or ABI 3 is
+refused as before, and a schema-5 manifest that names `h13`, `h14`, ABI 1
+or ABI 2 is refused.
+
+Differences from schema 4:
+
+| Field | Schema 5 contract |
+| --- | --- |
+| `manifest_version` | Exact integer `5`. |
+| `tile_shift` | Not allowed. |
+| `compiler.target`, `driver_abi_major` | Exactly `h16g` and `3`. |
+| `payloads` | Role `hwx` only, at least one; no `weights` (an HWX carries its constants). |
+| Tensor `stride` | Must cover `byte_size`; no tile alignment. |
+| Program `outputs` | Exactly one binding (the driver accepts one output per program). |
+| Binding `surface` | Replaces `channel`: the H16 surface index in HWX segment order, the order H16_LOAD reports. |
+| Binding `allocation_bytes` | Exactly the HWX `__FVMLIB` segment size of that surface. |
+| Program `task_descriptors` | The task count of the HWX `__TEXT,__text` stream. |
+| Program `scratch_bytes` | The `__DATA,__bss` size, or 0. The scratch is kernel-owned and is not a surface. |
+
+Bindings keep the schema-4 forms: `raw: true` copies staged bytes to the
+surface verbatim; otherwise the NCHW plane and row strides place them, with
+the same `tile_layout.h` packing the libane device uses.
+
+Validation runs before any worker or device: after every payload digest
+matches, each HWX is mapped and the four H16_LOAD sections (generic,
+operation, procedure, text properties) are built from it with the rules of
+the kernel tree's reference client
+`tools/testing/selftests/drivers/ane/h16-sections.py`
+(`overlay/mlx/backend/omarchy/ane/h16_hwx.cpp` derives the same bytes). Every
+refusal of that client refuses the bundle. Then the CPU subtype must be 7
+(H16G), the HWX must have at most four surfaces, and every surface must be
+bound exactly once with its direction and size. The sealed loader
+(`load_bundle_sealed`) treats an HWX like any other payload.
+
+The lane-3 Parakeet encoder bundle `parakeet-encoder-whole-h16` is built by
+`overlay/tools/coreml/build_whole_encoder_bundle_h16.py` from the macOS
+harvest (Apple `ANECCompile` for h16g with `output_mask` removed, one fp16
+input `input_features` [3000, 128], one output `encoder_hidden` [375, 640]).
+It pins the HWX by the sha256 it measures, registers the bundle in the
+compiled cache, and `--check` runs it once through
+`mlx-omarchy-ane-worker --device h16` against the golden `encoder_hidden`
+under the lock's numerical contract (max_abs 0.3, mean_abs 0.02,
+rel_l2 0.1).
+
+Measured: host tests only. The add-128 section bytes equal the kernel's
+KUnit fixture, the C++ builder matches `h16-sections.py` on 6710 HWX
+variants, and the schema-5 loader, the lane-3 device behind a fake driver
+and the bundle builder on a synthetic stand-in pass their suites. No lane-3
+bundle has run on H16 hardware, and no Apple-compiled Parakeet HWX for
+h16g exists yet.
 
 ## External reference: maderix (Inside the M4 ANE)
 

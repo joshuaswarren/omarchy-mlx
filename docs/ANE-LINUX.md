@@ -55,6 +55,45 @@ Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and Parakeet
 error. The raw files above show that pass loading on `bd34a12`. A tokens-per-second figure for the per-call path on that
 module has not been measured.
 
+## M4 Pro ANE (lane 3)
+
+Lane 3 runs the H16 Neural Engine of the M4 Pro (T6041 family) through the
+in-kernel `accel/ane` driver at driver ABI 3. It loads no libane: the worker
+opens the accel node itself.
+
+- Kernel: an aurora kernel whose ANE driver reaches its `program` stage and
+  registers an accel node that reports ABI 3 / H16 in
+  `DRM_IOCTL_ANE_GET_CAPS`. The uapi header the worker builds against is
+  vendored at `overlay/mlx/backend/omarchy/ane/uapi/drm/ane_accel.h`
+  (aurora 3aa52f4f).
+- Programs: original Apple HWX files compiled for h16g on macOS, carried in
+  schema-5 bundles (`docs/ane-bundles.md`). The worker builds the four
+  H16_LOAD sections from each HWX on the host.
+- Worker: `mlx-omarchy-ane-worker --device h16` picks the first
+  `/dev/accel/accel*` that reports ABI 3 / H16, `--device h16:/dev/accel/accelN`
+  names one; every one-shot and resident form takes it in place of
+  `--libane PATH`. It prints `device lane=3 node=... driver=ane
+  drm_version=... abi=3 chip=h16 ...` before any load.
+- Each loaded program gets its own open file (the driver keeps one program
+  per file, any number of files at once); closing the file unloads it.
+  Each EXEC passes every surface in the order H16_LOAD reported; the
+  driver copies inputs in and the output out.
+- Parakeet: on an H16 machine the encoder runs as the one-program bundle
+  `parakeet-encoder-whole-h16` when it is in the compiled cache or named by
+  `MLX_OMARCHY_WHOLE_ENCODER_BUNDLE`, and on the GPU otherwise. The program
+  returns `encoder_hidden`; `encoder_mask` comes from the model graph's mask
+  arithmetic on the GPU. `build_whole_encoder_bundle_h16.py` builds the
+  bundle from the macOS harvest.
+
+What is measured: host tests only (section bytes against the kernel's
+add-128 fixture, a 6710-file differential against `h16-sections.py`, the
+schema-5 loader, the device behind a fake driver, the bundle builder on a
+synthetic stand-in). Nothing in lane 3 has run on H16 hardware. The
+h16g Parakeet HWX does not exist until the macOS harvest has run. The driver
+keeps every loaded program's firmware mappings until reboot, so each worker
+process that loads the 450 MB encoder uses program-window space that only a
+reboot returns; how many loads fit is not measured.
+
 ## Turn on the ANE for your chip
 
 The collector prints the steps that match your kernel. One wording source:
