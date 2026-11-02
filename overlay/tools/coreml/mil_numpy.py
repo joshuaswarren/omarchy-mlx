@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 # SPDX-License-Identifier: MIT
-"""Numpy evaluator for the textual MIL that ``mil_adapter.py`` emits.
+"""Numpy evaluator for textual MIL from the adapter or the original encoder.
 
-Host-only. Evaluates the pinned Parakeet encoder from ``model.mil`` plus its
-blob-v2 weight files, so encoder tensors can be staged, diffed and validated
-without Core ML, the ANE, or a GPU. Only the ops the pinned encoder uses are
-implemented; anything else is a hard error.
+Host-only. Evaluates the pinned Parakeet encoder from MIL plus blob-v2 weight
+files, including original scalar constructors and fp16/uint4 palette constants.
+Encoder tensors can be staged, diffed and validated without Core ML, the ANE,
+or a GPU. Anything outside the implemented operations is a hard error.
 
 Numeric contract (the Core ML fp16 execution model): every op computes in
 fp32 and rounds once to the dtype the MIL declares for its result. Elementwise
@@ -34,10 +34,16 @@ import hashlib
 import json
 import re
 import struct
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from coreml.depalettize import _gather_dense, _read_blob, read_blob_metadata
 
 BLOB_MAGIC = 0xDEADBEEF
 BLOB_STORAGE = {1: np.float16, 2: np.float32, 3: np.uint8, 4: np.int8, 14: np.int32}
@@ -117,6 +123,8 @@ def parse_type(text: str) -> tuple[str, tuple[int, ...]]:
 def _scalar(text: str, dtype):
     text = text.strip()
     if dtype is np.bool_:
+        if text not in ("true", "false"):
+            raise MilError(f"invalid bool literal {text!r}")
         return text == "true"
     if dtype in (np.float16, np.float32):
         try:
@@ -287,6 +295,16 @@ class Program:
     # ---------------------------------------------------------------- const
 
     def _literal(self, text: str):
+        scalar = re.fullmatch(r"(string|bool|int32|fp16|fp32)\((.*)\)", text.strip())
+        if scalar is not None:
+            kind, payload = scalar.groups()
+            if kind == "string":
+                value = json.loads(payload)
+                if not isinstance(value, str):
+                    raise MilError("string literal must hold a string")
+                return value
+            dtype = DTYPES[kind]
+            return np.asarray(_scalar(payload, dtype), dtype=dtype)
         match = LITERAL.match(text.strip())
         if match is None:
             raise MilError(f"unparsed literal {text[:80]}")
@@ -302,6 +320,39 @@ class Program:
             return self.blobs.read(blob.group("path"), int(blob.group("offset")), dtype, shape)
         items = [_scalar(x, dtype) for x in split_top(payload.strip("[]"))]
         return np.array(items, dtype=dtype).reshape(shape)
+
+    def _palette_blob(self, token: str, dtype: str, storage: int):
+        match = LITERAL.fullmatch(token)
+        if match is None or match.group(1) != dtype:
+            raise MilError(f"palette operand must be a blob-backed {dtype} tensor")
+        _, shape = parse_type(f"tensor<{dtype}, [{match.group(2)}]>")
+        if not shape or any(size <= 0 for size in shape):
+            raise MilError("palette tensor dimensions must be positive")
+        blob = BLOBFILE.fullmatch(match.group(3))
+        if blob is None:
+            raise MilError("palette operand must use BLOBFILE storage")
+        path, offset = blob.group("path"), int(blob.group("offset"))
+        weights = self.blobs.root / "weights"
+        payload = _read_blob(weights, path, offset, "palette")
+        with (weights / path.split("/")[-1]).open("rb") as stream:
+            metadata = read_blob_metadata(stream, offset)
+        if metadata.dtype_code != storage:
+            raise MilError(f"palette {dtype} blob has storage code {metadata.dtype_code}, expected {storage}")
+        return shape, payload
+
+    def _palette(self, stmt: Statement) -> np.ndarray:
+        if set(stmt.kwargs) != {"indices", "lut"}:
+            raise MilError("palette requires exactly indices and lut")
+        shape, indices = self._palette_blob(stmt.kwargs["indices"], "uint4", 11)
+        lut_shape, lut = self._palette_blob(stmt.kwargs["lut"], "fp16", 1)
+        if len(lut_shape) != len(shape) + 2:
+            raise MilError("palette LUT rank must be indices rank plus two")
+        if any(size % blocks for size, blocks in zip(shape, lut_shape)):
+            raise MilError("palette blocks must divide each indices dimension")
+        if stmt.dtypes != ["fp16"] or stmt.shapes != [shape]:
+            raise MilError("palette output must match the fp16 LUT dtype and indices shape")
+        dense = _gather_dense(indices, 35, shape, lut, 10, lut_shape)
+        return np.frombuffer(dense, dtype=np.float16).reshape(shape)
 
     # -------------------------------------------------------------- execute
 
@@ -377,6 +428,8 @@ class Program:
         arg = lambda key, default=None: self.arg(stmt, key, default)
         ints = lambda key, default=None: self.ints(stmt, key, default)
 
+        if op == "constexpr_lut_to_dense":
+            return self._palette(stmt)
         if op == "identity":
             return arg("x")
         if op == "cast":
@@ -395,6 +448,8 @@ class Program:
             return np.floor(self._f32(arg("x")))
         if op == "less":
             return np.less(arg("x"), arg("y"))
+        if op == "greater":
+            return np.greater(np.asarray(arg("x")), np.asarray(arg("y")))
         if op == "logical_not":
             return np.logical_not(arg("x"))
         if op == "logical_and":
