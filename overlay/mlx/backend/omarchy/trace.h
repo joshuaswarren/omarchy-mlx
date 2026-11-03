@@ -29,6 +29,11 @@ struct Counters {
   // Descriptor write counts from dispatch ComputeBinding updates (one
   // write per binding). Structural: moves with vk_compute_dispatches.
   std::atomic<uint64_t> vk_descriptor_update_writes{0};
+  // Command-buffer ring (MLX_OMARCHY_IN_FLIGHT_CB): the depth the encoder runs with (a gauge, set when the encoder is built), the number of
+  // times recording had to wait for the oldest in-flight submission because every slot was busy, and the most slots busy at once.
+  std::atomic<uint64_t> vk_ring_depth{0};
+  std::atomic<uint64_t> vk_ring_waits{0};
+  std::atomic<uint64_t> vk_ring_high_water{0};
   // Dependency-barrier decisions (MLX_OMARCHY_GATED_BARRIERS accounting;
   // the default unconditional path counts every pre+post dispatch
   // barrier as emitted, never skipped). Excludes the TAPE_FULL_BARRIERS

@@ -37,8 +37,10 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <iostream>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -52,6 +54,9 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
+#include "mlx/ops.h"
+#include "mlx/stream.h"
+#include "mlx/transforms.h"
 #include "mlx/backend/omarchy/vulkan.h"
 #include "mlx/device.h"
 #include "mlx/ops.h"
@@ -114,6 +119,42 @@ int run_child_scenario(const std::string& mode) {
     }
     omarchy::allocator().free(buf);
     std::cout << "[child/reopen] fresh process device reopen ok\n";
+    return 0;
+  }
+  if (mode == "ring_depth") {
+    // 24 independent small graphs submitted back to back without waiting, then one synchronize: the ring is exercised, and the outputs are
+    // hashed byte for byte so the parent can compare runs with different depths. Counters go to a file for the parent.
+    const char* out_path = std::getenv("MLX_OMARCHY_TEST_OUT");
+    if (out_path == nullptr) {
+      return 2;
+    }
+    auto& counters = omarchy::trace::counters();
+    Stream s = new_stream(Device::gpu);
+    std::vector<array> outs;
+    for (int i = 0; i < 24; ++i) {
+      std::vector<float> v(256);
+      for (size_t k = 0; k < v.size(); ++k) {
+        v[k] = static_cast<float>((k * 13 + i * 7) % 97) * 0.03f - 1.0f;
+      }
+      array a(v.begin(), Shape{16, 16}, float32);
+      array r = matmul(add(a, array(0.5f), s), a, s);
+      async_eval(r);
+      outs.push_back(r);
+    }
+    eval(outs);
+    synchronize(s);
+    uint64_t hash = 1469598103934665603ull;
+    for (auto& o : outs) {
+      const auto* b = reinterpret_cast<const uint8_t*>(o.data<float>());
+      for (size_t i = 0; i < o.nbytes(); ++i) {
+        hash = (hash ^ b[i]) * 1099511628211ull;
+      }
+    }
+    std::ofstream f(out_path);
+    f << "hash=" << std::hex << hash << std::dec << "\n"
+      << "depth=" << counters.vk_ring_depth.load() << "\n"
+      << "waits=" << counters.vk_ring_waits.load() << "\n"
+      << "high_water=" << counters.vk_ring_high_water.load() << "\n";
     return 0;
   }
   if (mode == "bounded_submit") {
@@ -2392,6 +2433,54 @@ TEST_CASE("a reused Event accepts a later published producer generation") {
   CHECK_MESSAGE(
       r.code == 0,
       "child late_reused_event_publication failed with code " << r.code);
+}
+
+TEST_CASE("the command-buffer ring depth follows MLX_OMARCHY_IN_FLIGHT_CB and never changes the output") {
+  // Unset, empty, 0, 17 and text keep the default of 4. 1 to 16 are taken as given. The 24 submissions give the same bytes at every depth,
+  // and no more slots than the depth are ever busy at once.
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto run = [](const char* value) {
+    std::map<std::string, std::string> kv;
+    std::string path = "/tmp/mlx_omarchy_ring_depth_" + std::to_string(::getpid()) + ".txt";
+    ::setenv("MLX_OMARCHY_TEST_OUT", path.c_str(), 1);
+    if (value != nullptr) {
+      ::setenv("MLX_OMARCHY_IN_FLIGHT_CB", value, 1);
+    }
+    ChildRun r = run_child("ring_depth", 120);
+    ::unsetenv("MLX_OMARCHY_IN_FLIGHT_CB");
+    ::unsetenv("MLX_OMARCHY_TEST_OUT");
+    kv["exit"] = std::to_string(r.code);
+    std::ifstream f(path);
+    for (std::string line; std::getline(f, line);) {
+      auto eq = line.find('=');
+      if (eq != std::string::npos) {
+        kv[line.substr(0, eq)] = line.substr(eq + 1);
+      }
+    }
+    std::remove(path.c_str());
+    return kv;
+  };
+  struct Row {
+    const char* value;
+    const char* depth;
+  };
+  const Row rows[] = {{nullptr, "4"}, {"", "4"}, {"8", "8"}, {"16", "16"}, {"1", "1"}, {"0", "4"}, {"17", "4"}, {"abc", "4"}};
+  std::string first_hash;
+  for (const auto& row : rows) {
+    auto kv = run(row.value);
+    INFO("value=", std::string(row.value == nullptr ? "(unset)" : row.value));
+    REQUIRE(kv["exit"] == "0");
+    CHECK(kv["depth"] == row.depth);
+    CHECK(std::stoull(kv["high_water"]) >= 1);
+    CHECK(std::stoull(kv["high_water"]) <= std::stoull(row.depth));
+    if (first_hash.empty()) {
+      first_hash = kv["hash"];
+    }
+    CHECK(kv["hash"] == first_hash);
+  }
 }
 
 TEST_CASE("unrelated active work does not extend an unsignaled Event wait") {
