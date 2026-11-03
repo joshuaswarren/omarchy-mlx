@@ -2436,7 +2436,7 @@ TEST_CASE("a reused Event accepts a later published producer generation") {
 }
 
 TEST_CASE("the command-buffer ring depth follows MLX_OMARCHY_IN_FLIGHT_CB and never changes the output") {
-  // Unset, empty, 0, 17 and text keep the default of 4. 1 to 16 are taken as given. The 24 submissions give the same bytes at every depth,
+  // Unset, empty, 0 to 3, 17 and text keep the default of 4 (a shallower ring lets a blocked completion handler deadlock it). 4 to 16 are taken as given. The 24 submissions give the same bytes at every depth,
   // and no more slots than the depth are ever busy at once.
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
@@ -2446,11 +2446,19 @@ TEST_CASE("the command-buffer ring depth follows MLX_OMARCHY_IN_FLIGHT_CB and ne
     std::map<std::string, std::string> kv;
     std::string path = "/tmp/mlx_omarchy_ring_depth_" + std::to_string(::getpid()) + ".txt";
     ::setenv("MLX_OMARCHY_TEST_OUT", path.c_str(), 1);
+    const char* outer = std::getenv("MLX_OMARCHY_IN_FLIGHT_CB");
+    std::string saved = outer == nullptr ? "" : outer;
     if (value != nullptr) {
       ::setenv("MLX_OMARCHY_IN_FLIGHT_CB", value, 1);
+    } else {
+      ::unsetenv("MLX_OMARCHY_IN_FLIGHT_CB");  // the whole suite may run under a depth; the unset row means unset
     }
     ChildRun r = run_child("ring_depth", 120);
-    ::unsetenv("MLX_OMARCHY_IN_FLIGHT_CB");
+    if (outer != nullptr) {
+      ::setenv("MLX_OMARCHY_IN_FLIGHT_CB", saved.c_str(), 1);
+    } else {
+      ::unsetenv("MLX_OMARCHY_IN_FLIGHT_CB");
+    }
     ::unsetenv("MLX_OMARCHY_TEST_OUT");
     kv["exit"] = std::to_string(r.code);
     std::ifstream f(path);
@@ -2467,7 +2475,7 @@ TEST_CASE("the command-buffer ring depth follows MLX_OMARCHY_IN_FLIGHT_CB and ne
     const char* value;
     const char* depth;
   };
-  const Row rows[] = {{nullptr, "4"}, {"", "4"}, {"8", "8"}, {"16", "16"}, {"1", "1"}, {"0", "4"}, {"17", "4"}, {"abc", "4"}};
+  const Row rows[] = {{nullptr, "4"}, {"", "4"}, {"8", "8"}, {"16", "16"}, {"4", "4"}, {"3", "4"}, {"2", "4"}, {"1", "4"}, {"0", "4"}, {"17", "4"}, {"abc", "4"}};
   std::string first_hash;
   for (const auto& row : rows) {
     auto kv = run(row.value);

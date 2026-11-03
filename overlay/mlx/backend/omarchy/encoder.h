@@ -485,7 +485,11 @@ class MLX_API CommandEncoder {
   // then set by the device at the head of the next command buffer. It is not
   // destroyed with the encoder because a watchdog error can leave it pending;
   // vkDestroyDevice releases it with the command pool.
+  // Default ring depth, and the most slots a process may ask for (MLX_OMARCHY_IN_FLIGHT_CB).
   static constexpr int kInFlightCommandBuffers = 4;
+  static constexpr int kMaxInFlightCommandBuffers = 16;
+  // The depth this process runs with: the variable when it holds 4 to 16, else the default. Read once.
+  static int ring_depth_from_env();
   struct Slot {
     VkCommandBuffer cmd{VK_NULL_HANDLE};
     VkEvent started{VK_NULL_HANDLE};
@@ -604,7 +608,8 @@ class MLX_API CommandEncoder {
 
   Device& device_;
   VkCommandPool pool_{VK_NULL_HANDLE};
-  std::array<Slot, kInFlightCommandBuffers> slots_{};
+  std::array<Slot, kMaxInFlightCommandBuffers> slots_{};
+  int ring_depth_{kInFlightCommandBuffers};
   int current_slot_{0};
   VkCommandBuffer cmd_{VK_NULL_HANDLE};
   bool recording_{false};

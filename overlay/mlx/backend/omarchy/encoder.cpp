@@ -232,23 +232,50 @@ void CommandEncoder::reset_dependency_tracking() {
   head_synced_ = false;
 }
 
+int CommandEncoder::ring_depth_from_env() {
+  static const int depth = [] {
+    const char* e = std::getenv("MLX_OMARCHY_IN_FLIGHT_CB");
+    if (e == nullptr || *e == '\0') {
+      return kInFlightCommandBuffers;
+    }
+    char* end = nullptr;
+    long v = std::strtol(e, &end, 10);
+    // Only deeper rings are taken. Recording the next batch waits for a slot, including its completion handlers, so a handler that blocks until
+    // a later submission exists can never finish on a shallow ring: the 'completed markers behind a blocked handler' test hangs at 1 and at 2.
+    if (*end != '\0' || v < kInFlightCommandBuffers || v > kMaxInFlightCommandBuffers) {
+      fprintf(stderr,
+              "[omarchy] MLX_OMARCHY_IN_FLIGHT_CB=%s is not %d to %d; using %d\n",
+              e, kInFlightCommandBuffers, kMaxInFlightCommandBuffers, kInFlightCommandBuffers);
+      return kInFlightCommandBuffers;
+    }
+    if (v != kInFlightCommandBuffers) {
+      fprintf(stderr,
+              "[omarchy] command-buffer ring depth is %ld (MLX_OMARCHY_IN_FLIGHT_CB)\n", v);
+    }
+    return static_cast<int>(v);
+  }();
+  return depth;
+}
+
 CommandEncoder::CommandEncoder(Device& device) : device_(device) {
   auto& dt = vk::device_table();
+  ring_depth_ = ring_depth_from_env();
+  trace::counters().vk_ring_depth.store(ring_depth_, std::memory_order_relaxed);
   VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
       VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   pci.queueFamilyIndex = device_.queue_family();
   VKX_CHECK(dt.CreateCommandPool(device_.handle(), &pci, nullptr, &pool_));
 
-  std::array<VkCommandBuffer, kInFlightCommandBuffers> buffers{};
+  std::array<VkCommandBuffer, kMaxInFlightCommandBuffers> buffers{};
   VkCommandBufferAllocateInfo ai{
       VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   ai.commandPool = pool_;
   ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  ai.commandBufferCount = kInFlightCommandBuffers;
+  ai.commandBufferCount = ring_depth_;
   VKX_CHECK(dt.AllocateCommandBuffers(device_.handle(), &ai, buffers.data()));
   VkEventCreateInfo event_info{VK_STRUCTURE_TYPE_EVENT_CREATE_INFO};
-  for (int i = 0; i < kInFlightCommandBuffers; ++i) {
+  for (int i = 0; i < ring_depth_; ++i) {
     slots_[i].cmd = buffers[i];
     VKX_CHECK(dt.CreateEvent(
         device_.handle(), &event_info, nullptr, &slots_[i].started));
@@ -313,7 +340,7 @@ void CommandEncoder::ensure_recording() {
   int chosen = -1;
   uint64_t oldest_value = UINT64_MAX;
   int oldest = -1;
-  for (int i = 0; i < kInFlightCommandBuffers; ++i) {
+  for (int i = 0; i < ring_depth_; ++i) {
     uint64_t value = slots_[i].in_flight;
     if (value == 0 || completions.drained_value() >= value) {
       slots_[i].in_flight = 0;
@@ -326,6 +353,7 @@ void CommandEncoder::ensure_recording() {
     }
   }
   if (chosen < 0) {
+    trace::counters().vk_ring_waits++;
     completions.wait(oldest_value);
     slots_[oldest].in_flight = 0;
     chosen = oldest;
@@ -1359,6 +1387,16 @@ void CommandEncoder::submit() {
     submitted = completion_value;
     if (was_recording) {
       slots_[current_slot_].in_flight = completion_value;
+      // Slots not yet reclaimed (a drained slot is reclaimed lazily by the next ensure_recording), so this is an upper bound on busy slots.
+      uint64_t occupied = 0;
+      for (int i = 0; i < ring_depth_; ++i) {
+        occupied += slots_[i].in_flight != 0 ? 1 : 0;
+      }
+      auto& high = trace::counters().vk_ring_high_water;
+      uint64_t seen = high.load(std::memory_order_relaxed);
+      while (seen < occupied &&
+             !high.compare_exchange_weak(seen, occupied, std::memory_order_relaxed)) {
+      }
     }
     trace::counters().vk_submissions++;
     if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
