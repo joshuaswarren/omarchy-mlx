@@ -80,6 +80,10 @@ jobs:
         # submission with a 422 and is otherwise silent -- the endpoint keeps
         # serving reads, so nothing else here would notice. Exits 2 when the
         # live schema_sha256 / fields_sha256 differ from the bundled schema.
+        # The commit step leaves the checkout on the snapshot-only
+        # community-data branch, so return to the commit this run checked out
+        # before reading the script from the repo.
         run: |
+          git checkout --force --detach "$GITHUB_SHA"
           python3 services/community-data/scripts/check_schema_identity.py \
             --url "$BASE_URL"
