@@ -1,0 +1,24 @@
+date_utc 2026-11-02T01:42:05Z
+machine Apple Mac mini (M4, 2024) (apple,j773g apple,t8132 apple,arm-platform )
+memory_total_gib 15.3  cpus 10 online 0-9
+os Omarchy
+kernel 7.1.13-1-20-ARCH #25 SMP PREEMPT_DYNAMIC Mon, 02 Nov 2026 00:30:37 +0000
+gpu_kernel_driver asahi_m4 302600000.gpu: G16: GPU ID=0x0a021100 revision=0x11
+gpu_boot_firmware boot firmware mBoot-18000.161.10
+gpu_driver_hw_set hardware data +0x1dc90 = 0x1;hardware data +0xb6a0 = 0x67305452;hardware data +0xb6a4 = 0x67315452;hardware data +0xb6e0 = 0x3;
+pmp_bound_devices 0
+mesa_lib Mesa 26.3.0-devel (git-ea328336ef) sha256=5de742c14194ce78
+mesa_source ea32833 asahi/apple9: accept subgroup-scope barriers (branch m4-honeykrisp-compute)
+glslc 2026.4
+python Python 3.14.8
+env AGX_APPLE9_MAX_SHARED=32768 MLX_OMARCHY_BATCH_WORK=120000
+vulkan 	apiVersion         = 1.4.359
+vulkan 	driverVersion      = 26.2.99
+vulkan 	deviceName         = Apple M4 (G16G B1)
+vulkan 	driverName         = Honeykrisp
+vulkan 	driverInfo         = Mesa 26.3.0-devel (git-ea328336ef)
+vulkan 	conformanceVersion = 1.4.0.0
+vulkan_ext 	VK_KHR_cooperative_matrix                   : extension revision 2
+model mlx-community/granite-4.0-1b-4bit rev=29f108a4e2ff model.safetensors sha256=b7a43ebbc86517b8ecfc4cff265a787ea31620f7eb356984c08abe14646617c7 quant={"bits": 4, "group_size": 64, "mode": "affine"} bfloat16
+model mlx-community/Qwen2.5-0.5B-Instruct-4bit rev=a5339a4131f1 model.safetensors sha256=ddffab9cbc7bf6dde941c6724841eeca8981fcfa81ca20ff8efff1396326d153 quant={"bits": 4, "group_size": 64} bfloat16
+model mlx-community/gemma-3-1b-it-4bit rev=2d44e83dc9e8 model.safetensors sha256=229f1dfe07d60d4af01e7b2e356b3d33f00c2c1c1b02394d7b3a70e6700405de quant={"bits": 4, "group_size": 64} bfloat16
