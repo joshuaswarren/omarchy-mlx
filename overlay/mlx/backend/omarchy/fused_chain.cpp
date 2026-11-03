@@ -1186,6 +1186,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   eager_state = state;
   std::unordered_map<std::uintptr_t, const array*> nodes;
   std::unordered_map<std::uintptr_t, size_t> uses;
+  // Readers that are the eval's own Synchronizer: a requested output is
+  // an input of it, and it reads nothing, so it does not count as a
+  // consumer of the value.
+  std::unordered_map<std::uintptr_t, size_t> synchronizer_reads;
   // Per-input count of consumers that are pure views (Slice, Transpose,
   // Reshape). Views materialize nothing and read their input whenever
   // the consuming graph reads them, so an array whose consumers are ALL
@@ -1197,8 +1201,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     nodes.emplace(node.id(), &node);
     bool node_is_view = is_op(&node, typeid(Slice)) ||
         is_op(&node, typeid(Transpose)) || is_op(&node, typeid(Reshape));
+    const bool node_is_synchronizer =
+        node.has_primitive() &&
+        std::strcmp(node.primitive().name(), "Synchronize") == 0;
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
+      if (node_is_synchronizer) {
+        ++synchronizer_reads[input.id()];
+      }
       if (node_is_view) {
         ++view_uses[input.id()];
       }
@@ -1591,7 +1601,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const Stream& member_stream = group.members[0].node.primitive().stream();
     auto raw_node = lookup(plan.x_raw);
     if (!norm_prologue_supported(member_stream) ||
-        by_x[plan.x.id()].size() != uses[plan.x.id()] ||
+        by_x[plan.x.id()].size() + synchronizer_reads[plan.x.id()] !=
+            uses[plan.x.id()] ||
         lookup(plan.x)->primitive().stream() != member_stream ||
         (raw_node && (!is_op(raw_node, typeid(Add)) ||
                       raw_node->primitive().stream() != member_stream))) {
