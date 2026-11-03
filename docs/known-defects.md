@@ -30,6 +30,19 @@ intentionally not taken unilaterally. No output cleanup is applied.
 The exact ANE output is retained as a native parity reference, not presented
 as clean ASR output. This is a macOS reference finding, not a demonstrated Linux backend defect.
 
+Status: **FIXED on the general `transcribe` path** (any audio but the pinned fixture); the pinned fixture keeps the
+reference behavior above, so `verify` and the golden contract are unchanged. The decode artifact was one of two
+causes. The other: `_statistics` computed each mel bin's mean and std over all 3001 frames, so a short clip carried
+about 28 s of constant padding in its statistics. Speech frames of a 1.3 to 2.4 s clip normalized to mean +2.3 to +3.7
+(std 2.5 to 3.2) instead of 0 and 1, and 13 of the 2620 LibriSpeech test-clean clips returned an empty transcript.
+`extract_chunk_features(duration_aware=True)` takes NeMo's contract: statistics over the `samples // 160 + 1` frames
+that carry audio, padded frames zero, mask one only on those frames. The transcribe general path sets it. A full
+30 s window is bit-identical in both contracts.
+Measured on the 13-inch M1 ANE against the unfixed 0.7.35-1 on the same clips: the 13 empty clips all transcribe
+(35 reference words, 35 errors before, 6 after); 40 clips under 3 s went from 53.3 to 5.5 percent word error;
+12 clips of 6 to 10 s from 3.0 to 1.9; 8 clips of 15 to 25 s from 3.5 to 2.0.
+The dictation path (`parakeet_dictation.py`) still calls the frontend with the pinned contract and is not covered by this fix.
+
 ## Vulkan timeline stall kills serving threads: mlx_lm.server (0.31.3 and 872ae88) and oMLX 0.6.4
 
 Observed on t6001-test-host (M1 Max, Honeykrisp), wheel `b283a16`, 2026-09-18/19. Any serving stack
