@@ -10,14 +10,16 @@ Measured on the 13-inch M1. Five balanced pairs per cell. Default env. Both arms
 
 | Model | Context | Delta vs v0.7.37 |
 | --- | --- | --- |
-| Qwen3.8-2B 4-bit | 512 | +3.4% |
-| Qwen3.8-2B 4-bit | 2048 | +4.0% |
-| 4B | 512 | +1.8% |
-| 4B | 2048 | +2.2% |
-| 9B | 512 | +1.8% |
-| 9B | 2048 | +2.4% |
+| Qwen3.8-2B 4-bit | 512 | +3.43% |
+| Qwen3.8-2B 4-bit | 2048 | +3.99% |
+| 4B | 512 | +1.76% |
+| 4B | 2048 | +2.22% |
+| 4B | 4096 | +2.19% |
+| 9B | 512 | +1.83% |
+| 9B | 2048 | +2.42% |
+| 9B | 4096 | +2.04% |
 
-The full grid is 40 of 40 pairs with identical tokens. Within-arm spread stayed under 2 percent in every cell. `MLX_OMARCHY_QMM_GEOM=<rows>x<slots>` still overrides the default. Any value outside the listed geometries is refused by name.
+The full grid is 40 of 40 pairs with identical tokens: eight model/context cells on the 13-inch M1, five balanced pairs each, +1.76 to +3.99 percent, within-arm spread under 2 percent in every cell. On the 16-inch M1 Max the same interleaved A/B measured +4.12 percent at 2B with 512 tokens of context (#351); isolated per-shape cells are not comparable across geometries there, so the model-level summary is the 16-inch record. `MLX_OMARCHY_QMM_GEOM=<rows>x<slots>` still overrides the default. Any value outside the listed geometries is refused by name.
 
 ## Other changes
 
