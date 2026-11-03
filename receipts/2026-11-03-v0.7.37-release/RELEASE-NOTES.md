@@ -37,7 +37,7 @@ Batch 2 on a 14-inch M2 Max still takes about 5 percent longer per step than bef
 
 ## Known issue: a GPU page fault when a process with queued GPU work is killed (#339, kernel issue omacom/linux-aurora#335)
 
-On Linux, the GPU driver logs a page fault when a process with two compute submissions in flight is killed. A firmware timeout and a recovery follow. The machine recovers each time and later GPU work runs. The killed process does not. An 11-line MLX script reproduces it on a 13-inch M1 in 10 of 10 runs, and a Vulkan-only program with no MLX in it reproduces it in 15 of 15 kills. Nothing faulted in 10 runs with one submission in flight at a time, or in 10 runs where the Vulkan program exits normally. This is what the voice gate g10 logged on v0.7.35 and v0.7.36. The gate stops the assistant with a signal while work is still queued. The Vulkan-only program puts the fault below MLX, in the GPU driver. It is not new in this release, and the kernel side is tracked in linux-aurora#335.
+On Linux, the GPU driver logs a page fault when a process with two compute submissions in flight is killed. A firmware timeout and a recovery follow. The machine recovers each time and later GPU work runs. The killed process does not. An 11-line MLX script reproduces it on a 13-inch M1 in 10 of 10 runs, and a Vulkan-only program with no MLX in it reproduces it in 15 of 15 kills. Nothing faulted in 10 runs with one submission in flight at a time, or in 10 runs where the Vulkan program exits normally. This is what the voice gate g10 logged on v0.7.35 and v0.7.36. The gate stops the assistant with a signal while work is still queued. On this release g10 ran once on the 16-inch machine and logged no fault. The Vulkan-only program puts the fault below MLX, in the GPU driver. It is not new in this release, and the kernel side is tracked in linux-aurora#335.
 
 ## How this release was gated
 
@@ -55,7 +55,18 @@ On a 13-inch M1 (kernel `7.1.12-2-20261013.18-sep-ARCH`) every gate printed its 
 - g8 Kokoro: `G8_KOKORO_EXIT 0`.
 - g9 read-aloud: `SPEAK_QUEUE_SMOKE PASS`.
 
-PENDING: the 16-inch M1 Max gates (g2, g4, g5, g10 to g15) have not run yet. They are queued, and this paragraph is replaced with their results when they have.
+On a 16-inch M1 Max (kernel `7.1.12-2-20261103.2-lab-ARCH`, AGX vote off) the rest passed. The 9B gates run on this machine, because the product's own memory budget refuses the 9B pair on 15 GiB.
+
+- g2 online 9B: `GATE PASS`. The chat answered and the compare chose `cat` (0.7192).
+- g4 offline: `GATE PASS` with outbound traffic denied. g5 Laya: exit 0.
+- g10 Kokoro primer: `GATE10 PASS`. Primed after 26.4 s (limit 90 s), first audio 0.248 s (limit 2.0 s).
+- g12 Kokoro stream: `GATE12 PASS`. First audio 0.351 s (limit 1.5 s), 20 chunks, 10.90 s of audio, none starved, no errors.
+- g11 card 9B: `CARD_CHECK PASS`.
+- g13 GDN coopmat correctness: 6 of 6 cases, 1394 of 1394 assertions.
+- g14 routing: `ROUTE_ON PASS` and `KILL_SWITCH PASS`.
+- g15 trig contract: 7 of 7 cases (128 assertions) and 4 of 4 cases (49 assertions).
+
+The driver logged no GPU timeout during any of these batches, g10 included (see the known issue below). g1, g3 and g8 also passed on this machine, and so did g7d. Each of those 16-inch rows ran once.
 
 ## Decode number on the uploaded wheel
 

@@ -55,8 +55,28 @@ The median is 28.19. The generated token ids hash to `775bf034e185c8f9` in all f
 
 ## Logs
 
-The gate and decode logs named in `HASHES.txt` are in `logs/`, 54 KB in all, with the three scripts that produced them. Three kinds of private names were redacted before publishing: the home directory, host names and the name of a driver file. `logs/redact-logs.py` does it and is deterministic. `HASHES.txt` keeps the hashes of the originals. `HASHES-published-logs.txt` has the hashes of the files in `logs/`. A reader with the originals can run the script and compare.
+The gate and decode logs named in `HASHES.txt` are in `logs/`, 75 KB in all, with the three scripts that produced them. Three kinds of private names were redacted before publishing: the home directory, host names and the name of a driver file. `logs/redact-logs.py` does it and is deterministic. `HASHES.txt` keeps the hashes of the originals. `HASHES-published-logs.txt` has the hashes of the files in `logs/`. A reader with the originals can run the script and compare.
 
 ## 16-inch M1 Max gates
 
-PENDING: g2, g4, g5 and g10 to g15 are queued on the 16-inch M1 Max and have not run. This section gets their results when they have.
+Kernel `7.1.12-2-20261103.2-lab-ARCH`, AGX vote off. Eight rows ran once each and all passed. They were the tree build for g13 and g15, six gate batches, and g7d. The batch script, the asset sums and the tag tree commit were the same as on the 13-inch machine. The driver logged no GPU timeout in any of them (`GPU-TIMEOUTS delta=0`).
+
+| Gate | Result |
+| --- | --- |
+| g1 clean install | `INSTALL_EXIT 0`, installed `0.32.4.dev202611031039+06d1038d` equals the expected version |
+| g2 online 9B | `GATE PASS`, compare chose `cat` (0.7192) |
+| g3 online 4B card | `CARD_CHECK PASS` |
+| g4 offline | `GATE PASS` |
+| g5 Laya | `GATE5_EXIT 0` |
+| g8 Kokoro | `G8_KOKORO_EXIT 0` |
+| g10 Kokoro primer | `GATE10 PASS`, primed after 26.4 s, first audio 0.248 s |
+| g12 Kokoro stream | `GATE12 PASS`, first audio 0.351 s, 20 chunks, 10.90 s of audio |
+| g11 card 9B | `CARD_CHECK PASS` |
+| g13 GDN coopmat correctness | 6 of 6 cases, 1394 of 1394 assertions |
+| g14 routing | `ROUTE_ON PASS`, `KILL_SWITCH PASS` |
+| g15 trig contract | 7 of 7 cases (128 assertions), 4 of 4 cases (49 assertions) |
+| g7d fresh-image transcribe | `GOLDEN_MATCH PASS` |
+
+The receipt files are in `logs/` with a `16in-` prefix. The g10 primer took 26.4 s here. The v0.7.36 run on the same machine took 8.2 s. It is inside its 90 s limit and I did not look into the difference.
+
+The batches ran in this order: b1 (g1, g2), b2 (g3, g4, g5), b3 (g8, g10, g12), b4 (g11), b5 (g14), b6 (g13, g15). g8 runs before g10 on purpose. It installs the voice runtime that g10 and g12 need.
