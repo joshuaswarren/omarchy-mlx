@@ -107,10 +107,18 @@ choose the venv python and the driver setting.
 
 ## What to expect
 
-- **The G16G routes do not apply to G16S.** The M4 changes #316, #317 and
-  #321 are keyed on the device name containing `G16G`. A G16S device gets
-  the default cooperative-matrix pick and fused GEMV on. Nothing is
-  measured on G16S, so the routes are not extended to it.
+- **Two of the G16G routes do not apply to G16S.** The M4 changes #316
+  (fused GEMV off by default) and #317 (bf16 linear layers on the
+  scalar-FMA kernel) test the device name for `G16G`. A G16S device gets
+  fused GEMV on and the default cooperative-matrix pick. Nothing is
+  measured on G16S, so those two are not extended to it.
+- **#321 follows the driver, not the name.** The bf16 4-bit prefill route
+  on the scalar-FMA kernel applies to any device whose cooperative-matrix
+  route is unreachable. That means no fp32 cooperative matrix, a subgroup
+  size other than 32, too little shared memory, or
+  `MLX_OMARCHY_NO_COOPMAT=1`. If your driver does not expose the
+  cooperative matrix, you get #321 and not the default pick. The
+  collector's capability report shows which case you are in.
 - **Op checks may fail.** It is not known whether the wheel's kernels pass
   on Apple9 under Borealis. A failed op reference in the first run is a
   valid table fact.
