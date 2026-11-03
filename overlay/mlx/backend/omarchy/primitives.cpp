@@ -4007,10 +4007,12 @@ static int decode_path_override(const char* name) {
 }
 
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
-// live): the largest pass length T (2..4) whose [1, T, K] bf16 x runs as
-// one batch-shared decode GEMV instead of the coopmat prefill tile. The cap
-// is 4 because above it a second GEMV block costs more than the tile on G13G
-// (PR #296). Unset, empty or 0 keeps the shipped route. Each row is
+// live): the largest pass length T whose [1, T, K] bf16 x runs as batch-shared
+// decode GEMV (one dispatch per block of 4 rows) instead of the coopmat prefill
+// tile. The cap is 4 on every part but G13C, where it is 8 (qmv_small_t_device_cap):
+// above 4 a second GEMV block costs more than the tile on G13G (PR #296). The
+// request is clamped to 8 here and to the part's cap at the call site. Unset,
+// empty or 0 keeps the shipped route. Each row is
 // bit-identical to the single-row GEMV, not to the coopmat chain, so the
 // route is opt-in until a numerics decision
 // (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
