@@ -1,0 +1,44 @@
+IDLE-GUARD-JOB-START 20261103T130610Z lane=w72 class=validation release v0.7.37 gate batch b3 g8-kokoro g10-kokoro-primer g12-kokoro-stream pin=06d1038d draft-assets longcap=30 host-16in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261103.2-lab-ARCH
+PREFLIGHT-RUN
+SETTLE load1=2.29 SETTLE-SKIPPED
+GPU-TIMEOUTS before=23 boot=9de8ae34-9ba5-4817-88c2-c550a9df82dd
+=== g8-kokoro  13:06:11 free   38G ===
+BEGIN 2026-11-03T13:06:11Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+G8_KOKORO_EXIT 0
+g8-kokoro_RC=0 13:06:26
+=== g10-kokoro-primer  13:06:26 free   37G ===
+BEGIN 2026-11-03T13:06:26Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+loadavg_before=2.20 2.46 2.17 2/546 119685
+SETUP_COMPLETE 3.1s
+VOICE_SETUP_COMPLETE 30.0s
+PRIMED true after 26.4s (limit 90s)
+CHAT status=complete text='Ready'
+TTFA 0.248s (limit 2.00s)
+GATE10 PASS
+fuser_port=33805 exit=1 output=
+GATE10_EXIT 0
+g10-kokoro-primer_RC=0 13:07:35
+=== g12-kokoro-stream  13:07:35 free   34G ===
+BEGIN 2026-11-03T13:07:35Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+loadavg_before=1.89 2.33 2.15 2/547 121650
+SETUP_COMPLETE 3.2s
+VOICE_SETUP_COMPLETE 23.8s
+PRIMED true after 8.2s
+CHAT status=complete len=180
+WARM ttfa=0.3940603579994786 chunks=20 audio=10.90s errors=0 done=True
+TTFA 0.351s (limit 1.50s)
+STREAM chunks=20 audio=10.90s (min 3.0) starved=0 errors=0 done=True
+GATE12 PASS
+fuser_port=44651 exit=1 output=
+GATE12_EXIT 0
+g12-kokoro-stream_RC=0 13:08:27
+BATCH_OK g8-kokoro g10-kokoro-primer g12-kokoro-stream
+GPU-TIMEOUTS after=23 delta=0
+tput=
+GATE12_EXIT 0
+g12-kokoro-stream_RC=0 13:08:27
+BATCH_OK g8-kokoro g10-kokoro-primer g12-kokoro-stream

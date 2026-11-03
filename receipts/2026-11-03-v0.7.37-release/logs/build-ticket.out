@@ -1,0 +1,170 @@
+IDLE-GUARD-JOB-START 20261103T103937Z lane=w72 quiet-ane class=perf release-v0.7.37-aarch64-wheel-and-vendor-set-build host-13in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+rel-a64.sh: OK
+SETTLE load1=0.08 SETTLE-SKIPPED
+GPU-TIMEOUTS before=37 boot=6cb62736-5e56-47f4-b8a5-244b1eab9252
+start 10:39:38 load 0.08 free   28G
+checkout ok 06d1038d
+build-wheel ok 10:43:21
+PASS: build-hook clocks cannot change version; SOURCE_DATE_EPOCH uses UTC
+a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8  mlx_omarchy-0.32.4.dev202611031039+06d1038d-cp314-cp314-linux_aarch64.whl
+a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8  omarchy-mlx-wheel-cp314-aarch64.whl
+==> resolving requirements-lock.in for aarch64 python3.14
+Collecting mlx-lm==0.31.3 (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 14))
+  Using cached mlx_lm-0.31.3-py3-none-any.whl.metadata (9.5 kB)
+Collecting transformers==5.16.1 (from transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached transformers-5.16.1-py3-none-any.whl.metadata (32 kB)
+Collecting numpy (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 16))
+  Using cached numpy-2.5.4-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (6.6 kB)
+Collecting protobuf (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 17))
+  Using cached protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl.metadata (595 bytes)
+Collecting pyyaml (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 18))
+  Using cached pyyaml-6.0.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (2.4 kB)
+Collecting jinja2 (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 19))
+  Using cached jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+Collecting huggingface_hub (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Downloading huggingface_hub-2.4.0-py3-none-any.whl.metadata (16 kB)
+Collecting soundfile (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 21))
+  Using cached soundfile-0.14.0-py2.py3-none-manylinux_2_28_aarch64.whl.metadata (18 kB)
+Collecting sentencepiece (from mlx-lm==0.31.3->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 14))
+  Using cached sentencepiece-0.2.2-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (33 kB)
+Collecting huggingface_hub (from -r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached huggingface_hub-1.33.0-py3-none-any.whl.metadata (16 kB)
+Collecting packaging>=20.0 (from transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting regex>=2025.10.22 (from transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached regex-2026.9.29-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (40 kB)
+Collecting tokenizers<0.24.0,>=0.23.1 (from transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached tokenizers-0.23.3-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl.metadata (9.8 kB)
+Collecting typer (from transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached typer-0.27.3-py3-none-any.whl.metadata (16 kB)
+Collecting safetensors>=0.8.0 (from transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached safetensors-0.8.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl.metadata (4.2 kB)
+Collecting tqdm>=4.60 (from transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached tqdm-4.70.1-py3-none-any.whl.metadata (57 kB)
+Collecting click<9.0.0,>=8.4.2 (from huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached click-8.5.0-py3-none-any.whl.metadata (2.6 kB)
+Collecting filelock>=3.10.0 (from huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Downloading filelock-4.2.7-py3-none-any.whl.metadata (2.0 kB)
+Collecting fsspec>=2023.5.0 (from huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached fsspec-2026.9.0-py3-none-any.whl.metadata (10 kB)
+Collecting hf-xet<2.0.0,>=1.6.0 (from huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Downloading hf_xet-1.8.0-cp38-abi3-manylinux_2_28_aarch64.whl.metadata (4.9 kB)
+Collecting httpx<1,>=0.23.0 (from huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+Collecting typing-extensions>=4.1.0 (from huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting anyio (from httpx<1,>=0.23.0->huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Downloading anyio-4.16.0-py3-none-any.whl.metadata (4.7 kB)
+Collecting certifi (from httpx<1,>=0.23.0->huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached certifi-2026.10.23-py3-none-any.whl.metadata (2.5 kB)
+Collecting httpcore==1.* (from httpx<1,>=0.23.0->huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+Collecting idna (from httpx<1,>=0.23.0->huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached idna-3.20-py3-none-any.whl.metadata (7.2 kB)
+Collecting h11>=0.16 (from httpcore==1.*->httpx<1,>=0.23.0->huggingface_hub->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 20))
+  Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+Collecting MarkupSafe>=2.0 (from jinja2->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 19))
+  Using cached markupsafe-3.0.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (2.7 kB)
+Collecting cffi>=1.0 (from soundfile->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 21))
+  Using cached cffi-2.1.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl.metadata (2.5 kB)
+Collecting pycparser (from cffi>=1.0->soundfile->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 21))
+  Using cached pycparser-3.12-py3-none-any.whl.metadata (9.7 kB)
+Collecting shellingham>=1.3.0 (from typer->transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+Collecting rich>=13.8.0 (from typer->transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached rich-15.0.0-py3-none-any.whl.metadata (18 kB)
+Collecting annotated-doc>=0.0.2 (from typer->transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
+Collecting markdown-it-py>=2.2.0 (from rich>=13.8.0->typer->transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+Collecting pygments<3.0.0,>=2.13.0 (from rich>=13.8.0->typer->transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=13.8.0->typer->transformers==5.16.1->transformers[sentencepiece]==5.16.1->-r $HOME/scratch/w72/rel-0737-host-13in/a64/wt/packaging/requirements-lock.in (line 15))
+  Using cached mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+Using cached mlx_lm-0.31.3-py3-none-any.whl (408 kB)
+Using cached transformers-5.16.1-py3-none-any.whl (12.1 MB)
+Using cached huggingface_hub-1.33.0-py3-none-any.whl (846 kB)
+Using cached click-8.5.0-py3-none-any.whl (125 kB)
+Downloading hf_xet-1.8.0-cp38-abi3-manylinux_2_28_aarch64.whl (4.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.1/4.1 MB 181.5 MB/s  0:00:00
+Using cached httpx-0.28.1-py3-none-any.whl (73 kB)
+Using cached httpcore-1.0.9-py3-none-any.whl (78 kB)
+Using cached tokenizers-0.23.3-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (3.5 MB)
+Using cached numpy-2.5.4-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (15.7 MB)
+Using cached protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl (344 kB)
+Using cached pyyaml-6.0.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (766 kB)
+Using cached jinja2-3.1.6-py3-none-any.whl (134 kB)
+Using cached soundfile-0.14.0-py2.py3-none-manylinux_2_28_aarch64.whl (1.2 MB)
+Using cached cffi-2.1.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl (222 kB)
+Downloading filelock-4.2.7-py3-none-any.whl (164 kB)
+Using cached fsspec-2026.9.0-py3-none-any.whl (221 kB)
+Using cached h11-0.16.0-py3-none-any.whl (37 kB)
+Using cached markupsafe-3.0.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (24 kB)
+Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Using cached regex-2026.9.29-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (806 kB)
+Using cached safetensors-0.8.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (502 kB)
+Using cached sentencepiece-0.2.2-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (1.3 MB)
+Using cached tqdm-4.70.1-py3-none-any.whl (80 kB)
+Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Downloading anyio-4.16.0-py3-none-any.whl (134 kB)
+Using cached idna-3.20-py3-none-any.whl (69 kB)
+Using cached certifi-2026.10.23-py3-none-any.whl (135 kB)
+Using cached pycparser-3.12-py3-none-any.whl (62 kB)
+Using cached typer-0.27.3-py3-none-any.whl (123 kB)
+Using cached annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+Using cached rich-15.0.0-py3-none-any.whl (310 kB)
+Using cached pygments-2.21.0-py3-none-any.whl (1.3 MB)
+Using cached markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+Using cached mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Using cached shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/mlx_lm-0.31.3-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/transformers-5.16.1-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/huggingface_hub-1.33.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/click-8.5.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/hf_xet-1.8.0-cp38-abi3-manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/httpx-0.28.1-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/httpcore-1.0.9-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/numpy-2.5.4-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/pyyaml-6.0.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/jinja2-3.1.6-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/soundfile-0.14.0-py2.py3-none-manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/cffi-2.1.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/filelock-4.2.7-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/fsspec-2026.9.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/h11-0.16.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/markupsafe-3.0.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/packaging-26.3-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/regex-2026.9.29-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/safetensors-0.8.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/sentencepiece-0.2.2-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/tqdm-4.70.1-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/typing_extensions-4.16.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/anyio-4.16.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/idna-3.20-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/certifi-2026.10.23-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/pycparser-3.12-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/typer-0.27.3-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/annotated_doc-0.0.5-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/rich-15.0.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/pygments-2.21.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/markdown_it_py-4.2.0-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/mdurl-0.1.2-py3-none-any.whl
+Saved $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/shellingham-1.5.4-py2.py3-none-any.whl
+Successfully downloaded mlx-lm transformers huggingface_hub click hf-xet httpx httpcore tokenizers numpy protobuf pyyaml jinja2 soundfile cffi filelock fsspec h11 MarkupSafe packaging regex safetensors sentencepiece tqdm typing-extensions anyio idna certifi pycparser typer annotated-doc rich pygments markdown-it-py mdurl shellingham
+
+[notice] A new release of pip is available: 26.2.1 -> 26.3
+[notice] To update, run: pip install --upgrade pip
+verified 36 vendored wheel(s) against $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64/requirements-lock.txt
+==> vendored wheels + lock written under $HOME/scratch/w72/rel-0737-host-13in/a64/vendor/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64
+894379d1064d4b6e17384ba31c4d768364955a5c488309fd260d2d25e1e0f76b  omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.tar
+-rw-r--r-- 1 joshuawarren joshuawarren 467650560 Nov  3 04:43 $HOME/scratch/w72/rel-0737-host-13in/a64/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.t
+-rw-r--r-- 1 joshuawarren joshuawarren       118 Nov  3 04:43 $HOME/scratch/w72/rel-0737-host-13in/a64/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.t
+done 10:43:27
+GPU-TIMEOUTS after=37 delta=0
+awarren 467650560 Nov  3 04:43 $HOME/scratch/w72/rel-0737-host-13in/a64/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.t
+-rw-r--r-- 1 joshuawarren joshuawarren       118 Nov  3 04:43 $HOME/scratch/w72/rel-0737-host-13in/a64/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.t
+done 10:43:27

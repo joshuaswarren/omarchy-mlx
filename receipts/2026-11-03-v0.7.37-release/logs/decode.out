@@ -1,0 +1,72 @@
+IDLE-GUARD-JOB-START 20261103T105159Z lane=w72 quiet-ane class=perf release v0.7.37 decode pinned 2B 4-bit 5 runs on the uploaded wheel pin=06d1038d host-13in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.86 SETTLE-SKIPPED
+GPU-TIMEOUTS before=37 boot=6cb62736-5e56-47f4-b8a5-244b1eab9252
+start 10:52:00 free   25G load 0.86
+INSTALL_EXIT 0
+installed 0.32.4.dev202611031039+06d1038d mlx_lm 0.31.3
+== run 1 10:52:15 load 0.89
+[omarchy] warning: The mlx-lm in this environment has no omarchy serve patches. Hybrid models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B prefill). Fix: ins
+uclamp: uclamp_min=1024
+provenance: mlx-omarchy 0.32.4.dev202611031039+06d1038d mx=0.32.4.dev202611031039+06d1038d verified=match harness=06d1038d core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:b06ab8a688f6d848
+decode 27.89 tok/s over 127 tokens (128 requested, EOS suppressed)
+prefill 0.462s (reported separately, excluded from decode)
+decode mean per-token 35.9 ms
+generated_ids sha256:775bf034e185c8f9 n=128 first=760,1156,369 last=248046,198,248046
+{"decode_tps": 27.8898, "device": "Apple M1 (G13G B1)", "engine": "bench_decode", "generated": 128, "ids_first": [760, 1156, 369], "ids_last": [248046, 198, 248046], "ids_sha256_16": "775bf034e185c8f9", "prefill_s": 0.461501, "pre
+bench_decode exit 0
+== run 2 10:52:24 load 0.90
+[omarchy] warning: The mlx-lm in this environment has no omarchy serve patches. Hybrid models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B prefill). Fix: ins
+uclamp: uclamp_min=1024
+provenance: mlx-omarchy 0.32.4.dev202611031039+06d1038d mx=0.32.4.dev202611031039+06d1038d verified=match harness=06d1038d core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:b06ab8a688f6d848
+decode 28.19 tok/s over 127 tokens (128 requested, EOS suppressed)
+prefill 0.459s (reported separately, excluded from decode)
+decode mean per-token 35.5 ms
+generated_ids sha256:775bf034e185c8f9 n=128 first=760,1156,369 last=248046,198,248046
+{"decode_tps": 28.1896, "device": "Apple M1 (G13G B1)", "engine": "bench_decode", "generated": 128, "ids_first": [760, 1156, 369], "ids_last": [248046, 198, 248046], "ids_sha256_16": "775bf034e185c8f9", "prefill_s": 0.459362, "pre
+bench_decode exit 0
+== run 3 10:52:32 load 1.06
+[omarchy] warning: The mlx-lm in this environment has no omarchy serve patches. Hybrid models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B prefill). Fix: ins
+uclamp: uclamp_min=1024
+provenance: mlx-omarchy 0.32.4.dev202611031039+06d1038d mx=0.32.4.dev202611031039+06d1038d verified=match harness=06d1038d core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:b06ab8a688f6d848
+decode 28.19 tok/s over 127 tokens (128 requested, EOS suppressed)
+prefill 0.459s (reported separately, excluded from decode)
+decode mean per-token 35.5 ms
+generated_ids sha256:775bf034e185c8f9 n=128 first=760,1156,369 last=248046,198,248046
+{"decode_tps": 28.1862, "device": "Apple M1 (G13G B1)", "engine": "bench_decode", "generated": 128, "ids_first": [760, 1156, 369], "ids_last": [248046, 198, 248046], "ids_sha256_16": "775bf034e185c8f9", "prefill_s": 0.459242, "pre
+bench_decode exit 0
+== run 4 10:52:40 load 1.05
+[omarchy] warning: The mlx-lm in this environment has no omarchy serve patches. Hybrid models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B prefill). Fix: ins
+uclamp: uclamp_min=1024
+provenance: mlx-omarchy 0.32.4.dev202611031039+06d1038d mx=0.32.4.dev202611031039+06d1038d verified=match harness=06d1038d core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:b06ab8a688f6d848
+decode 27.95 tok/s over 127 tokens (128 requested, EOS suppressed)
+prefill 0.460s (reported separately, excluded from decode)
+decode mean per-token 35.8 ms
+generated_ids sha256:775bf034e185c8f9 n=128 first=760,1156,369 last=248046,198,248046
+{"decode_tps": 27.9472, "device": "Apple M1 (G13G B1)", "engine": "bench_decode", "generated": 128, "ids_first": [760, 1156, 369], "ids_last": [248046, 198, 248046], "ids_sha256_16": "775bf034e185c8f9", "prefill_s": 0.460112, "pre
+bench_decode exit 0
+== run 5 10:52:48 load 1.13
+[omarchy] warning: The mlx-lm in this environment has no omarchy serve patches. Hybrid models (Qwen3.5, Qwen3.6, Qwen3.8 and others) prefill several times slower on stock mlx-lm (measured 4.1x on Qwen3.6-35B-A3B prefill). Fix: ins
+uclamp: uclamp_min=1024
+provenance: mlx-omarchy 0.32.4.dev202611031039+06d1038d mx=0.32.4.dev202611031039+06d1038d verified=match harness=06d1038d core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:b06ab8a688f6d848
+decode 28.19 tok/s over 127 tokens (128 requested, EOS suppressed)
+prefill 0.463s (reported separately, excluded from decode)
+decode mean per-token 35.5 ms
+generated_ids sha256:775bf034e185c8f9 n=128 first=760,1156,369 last=248046,198,248046
+{"decode_tps": 28.1858, "device": "Apple M1 (G13G B1)", "engine": "bench_decode", "generated": 128, "ids_first": [760, 1156, 369], "ids_last": [248046, 198, 248046], "ids_sha256_16": "775bf034e185c8f9", "prefill_s": 0.46319, "pref
+bench_decode exit 0
+runs completed: 5 of 5; expected ids digest from the v0.7.35 and v0.7.36 receipts: sha256:775bf034e185c8f9
+DECODE_DONE
+GPU-TIMEOUTS after=37 delta=0
+k mlx-lm (measured 4.1x on Qwen3.6-35B-A3B prefill). Fix: ins
+uclamp: uclamp_min=1024
+provenance: mlx-omarchy 0.32.4.dev202611031039+06d1038d mx=0.32.4.dev202611031039+06d1038d verified=match harness=06d1038d core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:b06ab8a688f6d848
+decode 28.19 tok/s over 127 tokens (128 requested, EOS suppressed)
+prefill 0.463s (reported separately, excluded from decode)
+decode mean per-token 35.5 ms
+generated_ids sha256:775bf034e185c8f9 n=128 first=760,1156,369 last=248046,198,248046
+{"decode_tps": 28.1858, "device": "Apple M1 (G13G B1)", "engine": "bench_decode", "generated": 128, "ids_first": [760, 1156, 369], "ids_last": [248046, 198, 248046], "ids_sha256_16": "775bf034e185c8f9", "prefill_s": 0.46319, "pref
+bench_decode exit 0
+runs completed: 5 of 5; expected ids digest from the v0.7.35 and v0.7.36 receipts: sha256:775bf034e185c8f9
+DECODE_DONE
