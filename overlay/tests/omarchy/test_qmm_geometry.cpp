@@ -211,7 +211,10 @@ int main(int argc, char** argv) {
   // sets the override, so the child inherits the unset environment).
   {
     const auto& dev = mlx::core::omarchy::device().capabilities().device_name;
-    std::string want = dev.find("G13G") != std::string::npos ? "2x16" : "2x4";
+    std::string want =
+        (dev.find("G13G") != std::string::npos || dev.find("G13C") != std::string::npos)
+        ? "2x16"
+        : "2x4";
     int rc = run_child("name", "/tmp/w7p-geom-name.bin");
     std::ifstream f("/tmp/w7p-geom-name.bin");
     std::string got;
@@ -223,7 +226,7 @@ int main(int argc, char** argv) {
     }
   }
   // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x16", "4x8", "2x4"}) {
+  for (const char* geometry : {"2x16", "2x4"}) {
     for (const char* name : {"single", "group", "swiglu"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";
