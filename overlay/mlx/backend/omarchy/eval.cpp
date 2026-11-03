@@ -7,6 +7,7 @@
 
 #include "mlx/backend/gpu/eval.h"
 
+#include <cstdlib>
 #include <vector>
 
 #ifdef MLX_OMARCHY_GPU_PROFILING
@@ -18,6 +19,8 @@
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/primitives.h"
+#include "mlx/device.h"
+#include "mlx/stream.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/scheduler.h"
 
@@ -213,6 +216,26 @@ mlx_omarchy_trace_snapshot(
 extern "C" __attribute__((visibility("default"))) std::uint64_t
 mlx_omarchy_trace_snapshot_abi_size(void) {
   return sizeof(mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot);
+}
+
+// The mode the fused GatedDelta conv + delta op runs in: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated norm
+// fused. MLX_OMARCHY_GDN_CONV_DELTA overrides ("0", "1", "2"); unset follows the per-chip default in omarchy::gdn_conv_delta_norm_default_part. The mlx-lm
+// patch reads this once at import: without the symbol (an older wheel) the patch keeps the stock route.
+extern "C" __attribute__((visibility("default"))) int
+mlx_omarchy_gdn_conv_delta_default(void) {
+  const char* env = std::getenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  if (env != nullptr && env[0] != '\0') {
+    if (env[0] == '1' && env[1] == '\0') {
+      return 1;
+    }
+    if (env[0] == '2' && env[1] == '\0') {
+      return 2;
+    }
+    return 0;
+  }
+  auto& encoder = omarchy::get_command_encoder(default_stream(Device::gpu));
+  const std::string& name = encoder.device().capabilities().device_name;
+  return omarchy::gdn_conv_delta_norm_default_part(name) ? 2 : 0;
 }
 
 #ifdef MLX_OMARCHY_GPU_PROFILING
