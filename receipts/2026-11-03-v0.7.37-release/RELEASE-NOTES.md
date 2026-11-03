@@ -43,7 +43,7 @@ On Linux, the GPU driver logs a page fault when a process with two compute submi
 
 The gates installed from the draft release's assets, with the draft's `SHA256SUMS` checked first, and `scripts/verify-release-assets.py v0.7.37` printed `VERIFIED` on the draft. Both wheels were built from clean checkouts of the tag commit.
 
-On a 13-inch M1 (kernel `7.1.12-2-20261013.18-sep-ARCH`) every gate printed its own pass marker:
+On a 13-inch M1 (kernel `7.1.12-2-20261013.18-sep-ARCH`) every gate printed its own pass marker. Seven of them (g1, g3, g6, g7a, g7b, g8, g9) were rerun once after a first attempt failed in the harness, not in the release; the receipt lists both attempts:
 
 - g1 clean install: `INSTALL_EXIT 0`, and the installed version `0.32.4.dev202611031039+06d1038d` equals the uploaded wheel's.
 - g3 online 4B card: `CARD_CHECK PASS`.
@@ -57,8 +57,6 @@ On a 13-inch M1 (kernel `7.1.12-2-20261013.18-sep-ARCH`) every gate printed its 
 
 PENDING: the 16-inch M1 Max gates (g2, g4, g5, g10 to g15) have not run yet. They are queued, and this paragraph is replaced with their results when they have.
 
-My first attempts on the 13-inch M1 failed because of my own harness, not the release. The first g1 refused a gate home that already existed: the g7c and g7d row ran first and shared the gate root. The g8 and g7a rows that ran in the same minute then failed without an installed home (`G8_KOKORO_EXIT 1`, `GATE7A_EXIT 127`). I gave the two row groups separate gate roots and reran all of them; the results above are the reruns.
-
 ## Decode number on the uploaded wheel
 
-The uploaded aarch64 wheel was installed into a fresh venv on the 13-inch M1 with `pip install --no-index --find-links` on the vendored wheel set from the draft (mlx-lm 0.31.3). Qwen3.8-2B 4-bit (`SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b`), greedy, seed 0, 128 tokens, `MLX_DISABLE_COMPILE=1`, five separate runs: 27.89, 28.19, 28.19, 27.95 and 28.19 tokens per second. The median is 28.19. The generated token ids hash to `775bf034e185c8f9` in all five runs, the digest the v0.7.34, v0.7.35 and v0.7.36 runs gave. The v0.7.36 median on the same machine was 27.66.
+The uploaded aarch64 wheel was installed into a fresh venv on the 13-inch M1 with `pip install --no-index --find-links` on the vendored wheel set from the draft (mlx-lm 0.31.3). Qwen3.8-2B 4-bit (`SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b`), greedy, seed 0, 128 tokens requested, `MLX_DISABLE_COMPILE=1`, five separate runs: 27.89, 28.19, 28.19, 27.95 and 28.19 tokens per second. The median is 28.19. The generated token ids hash to `775bf034e185c8f9` in all five runs, the digest the v0.7.34, v0.7.35 and v0.7.36 runs gave. The v0.7.36 median on the same machine was 27.66.

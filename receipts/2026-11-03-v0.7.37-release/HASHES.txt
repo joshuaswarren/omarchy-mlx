@@ -1,0 +1,23 @@
+# v0.7.37 release receipt: sha256 and bytes
+# Format: sha256, bytes, name. Assets first, then the gate receipts of the 13-inch M1, then the scripts that ran.
+
+7b98acd4d6fdcf4c09b13e67cd5036916769d42ee86cdd4f1ef841b89bfd76d1  10572776  mlx_omarchy-0.32.4.dev202611031037+06d1038d-cp311-cp311-linux_x86_64.whl
+a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8  422445581  mlx_omarchy-0.32.4.dev202611031039+06d1038d-cp314-cp314-linux_aarch64.whl
+a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8  422445581  omarchy-mlx-wheel-cp314-aarch64.whl
+894379d1064d4b6e17384ba31c4d768364955a5c488309fd260d2d25e1e0f76b  467650560  omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.tar
+de5b3f74432eef794a037cec71f7687f5806873b63068f70d14102befbf58926  118        omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.tar.sha256
+9a90dc6ebd2c1b20a204d72e2ac889ed604a503edc3792c866f23f3da472c857  624        SHA256SUMS
+
+1a4d331f3c7bdb98e769539f3626e710a71551ee56dffe9c10cc59d7585e4e34  5290       gates-k1.out   (g1, g3)
+3df1f43fa4fef10c304d83cc0f0ef4462bd0a80e4459ce3993080e54934f6bab  1075       gates-k2.out   (g6, g8)
+a5931bae51df9c9fef6fc3ac77ddd3d7d96af5d71987854c69ab831e331b1c82  3914       gates-k3.out   (g7a, g7b, g9)
+4374d5a98c9fba73673a212c20bef8da163f3932d810b4fc06fb6f9ad8f67050  6126       gates-j4.out   (g7c, g7d)
+4170263d19ed0341531ab1352bb70dba35fc211e130dd544bc51197ed90cc087  6480       decode.out
+f277aa1f55f69d782fa3da97f3b2f64615051c2315038dbe0ad1874548dbb5cd  19007      build-ticket.out
+7ab9df4d7e6da159bf6a0308752f5f20dc22d1cf27ae91236c3311144e9e9115  850        gates-j1.out   (first attempt, failed)
+cb60518465cdb7824de908e7eb358fa1cd3ee6f724f6ce2f0efd146fdce3a1e0  1084       gates-j2.out   (first attempt, g8 failed)
+78a77722cab21b3cffff327c1ac58b59ded9c4d7ae1b33a13f94d2a907f98467  3624       gates-j3.out   (first attempt, g7a failed)
+
+3c8d3efd9d5a0814366c13e535a5afaf70529990f58279c396685fc3fe8bd5fb             gates-batch.sh
+6896470e57b9de25193eaea31993d2922ed7e5d66db9ee1887f545bfbd0e6075             decode.sh
+75c11bed69aa97eac114d6184cfa54fba54702614e03ab5699934013136616c4             rel-a64.sh
