@@ -43,6 +43,9 @@
 #if defined(GDN_CONV_FUSED) && (defined(GDN_COMPOSED_ORDER) || defined(GDN_NATIVE_GQA_INDEX))
 #error GDN_CONV_FUSED covers the default-order equal-head build only
 #endif
+#if defined(GDN_NORM_FUSED) && !defined(GDN_CONV_FUSED)
+#error GDN_NORM_FUSED extends GDN_CONV_FUSED
+#endif
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
@@ -58,6 +61,11 @@ layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; }
 layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
 layout(set = 0, binding = 2, std430) readonly buffer ConvW     { uint16_t v[]; } conv_w;
 layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
+#ifdef GDN_NORM_FUSED
+// Gated-norm epilogue (rms_norm_gated over each head's 128 outputs): 11 gate z [B, 1, Hv, 128], 12 norm weight [128].
+layout(set = 0, binding = 11, std430) readonly buffer NormGate   { uint16_t v[]; } norm_gate;
+layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#endif /* GDN_NORM_FUSED */
 #endif /* GDN_CONV_FUSED */
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
@@ -584,6 +592,41 @@ float gdn_conv_prologue(uint head, uint row) {
   gdn_conv_state_out(v_channel);
   return bf16_load(v_act);
 }
+#ifdef GDN_NORM_FUSED
+// Epilogue: rms_norm_gated (fast_norm_gated.comp mode 0, the default non-APPLE row reduction, which
+// serves 128-wide rows) over this head's 128 outputs, replacing the y store. Statements are that
+// file's. Extra fields: params.shape[3] gate item offset, params.output_size norm weight item offset,
+// params.alpha the norm eps. The reduction is the file's 256-slot tree with the stride-128 step omitted
+// (it only ever adds the +0.0 of the 128 idle slots).
+shared float gdn_out_block[128];
+
+void gdn_norm_epilogue(uint head, uint row, float o_acc) {
+  // the delta kernel's own bf16 store of y, then the widen the norm kernel's input read performs
+  float value = bf16_load(bf16_store(o_acc));
+  float local_sq = 0.0;
+  local_sq += value * value;
+  gdn_out_block[row] = local_sq;
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    if (row < stride) {
+      gdn_out_block[row] += gdn_out_block[row + stride];
+    }
+    barrier();
+  }
+  float mean_square = gdn_out_block[0] / 128.0;
+  barrier();
+  float norm = inversesqrt(mean_square + params.alpha);
+  float weight = bf16_load(norm_w.v[params.output_size + row]);
+  precise float norm_weight = norm * weight;
+  precise float result = value * norm_weight;
+  float normed = bf16_load(gdn_conv_bf16_store(result));
+  float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + row]);
+  float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+  precise float silu = gate * sigmoid_value;
+  precise float prod = silu * normed;
+  y_buf.v[params.output_offset + head * params.matrix_n + row] = gdn_conv_bf16_store(prod);
+}
+#endif /* GDN_NORM_FUSED */
 #define GDN_V_ELEM gdn_v_elem
 #else /* GDN_CONV_FUSED */
 #define GDN_V_ELEM bf16_load(v_buf.v[params.aux_size + head * dv + row])
@@ -737,5 +780,9 @@ void main() {
   float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row],
                                 (params.flags & 512u) != 0u);
 #endif /* GDN_COMPOSED_ORDER */
+#ifdef GDN_NORM_FUSED
+  gdn_norm_epilogue(head, row, o_acc);
+#else /* GDN_NORM_FUSED */
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
+#endif /* GDN_NORM_FUSED */
 }

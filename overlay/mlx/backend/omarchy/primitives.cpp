@@ -14796,8 +14796,10 @@ void GdnConvDeltaUpdate::eval_gpu(
   const std::string tag = name();
   auto s = stream();
   auto& encoder = omarchy::get_command_encoder(s);
-  // Inputs: conv state, qkv row, conv weight, a, b, A_log, dt_bias, recurrent state.
+  // Inputs: conv state, qkv row, conv weight, a, b, A_log, dt_bias, recurrent state, and optionally the
+  // gate z and the norm weight (then output 0 is rms_norm_gated(delta output, z, weight)).
   // Outputs: delta output, recurrent state out, conv carry-out state.
+  const bool with_norm = inputs.size() == 10;
   const int B = inputs.at(1).shape(0);
   const int C = inputs.at(1).shape(2);
   const int K = inputs.at(2).shape(1);
@@ -14826,7 +14828,7 @@ void GdnConvDeltaUpdate::eval_gpu(
   const bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
   const bool apple_norm = apple_norm_enabled(encoder.device(), size_t{128}, size_t{static_cast<size_t>(B) * C});
   const bool supported = B == 1 && K == 4 && decode_tile == false && gdn_pf && !apple_norm &&
-      encoder.device().compute().binding_limit() >= 11;
+      encoder.device().compute().binding_limit() >= (with_norm ? 13u : 11u);
   if (!supported) {
     auto result = fallback_(inputs);
     settle(result);
@@ -14888,7 +14890,15 @@ void GdnConvDeltaUpdate::eval_gpu(
   params.out_strides[1] = std::bit_cast<uint32_t>(qk_eps());
   params.out_strides[2] = std::bit_cast<uint32_t>(qk_scale_q());
   params.out_strides[3] = std::bit_cast<uint32_t>(qk_scale_k());
-  std::array<omarchy::ComputeBinding, 11> bindings{
+  array norm_gate = with_norm ? inputs.at(8) : a_in;
+  array norm_weight = with_norm ? inputs.at(9) : a_in;
+  if (with_norm) {
+    // The epilogue's fields (see gated_delta_decode_perrow_pf.comp): gate and weight item offsets, eps.
+    params.shape[3] = checked_item_offset(norm_gate, norm_gate.size(), tag, out);
+    params.output_size = checked_item_offset(norm_weight, norm_weight.size(), tag, out);
+    params.alpha = norm_eps();
+  }
+  std::array<omarchy::ComputeBinding, 13> bindings{
       binding(in_state),
       binding(in_x),
       binding(in_w),
@@ -14899,11 +14909,17 @@ void GdnConvDeltaUpdate::eval_gpu(
       binding(hf),
       binding(A_log),
       binding(dt_bias),
-      binding(conv_state_out)};
+      binding(conv_state_out),
+      binding(norm_gate),
+      binding(norm_weight)};
+  const omarchy::ComputeKernel kernel = with_norm
+      ? (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfWide
+                 : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Pf)
+      : (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
+                 : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
   encoder.dispatch_compute(
-      pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
-              : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf,
-      bindings,
+      kernel,
+      std::span<const omarchy::ComputeBinding>(bindings.data(), with_norm ? 13u : 11u),
       params,
       static_cast<uint32_t>(B * Hv),
       1,

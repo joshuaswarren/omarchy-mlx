@@ -54,7 +54,7 @@ array bf16(Shape shape, uint32_t seed, float scale, Stream s, float shift = 0.0f
 }
 
 struct Inputs {
-  array conv_state, qkv, weight, a, b, a_log, dt_bias, delta_state;
+  array conv_state, qkv, weight, a, b, a_log, dt_bias, delta_state, gate, norm_w;
 };
 
 Inputs make_inputs(uint32_t seed, float state_scale, Stream s) {
@@ -66,8 +66,10 @@ Inputs make_inputs(uint32_t seed, float state_scale, Stream s) {
       bf16({1, 1, H}, seed + 5, 1.0f, s),
       bf16({H}, seed + 6, 1.0f, s, 1.0f),
       bf16({H}, seed + 7, 1.0f, s),
-      pattern({1, H, D, D}, seed + 8, state_scale, 0.0f)};
-  eval({in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias, in.delta_state});
+      pattern({1, H, D, D}, seed + 8, state_scale, 0.0f),
+      bf16({1, 1, H, D}, seed + 9, 2.0f, s),
+      bf16({D}, seed + 10, 0.5f, s, 1.0f)};
+  eval({in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias, in.delta_state, in.gate, in.norm_w});
   return in;
 }
 
@@ -79,8 +81,9 @@ struct Run {
   uint64_t dispatches;
 };
 
-// The two production dispatches the fused op replaces, exactly as the model calls them.
-Run production_pair(const Inputs& in, Stream s) {
+// The production dispatches the fused op replaces, exactly as the model calls them: conv, delta and, with
+// `norm`, the gated norm (mx.fast.rms_norm_gated(out, z, weight, eps)).
+Run production_pair(const Inputs& in, Stream s, bool norm = false) {
   uint64_t before = counters().vk_compute_dispatches.load();
   auto conv = fast::gdn_conv_update(
       in.conv_state, in.qkv, in.weight, true, KEY_DIM, INV * INV, INV, EPS, s);
@@ -89,17 +92,19 @@ Run production_pair(const Inputs& in, Stream s) {
   auto delta = fast::gated_delta_update_raw(
       reshape(parts[0], heads, s), reshape(parts[1], heads, s), reshape(parts[2], heads, s),
       in.a, in.b, in.a_log, in.dt_bias, in.delta_state, std::nullopt, s);
-  Run r{{delta[0], delta[1], conv[1]}, 0};
+  array y = norm ? fast::rms_norm_gated(delta[0], in.gate, in.norm_w, EPS, s) : delta[0];
+  Run r{{y, delta[1], conv[1]}, 0};
   eval(r.out);
   r.dispatches = counters().vk_compute_dispatches.load() - before;
   return r;
 }
 
-Run fused(const Inputs& in, Stream s) {
+Run fused(const Inputs& in, Stream s, bool norm = false) {
   uint64_t before = counters().vk_compute_dispatches.load();
   Run r{fast::gdn_conv_delta_update(
             in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias, in.delta_state,
-            KEY_DIM, INV * INV, INV, EPS, s),
+            KEY_DIM, INV * INV, INV, EPS, norm ? std::optional<array>(in.gate) : std::nullopt,
+            norm ? std::optional<array>(in.norm_w) : std::nullopt, norm ? EPS : 0.0f, s),
         0};
   eval(r.out);
   r.dispatches = counters().vk_compute_dispatches.load() - before;
@@ -168,4 +173,59 @@ TEST_CASE("the fused conv + delta step is off unless the flag is set") {
   for (int i = 0; i < 3; ++i) {
     CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
   }
+}
+
+TEST_CASE("the conv + delta + gated norm step returns the production sequence's bytes") {
+  if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
+  Stream s = gpu_stream();
+  const char* names[3] = {"normed output", "recurrent state", "conv carry-out state"};
+  for (uint32_t seed : {10u, 20u, 30u}) {
+    for (float state_scale : {0.05f, 2.0f}) {
+      Inputs in = make_inputs(seed, state_scale, s);
+      Run want = production_pair(in, s, true);
+      Run got = fused(in, s, true);
+      REQUIRE(got.out.size() == 3);
+      for (int i = 0; i < 3; ++i) {
+        CHECK_MESSAGE(got.out[i].shape() == want.out[i].shape(), std::string(names[i]), ": shape differs");
+        CHECK_MESSAGE(
+            array_equal(got.out[i], want.out[i], s).item<bool>(), std::string(names[i]),
+            " differs from the production sequence (seed ", seed, ", state scale ", state_scale, ")");
+      }
+    }
+  }
+}
+
+TEST_CASE("the conv + delta + gated norm step is one dispatch where the sequence is three") {
+  if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
+  Stream s = gpu_stream();
+  Inputs in = make_inputs(10, 0.05f, s);
+  production_pair(in, s, true);  // warm both routes so one-time setup is not counted
+  fused(in, s, true);
+  Run seq = production_pair(in, s, true);
+  Run one = fused(in, s, true);
+  std::cout << "[gdn_conv_delta] production sequence " << seq.dispatches << " dispatches, fused with norm " << one.dispatches << "\n";
+  CHECK_MESSAGE(seq.dispatches == 3, "the reference sequence is expected to be three dispatches");
+  if (one.dispatches == seq.dispatches && std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") == nullptr) {
+    std::cout << "Skipping the engagement check: this device's unfused route does not use the prefetch delta kernel\n";
+    return;
+  }
+  CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the sequence into one dispatch");
+}
+
+TEST_CASE("the norm form composes the sequence unless the flag is 2") {
+  if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);  // the conv + delta form only: norm arguments must compose
+  Stream s = gpu_stream();
+  Inputs in = make_inputs(10, 0.05f, s);
+  Run want = production_pair(in, s, true);
+  Run got = fused(in, s, true);
+  CHECK_MESSAGE(got.dispatches == want.dispatches, "flag 1 with norm arguments must run the composed sequence");
+  for (int i = 0; i < 3; ++i) {
+    CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+  }
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  Run unset = fused(in, s, true);
+  CHECK_MESSAGE(unset.dispatches == want.dispatches, "an unset flag must run the composed sequence");
 }
