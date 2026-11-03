@@ -104,12 +104,13 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // once): the bf16 subgroup Q4 word and multi kernels run <rows> columns per
 // slot and <slots> 32-lane slots per workgroup. Every column keeps the same
 // per-lane chain, so the bytes are identical in every geometry; only the
-// columns and threads per workgroup change. Unset: 2x16 on G13G (the
-// measured winner there: +3.59 percent on the 2B at 512 tokens of context,
-// +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
-// identical), 2x4 on every other chip until its paired A/B lands. The only
-// other accepted value is 4x8, the second candidate the 16-inch A/B still
-// needs.
+// columns and threads per workgroup change. Unset: 2x16 on G13G and G13C
+// (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
+// context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
+// identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
+// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
+// every other chip until its paired A/B lands. The accepted overrides are
+// 2x4 and 2x16.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
