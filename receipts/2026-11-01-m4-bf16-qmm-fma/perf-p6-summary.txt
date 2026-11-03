@@ -1,0 +1,16 @@
+## prefill_bench.py mlx-community/granite-4.0-1b-4bit 128 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=21.5 values=[21.5, 21.5] argmax [279] peak_gpu_gib=0.932 temps_c=32.164-41.457 load1_before<=0.08
+  B p6+95a3849 n=2 median=181.75 values=[181.8, 181.7] argmax [279] peak_gpu_gib=0.932 temps_c=32.43-41.57 load1_before<=0.11
+  B/A = 8.453
+## prefill_bench.py mlx-community/granite-4.0-1b-4bit 512 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=21.1 values=[21.1, 21.1] argmax [13] peak_gpu_gib=1.104 temps_c=32.605-46.328 load1_before<=0.02
+  B p6+95a3849 n=2 median=171.85000000000002 values=[171.9, 171.8] argmax [13] peak_gpu_gib=1.104 temps_c=32.788-45.027 load1_before<=0.02
+  B/A = 8.145
+## prefill_bench.py mlx-community/Qwen3.5-2B-MLX-4bit 512 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=15.7 values=[15.7, 15.7] argmax [13] peak_gpu_gib=1.653 temps_c=33.226-49.269 load1_before<=0.2
+  B p6+95a3849 n=2 median=63.6 values=[63.6, 63.6] argmax [13] peak_gpu_gib=1.653 temps_c=34.204-48.136 load1_before<=0.18
+  B/A = 4.051
+## decode_bench.py mlx-community/granite-4.0-1b-4bit 64 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=38.78 values=[38.77, 38.79] prompt_med 22.5 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=34.014-49.015 load1_before<=0.33
+  B p6+95a3849 n=2 median=38.795 values=[38.79, 38.8] prompt_med 112.325 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=34.295-47.953 load1_before<=0.18
+  B/A = 1.000

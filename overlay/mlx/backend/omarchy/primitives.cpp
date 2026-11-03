@@ -8216,6 +8216,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // falls back to the shipped pick for A/B measurement.
   static const bool qmm_fma_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA");
+  // bf16 activations take the same kernel's bf16 build
+  // (QmmPrefillFmaBF16) instead of the scalar 16x16 tile kernel;
+  // MLX_OMARCHY_NO_QMM_FMA_BF16=1 restores the tile route for A/B.
+  static const bool qmm_fma_bf16_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA_BF16");
   const char* tile_env = std::getenv("MLX_OMARCHY_QMM_TILE");
   bool tile_path = tile_env == nullptr || std::strcmp(tile_env, "0") != 0;
   const char* rb_env = std::getenv("MLX_OMARCHY_QMM_TILE_RB");
@@ -8240,8 +8245,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // a coopmat-capable driver the dispatch falls through to the shipped
   // cooperative-matrix pick by name and the FMA kernels stay reserved.
   if (!qmm_fma_disabled && !coopmat_reachable && tile_path && rb_enabled &&
-      q4_g64_transpose && out.dtype() == float16 && x.ndim() >= 2 &&
-      x.shape(-2) > 1) {
+      q4_g64_transpose &&
+      (out.dtype() == float16 ||
+       (out.dtype() == bfloat16 && !qmm_fma_bf16_disabled)) &&
+      x.ndim() >= 2 && x.shape(-2) > 1) {
     int fma_k = x.shape(-1);
     int fma_n = transpose_ ? w.shape(-2) : w.shape(-1) * 32 / bits_;
     qmm_fma_reachable = (fma_k % 8 == 0) && (fma_n % 2 == 0);
@@ -8537,13 +8544,42 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     }
   }
   if (tile_path) {
+    // bf16-activation scalar-FMA prefill: the bf16 build of the f16 FMA
+    // kernel, wherever the cooperative route is not reachable for this
+    // call (qmm_fma_reachable above requires !coopmat_reachable, which
+    // also covers a cooperative-matrix device whose subgroup size, shared
+    // memory or MLX_OMARCHY_NO_COOPMAT rules the route out), so the
+    // coopmat block below is unaffected. Same alignment, grid and
+    // contraction-class split as the f16 route.
+    if (rb_enabled && out.dtype() == bfloat16 && qmm_fma_reachable) {
+      if ((params.lhs_offset & 7u) != 0u ||
+          (params.output_offset & 1u) != 0u) {
+        omarchy::unsupported(tag + " fma operand alignment", out);
+      }
+      omarchy::ComputeKernel fma_kernel =
+          params.matrix_m >= 1024u
+              ? omarchy::ComputeKernel::QmmPrefillFmaPreciseBF16
+              : omarchy::ComputeKernel::QmmPrefillFmaBF16;
+      encoder.dispatch_compute(
+          fma_kernel,
+          bindings,
+          params,
+          std::min((params.matrix_n + 63u) / 64u,
+                   omarchy::kMaxComputeGroupCountX),
+          std::min((params.matrix_m + 63u) / 64u,
+                   omarchy::kMaxComputeGroupCountX),
+          1u);
+      return;
+    }
     // bf16-activation coopmat prefill: the pinned mlx-community Qwen3.8
     // 4-bit snapshots are bf16-hybrid, so without this route their
-    // prefill falls to the scalar 16x16 QmmTileBF16 baseline. The
-    // f16-only FMA and register-blocked fallbacks do not apply; a
-    // driver without the fp32 cooperative matrix keeps the shipped
-    // tile path (the block below declines by not dispatching, matching
-    // the pre-route behavior bit for bit).
+    // prefill falls to the scalar 16x16 QmmTileBF16 baseline. Where the
+    // cooperative route is not reachable for this call (no fp32 8x8x8
+    // matrix, subgroup size other than 32, too little shared memory or
+    // MLX_OMARCHY_NO_COOPMAT=1), 4-bit group-64 transposed bf16 took the
+    // scalar-FMA build above unless MLX_OMARCHY_NO_QMM_FMA(_BF16)=1 or
+    // its alignment refused; the other formats and those cases keep the
+    // tile path (the block below declines by not dispatching).
     if (rb_enabled && out.dtype() == bfloat16 && coopmat_reachable) {
       if ((params.lhs_offset | params.output_offset) & 1u) {
         omarchy::unsupported(tag + " coopmat operand alignment", out);
