@@ -4,7 +4,7 @@
 
 Idempotent patch for mlx-lm 0.31.3 venvs, mirroring
 patch-mlx-lm-qwen35-gdn-conv.py. The new branch runs only when
-MLX_OMARCHY_GDN_CONV_DELTA=1 is set in the process environment, the
+MLX_OMARCHY_GDN_CONV_DELTA is 1 (conv + delta) or 2 (the gated norm folded in too), the
 attribute exists on mx.fast, and the step is a plain bf16 decode (T == 1, no
 mask, no cache lengths, an existing recurrent state, no tensor sharding, GPU
 default device). Every other case takes the composed path unchanged, and so
@@ -21,8 +21,9 @@ IMPORT_NEW = "import os\nfrom dataclasses import dataclass, field\n"
 BRANCH_ANCHOR = """        if mask is not None:
             qkv = mx.where(mask[..., None], qkv, 0)
 """
-BRANCH_NEW = """        if (
-            os.environ.get("MLX_OMARCHY_GDN_CONV_DELTA") == "1"
+BRANCH_NEW = """        gdn_fuse = os.environ.get("MLX_OMARCHY_GDN_CONV_DELTA")
+        if (
+            gdn_fuse in ("1", "2")
             and mask is None
             and S == 1
             and cache is not None
@@ -47,11 +48,13 @@ BRANCH_NEW = """        if (
                 inv_scale**2,
                 inv_scale,
                 1e-6,
+                *((z, self.norm.weight, self.norm.eps) if gdn_fuse == "2" else ()),
             )
             cache[0] = new_conv_state
             cache[1] = state
             cache.advance(S)
-            out = self.norm(out, z)
+            if gdn_fuse != "2":
+                out = self.norm(out, z)
             return self.out_proj(out.reshape(B, S, -1))
 """ + BRANCH_ANCHOR
 
