@@ -1366,6 +1366,9 @@ Device::Device(uint32_t physical_device_index) {
     dt.CmdPushDescriptorSetKHR = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
         dt.GetDeviceProcAddr(device_, "vkCmdPushDescriptorSetKHR"));
     push_descriptors_ = dt.CmdPushDescriptorSetKHR != nullptr;
+    if (push_descriptors_) {
+      std::fprintf(stderr, "[omarchy] push descriptors are on (MLX_OMARCHY_PUSH_DESCRIPTORS)\n");
+    }
   } else if (push_descriptors_requested()) {
     std::fprintf(
         stderr,
