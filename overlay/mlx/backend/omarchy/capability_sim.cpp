@@ -111,6 +111,36 @@ const SimulationProfile kProfiles[] = {
         -1,
     },
     {
+        "workgroup-256",
+        "other",
+        "Runtime capability set with the compute workgroup limits cut to "
+        "256 invocations and 256 in x: the 1024-lane f16 decode SDPA arm "
+        "refuses, the 256-lane composition-exact bf16 arm is admitted",
+        -1,
+        0,
+        kAllSubgroupOps,
+        -1,
+        0,
+        256,
+        256,
+        -1,
+    },
+    {
+        "workgroup-128",
+        "other",
+        "Runtime capability set with the compute workgroup limits cut to "
+        "128 invocations and 128 in x: both decode SDPA arms refuse and "
+        "decode attention composes",
+        -1,
+        0,
+        kAllSubgroupOps,
+        -1,
+        0,
+        128,
+        128,
+        -1,
+    },
+    {
         "m1-g13-legacy",
         "honeykrisp_fork",
         "Base-M1 (G13G) device name over the runtime capability set: "

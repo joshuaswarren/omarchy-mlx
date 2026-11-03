@@ -1,0 +1,20 @@
+end: {"k": "end", "t": 11919742392752, "dispatches": 4577, "dropped": 0, "submissions": 51, "joins": 1, "barriers": 689, "barriers_skipped": 3939}
+    801 SdpaDecodeNativeF16Hd128
+    800 ElementwiseLiteF16
+    407 SdpaDecodeNativeBF16Hd128
+    400 ElementwiseLiteBF16
+    250 ElementwiseLiteF32
+     99 ElementwiseF32
+     96 RandomBitsU32
+     48 CastU32F32
+     38 CastF32BF16
+     15 CastF32F16
+      6 CastBF16F32
+      4 MatmulF32
+      2 SoftmaxF32
+      2 MatmulF16
+      1 SdpaDecodeNativeBF16Hd256
+      1 SdpaDecodeNativeBF16
+      1 SoftmaxF16
+      1 SdpaDecodeNativeTwoPassP1F16Hd128
+      1 SdpaDecodeNativeTwoPassP2F16Hd128
