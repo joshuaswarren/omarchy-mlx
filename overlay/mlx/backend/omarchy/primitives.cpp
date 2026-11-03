@@ -113,16 +113,10 @@ struct QmmGeometry {
 const QmmGeometry& qmm_geometry() {
   static const QmmGeometry geometry = [] {
     using K = omarchy::ComputeKernel;
-    const char* kunroll = std::getenv("MLX_OMARCHY_QMM_KUNROLL");
-    const bool ku2 = kunroll != nullptr && kunroll[0] != '\0' &&
-        !(kunroll[0] == '0' && kunroll[1] == '\0');
     const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
     if (env == nullptr || *env == '\0') {
       return QmmGeometry{
-          8u,
-          ku2 ? K::QmmVecQ4WordSubgroupBF16Ku2 : K::QmmVecQ4WordSubgroupBF16,
-          ku2 ? K::QmmVecQ4MultiSubgroupBF16Ku2
-              : K::QmmVecQ4MultiSubgroupBF16};
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
     }
     const std::string v(env);
     if (v == "2x2") {
@@ -172,10 +166,7 @@ const QmmGeometry& qmm_geometry() {
     }
     if (v == "2x4") {
       return QmmGeometry{
-          8u,
-          ku2 ? K::QmmVecQ4WordSubgroupBF16Ku2 : K::QmmVecQ4WordSubgroupBF16,
-          ku2 ? K::QmmVecQ4MultiSubgroupBF16Ku2
-              : K::QmmVecQ4MultiSubgroupBF16};
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
     }
     throw std::invalid_argument(
         "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x2 4x2 2x4 4x4 2x8 4x8 "
