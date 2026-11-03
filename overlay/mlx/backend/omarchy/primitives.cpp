@@ -16536,9 +16536,14 @@ void ScaledDotProductAttention::eval_gpu(
     // shapes) and engages this path even when the unchunked route would
     // fit, so a single fresh-process ticket can compare chunked and
     // single-chunk output byte-for-byte. Non-causal, no mask, no sinks,
-    // single output; everything else keeps the routes below.
-    if (outputs.size() == 1 && !do_causal_ && inputs.size() == 3 &&
-        !has_sinks_ && q_len > 1) {
+    // single output; everything else keeps the routes below. Causal calls
+    // join when every row holds a key (causal_fast): a chunk starting at row
+    // row0 sees the keys up to causal_offset + row0, so the QK matmul, the
+    // causal softmax and the PV matmul take that offset; the rows are still
+    // independent and chunk starts are multiples of 64, so the tile
+    // boundaries and each row's arithmetic match the whole pass.
+    if (outputs.size() == 1 && (!do_causal_ || causal_fast) &&
+        inputs.size() == 3 && !has_sinks_ && q_len > 1) {
       const uint64_t chunk_denom =
           static_cast<uint64_t>(batch) * heads * k_len * sizeof(float);
       uint64_t chunk_bytes_cap = 1ull << 30;
@@ -16593,6 +16598,10 @@ void ScaledDotProductAttention::eval_gpu(
           array qs_c = row_chunk_view(qs, row0, rows);
           Shape score_shape = qs_c.shape();
           score_shape.back() = k_len;
+          // This chunk's first row is global row row0, so its causal offset
+          // is causal_offset + row0 (0 and no skipping when not causal).
+          const uint32_t chunk_causal_offset =
+              causal_fast ? causal_offset + row0 : 0u;
           array scores_c(score_shape, float32, nullptr, {});
           dispatch_matmul(
               tag,
@@ -16602,12 +16611,20 @@ void ScaledDotProductAttention::eval_gpu(
               0.0f,
               false,
               s,
-              {0u, CausalSkip::None},
+              {chunk_causal_offset,
+               causal_fast ? CausalSkip::Columns : CausalSkip::None},
               omarchy::ComputeKernel::MatmulF32CoopmatQkBF16);
           encoder.add_temporary(scores_c);
           array probs_c(scores_c.shape(), float32, nullptr, {});
           dispatch_softmax(
-              tag, scores_c, probs_c, s, nullptr, rows, false, 0);
+              tag,
+              scores_c,
+              probs_c,
+              s,
+              nullptr,
+              rows,
+              causal_fast,
+              static_cast<int>(chunk_causal_offset));
           encoder.add_temporary(probs_c);
           // PV lands in a fresh contiguous chunk matrix; the strided
           // inplace copy then writes it into the output rows through the
@@ -16629,7 +16646,8 @@ void ScaledDotProductAttention::eval_gpu(
               0.0f,
               false,
               s,
-              {0u, CausalSkip::None},
+              {chunk_causal_offset,
+               causal_fast ? CausalSkip::K : CausalSkip::None},
               omarchy::ComputeKernel::MatmulF32CoopmatPvBF16);
           encoder.add_temporary(result_c);
           // result_c is (batch, kv, repeat, rows, v_dim) when GQA regroups q;
