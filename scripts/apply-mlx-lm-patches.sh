@@ -82,6 +82,7 @@ SERIES_PATCHES=(
   mlx-lm-convring.patch
   mlx-lm-last-logits.patch
   mlx-lm-last-logits-qwen3.patch
+  mlx-lm-prefill-step-memory.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -266,6 +267,12 @@ apply mlx-lm-last-logits.patch
 # within one bf16 ULP and identical fp64-reference error (receipts/2026-10-08-qwen3-last-logits).
 # MLX_OMARCHY_FULL_LOGITS=1 restores the full head; cache=None calls always keep it.
 apply mlx-lm-last-logits-qwen3.patch
+# Memory-aware prefill chunk for direct mlx-lm use: with no chunk given, generate_step picks the
+# largest of 2048 and its halvings whose estimated scratch fits the Honeykrisp heap headroom (heap =
+# HK_SYSMEM or half of MemTotal, minus live arrays). Qwen3.8-9B 4-bit on a 15.1 GiB host fails an 8k
+# prompt at the 2048 default with VK_ERROR_OUT_OF_DEVICE_MEMORY; with a smaller chunk it completes.
+# An explicit chunk always wins and the result never exceeds 2048, so a host with room is unchanged.
+apply mlx-lm-prefill-step-memory.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the
