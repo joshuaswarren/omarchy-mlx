@@ -37,6 +37,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <string>
@@ -114,6 +115,18 @@ int run_child_scenario(const std::string& mode) {
     }
     omarchy::allocator().free(buf);
     std::cout << "[child/reopen] fresh process device reopen ok\n";
+    return 0;
+  }
+  if (mode == "poll_env") {
+    // Initialize the device, then report HK_SUBMIT_POLL_US as the process sees it.
+    const char* out_path = std::getenv("MLX_OMARCHY_TEST_OUT");
+    if (out_path == nullptr) {
+      return 2;
+    }
+    bool ok = gpu::is_available();
+    const char* v = std::getenv("HK_SUBMIT_POLL_US");
+    std::ofstream f(out_path);
+    f << "available=" << (ok ? 1 : 0) << "\n" << "poll=" << (v == nullptr ? "(unset)" : v) << "\n";
     return 0;
   }
   if (mode == "bounded_submit") {
@@ -2392,6 +2405,52 @@ TEST_CASE("a reused Event accepts a later published producer generation") {
   CHECK_MESSAGE(
       r.code == 0,
       "child late_reused_event_publication failed with code " << r.code);
+}
+
+TEST_CASE("the backend leaves HK_SUBMIT_POLL_US unset and keeps a value the user set") {
+  // The 2000 us default made the host spin on zero-timeout syncobj waits for most of every wait (about 21000 expired waits per token on a 13-inch M1,
+  // 5 s more CPU and 1 W more system power over a 400-token decode, no speed gain). The knob stays available to whoever sets it.
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto run = [](const char* value) {
+    std::string path = "/tmp/mlx_omarchy_poll_env_" + std::to_string(::getpid()) + ".txt";
+    ::setenv("MLX_OMARCHY_TEST_OUT", path.c_str(), 1);
+    const char* outer = std::getenv("HK_SUBMIT_POLL_US");
+    std::string saved = outer == nullptr ? "" : outer;
+    bool had = outer != nullptr;
+    if (value != nullptr) {
+      ::setenv("HK_SUBMIT_POLL_US", value, 1);
+    } else {
+      ::unsetenv("HK_SUBMIT_POLL_US");
+    }
+    ChildRun r = run_child("poll_env", 60);
+    if (had) {
+      ::setenv("HK_SUBMIT_POLL_US", saved.c_str(), 1);
+    } else {
+      ::unsetenv("HK_SUBMIT_POLL_US");
+    }
+    ::unsetenv("MLX_OMARCHY_TEST_OUT");
+    std::string poll = "?";
+    std::ifstream f(path);
+    for (std::string line; std::getline(f, line);) {
+      if (line.rfind("poll=", 0) == 0) {
+        poll = line.substr(5);
+      }
+    }
+    std::remove(path.c_str());
+    return std::make_pair(r.code, poll);
+  };
+  auto unset = run(nullptr);
+  REQUIRE(unset.first == 0);
+  CHECK(unset.second == "(unset)");
+  auto set = run("500");
+  REQUIRE(set.first == 0);
+  CHECK(set.second == "500");
+  auto zero = run("0");
+  REQUIRE(zero.first == 0);
+  CHECK(zero.second == "0");
 }
 
 TEST_CASE("unrelated active work does not extend an unsignaled Event wait") {
