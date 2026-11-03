@@ -1,0 +1,66 @@
+IDLE-GUARD-JOB-START 20261103T130940Z lane=w72 class=validation release v0.7.37 gate batch b6 g13-gdn-maskless:build g15-trig:build g13-gdn-maskless:run g15-trig:run pin=06d1038d draft-assets longcap=30 host-16in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261103.2-lab-ARCH
+PREFLIGHT-RUN
+SETTLE load1=2.01 SETTLE-SKIPPED
+GPU-TIMEOUTS before=23 boot=9de8ae34-9ba5-4817-88c2-c550a9df82dd
+=== g13-gdn-maskless (build) 13:09:41 free   32G ===
+BEGIN 2026-11-03T13:09:41Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only, no GPU) ==
+CMAKE_CONFIGURE_EXIT 0
+== build target ==
+BUILD_EXIT 0
+BIN $HOME/scratch/w72/rel-0737-host-16in/tree/.work/mlx/tests/omarchy/omarchy_gdn_maskless_correctness_tests
+GATE13_BUILD_EXIT 0
+g13-gdn-maskless_build_RC=0 13:13:54
+=== g15-trig (build) 13:13:54 free   32G ===
+BEGIN 2026-11-03T13:13:54Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only) ==
+CMAKE_CONFIGURE_EXIT 0
+== build targets ==
+BUILD_EXIT 0
+BIN $HOME/scratch/w72/rel-0737-host-16in/tree/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+BIN $HOME/scratch/w72/rel-0737-host-16in/tree/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+GATE15_BUILD_EXIT 0
+g15-trig_build_RC=0 13:14:02
+=== g13-gdn-maskless (run) 13:14:02 free   32G ===
+BIN $HOME/scratch/w72/rel-0737-host-16in/tree/.work/mlx/tests/omarchy/omarchy_gdn_maskless_correctness_tests
+loadavg_before=2.34 2.37 2.22 1/592 135943
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:    6 |    6 passed | 0 failed | 0 skipped
+[doctest] assertions: 1394 | 1394 passed | 0 failed |
+[doctest] Status: SUCCESS!
+DOCTEST_EXIT 0
+GATE13_EXIT 0
+g13-gdn-maskless_run_RC=0 13:16:11
+=== g15-trig (run) 13:16:11 free   32G ===
+BIN $HOME/scratch/w72/rel-0737-host-16in/tree/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+loadavg_before=2.90 2.52 2.30 2/597 138885
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   7 |   7 passed | 0 failed | 0 skipped
+[doctest] assertions: 128 | 128 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_eq_math_tests_EXIT 0
+BIN $HOME/scratch/w72/rel-0737-host-16in/tree/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+loadavg_before=2.90 2.52 2.30 2/597 138900
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:  4 |  4 passed | 0 failed | 0 skipped
+[doctest] assertions: 49 | 49 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_trig_reduction_tests_EXIT 0
+GATE15_EXIT 0
+g15-trig_run_RC=0 13:16:11
+BATCH_OK g13-gdn-maskless:build g15-trig:build g13-gdn-maskless:run g15-trig:run
+GPU-TIMEOUTS after=23 delta=0
+ 4 |  4 passed | 0 failed | 0 skipped
+[doctest] assertions: 49 | 49 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_trig_reduction_tests_EXIT 0
+GATE15_EXIT 0
+g15-trig_run_RC=0 13:16:11
+BATCH_OK g13-gdn-maskless:build g15-trig:build g13-gdn-maskless:run g15-trig:run

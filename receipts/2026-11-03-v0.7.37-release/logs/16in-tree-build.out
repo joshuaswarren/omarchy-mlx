@@ -1,0 +1,9 @@
+IDLE-GUARD-JOB-START 20261103T125938Z lane=w72 quiet-ane class=perf release v0.7.37 tree build for g13 and g15 cpu-compile pin=06d1038d host-16in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261103.2-lab-ARCH
+PREFLIGHT-RUN
+SETTLE load1=2.41 SETTLE-SKIPPED
+GPU-TIMEOUTS before=23 boot=9de8ae34-9ba5-4817-88c2-c550a9df82dd
+start 12:59:39 load 2.41 free   50G
+TREE_BUILD_OK 13:03:02
+GPU-TIMEOUTS after=23 delta=0
+03:02

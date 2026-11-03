@@ -1,0 +1,66 @@
+IDLE-GUARD-JOB-START 20261103T105146Z lane=w72 class=validation release v0.7.37 gate batch j3 g7a-packaged-icd g7b-system-install g9-speak-queue pin=06d1038d draft-assets longcap=30 host-13in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=1.10 SETTLE-SKIPPED
+GPU-TIMEOUTS before=37 boot=6cb62736-5e56-47f4-b8a5-244b1eab9252
+=== g7a-packaged-icd  10:51:48 free   25G ===
+BEGIN 2026-11-03T10:51:48Z tag=v0.7.37 boot_id=6cb62736-5e56-47f4-b8a5-244b1eab9252 uname=7.1.12-2-20261013.18-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json,sys; print(json.load(sys.stdin)["driver_sha"])
+                           ~~~~~~~~~^^^^^^^^^^^
+  File "/usr/lib/python3.14/json/__init__.py", line 298, in load
+    return loads(fp.read(),
+        cls=cls, object_hook=object_hook,
+        parse_float=parse_float, parse_int=parse_int,
+        parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)
+  File "/usr/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 363, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+fixture_driver_sha 
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+    d = json.load(sys.stdin)
+  File "/usr/lib/python3.14/json/__init__.py", line 298, in load
+    return loads(fp.read(),
+        cls=cls, object_hook=object_hook,
+        parse_float=parse_float, parse_int=parse_int,
+        parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)
+  File "/usr/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 363, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+GATE7A_EXIT 127
+g7a-packaged-icd_RC=127 10:51:48
+STOPPING: g7a-packaged-icd failed with rc 127
+GPU-TIMEOUTS after=37 delta=0
+d = json.load(sys.stdin)
+  File "/usr/lib/python3.14/json/__init__.py", line 298, in load
+    return loads(fp.read(),
+        cls=cls, object_hook=object_hook,
+        parse_float=parse_float, parse_int=parse_int,
+        parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)
+  File "/usr/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 363, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+GATE7A_EXIT 127
+g7a-packaged-icd_RC=127 10:51:48
+STOPPING: g7a-packaged-icd failed with rc 127

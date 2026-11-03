@@ -4211,18 +4211,33 @@ TEST_CASE("rope half-split builds: the part rule") {
   CHECK_FALSE(omarchy::rope_half_split_default_part(""));
 }
 
+TEST_CASE("rope half-split builds: MLX_OMARCHY_NO_ROPE_HALF_SPLIT values") {
+  // 0 general builds everywhere, 1 half-split builds everywhere, -1 the part rule.
+  CHECK_EQ(omarchy::rope_half_split_setting(nullptr), -1);
+  for (const char* v : {"1", "on", "true", "yes", "TRUE", "On", "YES"}) {
+    INFO("value=" << v);
+    CHECK_EQ(omarchy::rope_half_split_setting(v), 0);
+  }
+  CHECK_EQ(omarchy::rope_half_split_setting("0"), 1);
+  for (const char* v : {"", "false", "off", "no", "OFF", "maybe", "00", " 0", "2"}) {
+    INFO("value=\"" << v << "\"");
+    CHECK_EQ(omarchy::rope_half_split_setting(v), -1);
+  }
+}
+
 TEST_CASE("fused rope half-split form runs the half-split builds") {
   if (!compute_available()) {
     return;
   }
-  // The route this process takes: MLX_OMARCHY_NO_ROPE_HALF_SPLIT wins when
-  // set (1 general builds, 0 half-split builds); unset follows the part rule
-  // for this device. Both sides are checked: a part off the rule must keep
-  // the general builds.
+  // The route this process takes: MLX_OMARCHY_NO_ROPE_HALF_SPLIT wins when it
+  // is 1 (general builds) or 0 (half-split builds); unset or any other value
+  // follows the part rule for this device. Both sides are checked: a part off
+  // the rule must keep the general builds.
   const auto& caps = omarchy::device(0).capabilities();
-  const bool route_on =
-      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT") != nullptr
-      ? !omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT")
+  const int setting = omarchy::rope_half_split_setting(
+      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT"));
+  const bool route_on = setting >= 0
+      ? setting == 1
       : omarchy::rope_half_split_default_part(caps.device_name);
   INFO("device=" << caps.device_name << " route_on=" << route_on);
   using K = omarchy::ComputeKernel;
