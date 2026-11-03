@@ -131,7 +131,7 @@ uint16_t bf16_store(float value) {
 #if defined(QMM_VEC_OUTGATE)
 #define PROLOGUE_XWORDS(x_base) outgate_quad((x_base) / 8u)
 #elif defined(QMM_VEC_NORM)
-#define PROLOGUE_XWORDS(x_base) norm_quad((x_base) / 8u)
+#define PROLOGUE_XWORDS(x_base) norm_row[(x_base) / 8u]
 #else
 #define PROLOGUE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
@@ -340,9 +340,8 @@ layout(set = 0, binding = 27, std430) writeonly buffer NormOut {
   uvec4 values[];
 } norm_out;
 shared float norm_partial[8];
-float norm_scale;
-float norm_lane_squares(uint quad_index) {
-  uvec4 q = norm_raw.values[quad_index];
+shared uvec4 norm_row[256];
+float norm_lane_squares(uvec4 q) {
   precise float reg_sq = 0.0;
   for (uint i = 0u; i < 4u; ++i) {
     float lo = uintBitsToFloat(q[i] << 16u);
@@ -352,12 +351,33 @@ float norm_lane_squares(uint quad_index) {
   }
   return reg_sq;
 }
+uint norm_word(uint x_word, uint w_word, float scale) {
+  float x_lo = uintBitsToFloat(x_word << 16u);
+  float x_hi = uintBitsToFloat(x_word & 0xFFFF0000u);
+  float w_lo = uintBitsToFloat(w_word << 16u);
+  float w_hi = uintBitsToFloat(w_word & 0xFFFF0000u);
+  precise float nw_lo = scale * w_lo;
+  precise float nw_hi = scale * w_hi;
+  precise float r_lo = x_lo * nw_lo;
+  precise float r_hi = x_hi * nw_hi;
+  return uint(bf16_store(r_lo)) | (uint(bf16_store(r_hi)) << 16u);
+}
+uvec4 norm_quad(uvec4 x, uvec4 w, float scale) {
+  return uvec4(
+      norm_word(x.x, w.x, scale), norm_word(x.y, w.y, scale),
+      norm_word(x.z, w.z, scale), norm_word(x.w, w.w, scale));
+}
+// The normalized row lands in shared memory once per workgroup (each of the
+// 128 threads takes quads t and t + 128), so the four column slots read it
+// instead of each renormalizing every quad they visit.
 void norm_prologue() {
   uint thread = gl_LocalInvocationID.x;
   uint sub_id = thread / 32u;
   uint lane = thread % 32u;
-  float sub_low = subgroupAdd(norm_lane_squares(thread));
-  float sub_high = subgroupAdd(norm_lane_squares(thread + 128u));
+  uvec4 xa = norm_raw.values[thread];
+  uvec4 xb = norm_raw.values[thread + 128u];
+  float sub_low = subgroupAdd(norm_lane_squares(xa));
+  float sub_high = subgroupAdd(norm_lane_squares(xb));
   if (lane == 0u) {
     norm_partial[sub_id] = sub_low;
     norm_partial[sub_id + 4u] = sub_high;
@@ -372,28 +392,17 @@ void norm_prologue() {
   }
   barrier();
   float mean_square = norm_partial[0] / float(params.matrix_k);
-  norm_scale = inversesqrt(mean_square + params.alpha);
-}
-uint norm_word(uint x_word, uint w_word) {
-  float x_lo = uintBitsToFloat(x_word << 16u);
-  float x_hi = uintBitsToFloat(x_word & 0xFFFF0000u);
-  float w_lo = uintBitsToFloat(w_word << 16u);
-  float w_hi = uintBitsToFloat(w_word & 0xFFFF0000u);
-  precise float nw_lo = norm_scale * w_lo;
-  precise float nw_hi = norm_scale * w_hi;
-  precise float r_lo = x_lo * nw_lo;
-  precise float r_hi = x_hi * nw_hi;
-  return uint(bf16_store(r_lo)) | (uint(bf16_store(r_hi)) << 16u);
-}
-uvec4 norm_quad(uint quad_index) {
-  uvec4 x = norm_raw.values[quad_index];
-  uvec4 w = norm_weight.values[quad_index];
-  uvec4 m = {norm_word(x.x, w.x), norm_word(x.y, w.y),
-             norm_word(x.z, w.z), norm_word(x.w, w.w)};
+  float scale = inversesqrt(mean_square + params.alpha);
+  uvec4 ya = norm_quad(xa, norm_weight.values[thread], scale);
+  uvec4 yb = norm_quad(xb, norm_weight.values[thread + 128u], scale);
+  norm_row[thread] = ya;
+  norm_row[thread + 128u] = yb;
   if (gl_WorkGroupID.x == 0u) {
-    norm_out.values[quad_index] = m;
+    norm_out.values[thread] = ya;
+    norm_out.values[thread + 128u] = yb;
   }
-  return m;
+  memoryBarrierShared();
+  barrier();
 }
 #define NORM_PROLOGUE() norm_prologue();
 #endif
