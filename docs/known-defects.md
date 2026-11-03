@@ -24,11 +24,31 @@ kernel sets `mask[frame] = 1` for every frame) and the macOS CoreML reference
 (`MelFeatureExtractor.swift` in the pinned `75aec2a1` tree) — so the decoder
 decodes the full 375-frame padded window on audio shorter than the 30 s model
 window, producing trailing punctuation/Cyrillic artifacts. This is reference
-behavior in the pinned lineage; changing it is a reference-contract decision,
-intentionally not taken unilaterally. No output cleanup is applied.
+behavior in the pinned lineage. The pinned fixture and the `verify` golden keep
+it. The general `transcribe` path no longer does (status below). No output
+cleanup is applied.
 
-The exact ANE output is retained as a native parity reference, not presented
-as clean ASR output. This is a macOS reference finding, not a demonstrated Linux backend defect.
+The exact ANE output of the pinned fixture is retained as a native parity reference, not presented
+as clean ASR output. When recorded this was a macOS reference finding; the Linux general path inherited it.
+
+Status: **FIXED on the general `transcribe` path** (any audio but the pinned fixture); the pinned fixture keeps the
+reference behavior above, so `verify` and the golden contract are unchanged. The decode artifact was one of two
+causes. The other: `_statistics` computed each mel bin's mean and std over all 3001 frames, so a short clip carried
+about 28 s of constant padding in its statistics. Speech frames of a 1.3 to 2.4 s clip normalized to mean +2.3 to +3.7
+(std 2.5 to 3.2) instead of 0 and 1, and 13 of the 2620 LibriSpeech test-clean clips returned an empty transcript.
+`extract_chunk_features(duration_aware=True)` takes NeMo's contract: statistics over the `samples // 160 + 1` frames
+that carry audio, padded frames zero, mask one only on those frames. The transcribe general path sets it. A full
+30 s window is bit-identical in both contracts.
+Measured on the 13-inch M1 ANE against the unfixed 0.7.35-1 on the same clips: the 13 empty clips all transcribe
+(35 reference words, 35 errors before, 6 after); 40 clips under 3 s went from 53.3 to 5.5 percent word error;
+12 clips of 6 to 10 s from 3.0 to 1.9; 8 clips of 15 to 25 s from 3.5 to 2.0.
+
+## Parakeet dictation still uses the pinned mel contract
+
+Open. `overlay/tools/coreml/parakeet_dictation.py` calls `extract_chunk_features` without `duration_aware`, so
+dictation of a short utterance normalizes it over the padded window and decodes the padding, as `transcribe` did
+before the fix above. The fix needs the dictation decode to stop at the mask's valid frames, which its callbacks
+do not do today. Not measured: no dictation WER was taken.
 
 ## Vulkan timeline stall kills serving threads: mlx_lm.server (0.31.3 and 872ae88) and oMLX 0.6.4
 

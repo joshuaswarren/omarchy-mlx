@@ -43,6 +43,7 @@ N_FFT = 512
 N_BINS = 257
 N_MELS = 128
 ENCODER_FRAMES = 3_000
+HOP_SAMPLES = 160
 
 
 class _Constants(NamedTuple):
@@ -59,6 +60,12 @@ class VulkanMelResult(NamedTuple):
     encoder_features: object
     encoder_mask: object
     stages: dict[str, object]
+    valid_frames: int = N_FRAMES
+
+
+def valid_mel_frames(samples: int) -> int:
+    """Mel frames that carry audio: NeMo's seq_len, samples // hop + 1, and at least 2 (the std divides by n - 1)."""
+    return max(2, min(N_FRAMES, samples // HOP_SAMPLES + 1))
 
 
 def _mlx():
@@ -1079,33 +1086,34 @@ def _stats_kernel(mx=None):
     mx = mx or _mlx()
     return mx.fast.metal_kernel(
         name="parakeet_mean_std_f32",
-        input_names=["logmel"],
+        input_names=["logmel", "frames"],
         output_names=["mean", "std"],
         header=_SQRT_HEADER + _PRECISE_DIV_HEADER,
         source="""
             uint mel = thread_position_in_grid.x;
+            uint count = frames[0];
             precise float sum = 0.0f;
-            for (uint frame = 0u; frame < 3001u; ++frame)
+            for (uint frame = 0u; frame < count; ++frame)
                 sum = sum + logmel[frame * 128u + mel];
-            precise float average = precise_div(sum, 3001.0f);
+            precise float average = precise_div(sum, float(count));
             precise float squared = 0.0f;
-            for (uint frame = 0u; frame < 3001u; ++frame) {
+            for (uint frame = 0u; frame < count; ++frame) {
                 precise float deviation = logmel[frame * 128u + mel] - average;
                 precise float term = deviation * deviation;
                 squared = squared + term;
             }
             mean[mel] = average;
-            std[mel] = sqrt32(precise_div(squared, 3000.0f));
+            std[mel] = sqrt32(precise_div(squared, float(count - 1u)));
         """,
         compile_options={"math_mode": "safe"},
     )
 
 
-def _statistics(logmel):
+def _statistics(logmel, frames_valid):
     mx = _mlx()
     return tuple(_call(
         _stats_kernel(mx),
-        [logmel],
+        [logmel, frames_valid],
         [(N_MELS,), (N_MELS,)],
         [mx.float32, mx.float32],
         (N_MELS, 1, 1),
@@ -1118,27 +1126,28 @@ def _normalize_kernel(mx=None):
     mx = mx or _mlx()
     return mx.fast.metal_kernel(
         name="parakeet_normalize_mask_f32",
-        input_names=["logmel", "mean", "std"],
+        input_names=["logmel", "mean", "std", "frames"],
         output_names=["mel", "mask"],
         header=_PRECISE_DIV_HEADER,
         source="""
             uint index = thread_position_in_grid.x;
             uint frame = index / 128u;
             uint bin = index - frame * 128u;
+            uint count = frames[0];
             precise float numerator = logmel[index] - mean[bin];
             precise float denominator = std[bin] + 0.00001f;
-            mel[index] = precise_div(numerator, denominator);
-            if (bin == 0u) mask[frame] = 1;
+            mel[index] = frame < count ? precise_div(numerator, denominator) : 0.0f;
+            if (bin == 0u) mask[frame] = frame < count ? 1 : 0;
         """,
         compile_options={"math_mode": "safe"},
     )
 
 
-def _normalize(logmel, mean, std):
+def _normalize(logmel, mean, std, frames_valid):
     mx = _mlx()
     return tuple(_call(
         _normalize_kernel(mx),
-        [logmel, mean, std],
+        [logmel, mean, std, frames_valid],
         [(N_FRAMES, N_MELS), (N_FRAMES,)],
         [mx.float32, mx.int32],
         (N_FRAMES * N_MELS, 1, 1),
@@ -1157,17 +1166,27 @@ def _validate_waveform(waveform, mx) -> None:
         raise ValueError("waveform must contain at most 480000 samples")
 
 
-def extract_chunk_features(waveform, *, capture_stages: bool = False) -> VulkanMelResult:
-    """Return pinned mel, masks, and the encoder slice as MLX GPU arrays."""
+def extract_chunk_features(waveform, *, capture_stages: bool = False,
+                           duration_aware: bool = False) -> VulkanMelResult:
+    """Return pinned mel, masks, and the encoder slice as MLX GPU arrays.
+
+    ``duration_aware=False`` is the pinned golden contract: statistics over all
+    3001 frames, every frame valid. ``duration_aware=True`` is NeMo's: statistics
+    over the frames that carry audio, padded frames zero, mask one only on those
+    frames. The pinned contract normalizes a short clip with about 28 s of padding
+    in its mean and std, which puts its speech at the wrong scale.
+    """
     mx = _mlx()
     _validate_waveform(waveform, mx)
+    valid = valid_mel_frames(int(waveform.size)) if duration_aware else N_FRAMES
+    frames_valid = mx.array([valid], dtype=mx.uint32)
     constants = _constant_arrays(mx)
     frames = _frames(waveform, constants.hann)
     dft_real, dft_imag = _dft_frames(frames)
     power = _power(dft_real, dft_imag)
     melproj, logmel = _mel_project(power, constants.filterbank)
-    mean, std = _statistics(logmel)
-    mel, mask = _normalize(logmel, mean, std)
+    mean, std = _statistics(logmel, frames_valid)
+    mel, mask = _normalize(logmel, mean, std, frames_valid)
     encoder_features = mel[:ENCODER_FRAMES].reshape(1, ENCODER_FRAMES, N_MELS)
     encoder_mask = mask[:ENCODER_FRAMES].reshape(1, ENCODER_FRAMES)
     stages = {}
@@ -1187,7 +1206,7 @@ def extract_chunk_features(waveform, *, capture_stages: bool = False) -> VulkanM
             "mean": mean,
             "std": std,
         }
-    return VulkanMelResult(mel, mask, encoder_features, encoder_mask, stages)
+    return VulkanMelResult(mel, mask, encoder_features, encoder_mask, stages, valid)
 
 
 def _comparison_stages(result, np):
