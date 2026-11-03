@@ -1,0 +1,77 @@
+--- a/mlx/fast.h	2026-11-03 07:11:02.444030416 -0600
++++ b/mlx/fast.h	2026-11-03 07:11:02.445030408 -0600
+@@ -229,6 +229,28 @@
+     float qk_eps = 0.0f,
+     StreamOrDevice s = {});
+ 
++// GDN decode conv + gated-delta step as one dispatch (Qwen3.8-2B geometry:
++// head dim 128, key heads == value heads, bf16, T == 1, B == 1). Equivalent,
++// bit for bit, to gdn_conv_update(activate, qk norm) -> split -> reshape ->
++// gated_delta_update_raw, which is exactly what the fallback composes.
++// Returns {delta output [B, 1, Hv, Dv], recurrent state [B, Hv, Dv, Dk],
++// conv carry-out state [B, K-1, C]}. `key_dim` is Hk * 128; the value width
++// is C - 2 * key_dim.
++MLX_API std::vector<array> gdn_conv_delta_update(
++    const array& conv_state,
++    const array& qkv,
++    const array& conv_weight,
++    const array& a_in,
++    const array& b_in,
++    const array& A_log,
++    const array& dt_bias,
++    const array& delta_state,
++    int key_dim,
++    float qk_scale_q,
++    float qk_scale_k,
++    float qk_eps,
++    StreamOrDevice s = {});
++
+ // Greedy token of a transposed affine-quantized projection: the index
+ // argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
+ // logits = quantized_matmul(x, w, scales, biases, transpose=true).
+--- a/mlx/fast.cpp	2026-11-03 07:11:02.455030322 -0600
++++ b/mlx/fast.cpp	2026-11-03 07:11:02.456030314 -0600
+@@ -2368,6 +2368,43 @@
+       /* inputs */ std::vector<array>{state, x, weight});
+ }
+ 
++std::vector<array> gdn_conv_delta_update(
++    const array& conv_state,
++    const array& qkv,
++    const array& conv_weight,
++    const array& a_in,
++    const array& b_in,
++    const array& A_log,
++    const array& dt_bias,
++    const array& delta_state,
++    int key_dim,
++    float qk_scale_q,
++    float qk_scale_k,
++    float qk_eps,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  // The composition the model runs today: the fused conv (SiLU and the q/k
++  // norm folded), the q|k|v split, and the raw-gates gated-delta step.
++  auto conv = gdn_conv_update(
++      conv_state, qkv, conv_weight, true, key_dim, qk_scale_q, qk_scale_k, qk_eps, s);
++  int b = qkv.shape(0);
++  int heads = key_dim / 128;
++  int v_heads = (qkv.shape(2) - 2 * key_dim) / 128;
++  auto parts = split(conv[0], {key_dim, 2 * key_dim}, -1, s);
++  auto delta = gated_delta_update_raw(
++      reshape(parts[0], Shape{b, 1, heads, 128}, s),
++      reshape(parts[1], Shape{b, 1, heads, 128}, s),
++      reshape(parts[2], Shape{b, 1, v_heads, 128}, s),
++      a_in,
++      b_in,
++      A_log,
++      dt_bias,
++      delta_state,
++      std::nullopt,
++      s);
++  return std::vector<array>{delta[0], delta[1], conv[1]};
++}
++
+ 
+ std::vector<array> GatedDeltaUpdate::vjp(
+     const std::vector<array>& primals,

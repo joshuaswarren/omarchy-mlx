@@ -328,6 +328,19 @@ doctest_discover_tests(omarchy_gdn_decode_batch_tests)
 add_test(NAME omarchy_gdn_decode_batch_tests
          COMMAND omarchy_gdn_decode_batch_tests)
 
+# Fused GDN decode conv + gated-delta step (MLX_OMARCHY_GDN_CONV_DELTA): the
+# production pair's bytes from one dispatch.
+add_executable(omarchy_gdn_conv_delta_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_conv_delta.cpp)
+target_link_libraries(omarchy_gdn_conv_delta_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_conv_delta_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_conv_delta_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_gdn_conv_delta_tests)
+add_test(NAME omarchy_gdn_conv_delta_tests
+         COMMAND omarchy_gdn_conv_delta_tests)
+
 # Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on): per-row bit
 # identity over many random datasets, plus trace-proven engagement.
 add_executable(omarchy_qmv_batch_tests
