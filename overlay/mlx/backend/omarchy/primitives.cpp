@@ -122,8 +122,9 @@ const QmmGeometry& qmm_geometry() {
     const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
     const std::string v = env == nullptr ? std::string() : std::string(env);
     if (v.empty()) {
-      if (omarchy::device().capabilities().device_name.find("G13G") !=
-          std::string::npos) {
+      const std::string& chip = omarchy::device().capabilities().device_name;
+      if (chip.find("G13G") != std::string::npos ||
+          chip.find("G13C") != std::string::npos) {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
@@ -131,11 +132,6 @@ const QmmGeometry& qmm_geometry() {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
-    }
-    if (v == "4x8") {
-      return QmmGeometry{
-          32u, K::QmmVecQ4WordSubgroupBF16R4S8,
-          K::QmmVecQ4MultiSubgroupBF16R4S8, "4x8"};
     }
     if (v == "2x16") {
       return QmmGeometry{
@@ -148,7 +144,7 @@ const QmmGeometry& qmm_geometry() {
           "2x4"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 4x8 2x16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16");
   }();
   return geometry;
 }
