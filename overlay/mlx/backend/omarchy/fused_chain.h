@@ -248,6 +248,11 @@ bool fused_gemv_enabled(const Device& device);
 
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; default off on G13 parts other
 // than G13C (see fused_chain.cpp).
+// The active decode Qmm column geometry ("2x4", "4x8" or "2x16"): the
+// chip-gated default plus the MLX_OMARCHY_QMM_GEOM override. For tests and
+// docs; defined in primitives.cpp beside the geometry selection.
+const char* qmm_geometry_name();
+
 bool outgate_fold_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
