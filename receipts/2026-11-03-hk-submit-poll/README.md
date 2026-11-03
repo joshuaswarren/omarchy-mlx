@@ -22,6 +22,18 @@ An `LD_PRELOAD` shim on `ioctl` (tools in the research repo, `tools/timeline-spy
 
 The 2000 us poll costs 5.4 s of process CPU over a 400-token decode. It also costs about 1 W of system power and 0.8 W of package power. Speed is the same within the spread.
 
+## Decode: CPU and power, 16-inch M1 Max
+
+The same row on the 16-inch M1 Max: 2B 4-bit, 400 tokens, three runs per arm, cores 2 to 9, the vote wrapped off for the runs, lab kernel `7.1.12-2-20261103.2`. The generated ids were identical in all nine runs, and the kernel's GPU timeout counter did not move (`GPU-TIMEOUTS delta=0`).
+
+| Arm | tok/s | spread | process CPU s | Total System W | Heatpipe W |
+| --- | --- | --- | --- | --- | --- |
+| A, 2000 us | 121.60 | 1.5% | 6.65 | 39.90 | 49.04 |
+| B, 0 | 121.99 | 1.2% | 4.95 | 40.03 | 47.46 |
+| C, 200 us | 121.67 | 0.3% | 5.21 | 40.05 | 46.85 |
+
+The 2000 us poll costs 1.7 s of process CPU and about 1.6 W of package power here. Speed is the same within the spread.
+
 ## Parakeet transcribe, the workload the poll was tuned for
 
 `mlx-omarchy-parakeet transcribe` on its packaged fixture, installed from the v0.7.37 draft. The number is the `tdt_decode` stage wall from `transcribe-report.json`. Four runs per arm.
@@ -38,5 +50,5 @@ The backend no longer sets `HK_SUBMIT_POLL_US`. A value in the environment still
 
 ## Not done
 
-- The 16-inch M1 Max decode CPU and power row is queued and has not run. This receipt gets its numbers when it does.
+- The 16-inch M1 Max decode CPU and power row has run (the table above).
 - The Honeykrisp side (a poll that backs off after a hit that took most of the budget) is not changed.
