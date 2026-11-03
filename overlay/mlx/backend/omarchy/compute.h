@@ -1092,6 +1092,9 @@ enum class ComputeKernel : uint16_t {
   // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
   GatedDeltaDecodeConvNormBF16Pf,
   GatedDeltaDecodeConvNormBF16PfWide,
+  // Value-phase variant of the width-256 split-K pass 1, four query heads per key-value head (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4
+  // -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Appended to keep profile kernel ids stable.
+  SdpaDecodeSplitP1VR4BF16Hd256,
   Count,
 };
 

@@ -29,6 +29,11 @@
 #define SPLIT_R 4
 #endif
 
+// Head width: 128 (default) or 256 (-DHD=256, the Qwen3.5/3.8 full-attention layers; SPLIT_R 4 at most so the partial-sum tile fits shared memory).
+#ifndef HD
+#define HD 128
+#endif
+
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Query {
@@ -37,9 +42,15 @@ layout(set = 0, binding = 0, std430) readonly buffer Query {
 layout(set = 0, binding = 1, std430) readonly buffer Key {
   uvec4 values[];
 } key_data;
+#if HD == 128
 layout(set = 0, binding = 2, std430) readonly buffer Value {
   uvec2 values[];
 } value_data;
+#else
+layout(set = 0, binding = 2, std430) readonly buffer Value {
+  uvec4 values[];
+} value_data;
+#endif
 layout(set = 0, binding = 3, std430) writeonly buffer Scratch {
   float values[];
 } scratch_data;
@@ -68,7 +79,11 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
+#if HD == 128
 const uint D = 128u;
+#else
+const uint D = 256u;
+#endif
 const uint BK = 128u;
 const uint SUBGROUPS = 4u;
 
@@ -90,11 +105,22 @@ void main() {
   uint nblocks = (k_len + BK - 1u) / BK;
   uint sg = gl_SubgroupID;
 
+#if HD == 128
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
     s_q[r * D + t] = params.alpha * bf16_load(
         query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
   }
+#else
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    for (uint d = 0u; d < 2u; ++d) {
+      uint dim = d * 128u + t;
+      s_q[r * D + dim] = params.alpha * bf16_load(
+          query_data.values[params.lhs_offset + head * params.shape[0] + dim * params.shape[3]]);
+    }
+  }
+#endif
   barrier();
 
   uint key = block * BK + t;
@@ -155,6 +181,7 @@ void main() {
   uint part = t >> 5u;
   uint kstart = part * 32u;
   uint kend = min(nk, kstart + 32u);
+#if HD == 128
   uint v_row0 = params.aux_offset + kv_head * params.in_strides[1] + block * BK * v_stride + dg * 4u;
   float o[SPLIT_R * 4];
   for (uint i = 0u; i < SPLIT_R * 4u; ++i) {
@@ -212,4 +239,76 @@ void main() {
     float total = s_o[r * D + t] + s_o[(SPLIT_R + r) * D + t] + s_o[(2u * SPLIT_R + r) * D + t] + s_o[(3u * SPLIT_R + r) * D + t];
     scratch_data.values[base + 2u + t] = total;
   }
+#else
+  // Width 256: each lane covers 8 dimensions with one 16-byte value load per key; the four subgroups each walk 32 of the 128 keys, four keys per batch
+  // (the same 64 bytes in flight per lane as the width-128 batch of eight 8-byte loads). The four partial sums of a dimension are added in the same fixed order.
+  uint v_row0 = params.aux_offset + kv_head * params.in_strides[1] + block * BK * v_stride + dg * 8u;
+  float o[SPLIT_R * 8];
+  for (uint i = 0u; i < SPLIT_R * 8u; ++i) {
+    o[i] = 0.0;
+  }
+  uint key0 = kstart;
+  for (; key0 + 4u <= kend; key0 += 4u) {
+    uvec4 w[4];
+    for (uint i = 0u; i < 4u; ++i) {
+      w[i] = value_data.values[(v_row0 + (key0 + i) * v_stride) >> 3u];
+    }
+    for (uint i = 0u; i < 4u; ++i) {
+      float v[8];
+      v[0] = uintBitsToFloat(w[i].x << 16u);
+      v[1] = uintBitsToFloat(w[i].x & 0xffff0000u);
+      v[2] = uintBitsToFloat(w[i].y << 16u);
+      v[3] = uintBitsToFloat(w[i].y & 0xffff0000u);
+      v[4] = uintBitsToFloat(w[i].z << 16u);
+      v[5] = uintBitsToFloat(w[i].z & 0xffff0000u);
+      v[6] = uintBitsToFloat(w[i].w << 16u);
+      v[7] = uintBitsToFloat(w[i].w & 0xffff0000u);
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        float p = s_p[r * BK + key0 + i];
+        for (uint j = 0u; j < 8u; ++j) {
+          o[r * 8u + j] += p * v[j];
+        }
+      }
+    }
+  }
+  for (; key0 < kend; ++key0) {
+    uvec4 w = value_data.values[(v_row0 + key0 * v_stride) >> 3u];
+    float v[8];
+    v[0] = uintBitsToFloat(w.x << 16u);
+    v[1] = uintBitsToFloat(w.x & 0xffff0000u);
+    v[2] = uintBitsToFloat(w.y << 16u);
+    v[3] = uintBitsToFloat(w.y & 0xffff0000u);
+    v[4] = uintBitsToFloat(w.z << 16u);
+    v[5] = uintBitsToFloat(w.z & 0xffff0000u);
+    v[6] = uintBitsToFloat(w.w << 16u);
+    v[7] = uintBitsToFloat(w.w & 0xffff0000u);
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      float p = s_p[r * BK + key0];
+      for (uint j = 0u; j < 8u; ++j) {
+        o[r * 8u + j] += p * v[j];
+      }
+    }
+  }
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    for (uint i = 0u; i < 8u; ++i) {
+      s_o[(part * SPLIT_R + r) * D + dg * 8u + i] = o[r * 8u + i];
+    }
+  }
+  barrier();
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    uint base = (head * nblocks + block) * (D + 2u);
+    if (t == 0u) {
+      scratch_data.values[base] = block_max[r];
+      scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u] +
+          s_sum[r * SUBGROUPS + 2u] + s_sum[r * SUBGROUPS + 3u];
+    }
+    for (uint d = 0u; d < 2u; ++d) {
+      uint dim = d * 128u + t;
+      float total = s_o[r * D + dim] + s_o[(SPLIT_R + r) * D + dim] + s_o[(2u * SPLIT_R + r) * D + dim] + s_o[(3u * SPLIT_R + r) * D + dim];
+      scratch_data.values[base + 2u + dim] = total;
+    }
+  }
+#endif
 }
