@@ -1,17 +1,17 @@
-# Run omarchy-mlx on any Vulkan GPU
+# No Mac? Vulkan development guide
 
 Back to the [README](../README.md). Results so far:
 [TESTED-HARDWARE.md](TESTED-HARDWARE.md).
 
-omarchy-mlx targets Apple GPUs through Honeykrisp. On any other Vulkan
-1.3 device (NVIDIA, Intel, AMD, or Apple silicon without the
-Honeykrisp ICD), the backend refuses at device discovery on purpose.
+omarchy-mlx targets Apple Silicon GPUs on Omarchy through Honeykrisp.
+Other Vulkan 1.3 devices are a development path, not the supported
+Omarchy/Apple Silicon target. The backend refuses them at device discovery.
 `MLX_OMARCHY_ALLOW_NON_APPLE=1` lifts that refusal for development.
 The kernels and tools are unchanged; what changes is which device the
 loader hands the backend.
 
 This is a development path. A non-Apple GPU has no qualification
-contract (that concept is defined for Apple silicon in
+contract (that concept is defined for Apple Silicon in
 [docs/new-chip-bringup.md](new-chip-bringup.md)). Do not set the flag
 on an Apple-GPU receipt.
 
@@ -35,14 +35,20 @@ describes the dataset and the redaction. The suite log is not
 published; it stays in the output directory the script prints, and a
 failure report needs it (see "Attach your results").
 
-Verification status of the script:
+Measured paths and hardware:
 
-| Verified | Where |
-|---|---|
-| Prerequisite checks, device detection, `--help`, `--dry-run` | x86_64 CPU-only container (Debian 12), device llvmpipe |
-| Stage, build, runtime suite, quick collector | lavapipe software Vulkan 1.3, same container |
-| AMD, Intel, NVIDIA hardware | not verified |
-| Fresh Omarchy install from the ISO | not verified |
+| Status | Path or hardware | Scope and source |
+|---|---|---|
+| Measured | Script prerequisite checks, device detection, `--help`, `--dry-run` | Debian 12 x86_64 CPU-only container with software Vulkan; [script verification](https://github.com/joshuaswarren/omarchy-mlx/pull/150). |
+| Measured | Full script with lavapipe software Vulkan 1.3 | 57/57 runtime tests; 27/28 copy-offset tests. The remaining test requests 256 MiB against a 128 MiB device limit; [recorded result](https://github.com/joshuaswarren/omarchy-mlx/pull/150). This is not hardware inference. |
+| Measured | Intel UHD 770, Mesa ANV 26.2.4 | CachyOS x86_64, Linux 7.2.9: 55/55 runtime tests and op check clean; [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111). Not an Omarchy x86 run or full-script result. |
+| Measured | NVIDIA RTX 5060 Ti, driver 615.71.09 | Same CachyOS host: 54/55 runtime tests; independent-streams timing check failed. Op checks within bf16 tolerance; [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111). Not a fully passing suite or full-script result. |
+| Not measured | Full script on AMD, Intel or NVIDIA hardware | The hardware runtime results above do not cover this entry point. |
+| Not measured | AMD hardware with RADV | No recorded hardware run in [TESTED-HARDWARE.md](TESTED-HARDWARE.md). |
+| Not measured | Fresh Omarchy install from the ISO | No recorded end-to-end installation run in [script verification](https://github.com/joshuaswarren/omarchy-mlx/pull/150). |
+
+Each status covers only the named workload. A build, client check or runtime
+suite does not establish same-model throughput or qualify every model on a GPU.
 
 ## Prerequisites
 
@@ -141,10 +147,10 @@ with:
   (see the decision below); install `vulkan-tools` and rerun.
 - `python3 scripts/collect_deep.py --out FILE` adds correctness and
   benchmark sections, but only where a `mlx` module is importable.
-  Releases include Python 3.11 x86_64 wheels and Python 3.14 aarch64
-  wheels. Install the wheel that matches the collector's interpreter,
-  or build from source. Set `MLX_OMARCHY_ALLOW_NON_APPLE=1` before
-  running the collector on a non-Apple GPU.
+  Use a source-built module matching the collector's interpreter.
+  Set `MLX_OMARCHY_ALLOW_NON_APPLE=1` before running the collector on a
+  non-Apple GPU. This development guide does not validate release-wheel
+  installation or ANE execution.
 
 ## Non-Apple results stay issue-only
 

@@ -1,5 +1,10 @@
 # omarchy-mlx
 
+**No Mac? [Start here](docs/ANY-GPU.md)** for NVIDIA, Intel, AMD and software
+Vulkan development paths.
+
+Results so far: [docs/TESTED-HARDWARE.md](docs/TESTED-HARDWARE.md).
+
 MLX on the Apple GPU under Linux, and Core ML models on the
 Apple Neural Engine.
 
@@ -13,6 +18,23 @@ There is no Metal and no CPU fallback.
 
 It is for people who run Linux on an M1 or M2 Mac. You get local chat,
 serving, and speech to text, with no macOS and no cloud account.
+
+## The projects
+
+Part of the Omarchy on Apple Silicon ecosystem:
+
+- [omarchy-ane](https://github.com/joshuaswarren/omarchy-ane) — Linux driver for the Apple Neural Engine: DRM kernel modules and libane.
+- [mil-hwx-compiler](https://github.com/joshuaswarren/mil-hwx-compiler) — compiles Core ML MIL into ANE programs on Linux (M1/M2 targets).
+- [metal2vk](https://github.com/joshuaswarren/metal2vk) — translates Metal compute kernels to Vulkan SPIR-V with open tools.
+- [mesa-1](https://github.com/joshuaswarren/mesa-1) — Mesa fork carrying the Honeykrisp Vulkan driver work for Apple silicon.
+- [omarchy-cluster](https://github.com/joshuaswarren/omarchy-cluster) — one local model split across Macs on macOS and Omarchy Linux.
+- [omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) — build and ship iOS apps from Omarchy Linux, no Xcode or Mac.
+- [omarchy-egpu](https://github.com/joshuaswarren/omarchy-egpu) — eGPU setup, diagnostics and measured local-inference results on Omarchy Linux.
+- [ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments) — Neural Engine on Linux: verified primitives, receipt-backed macOS parity.
+- [coreglass](https://github.com/joshuaswarren/coreglass) — profiler that shows where local inference loses speed on Apple Silicon Linux.
+- [omarchy-inference-fleet](https://github.com/joshuaswarren/omarchy-inference-fleet) — reproducible, pinned single-node MLX inference baselines.
+- [remnic](https://github.com/joshuaswarren/remnic) — local-first memory and context for AI agents.
+- Platform upstream: [omarchy-mac](https://github.com/omacom/omarchy-mac) — Omarchy on Apple Silicon Macs.
 
 ## What runs on Omarchy Linux
 
@@ -57,13 +79,14 @@ plus Laya, and it needs a 96 GB machine.
 | M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
-| M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
+| M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port | Data-only; h16 bring-up module |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
-this project measures on. On an M3 or M4 Mac, run the tester kit,
+this project measures on. The M4 row needs the out-of-tree G16G driver
+stack named in its receipt. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
-to send us the numbers and ANE state that only real silicon gives.
+to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet.
 
 The ANE is separate hardware from the GPU. It has its own driver and its
 own tested state. Chip-by-chip ANE status, including what each untested
@@ -213,3 +236,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 MIT, see [LICENSE](LICENSE). Prepared MLX source keeps Apple's MIT
 license and copyright notices. Other bundled components keep their
 own notices under [LICENSES](LICENSES). Not affiliated with Apple.
+
+## Contributors
+
+Everyone credited so far: [CONTRIBUTORS.md](CONTRIBUTORS.md).

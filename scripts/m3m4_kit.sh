@@ -7,7 +7,10 @@ set -euo pipefail
 #      sanitized by aurora before saving),
 #   2. the omarchy-mlx collector archive (capability, correctness,
 #      benchmark, ANE state) plus its paste-ready submission note.
-# macOS (M3/M4; M4 is macOS-only today):
+# Linux, M4 (aurora integration with the M4 GPU patches): the collector
+#   only. aurora's M3 report and power survey are M3 tools and are
+#   skipped. The ANE is not supported on M4 Linux yet.
+# macOS (M3/M4):
 #   1. the same collector, native: MLX/Metal benchmark numbers, ANE
 #      ioreg/DeviceTree dump, ANE firmware hashes,
 #   2. optional powermetrics one-shot (printed for you to run; sudo),
@@ -219,10 +222,12 @@ ane_stage() {
 }
 ane_stage || exit 1
 
+is_m4=0
 if [ "$OS" = "Linux" ] && [ "${chip#Apple M4}" != "$chip" ]; then
-  echo "M4 on Linux: aurora does not boot M4 Macs yet; run this kit from"
-  echo "macOS on the same box so we get the reference numbers."
-  exit 1
+  is_m4=1
+  echo "M4 on Linux: the kit runs the collector only. aurora's M3 report and"
+  echo "power survey are M3 tools and are skipped. The ANE is not supported on"
+  echo "M4 Linux yet; the collector records its state."
 fi
 echo "M3/M4 kit: $chip (${CHIP_RAW}) on ${OS}; writing to $OUT/"
 mkdir -p "$OUT"
@@ -237,7 +242,9 @@ collector_stage() {
   fi
 }
 
-if [ "$OS" = "Linux" ]; then
+if [ "$OS" = "Linux" ] && [ "$is_m4" = "1" ]; then
+  collector_stage
+elif [ "$OS" = "Linux" ]; then
   # aurora's M3 bring-up report (their tool, their sanitizer).
   if (cd "$OUT" &&
       curl -fsSL "$AURORA_URL" -o install-aurora-sep.sh &&
@@ -296,5 +303,5 @@ Next steps (nothing has been sent):
        python3 scripts/collect_deep.py --out $OUT/mlx-omarchy-m3m4.tar --submit
      (the endpoint replies with a public receipt URL; identical content
      deduplicates by SHA-256).
-  3. On Linux, also attach the aurora report tgz from $OUT/.
+  3. On Linux M3, also attach the aurora report tgz from $OUT/.
 EOF

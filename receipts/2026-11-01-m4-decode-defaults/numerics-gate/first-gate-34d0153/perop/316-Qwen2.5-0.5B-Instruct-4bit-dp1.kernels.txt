@@ -1,0 +1,8 @@
+end: {"k": "end", "t": 5943025665895, "dispatches": 918, "dropped": 0, "submissions": 360, "joins": 1, "barriers": 870, "barriers_skipped": 408}
+    324 CastF16F32
+     14 QmmVecQ4WordSubgroupF16
+      6 BinaryVecF16
+      4 FastRmsNormF16
+      4 FastRopeF16
+      2 SwigluF16
+      2 ElementwiseLiteF16
