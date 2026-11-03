@@ -166,17 +166,30 @@ TEST_CASE("the fused conv + delta step is one dispatch where the pair is two") {
   CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the pair into one dispatch");
 }
 
-TEST_CASE("the fused conv + delta step is off unless the flag is set") {
+TEST_CASE("the fused op does not read the flag: with the variable unset it fuses wherever its geometry allows") {
   if (!have_gpu()) return;
+  // The caller decides (the mlx-lm patch, from the backend's single resolver); the op itself fuses on geometry alone. With the variable UNSET the
+  // fused op must therefore still be one dispatch where the unfused route is two (and three with the gated norm), with the production bytes. The
+  // dispatch assertions need the untiled prefetch kernel, so they are required only where the part runs it (GDN_CONV_DELTA_REQUIRE_ENGAGED=1).
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
   Stream s = gpu_stream();
   Inputs in = make_inputs(10, 0.05f, s);
-  Run want = production_pair(in, s);
-  Run got = fused(in, s);
-  CHECK_MESSAGE(got.dispatches == want.dispatches, "the unset flag must run the composed pair");
+  Run pair = production_pair(in, s);
+  Run one = fused(in, s);
   for (int i = 0; i < 3; ++i) {
-    CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+    CHECK(array_equal(one.out[i], pair.out[i], s).item<bool>());
   }
+  Run seq = production_pair(in, s, true);
+  Run two = fused(in, s, true);
+  for (int i = 0; i < 3; ++i) {
+    CHECK(array_equal(two.out[i], seq.out[i], s).item<bool>());
+  }
+  if (one.dispatches == pair.dispatches && std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") == nullptr) {
+    std::cout << "Skipping dispatch check: this device's unfused route is not the untiled prefetch kernel\n";
+    return;
+  }
+  CHECK_MESSAGE(one.dispatches == 1, "with the flag unset the fused conv + delta op must still be one dispatch");
+  CHECK_MESSAGE(two.dispatches == 1, "with the flag unset the fused conv + delta + norm op must still be one dispatch");
 }
 
 TEST_CASE("the conv + delta + gated norm step returns the production sequence's bytes") {
@@ -224,37 +237,58 @@ TEST_CASE("the GDN conv + delta default is the 13-inch only, and the ABI resolve
   CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part(""));
-  // The ABI the mlx-lm patch reads: an explicit flag value wins, "0" and anything else keep the stock route.
-  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
-  CHECK(mlx_omarchy_gdn_conv_delta_default() == 2);
-  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
-  CHECK(mlx_omarchy_gdn_conv_delta_default() == 1);
-  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "0", 1);
-  CHECK(mlx_omarchy_gdn_conv_delta_default() == 0);
-  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "3", 1);
-  CHECK(mlx_omarchy_gdn_conv_delta_default() == 0);
+  // The single resolver, host-only (it takes the device name, so every part is observable on any machine): an explicit flag value wins over the
+  // per-chip default, "0" and anything else read as the stock route, and UNSET follows the default: 2 on G13G, 0 elsewhere.
+  const std::string m1 = "Apple M1 (G13G B1)";
+  const std::string m1max = "Apple M1 Max (G13C C0)";
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
-  // Unset follows the per-chip default of this device.
+  CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
+  CHECK(omarchy::gdn_conv_delta_resolved_mode(m1max) == 0);
+  CHECK(omarchy::gdn_conv_delta_resolved_mode("Apple M2 Max (G14C B1)") == 0);
+  CHECK(omarchy::gdn_conv_delta_resolved_mode("") == 0);
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "", 1);  // an empty value counts as unset
+  CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
+  for (const std::string& part : {m1, m1max}) {
+    setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
+    CHECK(omarchy::gdn_conv_delta_resolved_mode(part) == 2);
+    setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
+    CHECK(omarchy::gdn_conv_delta_resolved_mode(part) == 1);
+    setenv("MLX_OMARCHY_GDN_CONV_DELTA", "0", 1);
+    CHECK(omarchy::gdn_conv_delta_resolved_mode(part) == 0);
+    setenv("MLX_OMARCHY_GDN_CONV_DELTA", "3", 1);
+    CHECK(omarchy::gdn_conv_delta_resolved_mode(part) == 0);
+  }
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  // The C ABI the mlx-lm patch reads answers exactly what the resolver answers for this device.
   if (gpu::is_available()) {
     const auto& info = gpu::device_info(0);
     auto it = info.find("device_name");
     std::string name = it != info.end() ? std::get<std::string>(it->second) : std::string();
-    CHECK(mlx_omarchy_gdn_conv_delta_default() == (omarchy::gdn_conv_delta_norm_default_part(name) ? 2 : 0));
+    CHECK(mlx_omarchy_gdn_conv_delta_default() == omarchy::gdn_conv_delta_resolved_mode(name));
+    setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
+    CHECK(mlx_omarchy_gdn_conv_delta_default() == 1);
+    unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
   }
 }
 
-TEST_CASE("the norm form composes the sequence unless the flag is 2") {
+TEST_CASE("the op's form follows its inputs, not the flag: norm arguments select the norm form with the flag unset or any value") {
   if (!have_gpu()) return;
-  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);  // the conv + delta form only: norm arguments must compose
   Stream s = gpu_stream();
   Inputs in = make_inputs(10, 0.05f, s);
   Run want = production_pair(in, s, true);
-  Run got = fused(in, s, true);
-  CHECK_MESSAGE(got.dispatches == want.dispatches, "flag 1 with norm arguments must run the composed sequence");
-  for (int i = 0; i < 3; ++i) {
-    CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+  for (const char* value : {static_cast<const char*>(nullptr), "0", "1", "2", "3"}) {
+    if (value == nullptr) {
+      unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+    } else {
+      setenv("MLX_OMARCHY_GDN_CONV_DELTA", value, 1);
+    }
+    Run got = fused(in, s, true);
+    INFO("flag value " << (value == nullptr ? "(unset)" : value));
+    for (int i = 0; i < 3; ++i) {
+      CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+    }
+    // Every flag value sees the same dispatches: the op never reads it.
+    CHECK(got.dispatches == fused(in, s, true).dispatches);
   }
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
-  Run unset = fused(in, s, true);
-  CHECK_MESSAGE(unset.dispatches == want.dispatches, "an unset flag must run the composed sequence");
 }
