@@ -71,7 +71,11 @@ a built `ane_h15.ko` and an opt-in line, and is a later, separate ask
 (`MKIT_ANE_STAGE=t6031:0`, see "ANE stage" below). It is not a support
 claim: no ANE driver has run on an M3 Max yet.
 
-## macOS, M3/M4 (M4 is macOS-only today)
+## Linux, M4
+
+On an M4 that runs Linux (aurora integration with the M4 GPU patches), the kit runs the collector only. It skips aurora's `--m3-report` and `--m3-power-survey`, which are M3 tools. The collector records the GPU and ANE state, plus benchmark numbers where the GPU driver works. The ANE is not supported on M4 Linux yet. The kit stays bring-up evidence for that chip, not a support claim.
+
+## macOS, M3/M4
 
 | Step | Hardware-only question it answers |
 |---|---|
@@ -131,9 +135,8 @@ Other flags:
 A real run captures `dmesg | grep -E 'ane_h1[56]|RESULT'` into
 `$OUT/ane-stage.log`, prints the RESULT line(s), and reminds that
 submission is a separate explicit `collect_deep --submit` step. On
-Linux the kit still refuses the MLX/GPU flow on M4 (aurora does not
-boot M4 Macs yet); the ANE stage runs before that refusal because it
-collects no MLX data.
+Linux M4 the kit continues after the ANE stage and runs the collector
+only (see Linux, M4 above).
 
 ## After the kit
 

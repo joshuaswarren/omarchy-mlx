@@ -271,6 +271,23 @@ class M3m4KitAneStageTests(unittest.TestCase):
         self.assertIn("aurora --m3-power-survey: OK", result.stdout)
         self.assertNotIn("rerun with MKIT_POWER_SURVEY=1", result.stdout)
 
+    def test_m4_linux_continues_to_the_collector_without_aurora_m3_tools(self):
+        """M4 on Linux no longer stops the kit. The collector runs; aurora's M3
+        report and power survey do not; the output says the ANE is unsupported."""
+        path, log = self._stub_aurora()
+        for soc, name in (("t8132", "Apple M4"), ("t6040", "Apple M4 Pro"),
+                          ("t6041", "Apple M4 Max")):
+            with self.subTest(soc=soc):
+                self.rechip(soc)
+                result = self.run_kit(MKIT_DRY_RUN=0, PATH=path, MKIT_POWER_SURVEY=1)
+                out = result.stdout + result.stderr
+                self.assertIn(f"M3/M4 kit: {name} (apple,{soc}) on Linux", out)
+                self.assertIn("The ANE is not supported on", result.stdout)
+                self.assertNotIn("aurora does not boot M4", out)
+                self.assertIn("collector did not complete", out)
+                self.assertFalse(log.exists(), "aurora M3 tools ran on M4")
+                self.assertNotIn("aurora --m3", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
