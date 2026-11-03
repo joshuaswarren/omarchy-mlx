@@ -1,0 +1,21 @@
+A = p2j, B = p3m; host wall time per decode q+k pair (us), 200 pairs in one eval
+## bfloat16 base
+  per process, run order: p2j 126.4, p3m 98.9, p3m 99.0, p2j 128.8, p2j 142.9, p3m 100.3, p3m 99.9, p2j 137.5, p2j 138.6, p3m 100.3, p3m 99.7, p2j 137.7
+  p2j: n=6 mean 135.3 (min 126.4, max 142.9)
+  p3m: n=6 mean 99.7 (min 98.9, max 100.3)
+  B/A 0.737
+## bfloat16 freqs
+  per process, run order: p2j 1053.7, p3m 1078.2, p3m 1119.8, p2j 1239.7, p2j 1247.0, p3m 1224.5, p3m 1205.9, p2j 1290.5, p2j 1294.6, p3m 1226.5, p3m 1233.5, p2j 1290.8
+  p2j: n=6 mean 1236.0 (min 1053.7, max 1294.6)
+  p3m: n=6 mean 1181.4 (min 1078.2, max 1233.5)
+  B/A 0.956
+## float16 base
+  per process, run order: p2j 40.7, p3m 33.3, p3m 32.6, p2j 32.6, p2j 32.7, p3m 32.8, p3m 32.3, p2j 32.7, p2j 32.6, p3m 32.7, p3m 32.1, p2j 32.8
+  p2j: n=6 mean 34.0 (min 32.6, max 40.7)
+  p3m: n=6 mean 32.6 (min 32.1, max 33.3)
+  B/A 0.959
+## float16 freqs
+  per process, run order: p2j 1016.2, p3m 939.6, p3m 986.0, p2j 1193.5, p2j 1197.3, p3m 1091.0, p3m 1069.1, p2j 1239.2, p2j 1241.6, p3m 1084.5, p3m 1099.6, p2j 1236.6
+  p2j: n=6 mean 1187.4 (min 1016.2, max 1241.6)
+  p3m: n=6 mean 1045.0 (min 939.6, max 1099.6)
+  B/A 0.880
