@@ -4197,14 +4197,34 @@ TEST_CASE("fused rope_rms_norm writes every row past the one-dispatch clamp") {
 // and the traditional and passthrough forms keep the general builds. The
 // values are pinned by the bit-for-bit and f64 cases above, which run
 // through the same dispatch.
+TEST_CASE("rope half-split builds: the part rule") {
+  // Pure and per call: alternating parts in either order never inherits
+  // an earlier answer.
+  for (int round = 0; round < 2; ++round) {
+    CHECK(omarchy::rope_half_split_default_part("Apple M4 (G16G B1)"));
+    CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
+  }
+  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::rope_half_split_default_part(""));
+}
+
 TEST_CASE("fused rope half-split form runs the half-split builds") {
   if (!compute_available()) {
     return;
   }
-  if (omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT")) {
-    skip("MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1 keeps the general builds");
-    return;
-  }
+  // The route this process takes: MLX_OMARCHY_NO_ROPE_HALF_SPLIT wins when
+  // set (1 general builds, 0 half-split builds); unset follows the part rule
+  // for this device. Both sides are checked: a part off the rule must keep
+  // the general builds.
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool route_on =
+      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT") != nullptr
+      ? !omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT")
+      : omarchy::rope_half_split_default_part(caps.device_name);
+  INFO("device=" << caps.device_name << " route_on=" << route_on);
   using K = omarchy::ComputeKernel;
   Stream stream = gpu_stream();
   array offset = array(5, int32);
@@ -4239,7 +4259,7 @@ TEST_CASE("fused rope half-split form runs the half-split builds") {
           omarchy::get_command_encoder(stream).synchronize();
           const int64_t dispatched =
               omarchy::trace::counters().last_dispatched_kernel.load();
-          const bool half_split = !traditional && dims == 16;
+          const bool half_split = route_on && !traditional && dims == 16;
           const bool bf16 = dtype == bfloat16;
           K expected = half_split
               ? (with_freqs

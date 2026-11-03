@@ -1,6 +1,6 @@
 # Half-split RoPE built separately (M4 Mac mini)
 
-Result: the forward RoPE kernels `FastRope{,Freqs}{BF16,F16}` carry the half-split, traditional and passthrough forms behind runtime flags. Four more builds of the same source with `-DROPE_HALF_SPLIT_ONLY` (`FastRope{,Freqs}HalfSplit{BF16,F16}`) fix the traditional and passthrough flags false, so those branches fold away (SPIR-V: bf16 28.4 -> 15.7 KB, f16 11.0 -> 6.1 KB). `RoPE::eval_gpu` routes the half-split form with bf16 or f16 output to them. The output is bit-identical (72/72 `rope_bits.py` cases against `main`). On the M4 Mac mini a bf16 decode RoPE dispatch drops from 75.9 to 53.6 microseconds in the trace, a bf16 q+k RoPE pair from 136.2 to 103.3 microseconds of wall time, and granite-4.0-1b-4bit decodes 6.5 percent faster (38.84 -> 41.35 tok/s) with identical token ids. f16 models whose RoPE runs inside the fused trio on `main` (Qwen2.5-0.5B, gemma-3-1b) are unchanged by this change aloneon one integration wheel (`749902d`), `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` against unset, Qwen2.5-0.5B-Instruct-4bit 116.13 -> 121.22 tok/s (1.044) and gemma-3-1b-it-4bit 52.96 -> 54.06 (1.021), identical token ids.. `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` keeps the general builds.
+Result: the forward RoPE kernels `FastRope{,Freqs}{BF16,F16}` carry the half-split, traditional and passthrough forms behind runtime flags. Four more builds of the same source with `-DROPE_HALF_SPLIT_ONLY` (`FastRope{,Freqs}HalfSplit{BF16,F16}`) fix the traditional and passthrough flags false, so those branches fold away (SPIR-V: bf16 28.4 -> 15.7 KB, f16 11.0 -> 6.1 KB). `RoPE::eval_gpu` routes the half-split form with bf16 or f16 output to them. The output is bit-identical (72/72 `rope_bits.py` cases against `main`). On the M4 Mac mini a bf16 decode RoPE dispatch drops from 75.9 to 53.6 microseconds in the trace, a bf16 q+k RoPE pair from 136.2 to 103.3 microseconds of wall time, and granite-4.0-1b-4bit decodes 6.5 percent faster (38.84 -> 41.35 tok/s) with identical token ids. f16 models whose RoPE runs inside the fused trio on `main` (Qwen2.5-0.5B, gemma-3-1b) are unchanged by this change alone; on one integration wheel (`749902d`), `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` against unset, Qwen2.5-0.5B-Instruct-4bit 116.13 -> 121.22 tok/s (1.044) and gemma-3-1b-it-4bit 52.96 -> 54.06 (1.021), identical token ids. `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` keeps the general builds.
 
 ## What changed
 
@@ -44,7 +44,7 @@ Decode (`perf-p4-summary.txt`): `decode_bench.py <repo> 64 4`, two interleaved p
 
 With the trio off (the integration, which carries #316), the f16 models' standalone RoPE runs the half-split build; `perf-p4b-summary.txt` is that A/B on one integration wheel, `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` (A) against unset (B): on one integration wheel (`749902d`), `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` against unset, Qwen2.5-0.5B-Instruct-4bit 116.13 -> 121.22 tok/s (1.044) and gemma-3-1b-it-4bit 52.96 -> 54.06 (1.021), identical token ids.
 
-RoPE alone (`perf-p4-rope.jsonl`, `rope_bits.py` timing: host wall time per decode q (16 heads) + k (4 heads) pair, 200 pairs in one eval, two interleaved pairs, mean of the two processes): bf16 base 136.2 -> 103.3 us, bf16 `freqs` 1397.6 -> 1334.2, f16 base 32.2 -> 33.9, slower on this measurement (one B process read 35.2; the others 32.1 to 32.5), so the f16 base form shows no gain and a possible regression within noise, f16 `freqs` 1342.4 -> 1197.5.
+RoPE alone (`perf-p4-rope.jsonl`, `perf-p4-rope-summary.txt`; `rope_bits.py` timing: host wall time per decode q (16 heads) + k (4 heads) pair, 200 pairs in one eval, two interleaved pairs, mean of the two processes): bf16 base 136.2 -> 103.3 us, bf16 `freqs` 1397.6 -> 1334.2, f16 base 32.2 -> 33.9, f16 `freqs` 1342.4 -> 1197.4. On f16 base, one B process read 35.2 and the others 32.1 to 32.5, so these two pairs show no gain, and with two runs per arm a regression is not ruled out. Six more pairs on the merged head settle it (Follow-up, below): no measurable change on f16 base.
 
 ## Dispatch trace (`trace-*.txt`)
 
@@ -58,8 +58,27 @@ Profiling build of the six-change integration, granite-4.0-1b-4bit decode, per s
 
 ## Other parts
 
-Bit-identical by construction everywhere. The four modules add about 44 KB of SPIR-V to the wheel. G13 and G14: not measured here; the commands are `rope_bits.py dump`/`compare` across the two wheels and a decode A/B with `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1` on one wheel.
+Bit-identical by construction everywhere. The four modules add about 44 KB of SPIR-V to the wheel. G13 and G14: not measured here. Since `1b1b71b1` the half-split builds are the default on G16G only (`omarchy::rope_half_split_default_part`), so G13 and G14 keep the general builds unless `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=0` is set. To measure them: `rope_bits.py dump`/`compare` across the two wheels, and a decode A/B on one wheel with `MLX_OMARCHY_NO_ROPE_HALF_SPLIT=0` against unset.
+
+## Follow-up (2026-11-03)
+
+After #319 merged, three runs on the same host (`followup-2026-11-03/`, `host.txt` there). Every probe process passed its wheel-stamp check, and no run added a GPU driver error. The `main` arm is the wheel of `2e5d7ea4`, whose tree equals `main` `999afe65`.
+
+- **Merged head `3c2160b1`** (`merged-head-3c2160b1/`): `scripts/bits.sh`, dump on `main`, compare on `3c2160b1`. `rope_bits.py` 72/72 cases bit-identical, `qmv_bits.py` 120/120, `sdpa_bits.py` 35/35, `qmm_fma_bits.py` 21/21. `omarchy_fast_ops_tests` 50/50 test cases. The 4 failed assertions are all in the `doctest::may_fail` case `sdpa vjp dk dv match finite differences at rep=1 (path per gate)`, as before. That boot ran with `nr_cpus=1`, and the run reports no timing.
+- **Six more RoPE timing pairs** (`timing-3c2160b1/`): `ab.py` with 6 interleaved pairs, `main` (A) against `3c2160b1` (B), same probe and procedure as above, on a normal 10-CPU boot. `perf-3c2160b1-rope-summary.txt` lists every process.
+
+  | form | `main`, run order | `3c2160b1`, run order | means | B/A |
+  |---|---|---|---|---|
+  | f16 base | 40.7, 32.6, 32.7, 32.7, 32.6, 32.8 | 33.3, 32.6, 32.8, 32.3, 32.7, 32.1 | 34.0, 32.6 | 0.959 |
+  | bf16 base | 126.4, 128.8, 142.9, 137.5, 138.6, 137.7 | 98.9, 99.0, 100.3, 99.9, 100.3, 99.7 | 135.3, 99.7 | 0.737 |
+  | bf16 `freqs` | 1053.7, 1239.7, 1247.0, 1290.5, 1294.6, 1290.8 | 1078.2, 1119.8, 1224.5, 1205.9, 1226.5, 1233.5 | 1236.0, 1181.4 | 0.956 |
+  | f16 `freqs` | 1016.2, 1193.5, 1197.3, 1239.2, 1241.6, 1236.6 | 939.6, 986.0, 1091.0, 1069.1, 1084.5, 1099.6 | 1187.4, 1045.0 | 0.880 |
+
+  f16 base: the B readings (32.1 to 33.3) lie on both sides of the A readings (32.6 to 32.8, apart from A's first process at 40.7). The medians are 32.7 (A) and 32.65 (B). The earlier 35.2 did not recur. So f16 base shows no measurable change either way; the 0.959 ratio of means comes from A's first process. The other three forms repeat the first measurement's direction and size. The two `freqs` forms rose over the run in both arms.
+- **Half-split default keyed on G16G, `1b1b71b1`** (`g16g-default-1b1b71b1/`): `omarchy_fast_ops_tests` 51/51 test cases with `MLX_OMARCHY_NO_ROPE_HALF_SPLIT` unset, `=1` and `=0` (the new part-rule case, plus the dispatch case now checking the route each setting selects), with the same 4 may-fail assertions. `scripts/bits.sh` compare against the `main` dump: 72/72, 120/120, 35/35, 21/21 bit-identical.
+
+`scripts/rope_summary.py` writes the RoPE summaries: `summarize.py` skips `rope_bits.py` records, which is why `perf-p4-rope-summary.txt` was empty before. The scripts that ran these steps on the host are in `followup-2026-11-03/scripts/`.
 
 ## Files
 
-`host.txt`, `wheels.txt`, `battery.txt`, `bits-p4-vs-main.log`, `bits-selftest.log`, `engage-rope-kernels.txt`, `perf-p4*.jsonl`, `perf-p4*-summary.txt`, `trace-*.txt`, `trace-*.run.log`, `reopen.log`, `scripts/`, `SHA256SUMS`.
+`host.txt`, `wheels.txt`, `battery.txt`, `bits-p4-vs-main.log`, `bits-selftest.log`, `engage-rope-kernels.txt`, `perf-p4*.jsonl`, `perf-p4*-summary.txt`, `trace-*.txt`, `trace-*.run.log`, `reopen.log`, `scripts/`, `followup-2026-11-03/`, `SHA256SUMS`.

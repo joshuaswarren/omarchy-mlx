@@ -1,0 +1,3 @@
+battery p5 2026-11-03T02:20:18Z commit=1b1b71b extra_env=MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1
+omarchy_fast_ops_tests rc=0 secs=6 new_gpu_kernel_errors=0 [doctest] test cases:      51 |      51 passed | 0 failed | 0 skipped [doctest] assertions: 1383999 | 1383995 passed | 4 failed | 
+BATTERY_DONE 2026-11-03T02:20:24Z

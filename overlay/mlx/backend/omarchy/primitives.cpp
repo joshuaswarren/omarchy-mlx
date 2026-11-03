@@ -15510,11 +15510,21 @@ void RoPE::eval_gpu(
   // The half-split form (flags bits 1 traditional and 3 passthrough clear)
   // has builds with the other branches folded away: the general kernel's
   // code size dominates a decode-sized RoPE on G16 (Apple M4), which
-  // fetches a short kernel's code cold at each dispatch.
-  static const bool half_split_disabled =
-      omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT");
+  // fetches a short kernel's code cold at each dispatch. The route is the
+  // default only on the parts of omarchy::rope_half_split_default_part,
+  // decided for the executing device; MLX_OMARCHY_NO_ROPE_HALF_SPLIT, read
+  // once, wins when set (1 keeps the general builds, 0 takes the half-split
+  // builds, on every part).
+  static const int half_split_setting =
+      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT") == nullptr
+      ? -1
+      : (omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT") ? 0 : 1);
+  const bool half_split_route = half_split_setting >= 0
+      ? half_split_setting == 1
+      : omarchy::rope_half_split_default_part(
+            encoder.device().capabilities().device_name);
   const bool half_split =
-      !half_split_disabled && (params.flags & 0xau) == 0u;
+      half_split_route && (params.flags & 0xau) == 0u;
   if (fuse_norm) {
     // row_length rides reduce_size (== D) and the row count is B*N*T; the
     // shared shape guard keeps the fused kernel's row-reduction order

@@ -605,4 +605,14 @@ inline bool matmul_bf16_fma_over_coopmat_part(const std::string& device_name) {
   return device_name.find("G16G") != std::string::npos;
 }
 
+// Forward RoPE in the half-split form with MLX_OMARCHY_NO_ROPE_HALF_SPLIT unset: the parts where the half-split builds
+// (FastRope{,Freqs}HalfSplit{BF16,F16}) are the default, because the general kernel's code size was measured to dominate
+// a decode-sized RoPE dispatch there:
+//   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-rope-half-split.
+// The output is bit-identical to the general builds on every part. Keyed on the device name so an unmeasured part keeps
+// the general builds; RoPE::eval_gpu passes the executing device's name. An explicit setting wins. Pure.
+inline bool rope_half_split_default_part(const std::string& device_name) {
+  return device_name.find("G16G") != std::string::npos;
+}
+
 } // namespace mlx::core::omarchy
