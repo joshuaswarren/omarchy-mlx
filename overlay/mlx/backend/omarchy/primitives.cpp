@@ -100,6 +100,60 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
   return row_length != 2048u || rows <= 64u;
 }
 
+// Decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>, read once):
+// the bf16 subgroup Q4 word and multi kernels run <rows> columns per slot and
+// <slots> 32-lane slots per workgroup. Every column keeps the same per-lane
+// chain, so the bytes are identical in every geometry; only the columns and
+// threads per workgroup change. Unset keeps 2x4.
+struct QmmGeometry {
+  uint32_t columns;
+  omarchy::ComputeKernel word;
+  omarchy::ComputeKernel multi;
+};
+const QmmGeometry& qmm_geometry() {
+  static const QmmGeometry geometry = [] {
+    using K = omarchy::ComputeKernel;
+    const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
+    if (env == nullptr || *env == '\0') {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
+    }
+    const std::string v(env);
+    if (v == "2x2") {
+      return QmmGeometry{
+          4u, K::QmmVecQ4WordSubgroupBF16R2S2,
+          K::QmmVecQ4MultiSubgroupBF16R2S2};
+    }
+    if (v == "4x2") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16R4S2,
+          K::QmmVecQ4MultiSubgroupBF16R4S2};
+    }
+    if (v == "4x4") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R4S4,
+          K::QmmVecQ4MultiSubgroupBF16R4S4};
+    }
+    if (v == "2x8") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R2S8};
+    }
+    if (v == "4x8") {
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R4S8,
+          K::QmmVecQ4MultiSubgroupBF16R4S8};
+    }
+    if (v == "2x4") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
+    }
+    throw std::invalid_argument(
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x2 4x2 2x4 4x4 2x8 4x8");
+  }();
+  return geometry;
+}
+
 bool apple_norm_enabled(
     const omarchy::Device& device,
     size_t row_length,
@@ -8510,11 +8564,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         scales.ndim() == 2 && biases.ndim() == 2) {
       vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
     }
+    uint32_t qmm_groups = n_groups_qmm_vec;
+    if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16) {
+      const auto& geometry = qmm_geometry();
+      vec_kernel = geometry.word;
+      qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+    }
     encoder.dispatch_compute(
         vec_kernel,
         bindings,
         params,
-        std::min(n_groups_qmm_vec, omarchy::kMaxComputeGroupCountX),
+        std::min(qmm_groups, omarchy::kMaxComputeGroupCountX),
         1u,
         1u);
     return;
@@ -9113,6 +9173,13 @@ bool dispatch_quantized_gemv_group(
   }
   ComputeParams params;
   uint32_t total_groups = 0;
+  // Columns per workgroup of the kernel selected below: the geometry applies
+  // to the bf16 subgroup single-token multi kernel only.
+  const uint32_t group_columns =
+      (!token_route && outgate == nullptr && dtype == bfloat16 &&
+       subgroup_ready)
+      ? qmm_geometry().columns
+      : 8u;
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
     if (node.inputs().size() != 4 || node.inputs()[0].id() != x.id() ||
@@ -9168,7 +9235,8 @@ bool dispatch_quantized_gemv_group(
       params.flags |= 256u << i;
     }
     params.shape[i] = static_cast<uint32_t>(n);
-    total_groups += (static_cast<uint32_t>(n) + 7u) / 8u;
+    total_groups +=
+        (static_cast<uint32_t>(n) + group_columns - 1u) / group_columns;
   }
   if (swiglu_out &&
       (params.shape[0] != params.shape[1] || swiglu_out->dtype() != dtype ||
@@ -9178,7 +9246,7 @@ bool dispatch_quantized_gemv_group(
   if (swiglu_out) {
     // Paired epilogue: every workgroup computes the same column slice
     // of both weights, so the gate count is weight 0's alone.
-    total_groups = (params.shape[0] + 7u) / 8u;
+    total_groups = (params.shape[0] + group_columns - 1u) / group_columns;
     params.flags |= 65536u;
   }
   if (total_groups > kMaxComputeGroupCountX) {
@@ -9375,7 +9443,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            ComputeKernel::QmmVecQ4MultiSubgroupBF16)
+            qmm_geometry().multi)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
