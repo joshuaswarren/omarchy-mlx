@@ -107,12 +107,12 @@ choose the venv python and the driver setting.
 
 ## What to expect
 
-- **Two of the G16G routes do not apply to G16S.** The M4 changes #316
+- Two of the G16G routes do not apply to G16S. The M4 changes #316
   (fused GEMV off by default) and #317 (bf16 linear layers on the
   scalar-FMA kernel) test the device name for `G16G`. A G16S device gets
   fused GEMV on and the default cooperative-matrix pick. Nothing is
   measured on G16S, so those two are not extended to it.
-- **#321 follows the driver, not the name.** The bf16 4-bit prefill route
+- #321 follows the driver, not the name. The bf16 4-bit prefill route
   on the scalar-FMA kernel applies to any device whose cooperative-matrix
   route is unreachable. That means no fp32 cooperative matrix, a subgroup
   size other than 32, too little shared memory, or
