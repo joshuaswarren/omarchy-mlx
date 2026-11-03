@@ -27,8 +27,10 @@
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/capability_sim.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/trace.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
@@ -611,6 +613,102 @@ TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   std::cout << "[capsim q4-prefill] profile=" << g_profile << " -> "
             << (e.coopmat_claim ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
             << " (backed=" << coopmat_backed() << ")\n";
+}
+
+// bf16 4-bit group-64 prefill under the profile: a cooperative-matrix
+// kernel where that route is reachable (fp32 8x8x8 claim, subgroup 32,
+// 4 KiB staging shared memory), otherwise the bf16 scalar-FMA build, a
+// device with the matrix extension but another subgroup size included;
+// with MLX_OMARCHY_QMM_TILE_RB=0 the original tile kernel. Every arm against the f64 host reference in the shared
+// qmm envelope.
+TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& c = caps();
+  const bool coopmat_reachable = c.cooperative_matrix_f32_8 &&
+      c.subgroup_size == 32u &&
+      (32u * 16u + 16u * 32u) * sizeof(float) <=
+          c.max_compute_shared_memory_size;
+  constexpr int m = 64;
+  constexpr int k = 128;
+  constexpr int n = 32;
+  std::mt19937 gen(12);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  std::vector<float> x_values(static_cast<size_t>(m) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  for (auto& v : x_values) {
+    v = dist(gen);
+  }
+  auto host = host_affine_quantize(matrix, n, k, 64, 4);
+  HostQuantizedWeights rounded = host;
+  rounded.scales = round_trip(stream, host.scales, bfloat16);
+  rounded.biases = round_trip(stream, host.biases, bfloat16);
+  auto x_rt = round_trip(stream, x_values, bfloat16);
+  auto expected = host_quantized_matmul(rounded, x_rt, m, n, k, 64, 4);
+  array x(x_rt.begin(), Shape{m, k}, bfloat16);
+  array w_words(host.words.begin(), Shape{n, k / 8}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / 64}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / 64}, bfloat16);
+  for (const char* rb : {static_cast<const char*>(nullptr), "0"}) {
+    if (rb) {
+      setenv("MLX_OMARCHY_QMM_TILE_RB", rb, 1);
+    } else {
+      unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+    }
+    array out = quantized_matmul(
+        x, w_words, scales, biases, true, 64, 4, "affine", stream);
+    std::string error = evaluation_error(out);
+    const bool coopmat_arm = coopmat_reachable && !rb;
+    if (coopmat_arm && !coopmat_backed()) {
+      expect_simulated_refusal(error, "QmmPrefillCoopmatBF16");
+      continue;
+    }
+    REQUIRE_MESSAGE(error.empty(), error);
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t kernel =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    INFO("rb=", rb ? rb : "unset", " coopmat_reachable=", coopmat_reachable);
+    const auto id = [](omarchy::ComputeKernel k) {
+      return static_cast<int64_t>(k);
+    };
+    if (rb) {
+      CHECK_EQ(kernel, id(omarchy::ComputeKernel::QmmTileBF16));
+    } else if (coopmat_reachable) {
+      // One of the cooperative-matrix bf16 prefill kernels (the tile-row
+      // and direct-load variants are picked by shape); never the FMA or
+      // tile arm.
+      CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaBF16));
+      CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaPreciseBF16));
+      CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmTileBF16));
+    } else {
+      CHECK_EQ(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaBF16));
+    }
+    // The tile kernel's derived bound (matmul family qmm tile case): k-step
+    // f32 rounding plus one bf16 storage rounding of the output.
+    auto got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), expected.size());
+    double out_max = 0.0;
+    double max_diff = 0.0;
+    for (size_t i = 0; i < got.size(); ++i) {
+      REQUIRE(std::isfinite(got[i]));
+      out_max = std::max(out_max, std::fabs(static_cast<double>(got[i])));
+      max_diff = std::max(
+          max_diff, std::fabs(static_cast<double>(got[i]) - expected[i]));
+    }
+    const double m_bound = std::max(out_max * 2.0, 1.0);
+    const double bound = (3.0 * k + 1.0) * m_bound * std::ldexp(1.0, -23) +
+        m_bound * std::ldexp(1.0, -8);
+    CHECK(max_diff <= bound);
+    std::cout << "[capsim bf16-q4-prefill] profile=" << g_profile
+              << " rb=" << (rb ? rb : "unset") << " kernel=" << kernel
+              << " max_diff=" << max_diff << " bound=" << bound << "\n";
+  }
+  unsetenv("MLX_OMARCHY_QMM_TILE_RB");
 }
 
 TEST_CASE("sdpa decode routes per the profile") {

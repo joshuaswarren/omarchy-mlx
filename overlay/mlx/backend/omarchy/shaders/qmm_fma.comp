@@ -1,8 +1,34 @@
 #version 460
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef USE_BF16
+// bf16 build: the same kernel with bfloat16 activations, scales and
+// biases. Widening bf16 to f32 is exact, so the k chain matches the f16
+// build's f32 arithmetic; the drain rounds to nearest even like the bf16
+// tile kernel.
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define AFFINE_TYPE uint16_t
+#define AFFINE_LOAD(v) uintBitsToFloat(uint(v) << 16u)
+#define X_LO(word) uintBitsToFloat((word) << 16u)
+#define X_HI(word) uintBitsToFloat((word) & 0xffff0000u)
+uint bf16_bits(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return (bits >> 16) | 0x40u;
+  }
+  return (bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16;
+}
+#define PACK_OUT(a, b) (bf16_bits(a) | (bf16_bits(b) << 16u))
+#else
+#define AFFINE_TYPE float16_t
+#define AFFINE_LOAD(v) float(v)
+#define X_LO(word) unpackHalf2x16(word).x
+#define X_HI(word) unpackHalf2x16(word).y
+#define PACK_OUT(a, b) packHalf2x16(vec2((a), (b)))
+#endif
 
-// Scalar-FMA prefill Q4/group-64 f16 quantized matmul. Replaces the
+// Scalar-FMA prefill Q4/group-64 f16 (and, built with USE_BF16, bf16)
+// quantized matmul. Replaces the
 // cooperative-matrix kernel on the shared dispatch gate: the G13
 // 8x8x8 fp32 matrix path tops out at ~1.46 TFLOP/s in this dispatch
 // geometry with zero operand traffic (receipts/2026-09-11-coopmat-ilp-chains),
@@ -12,7 +38,7 @@
 // and keeps ROWS x COLS independent f32 accumulators; per output the
 // sum is one ascending-k fused chain, the same arithmetic qmm_tile and
 // qmm_coopmat produce, with weights dequantized in registers
-// (scale*float(nibble)+bias, f32) and x widened exactly from f16 - no
+// (scale*float(nibble)+bias, f32) and x widened exactly from f16 or bf16 - no
 // shared memory, no barriers, no coopMatLoad round trip.
 // Requires matrix_k % 8 == 0 (implied by group_size 64), even
 // matrix_n and output offset (word-pair f16 stores), and an x row
@@ -41,10 +67,10 @@ layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
 } input_w;
 layout(set = 0, binding = 2, std430) readonly buffer Scales {
-  float16_t values[];
+  AFFINE_TYPE values[];
 } scales;
 layout(set = 0, binding = 3, std430) readonly buffer Biases {
-  float16_t values[];
+  AFFINE_TYPE values[];
 } biases;
 layout(set = 0, binding = 4, std430) writeonly buffer Output {
   uint values[];
@@ -114,10 +140,10 @@ void main() {
           for (uint c = 0u; c < COLS_U; ++c) {
             uint col = col0 + c;
             scale[c] = col < n
-                ? float(scales.values[scale_slice + col * groups_per_row + g])
+                ? AFFINE_LOAD(scales.values[scale_slice + col * groups_per_row + g])
                 : 0.0;
             bias[c] = col < n
-                ? float(biases.values[bias_slice + col * groups_per_row + g])
+                ? AFFINE_LOAD(biases.values[bias_slice + col * groups_per_row + g])
                 : 0.0;
           }
           for (uint s = 0u; s < 8u; ++s) {
@@ -143,14 +169,14 @@ void main() {
               uvec4 xw = row < m
                   ? input_x4.values4[x_slice4 + row * x_vec_per_row + xk]
                   : uvec4(0u);
-              float x0 = unpackHalf2x16(xw.x).x;
-              float x1 = unpackHalf2x16(xw.x).y;
-              float x2 = unpackHalf2x16(xw.y).x;
-              float x3 = unpackHalf2x16(xw.y).y;
-              float x4 = unpackHalf2x16(xw.z).x;
-              float x5 = unpackHalf2x16(xw.z).y;
-              float x6 = unpackHalf2x16(xw.w).x;
-              float x7 = unpackHalf2x16(xw.w).y;
+              float x0 = X_LO(xw.x);
+              float x1 = X_HI(xw.x);
+              float x2 = X_LO(xw.y);
+              float x3 = X_HI(xw.y);
+              float x4 = X_LO(xw.z);
+              float x5 = X_HI(xw.z);
+              float x6 = X_LO(xw.w);
+              float x7 = X_HI(xw.w);
               for (uint c = 0u; c < COLS_U; ++c) {
 #ifdef PRECISE_ACCUM
                 precise float p0 = x0 * wv[c][0];
@@ -191,7 +217,7 @@ void main() {
               if (col < n) {
                 uint index = (out_slice + row * n + col) / 2u;
                 output_words.values[index] =
-                    packHalf2x16(vec2(acc[r][2u * p], acc[r][2u * p + 1u]));
+                    PACK_OUT(acc[r][2u * p], acc[r][2u * p + 1u]);
               }
             }
           }

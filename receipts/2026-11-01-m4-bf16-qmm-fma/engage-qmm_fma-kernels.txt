@@ -1,0 +1,11 @@
+end: {"k": "end", "t": 11921839756709, "dispatches": 693, "dropped": 0, "submissions": 202, "joins": 1, "barriers": 650, "barriers_skipped": 245}
+    180 ElementwiseLiteF32
+     88 QmmPrefillFmaBF16
+     74 ElementwiseF32
+     68 RandomBitsU32
+     63 CastBF16F32
+     38 CastF32BF16
+     36 QmmPrefillFmaPreciseBF16
+     34 CastU32F32
+     21 DequantBF16
+     19 QuantizeBF16

@@ -1072,6 +1072,11 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1R4BF16Hd256,
   SdpaDecodeSplitP1R8BF16Hd256,
   SdpaDecodeSplitP2BF16Hd256,
+  // bf16 builds of the scalar-FMA Q4 prefill pair (shaders/qmm_fma.comp
+  // -DUSE_BF16=1) for drivers without the fp32 cooperative matrix.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillFmaBF16,
+  QmmPrefillFmaPreciseBF16,
   Count,
 };
 

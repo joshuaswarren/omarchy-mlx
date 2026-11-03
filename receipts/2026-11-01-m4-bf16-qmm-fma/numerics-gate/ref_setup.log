@@ -1,0 +1,12 @@
+mlx-0.32.3-cp314-cp314-manylinux_2_35_aarch64.whl size=681931 pypi_sha256=231a278b4fd2804ea16d297960ab169d1749ee1adbf820173e704fbed97bf1b6 downloaded_sha256=231a278b4fd2804ea16d297960ab169d1749ee1adbf820173e704fbed97bf1b6 MATCH
+mlx_cpu-0.32.3-py3-none-manylinux_2_35_aarch64.whl size=8837475 pypi_sha256=59223b7ce089f2bc2b63f520332f03d784bcdbe6301184a9e4c3afa0bf2eb9fc downloaded_sha256=59223b7ce089f2bc2b63f520332f03d784bcdbe6301184a9e4c3afa0bf2eb9fc MATCH
+mlx_lm-0.31.3-py3-none-any.whl size=408890 pypi_sha256=758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8 downloaded_sha256=758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8 MATCH
+
+
+RECORD mlx 0.32.3: 52 files match, 0 differ
+RECORD mlx-cpu 0.32.3: 262 files match, 0 differ
+RECORD mlx-lm 0.31.3: 193 files match, 0 differ
+no omarchy distribution in this venv
+mlx 0.32.3 default device Device(cpu, 0) file ~/gpu/upr/venv-ref/lib/python3.14/site-packages/mlx/core.cpython-314-aarch64-linux-gnu.so
+cpu rms_norm, rope, sdpa ran: (2, 8, 4, 64) (2, 8, 4, 64) (2, 8, 4, 64)
+REF_OK

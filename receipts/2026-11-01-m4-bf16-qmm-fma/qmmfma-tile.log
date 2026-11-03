@@ -1,0 +1,24 @@
+p6 0 provenance: mlx-omarchy 0.32.4.dev202611020559+89b54a0 mx=0.32.4.dev202611020559+89b54a0 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:10cdcd96b1cf685c
+m=    5 n= 1000 k= 2048 max|ref|=  190.15 max_err=0.50640 = 0.506 bf16 ulps at max|ref| mean_err=0.07428 gflops=11
+m=    5 n= 2050 k= 1024 max|ref|=  128.36 max_err=0.36023 = 0.360 bf16 ulps at max|ref| mean_err=0.05310 gflops=12
+m=    5 n= 3072 k= 2048 max|ref|=  178.61 max_err=0.61369 = 0.614 bf16 ulps at max|ref| mean_err=0.07559 gflops=19
+m=   64 n= 1000 k= 2048 max|ref|=  205.31 max_err=0.56040 = 0.560 bf16 ulps at max|ref| mean_err=0.07526 gflops=62
+m=   64 n= 2050 k= 1024 max|ref|=  158.95 max_err=0.41544 = 0.415 bf16 ulps at max|ref| mean_err=0.05295 gflops=63
+m=   64 n= 3072 k= 2048 max|ref|=  194.36 max_err=0.63142 = 0.631 bf16 ulps at max|ref| mean_err=0.07532 gflops=69
+m=   77 n= 1000 k= 2048 max|ref|=  196.34 max_err=0.66540 = 0.665 bf16 ulps at max|ref| mean_err=0.07514 gflops=61
+m=   77 n= 2050 k= 1024 max|ref|=  150.43 max_err=0.49833 = 0.498 bf16 ulps at max|ref| mean_err=0.05341 gflops=62
+m=   77 n= 3072 k= 2048 max|ref|=  225.27 max_err=0.62873 = 0.629 bf16 ulps at max|ref| mean_err=0.07524 gflops=67
+m=  130 n= 1000 k= 2048 max|ref|=  192.32 max_err=0.62220 = 0.622 bf16 ulps at max|ref| mean_err=0.07534 gflops=61
+m=  130 n= 2050 k= 1024 max|ref|=  142.28 max_err=0.42819 = 0.428 bf16 ulps at max|ref| mean_err=0.05315 gflops=60
+m=  130 n= 3072 k= 2048 max|ref|=  206.41 max_err=0.64159 = 0.642 bf16 ulps at max|ref| mean_err=0.07539 gflops=64
+m=  512 n= 1000 k= 2048 max|ref|=  218.24 max_err=0.69946 = 0.699 bf16 ulps at max|ref| mean_err=0.07549 gflops=70
+m=  512 n= 2050 k= 1024 max|ref|=  167.90 max_err=0.51368 = 0.514 bf16 ulps at max|ref| mean_err=0.05325 gflops=69
+m=  512 n= 3072 k= 2048 max|ref|=  225.72 max_err=0.72217 = 0.722 bf16 ulps at max|ref| mean_err=0.07535 gflops=71
+m= 1024 n= 1000 k= 2048 max|ref|=  227.21 max_err=0.68968 = 0.690 bf16 ulps at max|ref| mean_err=0.07518 gflops=71
+m= 1024 n= 2050 k= 1024 max|ref|=  157.71 max_err=0.56315 = 0.563 bf16 ulps at max|ref| mean_err=0.05309 gflops=69
+m= 1024 n= 3072 k= 2048 max|ref|=  254.07 max_err=0.69898 = 0.699 bf16 ulps at max|ref| mean_err=0.07517 gflops=72
+m= 1500 n= 1000 k= 2048 max|ref|=  229.43 max_err=0.68873 = 0.689 bf16 ulps at max|ref| mean_err=0.07545 gflops=71
+m= 1500 n= 2050 k= 1024 max|ref|=  163.02 max_err=0.61402 = 0.614 bf16 ulps at max|ref| mean_err=0.05317 gflops=69
+m= 1500 n= 3072 k= 2048 max|ref|=  221.18 max_err=0.67803 = 0.678 bf16 ulps at max|ref| mean_err=0.07534 gflops=72
+worst max_err in bf16 ulps at the case max|ref|: 0.722
+21/21 cases bit-identical

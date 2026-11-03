@@ -582,6 +582,8 @@ omarchy_shader(qmm_coopmat_m16_x32_fn_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -
 omarchy_shader(qmm_coopmat_x32_fn_g4_pad_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1 -DQBITS=8 -DQGROUP=32)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
+omarchy_shader(qmm_fma_bf16 shaders/qmm_fma.comp -DUSE_BF16=1)
+omarchy_shader(qmm_fma_precise_bf16 shaders/qmm_fma.comp -DUSE_BF16=1 -DPRECISE_ACCUM=1)
 omarchy_shader(matmul_fma_bf16 shaders/matmul_fma_bf16.comp)
 omarchy_shader(binary_vec_f16 shaders/binary_vec.comp -DUSE_FP16=1)
 omarchy_shader(binary_vec_bf16 shaders/binary_vec.comp -DUSE_BF16=1)

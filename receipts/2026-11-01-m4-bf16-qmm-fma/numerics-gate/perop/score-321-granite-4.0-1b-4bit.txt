@@ -1,0 +1,23 @@
+cell                     n   base relL2   cand relL2 identical
+layer0/down              2   1.6628e-03   1.6628e-03      2/2  
+layer0/gate              2   1.6647e-03   1.6647e-03      2/2  
+layer0/k                 2   1.6809e-03   1.6809e-03      2/2  
+layer0/o                 2   1.7151e-03   1.7151e-03      2/2  
+layer0/q                 2   1.6667e-03   1.6667e-03      2/2  
+layer0/up                2   1.6490e-03   1.6490e-03      2/2  
+layer0/v                 2   1.6573e-03   1.6573e-03      2/2  
+layer20/down             2   1.6491e-03   1.6491e-03      2/2  
+layer20/gate             2   1.6551e-03   1.6551e-03      2/2  
+layer20/k                2   1.6788e-03   1.6788e-03      2/2  
+layer20/o                2   1.6614e-03   1.6614e-03      2/2  
+layer20/q                2   1.6619e-03   1.6619e-03      2/2  
+layer20/up               2   1.6603e-03   1.6603e-03      2/2  
+layer20/v                2   1.6578e-03   1.6578e-03      2/2  
+layer39/down             2   1.6257e-03   1.6257e-03      2/2  
+layer39/gate             2   1.6186e-03   1.6186e-03      2/2  
+layer39/k                2   1.6552e-03   1.6552e-03      2/2  
+layer39/o                2   1.6480e-03   1.6480e-03      2/2  
+layer39/q                2   1.6638e-03   1.6638e-03      2/2  
+layer39/up               2   1.6419e-03   1.6419e-03      2/2  
+layer39/v                2   1.6467e-03   1.6467e-03      2/2  
+{"kind": "qmm", "cells": 21, "cells_cand_no_worse": 21, "worst_ratio": 1.0, "check1_per_op": true}
