@@ -1085,6 +1085,10 @@ enum class ComputeKernel : uint16_t {
   FastRopeHalfSplitF16,
   FastRopeFreqsHalfSplitF16,
   FastRopeFreqsHalfSplitBF16,
+  // Fused GDN decode conv + gated-delta step (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED, plain and
+  // -DGDN_PF_WIDE): default order, equal head counts. Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvBF16Pf,
+  GatedDeltaDecodeConvBF16PfWide,
   Count,
 };
 
