@@ -64,6 +64,37 @@ Stream gpu_stream() {
 
 } // namespace
 
+TEST_CASE("bf16 strided copies preserve every storage bit pattern") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  Stream s = gpu_stream();
+  std::vector<uint16_t> bits(65538);
+  bits.front() = 0xbeefu;
+  bits.back() = 0xcafeu;
+  for (uint32_t i = 0; i < 65536; ++i) {
+    bits[i + 1] = static_cast<uint16_t>(i);
+  }
+  array raw(bits.begin(), Shape{65538}, uint16);
+  array source = view(raw, bfloat16, s);
+  array matrix = reshape(slice(source, {1}, {65537}, {1}, s), {256, 256}, s);
+  array transposed = transpose(matrix, {1, 0}, s);
+  for (bool reverse : {false, true}) {
+    array input = reverse ? flip(transposed, 1, s) : transposed;
+    array copied = full(input.shape(), input, s);
+    copied.eval();
+    omarchy::get_command_encoder(s).synchronize();
+    const auto* actual = copied.data<uint16_t>();
+    for (uint32_t row = 0; row < 256; ++row) {
+      for (uint32_t col = 0; col < 256; ++col) {
+        uint32_t original_row = reverse ? 255u - col : col;
+        CHECK_EQ(actual[row * 256u + col], bits[1u + original_row * 256u + row]);
+      }
+    }
+  }
+}
+
 TEST_CASE("vector copy honors the source slice offset") {
   if (!gpu::is_available()) {
     skip(

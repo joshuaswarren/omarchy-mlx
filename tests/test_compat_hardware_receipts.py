@@ -69,9 +69,18 @@ def test_m3_m4_rows_match_readme() -> None:
     section = _hardware_section()
     for phrase in (
         "aurora mesa-m3 graphics; compute not certified",
-        "no Linux GPU driver",
         "h15",
         "h16",
     ):
         assert phrase in readme, f"README lost the phrase: {phrase}"
         assert phrase in section, f"compatibility.md Hardware lost: {phrase}"
+
+    m4_readme = next(line for line in readme.splitlines() if line.startswith("| M4 |"))
+    m4_compat = next(bullet for bullet in _bullets(section) if bullet.startswith("- M4 "))
+    for row in (m4_readme, m4_compat):
+        for phrase in (
+            "Experimental",
+            "out-of-tree G16G",
+            "receipts/2026-11-01-m4-g16g-part1/README.md",
+        ):
+            assert phrase in row, f"M4 hardware row lost: {phrase}"
