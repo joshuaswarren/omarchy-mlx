@@ -475,6 +475,9 @@ omarchy_shader(gated_delta_decode_perrow_pfw_bf16 shaders/gated_delta_decode_per
 # Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update), default order, equal head counts.
 omarchy_shader(gated_delta_decode_perrow_pf_conv_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1)
 omarchy_shader(gated_delta_decode_perrow_pfw_conv_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1)
+# ... and with the gated-norm (rms_norm_gated) epilogue folded in.
+omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)
 omarchy_shader(gated_delta_decode_gqa_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_perrow_composed_bf16 shaders/gated_delta_decode_perrow.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)

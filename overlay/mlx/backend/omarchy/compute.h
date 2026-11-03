@@ -1094,6 +1094,9 @@ enum class ComputeKernel : uint16_t {
   // -DGDN_PF_WIDE): default order, equal head counts. Appended to keep profile kernel ids stable.
   GatedDeltaDecodeConvBF16Pf,
   GatedDeltaDecodeConvBF16PfWide,
+  // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
+  GatedDeltaDecodeConvNormBF16Pf,
+  GatedDeltaDecodeConvNormBF16PfWide,
   Count,
 };
 
