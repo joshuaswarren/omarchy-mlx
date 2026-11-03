@@ -1,0 +1,16 @@
+## decode_bench.py mlx-community/granite-4.0-1b-4bit 64 4
+  A main+a69d9e6 n=2 median=38.87 values=[38.87, 38.87] prompt_med 160.875 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=29.505-38.191 load1_before<=0.3046875
+  B p1n+f333327 n=2 median=46.3775 values=[46.37, 46.385000000000005] prompt_med 162.95000000000002 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.882 temps_c=29.505-38.019 load1_before<=0.2412109375
+  B/A = 1.193
+## decode_bench.py mlx-community/Qwen2.5-1.5B-Instruct-4bit 64 4
+  A main+a69d9e6 n=2 median=44.790000000000006 values=[44.81, 44.77] prompt_med 227.35 ids ['3000fba406cf353f'] peak_gpu_gib=0.863 temps_c=29.215-38.3 load1_before<=0.169921875
+  B p1n+f333327 n=2 median=62.5175 values=[62.545, 62.49] prompt_med 236.125 ids ['3000fba406cf353f'] peak_gpu_gib=0.86 temps_c=29.13-38.289 load1_before<=0.1005859375
+  B/A = 1.396
+## decode_bench.py mlx-community/Llama-3.2-3B-Instruct-4bit 64 4
+  A main+a69d9e6 n=2 median=12.555 values=[11.865, 13.245000000000001] prompt_med 101.425 ids ['be38086e9856de00'] peak_gpu_gib=1.719 temps_c=28.636-38.089 load1_before<=0.24853515625
+  B p1n+f333327 n=2 median=14.3075 values=[14.305, 14.309999999999999] prompt_med 105.1 ids ['be38086e9856de00'] peak_gpu_gib=1.717 temps_c=28.855-37.609 load1_before<=0.34619140625
+  B/A = 1.140
+## decode_bench.py mlx-community/Qwen2.5-0.5B-Instruct-4bit 64 4
+  A main+a69d9e6 n=2 median=83.685 values=[83.695, 83.67500000000001] prompt_med 545.1 ids ['6fb4db8c6ab6a09b'] peak_gpu_gib=0.288 temps_c=28.565-36.445 load1_before<=0.23046875
+  B p1n+f333327 n=2 median=114.3875 values=[114.4, 114.375] prompt_med 575.525 ids ['6fb4db8c6ab6a09b'] peak_gpu_gib=0.287 temps_c=28.402-36.218 load1_before<=0.19140625
+  B/A = 1.367

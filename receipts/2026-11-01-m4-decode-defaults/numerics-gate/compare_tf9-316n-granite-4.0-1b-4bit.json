@@ -1,0 +1,14 @@
+{
+  "positions": 5120,
+  "matched_top1": 5120,
+  "top1_agreement": 1.0,
+  "disagreements": 0,
+  "disagreement_gap_bf16_ulp": {
+    "max": 0.0,
+    "mean": 0.0,
+    "all": []
+  },
+  "chosen_token_logprob_abs_delta_mean": 0.0,
+  "chosen_token_logprob_abs_delta_max": 0.0,
+  "passed": true
+}

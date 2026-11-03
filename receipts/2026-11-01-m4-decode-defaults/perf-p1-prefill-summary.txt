@@ -1,0 +1,4 @@
+## prefill_bench.py mlx-community/Qwen2.5-1.5B-Instruct-4bit 512 4
+  A main+a69d9e6 n=2 median=385.6 values=[385.6, 385.6] argmax [13] peak_gpu_gib=1.058 temps_c=32.251-41.695 load1_before<=0.1
+  B p1+9d32f27 n=2 median=385.55 values=[385.6, 385.5] argmax [13] peak_gpu_gib=1.017 temps_c=32.43-41.656 load1_before<=0.06
+  B/A = 1.000

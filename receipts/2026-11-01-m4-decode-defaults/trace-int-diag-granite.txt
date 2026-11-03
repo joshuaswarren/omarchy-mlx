@@ -1,0 +1,16 @@
+end record: {"k": "end", "t": 11927673089209, "dispatches": 26667, "dropped": 0, "submissions": 36, "joins": 1, "barriers": 21119, "barriers_skipped": 8304}
+decode steps with all records: 10; dispatches per step: 771; GPU busy per step: 44.65 ms
+kernel                              per step   us/step  us/disp  share
+QmmVecQ4WordSubgroupBF16               281.0   23506.0     83.7  52.7%
+FastRopeHalfSplitBF16                   80.0    4287.5     53.6   9.6%
+CopyGeneralBF16                         80.0    3215.9     40.2   7.2%
+FastRmsNormAppleBF16                    81.0    3118.6     38.5   7.0%
+ElementwiseLiteBF16                     83.0    3084.1     37.2   6.9%
+SdpaDecodeNativeBF16Hd128               40.0    2745.0     68.6   6.1%
+BinaryVecBF16                           80.0    2723.2     34.0   6.1%
+SwigluBF16                              40.0    1463.7     36.6   3.3%
+LogSumExpBF16                            1.0     154.8    154.8   0.3%
+ArgReduceBF16                            1.0     139.6    139.6   0.3%
+TakeBF16                                 2.0     103.6     51.8   0.2%
+DequantBF16                              1.0      56.3     56.3   0.1%
+TakeU32                                  1.0      47.5     47.5   0.1%

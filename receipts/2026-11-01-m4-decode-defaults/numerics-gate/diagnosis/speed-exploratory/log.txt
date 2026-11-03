@@ -1,0 +1,23 @@
+15:02 start
+A main 0 [{"model": "Qwen2.5-0.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [83.74, 83.69, 83.71, 83.73], "decode_median": 83.72, "prompt_tok_s": [542.5
+B p1 0 [{"model": "Qwen2.5-0.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [114.82, 114.47, 114.42, 114.31], "decode_median": 114.445, "prompt_tok_s": 
+B p1 0 [{"model": "Qwen2.5-0.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [114.59, 114.59, 114.55, 114.54], "decode_median": 114.57, "prompt_tok_s": [
+A main 0 [{"model": "Qwen2.5-0.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [83.68, 83.68, 83.64, 83.69], "decode_median": 83.68, "prompt_tok_s": [541.9
+15:05 Qwen2.5-0.5B-Instruct-4bit done
+A main 0 [{"model": "Qwen2.5-1.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [44.82, 44.81, 44.81, 44.81], "decode_median": 44.81, "prompt_tok_s": [223.5
+B p1 0 [{"model": "Qwen2.5-1.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [62.52, 62.51, 62.53, 62.53], "decode_median": 62.525000000000006, "prompt_t
+B p1 0 [{"model": "Qwen2.5-1.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [62.56, 62.58, 62.58, 62.59], "decode_median": 62.58, "prompt_tok_s": [236.0
+A main 0 [{"model": "Qwen2.5-1.5B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 44, "generated": 64, "decode_tok_s": [44.8, 44.81, 44.81, 44.8], "decode_median": 44.805, "prompt_tok_s": [224.1,
+15:07 Qwen2.5-1.5B-Instruct-4bit done
+A main 0 [{"model": "granite-4.0-1b-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 45, "generated": 64, "decode_tok_s": [38.84, 38.84, 38.83, 38.83], "decode_median": 38.835, "prompt_tok_s": [162.2, 160.
+B p1 0 [{"model": "granite-4.0-1b-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 45, "generated": 64, "decode_tok_s": [46.34, 46.32, 46.33, 46.32], "decode_median": 46.325, "prompt_tok_s": [163.1, 164.
+B p1 0 [{"model": "granite-4.0-1b-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 45, "generated": 64, "decode_tok_s": [46.31, 46.33, 46.33, 46.32], "decode_median": 46.325, "prompt_tok_s": [163.1, 162.
+A main 0 [{"model": "granite-4.0-1b-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 45, "generated": 64, "decode_tok_s": [38.85, 38.86, 38.84, 38.85], "decode_median": 38.85, "prompt_tok_s": [161.8, 160.7
+15:10 granite-4.0-1b-4bit done
+15:10 end
+15:12 start Llama-3.2-3B (569s)
+A main 0 [{"model": "Llama-3.2-3B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 50, "generated": 64, "decode_tok_s": [11.78, 11.79, 11.77, 11.79], "decode_median": 11.785, "prompt_tok_s": [101.
+B p1 0 [{"model": "Llama-3.2-3B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 50, "generated": 64, "decode_tok_s": [14.48, 14.43, 14.45, 14.45], "decode_median": 14.45, "prompt_tok_s": [104.0
+B p1 0 [{"model": "Llama-3.2-3B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 50, "generated": 64, "decode_tok_s": [14.47, 14.45, 14.42, 14.47], "decode_median": 14.46, "prompt_tok_s": [104.2
+A main 0 [{"model": "Llama-3.2-3B-Instruct-4bit", "max_tokens": 64, "runs": 4, "prompt_tokens": 50, "generated": 64, "decode_tok_s": [11.86, 11.79, 11.81, 11.79], "decode_median": 11.8, "prompt_tok_s": [101.5,
+15:16 Llama-3.2-3B end

@@ -1,0 +1,44 @@
+run                                           agree %  flips  ties        PPL        dev   |dlogp|
+s1-a69d9e6-1793659572307082410.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-a69d9e6-1793659973966844895.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-a69d9e6-1793660118569935535.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-a69d9e6-1793660517050494815.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-a69d9e6-1793660670555618230.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-f333327-1793659700515217990.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-f333327-1793659828761131512.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-f333327-1793660246645201948.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-f333327-1793660373625703591.json            99.453     28    28    7.40599   0.000052   0.01156
+s1-f333327-1793660800961679138.json            99.453     28    28    7.40599   0.000052   0.01156
+reference (stock MLX CPU fp32)                                        7.40637
+per segment (first baseline run / first candidate run): agree, flips, near ties
+  segment 0: base 508/4/4  cand 508/4/4
+  segment 1: base 508/4/4  cand 508/4/4
+  segment 2: base 509/3/3  cand 509/3/3
+  segment 3: base 511/1/1  cand 511/1/1
+  segment 4: base 509/3/3  cand 509/3/3
+  segment 5: base 509/3/3  cand 509/3/3
+  segment 6: base 511/1/1  cand 511/1/1
+  segment 7: base 509/3/3  cand 509/3/3
+  segment 8: base 511/1/1  cand 511/1/1
+  segment 9: base 507/5/5  cand 507/5/5
+{
+ "positions": 5120,
+ "reference_ppl": 7.406372848726922,
+ "reference": {
+  "reference": "stock upstream MLX, CPU stream, float32",
+  "mlx": "0.32.3",
+  "mlx_cpu": "0.32.3",
+  "mlx_lm": "0.31.3",
+  "chunk": 64
+ },
+ "baseline_agree_with_ties_median_pct": 100.0,
+ "baseline_agree_with_ties_wilson_low_pct": 99.9250250046762,
+ "candidate_agree_with_ties_median_pct": 100.0,
+ "check2_token_choices": true,
+ "baseline_ppl_dev_median": 5.2364822476807366e-05,
+ "baseline_ppl_noise": 0.0,
+ "candidate_ppl_dev_median": 5.2364822476807366e-05,
+ "check3_perplexity": true,
+ "old_vs_new_top1_same": 5120,
+ "old_vs_new_top1_pct": 100.0
+}
