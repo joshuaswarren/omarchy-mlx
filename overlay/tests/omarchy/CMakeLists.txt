@@ -614,6 +614,19 @@ target_link_options(omarchy_fused_chain_tests
 doctest_discover_tests(omarchy_fused_chain_tests)
 add_test(NAME omarchy_fused_chain_tests COMMAND omarchy_fused_chain_tests)
 
+# FuseNormQmv: MLX_OMARCHY_FUSE_NORM_QMV folds the decode RmsNorm into the
+# single-row Qmm prologue; bytes identical to norm then Qmm, one dispatch
+# saved per fused norm, fallbacks identical.
+add_executable(omarchy_fuse_norm_qmv_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_fuse_norm_qmv.cpp)
+target_link_libraries(omarchy_fuse_norm_qmv_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_fuse_norm_qmv_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_fuse_norm_qmv_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_fuse_norm_qmv_tests)
+add_test(NAME omarchy_fuse_norm_qmv_tests COMMAND omarchy_fuse_norm_qmv_tests)
+
 # WrongValueSweep: float-to-bool casts decide from encoded bits (driver
 # denorm flush turned f32/bf16 subnormals into False), and same-mode
 # convolve / padded pool keep exact boundary bytes under allocator
