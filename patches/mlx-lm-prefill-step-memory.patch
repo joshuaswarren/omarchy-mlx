@@ -1,0 +1,88 @@
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -56,6 +56,62 @@
+ DEFAULT_QUANTIZED_KV_START = 5000
+ 
+ 
++# Memory-aware prefill chunk (mlx-omarchy). Honeykrisp's heap defaults to mesa's 50% of MemTotal (the backend raises it on large hosts; HK_SYSMEM or drirc can set it). On a
++# 16 GB host that leaves a 9B 4-bit model about 3 GiB for the prefill chunk, and the 2048-token default fails there with
++# VK_ERROR_OUT_OF_DEVICE_MEMORY at an 8k prompt (512 completes). When the caller gives no chunk, take the largest of the old
++# default and its halvings whose estimated scratch fits the heap headroom. An explicit value always wins and the result never
++# exceeds 2048, so a host with room is unchanged. The estimate is serve/mlx_omarchy_serve/budget.py PREFILL_*;
++# tests/test_mlxlm_prefill_step.py keeps the two in step.
++_OMARCHY_PREFILL_TOKEN_BYTES = 161 * 1024
++_OMARCHY_PREFILL_SCORE_HEADS = 32
++_OMARCHY_PREFILL_SCORE_TENSOR_BYTES = 8
++_OMARCHY_PREFILL_MARGIN = 1.15
++_OMARCHY_PREFILL_STEPS = (2048, 1024, 512, 256, 128, 64)
++
++
++def _omarchy_prefill_step(requested, context_tokens, headroom_bytes):
++    if requested is not None:
++        return requested
++    if headroom_bytes is None:
++        return _OMARCHY_PREFILL_STEPS[0]
++    for step in _OMARCHY_PREFILL_STEPS:
++        tokens = min(step, context_tokens)
++        scratch = (
++            tokens * _OMARCHY_PREFILL_TOKEN_BYTES
++            + tokens
++            * context_tokens
++            * _OMARCHY_PREFILL_SCORE_HEADS
++            * _OMARCHY_PREFILL_SCORE_TENSOR_BYTES
++        ) * _OMARCHY_PREFILL_MARGIN
++        if scratch <= headroom_bytes:
++            return step
++    return _OMARCHY_PREFILL_STEPS[-1]
++
++
++def _omarchy_prefill_headroom_bytes():
++    """Honeykrisp heap bytes not held by live arrays, or None where this does not apply.
++
++    The heap is the one the backend reports (device_info total_memory), not a value re-derived here: the backend
++    raises it for its own process on large hosts with a C-level setenv that Python cannot see, and drirc can set it.
++    """
++    import importlib.metadata
++
++    try:
++        importlib.metadata.version("mlx-omarchy")
++        heap = int(mx.device_info()["total_memory"])
++        if heap <= 0:
++            return None
++        return heap - mx.get_active_memory()
++    except (
++        importlib.metadata.PackageNotFoundError,
++        KeyError,
++        TypeError,
++        ValueError,
++        AttributeError,
++    ):
++        return None
++
++
+ def str2bool(string):
+     return string.lower() not in ["false", "f"]
+ 
+@@ -313,7 +369,7 @@
+     logits_processors: Optional[List[Callable[[mx.array, mx.array], mx.array]]] = None,
+     max_kv_size: Optional[int] = None,
+     prompt_cache: Optional[Any] = None,
+-    prefill_step_size: int = 2048,
++    prefill_step_size: Optional[int] = None,
+     kv_bits: Optional[int] = None,
+     kv_group_size: int = 64,
+     quantized_kv_start: int = 0,
+@@ -376,6 +432,13 @@
+ 
+     prompt_progress_callback = prompt_progress_callback or (lambda *_: None)
+ 
++    prefill_step_size = _omarchy_prefill_step(
++        prefill_step_size,
++        (len(input_embeddings) if input_embeddings is not None else len(prompt))
++        + max((getattr(c, "offset", 0) for c in prompt_cache), default=0),
++        _omarchy_prefill_headroom_bytes(),
++    )
++
+     quantize_cache_fn = functools.partial(
+         maybe_quantize_kv_cache,
+         quantized_kv_start=quantized_kv_start,
