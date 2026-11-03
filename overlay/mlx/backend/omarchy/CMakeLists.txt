@@ -385,6 +385,9 @@ omarchy_shader(qmm_vec_q4_multi_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC
 omarchy_shader(qmm_vec_q4_multi_subgroup_f32 shaders/qmm_vec.comp -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1)
 omarchy_shader(qmm_vec_q4_multi_subgroup_f16 shaders/qmm_vec.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
+# K-walk unroll experiment (MLX_OMARCHY_QMM_KUNROLL): two 64-word groups per iteration, ascending order kept.
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_ku2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DKQ_UNROLL2=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_ku2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DKQ_UNROLL2=1)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r8s4 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=8 -DSLOTS_PER_GROUP=4)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r8s8 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=8 -DSLOTS_PER_GROUP=8)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r4s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=4 -DSLOTS_PER_GROUP=16)
