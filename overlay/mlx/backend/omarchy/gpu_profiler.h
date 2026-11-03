@@ -33,6 +33,18 @@
 //   {"k":"end",...}   at exit: totals incl. barrier decisions ("barriers",
 //                     "barriers_skipped"; transfer/fill decisions included)
 //
+// Mode (MLX_OMARCHY_GPU_PROFILE_MODE, default "dispatch" = everything above):
+//   "cb"  command-buffer span mode, low perturbation: two timestamps per
+//         submission (query 0 at the start of the command buffer, query 1
+//         at its end, both BOTTOM_OF_PIPE), no per-dispatch timestamp, no
+//         per-dispatch barrier, no "d" records. One record per submission,
+//           {"k":"c","s":<submission>,"t0":<ticks>,"t1":<ticks>,"nd":<dispatches>}
+//         t1 - t0 is the GPU time the command buffer spans (what Metal's
+//         GPUEndTime - GPUStartTime reports); t0 of one submission minus t1
+//         of the previous one is the idle gap between submissions (each
+//         submission waits on the previous one's completion). The b, s, q,
+//         j and end records are unchanged. The meta record carries "mode".
+//
 // GPU ticks convert to nanoseconds with meta.period_ns; tick wraparound
 // wraps at 2^valid_bits. Kernel enum values map to names by their
 // declaration order in overlay/mlx/backend/omarchy/compute.h (the
@@ -149,7 +161,32 @@ class GpuProfiler {
     SlotCtx& s = ctx->slots[slot];
     s.cursor = 0;
     s.pending.clear();
+    s.cb_closed = false;
+    s.cb_dispatches = 0;
     vk::device_table().CmdResetQueryPool(cmd, s.pool, 0, kPoolQueries);
+    if (mode_cb_ && valid_bits_ != 0) {
+      vk::device_table().CmdWriteTimestamp(
+          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, 0);
+      s.cursor = 1;
+    }
+  }
+
+  // Called in submit() right before EndCommandBuffer (after the last
+  // barrier). In "cb" mode this writes the end-of-command-buffer timestamp;
+  // in the default mode it does nothing.
+  void before_end(const void* owner, int slot, VkCommandBuffer cmd) {
+    if (out_ == nullptr || !mode_cb_ || valid_bits_ == 0) {
+      return;
+    }
+    Ctx* ctx = find(owner);
+    if (ctx == nullptr) {
+      return;
+    }
+    SlotCtx& s = ctx->slots[slot];
+    vk::device_table().CmdWriteTimestamp(
+        cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, 1);
+    s.cursor = 2;
+    s.cb_closed = true;
   }
 
   // Called after the pre-dispatch barrier (when one was recorded) and
@@ -161,7 +198,7 @@ class GpuProfiler {
       int slot,
       VkCommandBuffer cmd,
       bool barrier) {
-    if (out_ == nullptr) {
+    if (out_ == nullptr || mode_cb_) {
       return;
     }
     Ctx* ctx = find(owner);
@@ -220,6 +257,11 @@ class GpuProfiler {
       return;
     }
     SlotCtx& s = ctx->slots[slot];
+    if (mode_cb_) {
+      s.cb_dispatches++;
+      dispatches_++;
+      return;
+    }
     PendingDispatch& p = s.pending.back();
     p.kernel = static_cast<uint32_t>(kernel);
     p.operation = params.operation;
@@ -354,6 +396,9 @@ class GpuProfiler {
     uint32_t cursor{0};
     uint64_t last_sub{0};
     std::vector<PendingDispatch> pending;
+    // cb mode: the command buffer wrote its end timestamp; dispatches in it.
+    bool cb_closed{false};
+    uint32_t cb_dispatches{0};
   };
 
   struct Ctx {
@@ -391,6 +436,10 @@ class GpuProfiler {
   // the slot's submission has completed (slot reuse or a full join).
   void flush_slot(Ctx& ctx, int slot, uint64_t sub) {
     SlotCtx& s = ctx.slots[slot];
+    if (mode_cb_) {
+      flush_slot_cb(s, sub);
+      return;
+    }
     if (s.pending.empty() || valid_bits_ == 0 || s.last_sub == 0) {
       s.pending.clear();
       s.cursor = 0;
@@ -455,6 +504,33 @@ class GpuProfiler {
     s.cursor = 0;
   }
 
+  // cb mode: read the two timestamps of a closed command buffer and emit its
+  // one "c" record. Idempotent: the closed flag is cleared, so a slot that was
+  // already flushed (slot reuse, then the join) is not emitted twice.
+  void flush_slot_cb(SlotCtx& s, uint64_t sub) {
+    const bool closed = s.cb_closed;
+    const uint32_t nd = s.cb_dispatches;
+    s.cb_closed = false;
+    s.cb_dispatches = 0;
+    s.cursor = 0;
+    if (!closed || valid_bits_ == 0 || s.last_sub == 0) {
+      return;
+    }
+    uint64_t ticks[2] = {0, 0};
+    VkResult result = vk::device_table().GetQueryPoolResults(
+        device_, s.pool, 0, 2, sizeof(ticks), ticks, sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS || ticks[1] < ticks[0]) {
+      return;
+    }
+    emitf("{\"k\":\"c\",\"s\":%" PRIu64 ",\"t0\":%" PRIu64
+          ",\"t1\":%" PRIu64 ",\"nd\":%u}\n",
+          sub,
+          ticks[0],
+          ticks[1],
+          nd);
+  }
+
   void open_output(const Device& device) {
     const char* path = std::getenv("MLX_OMARCHY_GPU_PROFILE");
     if (path == nullptr || path[0] == '\0') {
@@ -466,6 +542,17 @@ class GpuProfiler {
           stderr, "[prof] cannot open MLX_OMARCHY_GPU_PROFILE path %s\n", path);
       return;
     }
+    const char* mode = std::getenv("MLX_OMARCHY_GPU_PROFILE_MODE");
+    if (mode != nullptr && mode[0] != '\0') {
+      if (std::strcmp(mode, "cb") == 0) {
+        mode_cb_ = true;
+      } else if (std::strcmp(mode, "dispatch") != 0) {
+        std::fprintf(
+            stderr,
+            "[prof] MLX_OMARCHY_GPU_PROFILE_MODE=%s is not cb or dispatch; using dispatch\n",
+            mode);
+      }
+    }
     valid_bits_ = device.capabilities().queue_timestamp_valid_bits;
     period_ns_ = device.capabilities().timestamp_period;
     device_ = device.handle();
@@ -473,13 +560,14 @@ class GpuProfiler {
     const char* label = std::getenv("MLX_OMARCHY_GPU_PROFILE_LABEL");
     emitf("{\"k\":\"meta\",\"device\":\"%s\",\"period_ns\":%.6f"
           ",\"valid_bits\":%u,\"pool\":%u,\"label\":\"%s\",\"host_t0\":%"
-          PRIu64 "}\n",
+          PRIu64 ",\"mode\":\"%s\"}\n",
           device.capabilities().device_name.c_str(),
           static_cast<double>(period_ns_),
           valid_bits_,
           kPoolQueries,
           label != nullptr ? label : "",
-          host_t0_);
+          host_t0_,
+          mode_cb_ ? "cb" : "dispatch");
     if (valid_bits_ == 0) {
       std::fprintf(
           stderr,
@@ -507,6 +595,7 @@ class GpuProfiler {
   VkDevice device_{VK_NULL_HANDLE};
   FILE* out_{nullptr};
   uint32_t valid_bits_{0};
+  bool mode_cb_{false};
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
   uint64_t dispatches_{0};
@@ -546,6 +635,7 @@ class GpuProfiler {
 
   void attach(const void*, const Device&) {}
   void on_begin(const void*, int, VkCommandBuffer, uint64_t) {}
+  void before_end(const void*, int, VkCommandBuffer) {}
   void before_dispatch(const void*, int, VkCommandBuffer, bool) {}
   void on_barrier(bool) {}
   void after_dispatch(
