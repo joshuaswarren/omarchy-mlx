@@ -130,6 +130,8 @@ struct CapabilityReport {
   // family's reported priorities and silently keeps the default when the
   // requested one is absent.
   bool queue_global_priority{false};
+  // True when the device lists VK_KHR_push_descriptor.
+  bool push_descriptor{false};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};
@@ -342,6 +344,11 @@ class CompletionDispatcher {
 // A live Vulkan device. Created lazily per supported physical device index.
 class Device {
  public:
+  // True when descriptors are pushed (requested and the device supports it); decided at device creation.
+  bool push_descriptors() const {
+    return push_descriptors_;
+  }
+
   explicit Device(uint32_t physical_device_index);
   ~Device();
 
@@ -423,6 +430,7 @@ class Device {
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;
   std::unique_ptr<ComputeRuntime> compute_;
+  bool push_descriptors_{false};
   std::unique_ptr<CompletionDispatcher> completions_;
 };
 
@@ -484,6 +492,9 @@ class MLX_API TapeDebugScope {
 
 // Current scoped diagnostic state. False outside a TapeDebugScope.
 bool tape_full_barriers();
+// MLX_OMARCHY_PUSH_DESCRIPTORS (default off): record vkCmdPushDescriptorSetKHR per dispatch instead of allocating and
+// updating a descriptor set. Read once. Effective only on a device that lists VK_KHR_push_descriptor (Device::push_descriptors()).
+bool push_descriptors_requested();
 bool tape_no_reuse();
 // True when MLX_OMARCHY_NO_BUFFER_CACHE was set at runtime init
 // (diagnostic, docs/install-omarchy.md): the allocator destroys every

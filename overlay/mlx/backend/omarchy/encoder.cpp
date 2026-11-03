@@ -658,7 +658,11 @@ void CommandEncoder::dispatch_compute_pipeline(
       UINT64_MAX - batch_work_ > groups ? batch_work_ + groups : UINT64_MAX;
 
   auto& dt = vk::device_table();
-  VkDescriptorSet descriptor_set = acquire_descriptor_set(compute);
+  // Push descriptors (MLX_OMARCHY_PUSH_DESCRIPTORS): no set is allocated or updated; the bindings are pushed when the dispatch is
+  // recorded (below, or at wave replay).
+  const bool push = compute.push_descriptors();
+  VkDescriptorSet descriptor_set =
+      push ? VK_NULL_HANDLE : acquire_descriptor_set(compute);
 
   std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info{};
   std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes{};
@@ -672,13 +676,15 @@ void CommandEncoder::dispatch_compute_pipeline(
     writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &buffer_info[index];
   }
-  dt.UpdateDescriptorSets(
-      device_.handle(),
-      static_cast<uint32_t>(bindings.size()),
-      writes.data(),
-      0,
-      nullptr);
-  trace::counters().vk_descriptor_update_writes += bindings.size();
+  if (!push) {
+    dt.UpdateDescriptorSets(
+        device_.handle(),
+        static_cast<uint32_t>(bindings.size()),
+        writes.data(),
+        0,
+        nullptr);
+    trace::counters().vk_descriptor_update_writes += bindings.size();
+  }
 
   if (wave_sched()) {
     // Buffer the node; submit() records it in wave order (emit_pending).
@@ -827,15 +833,27 @@ void CommandEncoder::dispatch_compute_pipeline(
 
   VkPipelineLayout pipeline_layout = compute.pipeline_layout();
   dt.CmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-  dt.CmdBindDescriptorSets(
-      cmd_,
-      VK_PIPELINE_BIND_POINT_COMPUTE,
-      pipeline_layout,
-      0,
-      1,
-      &descriptor_set,
-      0,
-      nullptr);
+  if (push) {
+    // dstSet is ignored for a push; the writes built above carry the bindings.
+    dt.CmdPushDescriptorSetKHR(
+        cmd_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_layout,
+        0,
+        static_cast<uint32_t>(bindings.size()),
+        writes.data());
+    trace::counters().vk_push_descriptor_sets++;
+  } else {
+    dt.CmdBindDescriptorSets(
+        cmd_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_layout,
+        0,
+        1,
+        &descriptor_set,
+        0,
+        nullptr);
+  }
   dt.CmdPushConstants(
       cmd_,
       pipeline_layout,
@@ -1000,15 +1018,39 @@ void CommandEncoder::emit_pending() {
         VkPipelineLayout pipeline_layout = compute.pipeline_layout();
         dt.CmdBindPipeline(
             cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, node.pipeline);
-        dt.CmdBindDescriptorSets(
-            cmd_,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            pipeline_layout,
-            0,
-            1,
-            &node.descriptor_set,
-            0,
-            nullptr);
+        if (compute.push_descriptors()) {
+          std::array<VkDescriptorBufferInfo, kComputeBindingBudget> node_info{};
+          std::array<VkWriteDescriptorSet, kComputeBindingBudget> node_writes{};
+          for (uint32_t b = 0; b < node.binding_count; ++b) {
+            node_info[b] = {
+                node.bindings[b].buffer,
+                node.bindings[b].offset,
+                node.bindings[b].range};
+            node_writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            node_writes[b].dstBinding = b;
+            node_writes[b].descriptorCount = 1;
+            node_writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            node_writes[b].pBufferInfo = &node_info[b];
+          }
+          dt.CmdPushDescriptorSetKHR(
+              cmd_,
+              VK_PIPELINE_BIND_POINT_COMPUTE,
+              pipeline_layout,
+              0,
+              node.binding_count,
+              node_writes.data());
+          trace::counters().vk_push_descriptor_sets++;
+        } else {
+          dt.CmdBindDescriptorSets(
+              cmd_,
+              VK_PIPELINE_BIND_POINT_COMPUTE,
+              pipeline_layout,
+              0,
+              1,
+              &node.descriptor_set,
+              0,
+              nullptr);
+        }
         dt.CmdPushConstants(
             cmd_,
             pipeline_layout,

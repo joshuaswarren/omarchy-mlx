@@ -2074,10 +2074,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
 ComputeRuntime::ComputeRuntime(
     VkDevice device,
     uint32_t binding_limit,
-    uint32_t required_subgroup_size)
+    uint32_t required_subgroup_size,
+    bool push_descriptors)
     : device_(device),
       binding_limit_(binding_limit),
-      required_subgroup_size_(required_subgroup_size) {
+      required_subgroup_size_(required_subgroup_size),
+      push_descriptors_(push_descriptors) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2094,6 +2096,9 @@ ComputeRuntime::ComputeRuntime(
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
   descriptor_info.bindingCount = binding_limit_;
   descriptor_info.pBindings = bindings.data();
+  if (push_descriptors_) {
+    descriptor_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+  }
   VKX_CHECK(dt.CreateDescriptorSetLayout(
       device_, &descriptor_info, nullptr, &descriptor_layout_));
 

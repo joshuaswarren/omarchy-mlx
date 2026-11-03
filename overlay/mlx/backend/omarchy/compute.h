@@ -1147,7 +1147,8 @@ class ComputeRuntime {
   ComputeRuntime(
       VkDevice device,
       uint32_t binding_limit,
-      uint32_t required_subgroup_size);
+      uint32_t required_subgroup_size,
+      bool push_descriptors = false);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1176,6 +1177,12 @@ class ComputeRuntime {
   uint32_t binding_limit() const {
     return binding_limit_;
   }
+  // True when the descriptor layout is a push-descriptor layout: dispatches push their bindings (vkCmdPushDescriptorSetKHR), no
+  // descriptor set is allocated, and a set cannot be bound with this layout.
+  bool push_descriptors() const {
+    return push_descriptors_;
+  }
+
   VkDescriptorSetLayout descriptor_layout() const {
     return descriptor_layout_;
   }
@@ -1201,6 +1208,7 @@ class ComputeRuntime {
 
   VkDevice device_;
   VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};
+  bool push_descriptors_{false};
   VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
   std::array<VkPipeline, static_cast<size_t>(ComputeKernel::Count)> pipelines_{};
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;

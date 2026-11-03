@@ -500,6 +500,10 @@ CapabilityReport collect_capabilities(
         } else if (
             std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
           caps.queue_global_priority = true;
+        } else if (
+            std::strcmp(
+                e.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0) {
+          caps.push_descriptor = true;
 #ifdef OMARCHY_BF16_CMAT
         } else if (
             std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
@@ -939,6 +943,18 @@ bool tape_no_reuse() {
   return g_tape_no_reuse.load(std::memory_order_relaxed);
 }
 
+bool push_descriptors_requested() {
+  static const bool on = []() {
+    const char* v = std::getenv("MLX_OMARCHY_PUSH_DESCRIPTORS");
+    if (v == nullptr) {
+      return false;
+    }
+    std::string t = v;
+    return t == "1" || t == "on" || t == "true" || t == "yes";
+  }();
+  return on;
+}
+
 DeviceSupport classify_physical_device(
     const VkPhysicalDeviceProperties& props,
     int32_t driver_id,
@@ -1218,6 +1234,9 @@ Device::Device(uint32_t physical_device_index) {
     if (hw.cooperative_matrix_f32_8) {
       exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     }
+    if (hw.push_descriptor && push_descriptors_requested()) {
+      exts.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    }
 #ifdef OMARCHY_BF16_CMAT
     if (hw.cooperative_matrix_bf16_8) {
       exts.push_back(VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME);
@@ -1342,6 +1361,18 @@ Device::Device(uint32_t physical_device_index) {
 
 #undef VKX_LOAD_DEVICE_FN
 
+  // Push descriptors: only when requested, the device listed the extension (and so enabled it above), and the entry point loads.
+  if (hardware_caps_.push_descriptor && push_descriptors_requested()) {
+    dt.CmdPushDescriptorSetKHR = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
+        dt.GetDeviceProcAddr(device_, "vkCmdPushDescriptorSetKHR"));
+    push_descriptors_ = dt.CmdPushDescriptorSetKHR != nullptr;
+  } else if (push_descriptors_requested()) {
+    std::fprintf(
+        stderr,
+        "[omarchy] MLX_OMARCHY_PUSH_DESCRIPTORS is set but the device does not list VK_KHR_push_descriptor; "
+        "using descriptor sets\n");
+  }
+
   dt.GetDeviceQueue(device_, caps_.queue_family_index, 0, &queue_);
   // The live binding budget: what the backend wants, clamped by what this
   // physical device actually reports. The spec floor (4) always passes
@@ -1352,7 +1383,10 @@ Device::Device(uint32_t physical_device_index) {
           caps_.max_per_stage_descriptor_storage_buffers,
           caps_.max_descriptor_set_storage_buffers));
   compute_ = std::make_unique<ComputeRuntime>(
-      device_, binding_limit, hardware_caps_.required_subgroup_size);
+      device_,
+      binding_limit,
+      hardware_caps_.required_subgroup_size,
+      push_descriptors_);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

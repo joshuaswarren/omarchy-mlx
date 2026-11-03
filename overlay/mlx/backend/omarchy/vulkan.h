@@ -144,6 +144,8 @@ struct DeviceTable {
   PFN_vkDestroyPipeline DestroyPipeline{nullptr};
   PFN_vkCmdBindPipeline CmdBindPipeline{nullptr};
   PFN_vkCmdBindDescriptorSets CmdBindDescriptorSets{nullptr};
+  // VK_KHR_push_descriptor; loaded only when MLX_OMARCHY_PUSH_DESCRIPTORS is on and the device lists it.
+  PFN_vkCmdPushDescriptorSetKHR CmdPushDescriptorSetKHR{nullptr};
   PFN_vkCmdPushConstants CmdPushConstants{nullptr};
   PFN_vkCmdDispatch CmdDispatch{nullptr};
   PFN_vkCmdPipelineBarrier CmdPipelineBarrier{nullptr};
