@@ -57,12 +57,24 @@ class CommandBufferSpanMode(unittest.TestCase):
         counts, recs, _ = self.run_harness("cb", submits=1, dispatches=5)
         self.assertEqual(counts["timestamps"], 2, "start and end of the command buffer")
         self.assertEqual(sorted(counts["ts_queries"]), [0, 1])
-        self.assertEqual(counts["barriers"], 0, "no per-dispatch barrier")
+        self.assertEqual(counts["barriers"], 1, "one barrier per command buffer (before the end timestamp), none per dispatch")
         self.assertEqual([r for r in recs if r["k"] == "d"], [], "no per-dispatch record")
         c = [r for r in recs if r["k"] == "c"]
         self.assertEqual(len(c), 1)
         self.assertEqual((c[0]["s"], c[0]["t0"], c[0]["t1"], c[0]["nd"]), (1, 1000, 1100, 5))
         self.assertEqual([r for r in recs if r["k"] == "meta"][0].get("mode"), "cb")
+
+    def test_cb_mode_barrier_count_does_not_grow_with_the_number_of_dispatches(self):
+        few, _, _ = self.run_harness("cb", submits=1, dispatches=2)
+        many, _, _ = self.run_harness("cb", submits=1, dispatches=200)
+        self.assertEqual(few["barriers"], many["barriers"])
+        self.assertEqual(few["timestamps"], many["timestamps"])
+
+    def test_cb_mode_end_barrier_comes_before_the_end_timestamp(self):
+        _, _, _ = self.run_harness("cb", submits=1, dispatches=1)
+        src = (OVERLAY / "mlx/backend/omarchy/gpu_profiler.h").read_text()
+        body = src[src.index("void before_end("):]
+        self.assertLess(body.index("CmdPipelineBarrier"), body.index("CmdWriteTimestamp"))
 
     def test_cb_mode_keeps_the_host_side_records(self):
         _, recs, _ = self.run_harness("cb", submits=2, dispatches=2)
@@ -75,6 +87,7 @@ class CommandBufferSpanMode(unittest.TestCase):
     def test_cb_mode_two_submissions_in_one_ring_slot_each_get_their_own_record(self):
         counts, recs, _ = self.run_harness("cb", submits=2, dispatches=1)
         self.assertEqual(counts["timestamps"], 4)
+        self.assertEqual(counts["barriers"], 2)
         c = [r for r in recs if r["k"] == "c"]
         self.assertEqual([r["s"] for r in c], [1, 2])
         self.assertTrue(all(r["t0"] == 1000 and r["t1"] == 1100 for r in c))

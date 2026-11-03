@@ -37,7 +37,9 @@
 //   "cb"  command-buffer span mode, low perturbation: two timestamps per
 //         submission (query 0 at the start of the command buffer, query 1
 //         at its end, both BOTTOM_OF_PIPE), no per-dispatch timestamp, no
-//         per-dispatch barrier, no "d" records. One record per submission,
+//         per-dispatch barrier (one execution barrier per command buffer,
+//         right before the end timestamp), no "d" records. One record per
+//         submission,
 //           {"k":"c","s":<submission>,"t0":<ticks>,"t1":<ticks>,"nd":<dispatches>}
 //         t1 - t0 is the GPU time the command buffer spans (what Metal's
 //         GPUEndTime - GPUStartTime reports); t0 of one submission minus t1
@@ -172,8 +174,8 @@ class GpuProfiler {
   }
 
   // Called in submit() right before EndCommandBuffer (after the last
-  // barrier). In "cb" mode this writes the end-of-command-buffer timestamp;
-  // in the default mode it does nothing.
+  // barrier). In "cb" mode this records one barrier and the end-of-command-
+  // buffer timestamp; in the default mode it does nothing.
   void before_end(const void* owner, int slot, VkCommandBuffer cmd) {
     if (out_ == nullptr || !mode_cb_ || valid_bits_ == 0) {
       return;
@@ -183,6 +185,13 @@ class GpuProfiler {
       return;
     }
     SlotCtx& s = ctx->slots[slot];
+    // One execution barrier per command buffer (not per dispatch) so the end
+    // timestamp lands after every dispatch has completed. Measured on the
+    // M1 Max: a timestamp written right after a dispatch does NOT bracket
+    // it (a 7 MB weight kernel "ran" at 438 GB/s, above the 400 GB/s peak).
+    vk::device_table().CmdPipelineBarrier(
+        cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
     vk::device_table().CmdWriteTimestamp(
         cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, 1);
     s.cursor = 2;
