@@ -51,8 +51,14 @@ class GatedDeltaNet:
     A_log = "A"
     dt_bias = "D"
 
-    def norm(self, out, z):
-        return _Arr(("norm", out, z))
+    class norm_cls:
+        weight = "NW"
+        eps = 1e-6
+
+        def __call__(self, out, z):
+            return _Arr(("norm", out, z))
+
+    norm = norm_cls()
 
     def out_proj(self, x):
         return ("proj", x)
@@ -107,7 +113,7 @@ class PatchScript(unittest.TestCase):
     def install_fake_op(self, mod):
         def op(*args):
             mod.mx.fast.calls.append(args)
-            return "OUT", "STATE", "NEWCONV"
+            return mod._Arr("OUT"), "STATE", "NEWCONV"
         mod.mx.fast.gdn_conv_delta_update = op
 
     def test_patch_applies_compiles_and_is_idempotent(self):
@@ -145,7 +151,10 @@ class PatchScript(unittest.TestCase):
         qkv = type("A", (), {"dtype": "bf16"})()
         net = mod.GatedDeltaNet()
         result = net(qkv=qkv, a="a", b="b", z="z", conv_state="CS", cache=cache)
-        self.assertEqual(result, ("proj", ("reshape", ("norm", "OUT", "z"), (1, 1, -1))))
+        self.assertEqual(result[0], "proj")
+        self.assertEqual(result[1][2], (1, 1, -1))
+        self.assertEqual(result[1][1][0], "norm")  # flag 1: the separate gated norm still runs
+        self.assertEqual(len(mod.mx.fast.calls[0]), 12)
         (args,) = mod.mx.fast.calls
         self.assertEqual(args[0], "CS")
         self.assertEqual(args[2:8], ("W", "a", "b", "A", "D", 1))
@@ -153,6 +162,30 @@ class PatchScript(unittest.TestCase):
         inv = 128 ** -0.5
         self.assertEqual(args[9:], (inv**2, inv, 1e-6))
         self.assertEqual((cache[0], cache[1], cache.advanced), ("NEWCONV", "STATE", 1))
+
+    def test_flag_two_passes_the_norm_arguments_and_skips_the_separate_norm(self):
+        self.run_patch()
+        os.environ["MLX_OMARCHY_GDN_CONV_DELTA"] = "2"
+        self.addCleanup(os.environ.pop, "MLX_OMARCHY_GDN_CONV_DELTA", None)
+        mod = self.load()
+        self.install_fake_op(mod)
+        cache = Cache()
+        qkv = type("A", (), {"dtype": "bf16"})()
+        result = mod.GatedDeltaNet()(qkv=qkv, a="a", b="b", z="z", conv_state="CS", cache=cache)
+        (args,) = mod.mx.fast.calls
+        self.assertEqual(args[12:], ("z", "NW", 1e-6))
+        self.assertEqual(result, ("proj", ("reshape", "OUT", (1, 1, -1))))
+        self.assertEqual((cache[0], cache[1], cache.advanced), ("NEWCONV", "STATE", 1))
+
+    def test_other_flag_values_compose(self):
+        self.run_patch()
+        os.environ["MLX_OMARCHY_GDN_CONV_DELTA"] = "3"
+        self.addCleanup(os.environ.pop, "MLX_OMARCHY_GDN_CONV_DELTA", None)
+        mod = self.load()
+        self.install_fake_op(mod)
+        qkv = type("A", (), {"dtype": "bf16"})()
+        out = mod.GatedDeltaNet()(qkv=qkv, a="a", b="b", z="z", conv_state="CS", cache=Cache())
+        self.assertEqual(out[0], "composed")
 
     def test_unsupported_cases_take_the_composed_path(self):
         self.run_patch()
