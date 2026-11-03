@@ -15513,12 +15513,11 @@ void RoPE::eval_gpu(
   // fetches a short kernel's code cold at each dispatch. The route is the
   // default only on the parts of omarchy::rope_half_split_default_part,
   // decided for the executing device; MLX_OMARCHY_NO_ROPE_HALF_SPLIT, read
-  // once, wins when set (1 keeps the general builds, 0 takes the half-split
-  // builds, on every part).
-  static const int half_split_setting =
-      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT") == nullptr
-      ? -1
-      : (omarchy::env_flag("MLX_OMARCHY_NO_ROPE_HALF_SPLIT") ? 0 : 1);
+  // once, wins when it is 1 (general builds) or 0 (half-split builds) on
+  // every part; any other value counts as unset
+  // (omarchy::rope_half_split_setting).
+  static const int half_split_setting = omarchy::rope_half_split_setting(
+      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT"));
   const bool half_split_route = half_split_setting >= 0
       ? half_split_setting == 1
       : omarchy::rope_half_split_default_part(
