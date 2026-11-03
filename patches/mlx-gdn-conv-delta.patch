@@ -1,5 +1,5 @@
---- a/mlx/fast.h	2026-11-03 07:11:02.444030416 -0600
-+++ b/mlx/fast.h	2026-11-03 07:11:02.445030408 -0600
+--- a/mlx/fast.h	2026-11-03 07:40:05.055138274 -0600
++++ b/mlx/fast.h	2026-11-03 07:40:05.057138256 -0600
 @@ -229,6 +229,28 @@
      float qk_eps = 0.0f,
      StreamOrDevice s = {});
@@ -29,9 +29,9 @@
  // Greedy token of a transposed affine-quantized projection: the index
  // argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
  // logits = quantized_matmul(x, w, scales, biases, transpose=true).
---- a/mlx/fast.cpp	2026-11-03 07:11:02.455030322 -0600
-+++ b/mlx/fast.cpp	2026-11-03 07:11:02.456030314 -0600
-@@ -2368,6 +2368,43 @@
+--- a/mlx/fast.cpp	2026-11-03 07:40:05.065138188 -0600
++++ b/mlx/fast.cpp	2026-11-03 07:40:05.066138179 -0600
+@@ -2368,6 +2368,62 @@
        /* inputs */ std::vector<array>{state, x, weight});
  }
  
@@ -52,26 +52,166 @@
 +  auto s = to_stream(s_);
 +  // The composition the model runs today: the fused conv (SiLU and the q/k
 +  // norm folded), the q|k|v split, and the raw-gates gated-delta step.
-+  auto conv = gdn_conv_update(
-+      conv_state, qkv, conv_weight, true, key_dim, qk_scale_q, qk_scale_k, qk_eps, s);
-+  int b = qkv.shape(0);
-+  int heads = key_dim / 128;
-+  int v_heads = (qkv.shape(2) - 2 * key_dim) / 128;
-+  auto parts = split(conv[0], {key_dim, 2 * key_dim}, -1, s);
-+  auto delta = gated_delta_update_raw(
-+      reshape(parts[0], Shape{b, 1, heads, 128}, s),
-+      reshape(parts[1], Shape{b, 1, heads, 128}, s),
-+      reshape(parts[2], Shape{b, 1, v_heads, 128}, s),
-+      a_in,
-+      b_in,
-+      A_log,
-+      dt_bias,
-+      delta_state,
-+      std::nullopt,
-+      s);
-+  return std::vector<array>{delta[0], delta[1], conv[1]};
++  auto fallback = [s, key_dim, qk_scale_q, qk_scale_k, qk_eps](
++                      std::vector<array> in) {
++    auto conv = gdn_conv_update(
++        in[0], in[1], in[2], true, key_dim, qk_scale_q, qk_scale_k, qk_eps, s);
++    int b = in[1].shape(0);
++    int heads = key_dim / 128;
++    int v_heads = (in[1].shape(2) - 2 * key_dim) / 128;
++    auto parts = split(conv[0], {key_dim, 2 * key_dim}, -1, s);
++    auto delta = gated_delta_update_raw(
++        reshape(parts[0], Shape{b, 1, heads, 128}, s),
++        reshape(parts[1], Shape{b, 1, heads, 128}, s),
++        reshape(parts[2], Shape{b, 1, v_heads, 128}, s),
++        in[3],
++        in[4],
++        in[5],
++        in[6],
++        in[7],
++        std::nullopt,
++        s);
++    return std::vector<array>{delta[0], delta[1], conv[1]};
++  };
++  std::vector<array> inputs{
++      conv_state, qkv, conv_weight, a_in, b_in, A_log, dt_bias, delta_state};
++  if (GdnConvDeltaUpdate::use_fallback(inputs, key_dim, s)) {
++    return fallback(inputs);
++  }
++  int B = qkv.shape(0);
++  int C = qkv.shape(2);
++  int K = conv_weight.shape(1);
++  int Hv = a_in.shape(2);
++  return array::make_arrays(
++      /* output shapes */ {{B, 1, Hv, 128}, {B, Hv, 128, 128}, {B, K - 1, C}},
++      /* dtypes */ {bfloat16, float32, bfloat16},
++      /* primitive */
++      std::make_shared<GdnConvDeltaUpdate>(
++          s, fallback, key_dim, qk_scale_q, qk_scale_k, qk_eps),
++      /* inputs */ inputs);
 +}
 +
  
  std::vector<array> GatedDeltaUpdate::vjp(
      const std::vector<array>& primals,
+--- a/mlx/fast_primitives.h	2026-11-03 07:40:05.074138111 -0600
++++ b/mlx/fast_primitives.h	2026-11-03 07:40:05.075138103 -0600
+@@ -705,6 +705,85 @@
+   float qk_eps_{0.0f};
+ };
+ 
++// Fused GDN decode conv + gated-delta step (MLX_OMARCHY_GDN_CONV_DELTA=1, default off). Qwen3.8-2B
++// geometry only: B == 1, bf16, head dim 128, equal key and value head counts, 4 conv taps. Everything
++// else, the flag being off, and non-GPU streams compose gdn_conv_update + gated_delta_update_raw.
++class GdnConvDeltaUpdate : public Custom {
++ public:
++  GdnConvDeltaUpdate(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int key_dim,
++      float qk_scale_q,
++      float qk_scale_k,
++      float qk_eps)
++      : Custom(stream, std::move(fallback)),
++        key_dim_{key_dim},
++        qk_scale_q_{qk_scale_q},
++        qk_scale_k_{qk_scale_k},
++        qk_eps_{qk_eps} {}
++  // Inputs: conv state [1, K-1, C], qkv [1, 1, C], conv weight [C, K, 1], a [1, 1, Hv], b [1, 1, Hv],
++  // A_log [Hv], dt_bias [Hv] (all bf16), recurrent state [1, Hv, 128, 128] (f32).
++  static bool use_fallback(
++      const std::vector<array>& in,
++      int key_dim,
++      Stream s) {
++    const char* flag = std::getenv("MLX_OMARCHY_GDN_CONV_DELTA");
++    if (s.device == Device::cpu || flag == nullptr || flag[0] != '1' ||
++        flag[1] != '\0' || in.size() != 8 || key_dim <= 0 || key_dim % 128 != 0) {
++      return true;
++    }
++    const array& state = in[0];
++    const array& x = in[1];
++    const array& weight = in[2];
++    if (state.ndim() != 3 || x.ndim() != 3 || weight.ndim() != 3 ||
++        in[3].ndim() != 3 || in[4].ndim() != 3 || in[5].ndim() != 1 ||
++        in[6].ndim() != 1 || in[7].ndim() != 4) {
++      return true;
++    }
++    const int C = x.shape(2);
++    const int Hv = (C - 2 * key_dim) / 128;
++    for (int i = 0; i < 7; ++i) {
++      if (in[i].dtype() != bfloat16) {
++        return true;
++      }
++    }
++    return in[7].dtype() != float32 || x.shape(0) != 1 || x.shape(1) != 1 ||
++        state.shape(0) != 1 || state.shape(2) != C ||
++        weight.shape(0) != C || weight.shape(1) != 4 || weight.shape(2) != 1 ||
++        state.shape(1) != 3 || C != 3 * key_dim || Hv != key_dim / 128 ||
++        in[3].shape(2) != Hv || in[4].shape(2) != Hv || in[5].shape(0) != Hv ||
++        in[6].shape(0) != Hv || in[7].shape(1) != Hv || in[7].shape(2) != 128 ||
++        in[7].shape(3) != 128;
++  }
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++  int key_dim() const {
++    return key_dim_;
++  }
++  float qk_scale_q() const {
++    return qk_scale_q_;
++  }
++  float qk_scale_k() const {
++    return qk_scale_k_;
++  }
++  float qk_eps() const {
++    return qk_eps_;
++  }
++  DEFINE_NAME(GdnConvDeltaUpdate)
++  DEFINE_INPUT_OUTPUT_SHAPE()
++
++ private:
++  int key_dim_;
++  float qk_scale_q_;
++  float qk_scale_k_;
++  float qk_eps_;
++};
++
+ class GatedDeltaUpdateVJP : public Custom {
+  public:
+   GatedDeltaUpdateVJP(
+--- a/python/src/fast.cpp	2026-11-03 07:40:05.083138034 -0600
++++ b/python/src/fast.cpp	2026-11-03 07:40:05.084138026 -0600
+@@ -749,6 +749,30 @@
+                 Tuple of (conv_out [B, 1, C], new_state [B, K-1, C])
+         )");
+   m.def(
++      "gdn_conv_delta_update",
++      &mlx::core::fast::gdn_conv_delta_update,
++      "conv_state"_a,
++      "qkv"_a,
++      "conv_weight"_a,
++      "a_in"_a,
++      "b_in"_a,
++      "A_log"_a,
++      "dt_bias"_a,
++      "delta_state"_a,
++      "key_dim"_a,
++      "qk_scale_q"_a,
++      "qk_scale_k"_a,
++      "qk_eps"_a,
++      "stream"_a = nb::none(), // optional, defaults to None
++      R"(
++            GDN decode conv + gated-delta step as one dispatch (Qwen3.8-2B
++            geometry; default off, MLX_OMARCHY_GDN_CONV_DELTA=1). Bit-exact to
++            gdn_conv_update (SiLU and q/k norm folded) -> split -> reshape ->
++            gated_delta_update_raw; everything it cannot fuse composes exactly
++            those ops. Returns (delta output [B, 1, Hv, Dv], recurrent state
++            [B, Hv, Dv, Dk], conv carry-out state [B, K-1, C]).
++        )");
++  m.def(
+       "metal_kernel",
+       [](const std::string& name,
+          const std::vector<std::string>& input_names,

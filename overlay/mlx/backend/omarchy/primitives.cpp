@@ -14868,6 +14868,135 @@ void GdnConvUpdate::eval_gpu(
       1);
 }
 
+// Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update,
+// MLX_OMARCHY_GDN_CONV_DELTA). One dispatch of gated_delta_decode_perrow_pf.comp
+// -DGDN_CONV_FUSED replaces GdnConvDecodeBF16 + the untiled prefetch delta
+// kernel; the conv, SiLU and q/k norm statements are gdn_conv_decode.comp's and
+// the delta body is the unfused kernel's, so the bytes must match the pair.
+// That only holds where the unfused route would pick the same delta kernel, so
+// this mirrors GatedDeltaUpdate::eval_gpu's choice for the one geometry the op
+// covers (decode, raw gates, bf16 A_log, equal head counts, no mask) and runs
+// the composed fallback everywhere else (the same pattern as the VJP).
+void GdnConvDeltaUpdate::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  // Inputs: conv state, qkv row, conv weight, a, b, A_log, dt_bias, recurrent state.
+  // Outputs: delta output, recurrent state out, conv carry-out state.
+  const int B = inputs.at(1).shape(0);
+  const int C = inputs.at(1).shape(2);
+  const int K = inputs.at(2).shape(1);
+  const int Hv = inputs.at(3).shape(2);
+  const uint32_t dk = 128;
+  // The unfused route's kernel choice (GatedDeltaUpdate::eval_gpu), restated for this geometry.
+  const std::string& device_name = encoder.device().capabilities().device_name;
+  const bool tile_on = gdn_decode_tile_enabled(encoder);
+  const bool bf16a_untiled_default =
+      decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
+      omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
+  static const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
+  array h0 = inputs.at(7);
+  const bool dense_inputs = [&] {
+    for (const auto& x : inputs) {
+      if (!x.flags().row_contiguous) {
+        return false;
+      }
+    }
+    return true;
+  }();
+  const uint32_t h0_offset = dense_inputs
+      ? checked_item_offset(h0, h0.size(), tag, outputs.at(0))
+      : 0u;
+  const bool gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
+  const bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
+  const bool apple_norm = apple_norm_enabled(encoder.device(), size_t{128}, size_t{static_cast<size_t>(B) * C});
+  const bool supported = B == 1 && K == 4 && decode_tile == false && gdn_pf && !apple_norm &&
+      encoder.device().compute().binding_limit() >= 11;
+  if (!supported) {
+    auto result = fallback_(inputs);
+    settle(result);
+    encoder.synchronize("gdn_conv_delta_fallback");
+    for (int i = 0; i < 3; ++i) {
+      outputs.at(i).copy_shared_buffer(result.at(i));
+    }
+    return;
+  }
+  array in_state = inputs.at(0);
+  array in_x = inputs.at(1);
+  array in_w = inputs.at(2);
+  array a_in = inputs.at(3);
+  array b_in = inputs.at(4);
+  array A_log = inputs.at(5);
+  array dt_bias = inputs.at(6);
+  array& out = outputs.at(0);
+  array& hf = outputs.at(1);
+  array& conv_state_out = outputs.at(2);
+  // The recurrent-state output and the conv carry-out are fresh allocations, never
+  // aliases of the inputs: other workgroups keep reading the old conv state while
+  // the channel's owner writes the new one.
+  out.set_data(allocate_omarchy(out.nbytes()));
+  hf.set_data(allocate_omarchy(hf.nbytes()));
+  conv_state_out.set_data(allocate_omarchy(conv_state_out.nbytes()));
+  const bool wide_default = bf16a_untiled_default &&
+      omarchy::gdn_pf_wide_default(device_name, Hv, Hv);
+  const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
+  const bool pf_wide_want = pf_wide_env != nullptr
+      ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
+      : wide_default;
+  const bool pf_wide = pf_wide_want && (dk % 32u) == 0u;
+  omarchy::ComputeParams params;
+  params.count = dk;
+  params.operation = checked_u32(K, tag, out);
+  params.lhs_size = checked_u32(K - 1, tag, out);
+  params.rhs_size = checked_u32(static_cast<size_t>(key_dim()), tag, out);
+  params.reduce_size = checked_u32(C, tag, out);
+  params.matrix_m = dk;
+  params.matrix_n = dk;
+  params.matrix_k = checked_u32(static_cast<size_t>(B) * Hv, tag, out);
+  params.lhs_offset = checked_item_offset(in_state, in_state.size(), tag, out);
+  params.rhs_offset = checked_item_offset(in_x, in_x.size(), tag, out);
+  params.aux_size = checked_item_offset(in_w, in_w.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.shape[1] = h0_offset;
+  params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
+  params.dims = 1u;
+  // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
+  // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads.
+  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
+  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+  params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
+  params.in_strides[1] = checked_item_offset(dt_bias, dt_bias.size(), tag, out);
+  params.in_strides[2] = checked_u32(Hv, tag, out);
+  params.in_strides[3] = 0u;
+  params.flags |= 8u;
+  params.out_strides[0] = checked_item_offset(conv_state_out, conv_state_out.size(), tag, out);
+  params.out_strides[1] = std::bit_cast<uint32_t>(qk_eps());
+  params.out_strides[2] = std::bit_cast<uint32_t>(qk_scale_q());
+  params.out_strides[3] = std::bit_cast<uint32_t>(qk_scale_k());
+  std::array<omarchy::ComputeBinding, 11> bindings{
+      binding(in_state),
+      binding(in_x),
+      binding(in_w),
+      binding(a_in),
+      binding(b_in),
+      binding(h0),
+      binding(out),
+      binding(hf),
+      binding(A_log),
+      binding(dt_bias),
+      binding(conv_state_out)};
+  encoder.dispatch_compute(
+      pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
+              : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf,
+      bindings,
+      params,
+      static_cast<uint32_t>(B * Hv),
+      1,
+      1);
+}
+
 bool LayerNorm::use_fallback(Stream s) {
   return false;
 }

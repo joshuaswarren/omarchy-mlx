@@ -364,6 +364,8 @@
 #include "gated_delta_decode_perrow_pf_composed_bf16.h"
 #include "gated_delta_decode_perrow_pf_composed_gqa_bf16.h"
 #include "gated_delta_decode_perrow_pfw_bf16.h"
+#include "gated_delta_decode_perrow_pf_conv_bf16.h"
+#include "gated_delta_decode_perrow_pfw_conv_bf16.h"
 #include "gated_delta_prefill_bf16.h"
 #include "gated_delta_prefill_coopmat_bf16.h"
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
@@ -1269,6 +1271,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rope_freqs_halfsplit_f16, fast_rope_freqs_halfsplit_f16_size};
     case ComputeKernel::FastRopeFreqsHalfSplitBF16:
       return {fast_rope_freqs_halfsplit_bf16, fast_rope_freqs_halfsplit_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvBF16Pf:
+      return {
+          gated_delta_decode_perrow_pf_conv_bf16,
+          gated_delta_decode_perrow_pf_conv_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvBF16PfWide:
+      return {
+          gated_delta_decode_perrow_pfw_conv_bf16,
+          gated_delta_decode_perrow_pfw_conv_bf16_size};
     case ComputeKernel::FastRopeFreqsF32:
       return {fast_rope_freqs_f32, fast_rope_freqs_f32_size};
     case ComputeKernel::FastRopeFreqsF16:

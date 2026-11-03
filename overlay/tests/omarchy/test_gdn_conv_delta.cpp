@@ -13,7 +13,9 @@
 #include "doctest/doctest.h"
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <string>
 #include <vector>
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -115,6 +117,7 @@ bool have_gpu() {
 
 TEST_CASE("the fused conv + delta step returns the production pair's bytes") {
   if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
   Stream s = gpu_stream();
   const char* names[3] = {"delta output", "recurrent state", "conv carry-out state"};
   for (uint32_t seed : {10u, 20u, 30u}) {
@@ -124,9 +127,9 @@ TEST_CASE("the fused conv + delta step returns the production pair's bytes") {
       Run got = fused(in, s);
       REQUIRE(got.out.size() == 3);
       for (int i = 0; i < 3; ++i) {
-        CHECK_MESSAGE(got.out[i].shape() == want.out[i].shape(), names[i], ": shape differs");
+        CHECK_MESSAGE(got.out[i].shape() == want.out[i].shape(), std::string(names[i]), ": shape differs");
         CHECK_MESSAGE(
-            array_equal(got.out[i], want.out[i], s).item<bool>(), names[i],
+            array_equal(got.out[i], want.out[i], s).item<bool>(), std::string(names[i]),
             " differs from the production pair (seed ", seed, ", state scale ", state_scale, ")");
       }
     }
@@ -135,6 +138,7 @@ TEST_CASE("the fused conv + delta step returns the production pair's bytes") {
 
 TEST_CASE("the fused conv + delta step is one dispatch where the pair is two") {
   if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
   Stream s = gpu_stream();
   Inputs in = make_inputs(10, 0.05f, s);
   production_pair(in, s);  // warm both routes so one-time setup is not counted
@@ -143,5 +147,25 @@ TEST_CASE("the fused conv + delta step is one dispatch where the pair is two") {
   Run one = fused(in, s);
   std::cout << "[gdn_conv_delta] production pair " << pair.dispatches << " dispatches, fused " << one.dispatches << "\n";
   CHECK_MESSAGE(pair.dispatches == 2, "the reference pair is expected to be two dispatches");
+  // The fused kernel only exists for the untiled prefetch delta route; where the unfused route would use
+  // another kernel (a tiled-default device) the op composes the pair. GDN_CONV_DELTA_REQUIRE_ENGAGED=1
+  // (the hardware tickets) turns that fallback into a failure.
+  if (one.dispatches == pair.dispatches && std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") == nullptr) {
+    std::cout << "Skipping the engagement check: this device's unfused route does not use the prefetch delta kernel\n";
+    return;
+  }
   CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the pair into one dispatch");
+}
+
+TEST_CASE("the fused conv + delta step is off unless the flag is set") {
+  if (!have_gpu()) return;
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  Stream s = gpu_stream();
+  Inputs in = make_inputs(10, 0.05f, s);
+  Run want = production_pair(in, s);
+  Run got = fused(in, s);
+  CHECK_MESSAGE(got.dispatches == want.dispatches, "the unset flag must run the composed pair");
+  for (int i = 0; i < 3; ++i) {
+    CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+  }
 }
