@@ -42,6 +42,17 @@ Decode attention alone (`perf-p5-sdpa.jsonl`, `sdpa_bits.py` timing: host wall t
 
 granite-4.0-1b-4bit decode, 40 `SdpaDecodeNativeBF16Hd128` dispatches per step: 76.9 us per dispatch on `main`'s profiling build, 68.6 us on the integration's (69.7 with the fused routes on, the same dispatch list as `main`). The integration carries all six changes, so this delta is not attributed to this PR alone. Every dispatch is a Vulkan dispatch.
 
+Isolated, this change alone (`isolated-98f0911/`, 2026-11-03, after review). These are profiling builds of the PR's base, `main` `a69d9e6`, and of its code commit `98f0911`, with nothing else in either. Same trace procedure (`scripts/trace.sh` from this receipt), granite-4.0-1b-4bit, 32 greedy tokens, run order A B B A on one boot, normal 10-CPU kernel. Every run's provenance stamp matched, and all four generated the same text.
+
+| run | build | `SdpaDecodeNativeBF16Hd128` dispatches | mean us | p50 us |
+|---|---|---:|---:|---:|
+| 1 | `main` `a69d9e6` | 1200 | 78.8 | 78.6 |
+| 2 | `98f0911` | 1200 | 73.0 | 72.2 |
+| 3 | `98f0911` | 1240 | 73.2 | 72.2 |
+| 4 | `main` `a69d9e6` | 1320 | 80.0 | 79.5 |
+
+So on the M4 the 256-lane arm is about 8 percent faster per dispatch: means 79.4 against 73.1 us, p50 79.1 against 72.2. The dispatch counts differ because the profiled window varies between runs, so the per-dispatch figures are the comparable ones. The kernel is 6.4 to 6.8 percent of GPU time, so the end-to-end effect is well under one percent. That is consistent with the decode A/B above being inside noise; the median inter-token time in these runs was 69.6 to 72.0 ms on both builds. This is M4 (G16G) only.
+
 ## Device reopen
 
 `reopen.py` passed before and after the bit-compare set and at the end of the session; no new GPU driver message in the kernel log.
@@ -52,4 +63,4 @@ Bit-identical by construction. The newly admitted devices (workgroup limits 256 
 
 ## Files
 
-`host.txt`, `wheels.txt`, `battery.txt`, `bits-p5-vs-main.log`, `bits-selftest.log`, `engage-sdpa-kernels.txt`, `perf-p5*.jsonl`, `perf-p5*-summary.txt`, `trace-*.txt`, `trace-*.run.log`, `reopen.log`, `scripts/`, `SHA256SUMS`.
+`host.txt`, `wheels.txt`, `battery.txt`, `bits-p5-vs-main.log`, `bits-selftest.log`, `engage-sdpa-kernels.txt`, `perf-p5*.jsonl`, `perf-p5*-summary.txt`, `trace-*.txt`, `trace-*.run.log`, `isolated-98f0911/`, `reopen.log`, `scripts/`, `SHA256SUMS`.
