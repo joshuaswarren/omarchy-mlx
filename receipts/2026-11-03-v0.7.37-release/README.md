@@ -55,11 +55,11 @@ The median is 28.19. The generated token ids hash to `775bf034e185c8f9` in all f
 
 ## Logs
 
-The gate and decode logs named in `HASHES.txt` are in `logs/`, 75 KB in all, with the three scripts that produced them. Three kinds of private names were redacted before publishing: the home directory, host names and the name of a driver file. `logs/redact-logs.py` does it and is deterministic. `HASHES.txt` keeps the hashes of the originals. `HASHES-published-logs.txt` has the hashes of the files in `logs/`. A reader with the originals can run the script and compare.
+The gate and decode logs named in `HASHES.txt` are in `logs/`, 75 KB in all, with the three scripts that produced them. Three things were redacted before publishing. One is the home directory path. Another is the two lab host names. The third is every occurrence of the name of the project behind the Linux GPU driver, which also changes the kernel command line label and the driver file name in the logs. The file owner column of `ls -l` lines still shows the public account name. `logs/redact-logs.py` does it and is deterministic. `HASHES.txt` keeps the hashes of the originals. `HASHES-published-logs.txt` has the hashes of the files in `logs/`. A reader with the originals can run the script and compare.
 
 ## 16-inch M1 Max gates
 
-Kernel `7.1.12-2-20261103.2-lab-ARCH`, AGX vote off. Eight rows ran once each and all passed. They were the tree build for g13 and g15, six gate batches, and g7d. The batch script, the asset sums and the tag tree commit were the same as on the 13-inch machine. The driver logged no GPU timeout in any of them (`GPU-TIMEOUTS delta=0`).
+Kernel `7.1.12-2-20261103.2-lab-ARCH`, AGX vote off. That is the kernel's default, and no log line prints the value. Eight rows ran once each and all passed. They were the tree build for g13 and g15, six gate batches, and g7d. The batch script, the asset sums and the tag tree commit were the same as on the 13-inch machine. The seven rows that print the GPU timeout counter show `GPU-TIMEOUTS delta=0`. The g7d row does not print it.
 
 | Gate | Result |
 | --- | --- |
