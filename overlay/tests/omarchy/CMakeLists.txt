@@ -671,7 +671,9 @@ foreach(_capsim_profile IN ITEMS
             subgroup-size-64
             small-shared-memory
             no-cooperative-matrix
-            m1-g13-legacy)
+            m1-g13-legacy
+            workgroup-256
+            workgroup-128)
   add_test(NAME omarchy_capability_sim_tests/${_capsim_profile}
            COMMAND omarchy_capability_sim_tests ${_capsim_profile})
   set_tests_properties(omarchy_capability_sim_tests/${_capsim_profile}

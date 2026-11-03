@@ -15776,7 +15776,7 @@ void ScaledDotProductAttention::eval_gpu(
       (decode_caps.subgroup_operations & kDecodeSubgroupFeatures) ==
           kDecodeSubgroupFeatures;
   // The composition-exact bf16 arm uses no subgroup operations at all - its
-  // per-thread work and barriers need only the 1024-thread workgroup and the
+  // per-thread work and barriers need only the 256-thread workgroup and the
   // static shared the arm declares (29,952 bytes at query width 64, 30,720
   // at the Qwen3.8 full-attention width 256, against the 32 KiB device
   // limit) - so it gates on those alone and engages on any device that
@@ -15830,8 +15830,8 @@ void ScaledDotProductAttention::eval_gpu(
   // 448..544 contract regime (502.9 vs 339.8 us at 512), where the shipped
   // <=2048 bound had been routing decode to the slower arm.
   const bool decode_bf16_ready =
-      decode_caps.max_compute_work_group_invocations >= 1024u &&
-      decode_caps.max_compute_work_group_size[0] >= 1024u &&
+      decode_caps.max_compute_work_group_invocations >= 256u &&
+      decode_caps.max_compute_work_group_size[0] >= 256u &&
       decode_caps.max_compute_shared_memory_size >=
           decode_bf16_shared_required;
   const bool decode_bf16_probe = q.dtype() == bfloat16;
@@ -15872,7 +15872,7 @@ void ScaledDotProductAttention::eval_gpu(
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
   // Split-K decode route (bf16, head width 128 or 256, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
-  // fused kernel above is one 1024-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
+  // fused kernel above is one 256-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
   // blocks and reads each K and V row once per group. Float32 arithmetic in a different order, so the result is not bit-equal to the
   // fused kernel (gated against a float64 reference in test_sdpa_split.cpp). MLX_OMARCHY_SDPA_DECODE_SPLIT: any non-empty value other than "0" forces the route, "0" disables it, unset or empty
   // follows omarchy::sdpa_split_default. Needs 16-byte K rows (element offset and strides multiples of 8) and even V offset and strides.
