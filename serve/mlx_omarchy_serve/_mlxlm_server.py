@@ -559,6 +559,9 @@ def main() -> None:
         raise SystemExit(3)
     check_pinned(server_module)
     install(server_module, limit)
+    from mlx_omarchy_serve import gpu_drain
+
+    gpu_drain.install()  # a kill with a job queued behind a running one faults the GPU
     gate = None
     if getattr(server_module, "BatchGenerator", None) is not None and getattr(server_module, "_run_http_server", None) is not None:
         gate = YieldGate()

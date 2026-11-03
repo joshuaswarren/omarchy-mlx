@@ -124,6 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="GPU STT worker")
     parser.add_argument("--model-dir", required=True, type=Path)
     args = parser.parse_args(argv)
+    from mlx_omarchy_serve import gpu_drain
+
+    gpu_drain.install()  # a kill with a job queued behind a running one faults the GPU
     stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
     try:
         import mlx.core as mx

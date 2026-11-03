@@ -799,6 +799,9 @@ def _worker_main(conn, assets_dir: str) -> None:
     rate = 24000
     current_id = None
     cancelled = False
+    from mlx_omarchy_serve import gpu_drain
+
+    gpu_drain.install()  # a kill with a job queued behind a running one faults the GPU
     try:
         while True:
             try:
