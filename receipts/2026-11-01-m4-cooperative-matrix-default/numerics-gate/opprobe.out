@@ -1,0 +1,9 @@
+$ flock /tmp/m1-gpu.lock venv-main/bin/python gate/opprobe.py   (main a69d9e6 wheel; AGX_APPLE9_MAX_SHARED=32768)
+hk/apple9: compute shader rejected: Apple9 buffer compiler encountered unsupported NIR
+topk2 FAIL [omarchy] dt.CreateComputePipelines( device_, VK_NULL_HANDLE, 1, &pipeline_info, nullptr,
+logsumexp ok
+argmax ok
+max ok
+take_along_axis ok
+where_mask_max ok
+new GPU driver errors in the kernel log after the probe: 0
