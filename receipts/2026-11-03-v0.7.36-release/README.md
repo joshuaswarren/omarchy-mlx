@@ -68,16 +68,18 @@ Qwen3.8-2B 4-bit (`SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b`), greedy (`--temp 0
 
 Median 27.66. Generated token ids identical in all five runs (`sha256:775bf034e185c8f9`, the digest the v0.7.34 and v0.7.35 runs gave). Prefill 0.462 s in run 1, reported separately. The v0.7.34 run on the same chip had a median of 27.73, so this is 0.07 tok/s (0.3 percent) lower. It is not comparable with v0.7.35's 72.16, which ran on a different chip.
 
-## Known issue seen while gating: GPU page fault in g10
+## Known issue seen while gating: GPU page fault when g10 stops the assistant
 
-The corrected battery's g10 run made the kernel log a GPU page fault (`read: true, reason: Unmapped`) followed by a GPU timeout and a driver recovery, about 6 seconds before g10 ended; the guard's footer counted it (`GPU-TIMEOUTS delta=1`). g10 and g12 still passed. To see whether this is new, g10 then g12 were repeated four times on each wheel (the v0.7.36 wheel here and the published v0.7.35 wheel, installed fresh from its own assets, checksums equal to the v0.7.35 receipt), counting kernel GPU timeouts per iteration:
+The corrected battery's g10 run made the kernel log a GPU page fault (`read: true, reason: Unmapped`) followed by a GPU timeout and a driver recovery; the guard's footer counted it (`GPU-TIMEOUTS delta=1`). g10 and g12 still passed. To see whether this is new, g10 then g12 were repeated four times on each wheel (the v0.7.36 wheel here and the published v0.7.35 wheel, installed fresh from its own assets, checksums equal to the v0.7.35 receipt), counting kernel GPU timeouts per iteration:
 
 | Wheel | g10 runs | g10 runs with a fault | g12 runs | g12 runs with a fault |
 | --- | --- | --- | --- | --- |
 | v0.7.36 | 5 | 3 | 5 | 0 |
 | v0.7.35 | 4 | 1 | 4 | 0 |
 
-All four events have the same signature (unit UL1C, read, Unmapped, addresses `0x11ffe90000` to `0x11fffa4100`) and all fell inside g10. Every g10 and g12 run passed its own check. 3 of 5 against 1 of 4 is not a significant difference (Fisher exact, two-sided p = 0.52), so these counts do not show v0.7.36 faulting more often than v0.7.35, and they do not rule it out. The cause is not known; it has not been tested on the 13-inch M1 (the 9B pair does not fit there). Issue 339 tracks it.
+All four events have the same signature (unit UL1C, read, Unmapped, addresses `0x11ffe90000` to `0x11fffa4100`) and each was logged about 6 seconds before g10 ended. g10 stops its assistant with `kill -TERM`, `sleep 5`, `kill -KILL`, `sleep 1`, so each fault was logged at about the moment of the stop. g10's driver stops reading the speak stream at the first audio event, so as far as the code shows the speech is still being produced when the assistant is stopped; g12 reads the stream to its end and has the same teardown. A fifth event on a 13-inch M1 was logged at the second a 20-minute time limit interrupted a prefill run (another run stopped the same way did not fault). I first read the 16-inch events as a fault inside the chat and speak flow; the timing contradicts that, and the earlier reading is withdrawn.
+
+Every g10 and g12 run passed its own check. 3 of 5 against 1 of 4 is not a significant difference (Fisher exact, two-sided p = 0.52), so these counts do not show v0.7.36 faulting more often than v0.7.35, and they do not rule it out. That stopping a process with GPU work in flight causes the fault is a correlation, untested directly. The 9B pair does not fit the 13-inch M1, so g10 has not been run there. Issue 339 tracks it.
 
 ## Not in this release
 
