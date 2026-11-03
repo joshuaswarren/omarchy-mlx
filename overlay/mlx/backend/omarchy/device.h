@@ -615,4 +615,24 @@ inline bool rope_half_split_default_part(const std::string& device_name) {
   return device_name.find("G16G") != std::string::npos;
 }
 
+// The value of MLX_OMARCHY_NO_ROPE_HALF_SPLIT (nullptr when unset) -> 0: general builds on every part, 1: half-split builds
+// on every part, -1: follow rope_half_split_default_part. Only 1, on, true and yes (any case) select the general builds, and
+// only "0" forces the half-split builds; any other value, including an empty one, false, off and no, counts as unset, so a
+// value that reads as "leave it alone" never puts an unmeasured part on the route. Pure.
+inline int rope_half_split_setting(const char* value) {
+  if (value == nullptr) {
+    return -1;
+  }
+  std::string v(value);
+  for (char& c : v) {
+    if (c >= 'A' && c <= 'Z') {
+      c = static_cast<char>(c - 'A' + 'a');
+    }
+  }
+  if (v == "1" || v == "on" || v == "true" || v == "yes") {
+    return 0;
+  }
+  return v == "0" ? 1 : -1;
+}
+
 } // namespace mlx::core::omarchy
