@@ -35,7 +35,9 @@ The draft assets were the input of every gate. Each result is the gate's own pas
 | g7c packaged ANE worker verify, g7d fresh-image transcribe | 13-inch M1 | `GATE7C_EXIT 0` (verify and trace-ABI checks exit 0); `GOLDEN_MATCH PASS` (golden `db501a8c...`) |
 | g8 Kokoro | 13-inch M1 | `KOKORO_SMOKE PASS` |
 | g9 read-aloud | 13-inch M1 | `SPEAK_QUEUE_SMOKE PASS` |
-| g10 Kokoro primer, g12 Kokoro stream | 16-inch M1 Max | PENDING: see "Attempts" |
+| g8 Kokoro (voice runtime install, run first on this host) | 16-inch M1 Max | `G8_KOKORO_EXIT 0` |
+| g10 Kokoro primer | 16-inch M1 Max | `GATE10 PASS`: primed after 8.2 s, first audio 0.251 s (limit 2.0 s) |
+| g12 Kokoro stream | 16-inch M1 Max | `GATE12 PASS`: first audio 0.366 s (limit 1.5 s), 20 chunks, 10.90 s of audio, none starved, no errors |
 | g11 card 9B | 16-inch M1 Max | `CARD_CHECK PASS` |
 | g13 GDN coopmat correctness | 16-inch M1 Max | 6 of 6 cases, 1394 of 1394 assertions |
 | g14 routing | 16-inch M1 Max | `ROUTE_ON PASS` and `KILL_SWITCH PASS` |
@@ -47,7 +49,7 @@ Kernels: 13-inch M1 `7.1.12-2-20261013.18-sep-ARCH`, 16-inch M1 Max `7.1.12-2-20
 
 All of these were failures of my battery or its harness, not of the release. The first-attempt logs are kept.
 
-- **g10 on the 16-inch M1 Max, two attempts, both failed.** `PRIMED false after 90.8s (limit 90s)` with load average 1.80 at the start, then `PRIMED false after 91.2s (limit 90s)` with 1.29, each followed by `SPEAK_FAILED no audio event`. I first read this as primer-time variance; that was wrong. An instrumented run of the same flow (driver wait raised to 300 s, voice status logged every 20 s) showed the voice engine never usable: accelerator available, assets verified, dependencies missing (`mlx_audio, misaki, num2words, spacy, en-core-web-sm, phonemizer, espeakng-loader`), and `/api/speak` answering `voice dependencies unsatisfied`. g8 installs those packages into the shared gate home, and `run-all.sh` runs g8 before g10 and g12; I ran g10 first in a home where g8 had not run. The corrected run, g8 then g10 then g12 in the documented order, is PENDING. Issue 335 tracks making g10 and g12 name the missing precondition.
+- **g10 on the 16-inch M1 Max, two attempts, both failed.** `PRIMED false after 90.8s (limit 90s)` with load average 1.80 at the start, then `PRIMED false after 91.2s (limit 90s)` with 1.29, each followed by `SPEAK_FAILED no audio event`. I first read this as primer-time variance; that was wrong. An instrumented run of the same flow (driver wait raised to 300 s, voice status logged every 20 s) showed the voice engine never usable: accelerator available, assets verified, dependencies missing (`mlx_audio, misaki, num2words, spacy, en-core-web-sm, phonemizer, espeakng-loader`), and `/api/speak` answering `voice dependencies unsatisfied`. g8 installs those packages into the shared gate home, and `run-all.sh` runs g8 before g10 and g12; I ran g10 first in a home where g8 had not run. The corrected run, g8 then g10 then g12 in the documented order, passed (rows above). Issue 335 tracks making g10 and g12 name the missing precondition.
 - **g10 on the 13-inch M1.** I queued it there to split host from release. It never started: the server refused the 9B pair on memory (above) and the driver waited its 1200 seconds for a server that had exited. It used the 13-inch GPU slot for about 20 minutes.
 - **g13 first run on the 16-inch M1 Max.** The configure step failed with `BLAS_INCLUDE_DIRS` and `LAPACK_INCLUDE_DIRS` NOTFOUND. I set those two cache variables to `/usr/include/openblas` in the gate build tree (host preparation; the gate script and the tag are unchanged) and the retry passed. The gate script now passes them itself (pull request 336, for the next release). g15 had not run, and passed in the retry.
 - **Pinned decode, first attempt.** All five runs died at import: my staged copy of `scripts/` lacked `caps_sim_guard.py`, and my wrapper passed no `--prompt`. I copied the module (git blob identical to the tag's), and took the prompt, token count and driver environment from the v0.7.35 wrapper. The second attempt is the one below.
@@ -67,6 +69,17 @@ Qwen3.8-2B 4-bit (`SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b`), greedy (`--temp 0
 | 5 | 27.74 |
 
 Median 27.66. Generated token ids identical in all five runs (`sha256:775bf034e185c8f9`, the digest the v0.7.34 and v0.7.35 runs gave). Prefill 0.462 s in run 1, reported separately. The v0.7.34 run on the same chip had a median of 27.73, so this is 0.07 tok/s (0.3 percent) lower. It is not comparable with v0.7.35's 72.16, which ran on a different chip.
+
+## Known issue seen while gating: GPU page fault in g10
+
+The corrected battery's g10 run made the kernel log a GPU page fault (`read: true, reason: Unmapped`) followed by a GPU timeout and a driver recovery, about 6 seconds before g10 ended; the guard's footer counted it (`GPU-TIMEOUTS delta=1`). g10 and g12 still passed. To see whether this is new, g10 then g12 were repeated four times on each wheel (the v0.7.36 wheel here and the published v0.7.35 wheel, installed fresh from its own assets, checksums equal to the v0.7.35 receipt), counting kernel GPU timeouts per iteration:
+
+| Wheel | g10 runs | g10 runs with a fault | g12 runs | g12 runs with a fault |
+| --- | --- | --- | --- | --- |
+| v0.7.36 | 5 | 3 | 5 | 0 |
+| v0.7.35 | 4 | 1 | 4 | 0 |
+
+All four events have the same signature (unit UL1C, read, Unmapped, addresses `0x11ffe90000` to `0x11fffa4100`) and all fell inside g10. Every g10 and g12 run passed its own check. 3 of 5 against 1 of 4 is not a significant difference (Fisher exact, two-sided p = 0.52), so these counts do not show v0.7.36 faulting more often than v0.7.35, and they do not rule it out. The cause is not known; it has not been tested on the 13-inch M1 (the 9B pair does not fit there). Issue 339 tracks it.
 
 ## Not in this release
 
