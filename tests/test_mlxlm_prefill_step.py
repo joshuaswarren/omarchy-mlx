@@ -114,7 +114,9 @@ class Fs:
 MEMINFO = "MemTotal:       15843696 kB\nMemFree:         100 kB\n"
 
 
-def headroom_fn(source, monkeypatch, *, meminfo=MEMINFO, active=5_000_000_000, installed=True, hk=None):
+def headroom_fn(source, monkeypatch, *, total=7_920_824 * 1024, active=5_000_000_000, installed=True, hk=None,
+                device_info=True):
+    """The patch's headroom reader against a fake mx; /proc/meminfo is deliberately a different (wrong) answer."""
     import importlib.metadata as md
 
     def version(name):
@@ -127,36 +129,43 @@ def headroom_fn(source, monkeypatch, *, meminfo=MEMINFO, active=5_000_000_000, i
         monkeypatch.delenv("HK_SYSMEM", raising=False)
     else:
         monkeypatch.setenv("HK_SYSMEM", hk)
-    mx = SimpleNamespace(get_active_memory=lambda: active)
-    return namespace(source, mx=mx, open=Fs(meminfo).open)["_omarchy_prefill_headroom_bytes"]
+    fields = {"get_active_memory": lambda: active}
+    if device_info:
+        fields["device_info"] = lambda: {"total_memory": total}
+    return namespace(source, mx=SimpleNamespace(**fields), open=Fs(MEMINFO).open)["_omarchy_prefill_headroom_bytes"]
 
 
-def test_headroom_defaults_to_half_of_memtotal_minus_arrays(patched, monkeypatch):
-    fn = headroom_fn(patched[1], monkeypatch)
-    assert fn() == 15843696 * 1024 // 2 - 5_000_000_000
+def test_headroom_is_the_heap_the_backend_reports_minus_arrays(patched, monkeypatch):
+    fn = headroom_fn(patched[1], monkeypatch, total=8_110_923_776, active=5_000_000_000)
+    assert fn() == 8_110_923_776 - 5_000_000_000
 
 
-def test_headroom_honours_the_backends_hk_sysmem(patched, monkeypatch):
-    fn = headroom_fn(patched[1], monkeypatch, hk=str(11 * GIB))
-    assert fn() == 11 * GIB - 5_000_000_000
+def test_headroom_follows_a_heap_the_backend_raised_after_python_started(patched, monkeypatch):
+    # A 62 GiB host: the backend sets HK_SYSMEM with a C setenv, so os.environ never shows it and
+    # MemTotal / 2 (the old reading, here 7.5 GiB from MEMINFO) is wrong. The reported heap is 46 GiB.
+    fn = headroom_fn(patched[1], monkeypatch, total=46 * GIB, active=33 * GIB)
+    assert fn() == 13 * GIB
+    assert chooser(patched[1])(None, 8192, fn()) == 2048  # a host with room keeps 2048
 
 
-def test_headroom_ignores_an_unparsable_hk_sysmem(patched, monkeypatch):
-    fn = headroom_fn(patched[1], monkeypatch, hk="lots")
-    assert fn() == 15843696 * 1024 // 2 - 5_000_000_000
+def test_headroom_does_not_read_hk_sysmem_or_proc_from_python(patched, monkeypatch):
+    fn = headroom_fn(patched[1], monkeypatch, total=20 * GIB, active=GIB, hk="1")
+    assert fn() == 19 * GIB
 
 
-def test_headroom_is_none_off_omarchy_or_without_procfs(patched, monkeypatch):
+def test_headroom_is_none_off_omarchy(patched, monkeypatch):
     assert headroom_fn(patched[1], monkeypatch, installed=False)() is None
-    assert headroom_fn(patched[1], monkeypatch, meminfo=None)() is None
 
 
-def test_headroom_is_none_when_the_memory_api_is_missing(patched, monkeypatch):
+def test_headroom_is_none_when_the_memory_api_is_missing_or_unusable(patched, monkeypatch):
     import importlib.metadata as md
     monkeypatch.setattr(md, "version", lambda name: "x")
-    monkeypatch.delenv("HK_SYSMEM", raising=False)
-    fn = namespace(patched[1], mx=SimpleNamespace(), open=Fs(MEMINFO).open)["_omarchy_prefill_headroom_bytes"]
-    assert fn() is None
+    assert headroom_fn(patched[1], monkeypatch, device_info=False)() is None  # no mx.device_info
+    assert headroom_fn(patched[1], monkeypatch, total=0)() is None  # a heap of 0 is no reading
+    no_active = namespace(patched[1], mx=SimpleNamespace(device_info=lambda: {"total_memory": GIB}))
+    assert no_active["_omarchy_prefill_headroom_bytes"]() is None  # no mx.get_active_memory
+    empty = namespace(patched[1], mx=SimpleNamespace(device_info=lambda: {}, get_active_memory=lambda: 0))
+    assert empty["_omarchy_prefill_headroom_bytes"]() is None  # no total_memory field
 
 
 def _assignments_from_call(fn, target, func):
