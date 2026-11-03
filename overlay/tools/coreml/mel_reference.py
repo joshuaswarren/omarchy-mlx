@@ -36,6 +36,7 @@ import numpy as np
 from dft_geometry_probe import candidate_spectrum
 from dotpr import mel_projection
 from reference import MelConfig, ReferenceLock
+from vulkan_mel import valid_mel_frames
 
 CHUNK_SAMPLES = 3000 * 160  # 30 s chunk, as chunked by ParakeetTranscriber
 ENCODER_MAX_TIME = 3000     # encoder input frames per chunk (traced shape)
@@ -157,21 +158,26 @@ def logmel(frames: np.ndarray, cfg: MelConfig,
     return np.log(guarded.astype(np.float64)).astype(np.float32)
 
 
-def normalize(logmel_frames: np.ndarray, cfg: MelConfig) -> np.ndarray:
+def normalize(logmel_frames: np.ndarray, cfg: MelConfig, valid: int | None = None) -> np.ndarray:
     """Per-mel-bin mean/std over the frame axis, float32 sequential sums.
 
     Bessel-corrected variance (n-1), ``max(n-1, 1)`` denominator, output
     ``(x - mean) / (std + epsilon)``. Sequential accumulation is emulated
     exactly with float32 ``cumsum`` (the reference loops t in order).
+    ``valid`` limits the statistics to the first ``valid`` frames and zeroes the rest.
     """
     lm = np.ascontiguousarray(logmel_frames, dtype=np.float32)
-    n_t = np.float32(lm.shape[0])
-    mean = np.cumsum(lm, axis=0, dtype=np.float32)[-1] / n_t
-    dev = (lm - mean[None, :]).astype(np.float32)
-    denom = np.float32(max(lm.shape[0] - 1, 1))
+    head = lm if valid is None else lm[:valid]
+    n_t = np.float32(head.shape[0])
+    mean = np.cumsum(head, axis=0, dtype=np.float32)[-1] / n_t
+    dev = (head - mean[None, :]).astype(np.float32)
+    denom = np.float32(max(head.shape[0] - 1, 1))
     var = np.cumsum((dev * dev).astype(np.float32), axis=0, dtype=np.float32)[-1] / denom
     std = np.sqrt(var).astype(np.float32)
-    return ((lm - mean[None, :]) / (std[None, :] + np.float32(cfg.epsilon))).astype(np.float32)
+    out = ((lm - mean[None, :]) / (std[None, :] + np.float32(cfg.epsilon))).astype(np.float32)
+    if valid is not None:
+        out[valid:] = 0
+    return out
 
 
 def chunk_for_mel(waveform: np.ndarray) -> np.ndarray:
@@ -186,15 +192,21 @@ def chunk_for_mel(waveform: np.ndarray) -> np.ndarray:
     return x
 
 
-def extract_chunk_features(waveform_30s: np.ndarray, cfg: MelConfig) -> tuple[np.ndarray, np.ndarray]:
+def extract_chunk_features(waveform_30s: np.ndarray, cfg: MelConfig, *,
+                           duration_aware: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """(mel [3001,128] float32, attention mask [3001] int32) for one chunk.
 
-    Mirrors ``MelFeatureExtractor.extract``: every mel frame is valid
+    Default mirrors ``MelFeatureExtractor.extract``: every mel frame is valid
     (mask all ones) because the caller pre-pads the chunk to 30 s.
+    ``duration_aware`` is NeMo's contract for the general path: statistics over
+    the frames that carry audio, padded frames zero, mask one only on those frames.
     """
+    valid = valid_mel_frames(int(np.asarray(waveform_30s).size)) if duration_aware else None
     frames = stft_frames(chunk_for_mel(waveform_30s), cfg)
-    feats = normalize(logmel(frames, cfg), cfg)
+    feats = normalize(logmel(frames, cfg), cfg, valid)
     mask = np.ones(frames.shape[0], np.int32)
+    if valid is not None:
+        mask[valid:] = 0
     return feats, mask
 
 
