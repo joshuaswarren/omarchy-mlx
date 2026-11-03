@@ -144,12 +144,33 @@ const QmmGeometry& qmm_geometry() {
           32u, K::QmmVecQ4WordSubgroupBF16R4S8,
           K::QmmVecQ4MultiSubgroupBF16R4S8};
     }
+    if (v == "8x4") {
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R8S4,
+          K::QmmVecQ4MultiSubgroupBF16R8S4};
+    }
+    if (v == "8x8") {
+      return QmmGeometry{
+          64u, K::QmmVecQ4WordSubgroupBF16R8S8,
+          K::QmmVecQ4MultiSubgroupBF16R8S8};
+    }
+    if (v == "4x16") {
+      return QmmGeometry{
+          64u, K::QmmVecQ4WordSubgroupBF16R4S16,
+          K::QmmVecQ4MultiSubgroupBF16R4S16};
+    }
+    if (v == "2x16") {
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+          K::QmmVecQ4MultiSubgroupBF16R2S16};
+    }
     if (v == "2x4") {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x2 4x2 2x4 4x4 2x8 4x8");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x2 4x2 2x4 4x4 2x8 4x8 "
+        "8x4 8x8 4x16 2x16");
   }();
   return geometry;
 }
