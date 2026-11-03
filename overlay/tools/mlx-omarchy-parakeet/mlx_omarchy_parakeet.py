@@ -925,7 +925,7 @@ def _decode_chunks(island, runner, control, stage, lock, waveform,
 
     def stage_mel(chunk_wave):
         def work():
-            result = extract_chunk_features(chunk_wave)
+            result = extract_chunk_features(chunk_wave, duration_aware=not pinned)
             mx.eval(result.mel, result.mask, result.encoder_features,
                     result.encoder_mask)
             return result
@@ -991,13 +991,10 @@ def _decode_chunks(island, runner, control, stage, lock, waveform,
                     "slice-decode a mask with holes")
             # The pinned golden contract keeps the legacy full-window decode
             # (its reference transcript includes the padded-tail artifact).
-            # The general path clamps decode frames to the mask-derived
-            # count. Today that equals the window: the mel frontend emits an
-            # all-valid mask by design — the same choice the macOS CoreML
-            # reference makes (MelFeatureExtractor.swift) — so the mask is
-            # not duration-aware anywhere in the lineage. The clamp exists
-            # so a future duration-aware mask slots in without touching the
-            # golden path.
+            # The general path's mel frontend is duration-aware: statistics
+            # over the audio's frames, padding zeroed, mask one only on the
+            # audio. The encoder mask then marks the audio's frames and the
+            # decode stops there instead of decoding the padding.
             decode_frames = window if pinned else min(mask_valid, window)
             if decode_frames <= 0:
                 raise TranscribeRefusal(
@@ -1188,10 +1185,10 @@ def _pin_checks(pinned, expected, contract, tdt, transcript, mel_host,
               {"decoded_frames": chunk.frame_base,
                "mask_valid": chunk.last_mask_valid,
                "window": chunk.last_window,
-               # Both implementations (Linux mel frontend and the macOS
-               # CoreML reference) emit an all-valid mask by design, so the
-               # decoded frame count equals the window count; the mask is
-               # not duration-aware anywhere in the reference lineage.
+               # The general path's mel frontend is duration-aware, so the
+               # decoded frame count is the audio's, not the window's. The
+               # pinned fixture keeps the all-valid mask of the macOS CoreML
+               # reference (MelFeatureExtractor.swift).
                "mask_all_valid": bool(all_valid)})
         check("durations_domain",
               all(d in lock.tdt.durations for d in tdt.durations),

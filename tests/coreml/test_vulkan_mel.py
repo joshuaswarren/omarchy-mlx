@@ -163,3 +163,39 @@ def test_pinned_waveform_all_vulkan_stages_and_encoder_inputs_are_bit_exact():
     assert np.asarray(result.encoder_mask).tobytes() == expected_encoder_mask.tobytes()
     assert after["gpu_primitive_dispatches"] > before["gpu_primitive_dispatches"]
     assert after["vk_compute_dispatches"] > before["vk_compute_dispatches"]
+
+
+def _short_clip(seconds: float) -> np.ndarray:
+    rng = np.random.default_rng(7)
+    t = np.arange(int(seconds * 16000), dtype=np.float32) / 16000
+    tone = 0.2 * np.sin(2 * np.pi * 440 * t) + 0.1 * np.sin(2 * np.pi * 1210 * t)
+    return (tone + 0.05 * rng.standard_normal(t.size)).astype(np.float32)
+
+
+def test_duration_aware_kernels_match_the_cpu_reference_on_short_audio():
+    import mel_reference
+
+    cfg = ReferenceLock.load(TOOLS / "parakeet-reference.lock").mel
+    wave = _short_clip(1.5)
+    result = vulkan_mel.extract_chunk_features(mx.array(wave), duration_aware=True)
+    mx.eval(result.mel, result.mask)
+    expected, expected_mask = mel_reference.extract_chunk_features(wave, cfg, duration_aware=True)
+
+    assert result.valid_frames == int(expected_mask.sum()) == wave.size // 160 + 1
+    assert np.asarray(result.mask).tobytes() == expected_mask.tobytes()
+    assert not np.asarray(result.mel)[result.valid_frames :].any()
+    assert np.asarray(result.mel).tobytes() == expected.tobytes()
+
+
+def test_the_pinned_contract_keeps_all_frames_valid_on_short_audio():
+    import mel_reference
+
+    cfg = ReferenceLock.load(TOOLS / "parakeet-reference.lock").mel
+    wave = _short_clip(1.5)
+    result = vulkan_mel.extract_chunk_features(mx.array(wave))
+    mx.eval(result.mel, result.mask)
+    expected, expected_mask = mel_reference.extract_chunk_features(wave, cfg)
+
+    assert result.valid_frames == vulkan_mel.N_FRAMES
+    assert np.asarray(result.mask).tobytes() == expected_mask.tobytes()
+    assert np.asarray(result.mel).tobytes() == expected.tobytes()
