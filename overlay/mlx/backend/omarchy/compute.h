@@ -1088,22 +1088,8 @@ enum class ComputeKernel : uint16_t {
   // Decode column-geometry variants of the bf16 subgroup Q4 word and multi
   // kernels (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>); appended to keep profile
   // kernel ids stable.
-  QmmVecQ4WordSubgroupBF16R2S2,
-  QmmVecQ4MultiSubgroupBF16R2S2,
-  QmmVecQ4WordSubgroupBF16R4S2,
-  QmmVecQ4MultiSubgroupBF16R4S2,
-  QmmVecQ4WordSubgroupBF16R4S4,
-  QmmVecQ4MultiSubgroupBF16R4S4,
-  QmmVecQ4WordSubgroupBF16R2S8,
-  QmmVecQ4MultiSubgroupBF16R2S8,
   QmmVecQ4WordSubgroupBF16R4S8,
   QmmVecQ4MultiSubgroupBF16R4S8,
-  QmmVecQ4WordSubgroupBF16R8S4,
-  QmmVecQ4MultiSubgroupBF16R8S4,
-  QmmVecQ4WordSubgroupBF16R8S8,
-  QmmVecQ4MultiSubgroupBF16R8S8,
-  QmmVecQ4WordSubgroupBF16R4S16,
-  QmmVecQ4MultiSubgroupBF16R4S16,
   QmmVecQ4WordSubgroupBF16R2S16,
   QmmVecQ4MultiSubgroupBF16R2S16,
   Count,

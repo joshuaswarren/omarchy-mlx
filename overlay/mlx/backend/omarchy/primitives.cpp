@@ -100,77 +100,55 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
   return row_length != 2048u || rows <= 64u;
 }
 
-// Decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>, read once):
-// the bf16 subgroup Q4 word and multi kernels run <rows> columns per slot and
-// <slots> 32-lane slots per workgroup. Every column keeps the same per-lane
-// chain, so the bytes are identical in every geometry; only the columns and
-// threads per workgroup change. Unset keeps 2x4.
+// Decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>, read
+// once): the bf16 subgroup Q4 word and multi kernels run <rows> columns per
+// slot and <slots> 32-lane slots per workgroup. Every column keeps the same
+// per-lane chain, so the bytes are identical in every geometry; only the
+// columns and threads per workgroup change. Unset: 2x16 on G13G (the
+// measured winner there: +3.59 percent on the 2B at 512 tokens of context,
+// +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
+// identical), 2x4 on every other chip until its paired A/B lands. The only
+// other accepted value is 4x8, the second candidate the 16-inch A/B still
+// needs.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
   omarchy::ComputeKernel multi;
+  const char* name;
 };
 const QmmGeometry& qmm_geometry() {
   static const QmmGeometry geometry = [] {
     using K = omarchy::ComputeKernel;
     const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
-    if (env == nullptr || *env == '\0') {
+    const std::string v = env == nullptr ? std::string() : std::string(env);
+    if (v.empty()) {
+      if (omarchy::device().capabilities().device_name.find("G13G") !=
+          std::string::npos) {
+        return QmmGeometry{
+            32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+            K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
+      }
       return QmmGeometry{
-          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
-    }
-    const std::string v(env);
-    if (v == "2x2") {
-      return QmmGeometry{
-          4u, K::QmmVecQ4WordSubgroupBF16R2S2,
-          K::QmmVecQ4MultiSubgroupBF16R2S2};
-    }
-    if (v == "4x2") {
-      return QmmGeometry{
-          8u, K::QmmVecQ4WordSubgroupBF16R4S2,
-          K::QmmVecQ4MultiSubgroupBF16R4S2};
-    }
-    if (v == "4x4") {
-      return QmmGeometry{
-          16u, K::QmmVecQ4WordSubgroupBF16R4S4,
-          K::QmmVecQ4MultiSubgroupBF16R4S4};
-    }
-    if (v == "2x8") {
-      return QmmGeometry{
-          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
-          K::QmmVecQ4MultiSubgroupBF16R2S8};
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
+          "2x4"};
     }
     if (v == "4x8") {
       return QmmGeometry{
           32u, K::QmmVecQ4WordSubgroupBF16R4S8,
-          K::QmmVecQ4MultiSubgroupBF16R4S8};
-    }
-    if (v == "8x4") {
-      return QmmGeometry{
-          32u, K::QmmVecQ4WordSubgroupBF16R8S4,
-          K::QmmVecQ4MultiSubgroupBF16R8S4};
-    }
-    if (v == "8x8") {
-      return QmmGeometry{
-          64u, K::QmmVecQ4WordSubgroupBF16R8S8,
-          K::QmmVecQ4MultiSubgroupBF16R8S8};
-    }
-    if (v == "4x16") {
-      return QmmGeometry{
-          64u, K::QmmVecQ4WordSubgroupBF16R4S16,
-          K::QmmVecQ4MultiSubgroupBF16R4S16};
+          K::QmmVecQ4MultiSubgroupBF16R4S8, "4x8"};
     }
     if (v == "2x16") {
       return QmmGeometry{
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
-          K::QmmVecQ4MultiSubgroupBF16R2S16};
+          K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
     }
     if (v == "2x4") {
       return QmmGeometry{
-          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16};
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
+          "2x4"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x2 4x2 2x4 4x4 2x8 4x8 "
-        "8x4 8x8 4x16 2x16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 4x8 2x16");
   }();
   return geometry;
 }
@@ -9096,6 +9074,10 @@ bool input_ready(const array& value, const Stream& stream) {
 }
 
 } // namespace
+
+const char* qmm_geometry_name() {
+  return qmm_geometry().name;
+}
 
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,

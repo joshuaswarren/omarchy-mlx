@@ -301,22 +301,8 @@
 #include "qmm_vec_q4_multi_f16.h"
 #include "qmm_vec_q4_multi_f32.h"
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r8s4.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r8s4.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r8s8.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r8s8.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r4s16.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r4s16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r2s2.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r2s2.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r4s2.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r4s2.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r4s4.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r4s4.h"
-#include "qmm_vec_q4_word_subgroup_bf16_r2s8.h"
-#include "qmm_vec_q4_multi_subgroup_bf16_r2s8.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r4s8.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r4s8.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
@@ -1757,38 +1743,6 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::QmmVecQ4MultiSubgroupF16:
       return {
           qmm_vec_q4_multi_subgroup_f16, qmm_vec_q4_multi_subgroup_f16_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r2s2,
-          qmm_vec_q4_word_subgroup_bf16_r2s2_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S2:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r2s2,
-          qmm_vec_q4_multi_subgroup_bf16_r2s2_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R4S2:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r4s2,
-          qmm_vec_q4_word_subgroup_bf16_r4s2_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S2:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r4s2,
-          qmm_vec_q4_multi_subgroup_bf16_r4s2_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R4S4:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r4s4,
-          qmm_vec_q4_word_subgroup_bf16_r4s4_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S4:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r4s4,
-          qmm_vec_q4_multi_subgroup_bf16_r4s4_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r2s8,
-          qmm_vec_q4_word_subgroup_bf16_r2s8_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r2s8,
-          qmm_vec_q4_multi_subgroup_bf16_r2s8_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBF16R4S8:
       return {
           qmm_vec_q4_word_subgroup_bf16_r4s8,
@@ -1797,30 +1751,6 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r4s8,
           qmm_vec_q4_multi_subgroup_bf16_r4s8_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R8S4:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r8s4,
-          qmm_vec_q4_word_subgroup_bf16_r8s4_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R8S4:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r8s4,
-          qmm_vec_q4_multi_subgroup_bf16_r8s4_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R8S8:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r8s8,
-          qmm_vec_q4_word_subgroup_bf16_r8s8_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R8S8:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r8s8,
-          qmm_vec_q4_multi_subgroup_bf16_r8s8_size};
-    case ComputeKernel::QmmVecQ4WordSubgroupBF16R4S16:
-      return {
-          qmm_vec_q4_word_subgroup_bf16_r4s16,
-          qmm_vec_q4_word_subgroup_bf16_r4s16_size};
-    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S16:
-      return {
-          qmm_vec_q4_multi_subgroup_bf16_r4s16,
-          qmm_vec_q4_multi_subgroup_bf16_r4s16_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16:
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s16,
