@@ -29,6 +29,9 @@ struct Counters {
   // Descriptor write counts from dispatch ComputeBinding updates (one
   // write per binding). Structural: moves with vk_compute_dispatches.
   std::atomic<uint64_t> vk_descriptor_update_writes{0};
+  // Dispatches whose descriptors were pushed with vkCmdPushDescriptorSetKHR
+  // (MLX_OMARCHY_PUSH_DESCRIPTORS) instead of allocated and updated as a set.
+  std::atomic<uint64_t> vk_push_descriptor_sets{0};
   // Dependency-barrier decisions (MLX_OMARCHY_GATED_BARRIERS accounting;
   // the default unconditional path counts every pre+post dispatch
   // barrier as emitted, never skipped). Excludes the TAPE_FULL_BARRIERS

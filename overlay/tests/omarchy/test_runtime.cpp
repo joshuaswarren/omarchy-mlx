@@ -37,7 +37,9 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <future>
+#include <map>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -54,6 +56,8 @@
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/vulkan.h"
 #include "mlx/device.h"
+#include "mlx/fast.h"
+#include "mlx/transforms.h"
 #include "mlx/ops.h"
 #include "mlx/scheduler.h"
 #include "mlx/stream.h"
@@ -587,6 +591,47 @@ int run_child_scenario(const std::string& mode) {
     std::cout << "[child/stuck_warning] warning fired before the wall"
                  " typed error\n";
     return 0;
+  }
+  if (mode == "push_identity") {
+    // A fixed set of GPU ops (1 to 5 bindings, barriers between them), hashed byte for byte. The parent runs this twice, with push
+    // descriptors off and on, and compares the hashes and the counters.
+    const char* out_path = std::getenv("MLX_OMARCHY_TEST_OUT");
+    if (out_path == nullptr) {
+      return 2;
+    }
+    auto& counters = omarchy::trace::counters();
+    Stream s = new_stream(Device::gpu);
+    std::vector<float> xv(64 * 64);
+    for (size_t i = 0; i < xv.size(); ++i) {
+      xv[i] = static_cast<float>(i % 257) * 0.01f - 1.0f;
+    }
+    std::vector<float> wv(64 * 32);
+    for (size_t i = 0; i < wv.size(); ++i) {
+      wv[i] = static_cast<float>((i * 7) % 101) * 0.02f - 1.0f;
+    }
+    array x(xv.begin(), Shape{64, 64}, float32);
+    array w(wv.begin(), Shape{64, 32}, float32);
+    array h = add(multiply(x, array(0.5f), s), array(0.25f), s);
+    array p = matmul(h, w, s);
+    array sm = softmax(p, std::vector<int>{-1}, true, s);
+    array red = sum(sm, std::vector<int>{0}, false, s);
+    array nrm = fast::rms_norm(h, std::nullopt, 1e-5f, s);
+    std::vector<array> outs{h, p, sm, red, nrm};
+    eval(outs);
+    synchronize(s);
+    uint64_t hash = 1469598103934665603ull;
+    for (auto& o : outs) {
+      const auto* b = reinterpret_cast<const uint8_t*>(o.data<float>());
+      for (size_t i = 0; i < o.nbytes(); ++i) {
+        hash = (hash ^ b[i]) * 1099511628211ull;
+      }
+    }
+    std::ofstream f(out_path);
+    f << "hash=" << std::hex << hash << std::dec << "\n"
+      << "dispatches=" << counters.vk_compute_dispatches.load() << "\n"
+      << "update_writes=" << counters.vk_descriptor_update_writes.load() << "\n"
+      << "push_sets=" << counters.vk_push_descriptor_sets.load() << "\n";
+    return f.good() ? 0 : 3;
   }
   return 126;
 }
@@ -2940,4 +2985,44 @@ TEST_CASE("stuck-submit warning fires before the wall typed error") {
   CHECK_FALSE(run.timed_out);
   CHECK_FALSE(run.signaled);
   CHECK(run.code == 0);
+}
+
+TEST_CASE("push descriptors: identical results, push path used exactly when enabled") {
+  // MLX_OMARCHY_PUSH_DESCRIPTORS=1 records vkCmdPushDescriptorSetKHR per dispatch instead of allocating and updating a descriptor set.
+  // The same fixed op set runs in two fresh processes, push off and push on: every output must hash the same, the off run must use
+  // allocate-and-update only, and the on run must push every dispatch and update no set.
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto run = [](const char* flag) {
+    std::map<std::string, std::string> kv;
+    std::string path = "/tmp/mlx_omarchy_push_identity_" + std::to_string(::getpid()) + "_" + flag + ".txt";
+    ::setenv("MLX_OMARCHY_TEST_OUT", path.c_str(), 1);
+    ::setenv("MLX_OMARCHY_PUSH_DESCRIPTORS", flag, 1);
+    ChildRun r = run_child("push_identity", 120);
+    ::unsetenv("MLX_OMARCHY_PUSH_DESCRIPTORS");
+    ::unsetenv("MLX_OMARCHY_TEST_OUT");
+    kv["exit"] = std::to_string(r.code);
+    std::ifstream f(path);
+    for (std::string line; std::getline(f, line);) {
+      auto eq = line.find('=');
+      if (eq != std::string::npos) {
+        kv[line.substr(0, eq)] = line.substr(eq + 1);
+      }
+    }
+    std::remove(path.c_str());
+    return kv;
+  };
+  auto off = run("0");
+  auto on = run("1");
+  REQUIRE(off["exit"] == "0");
+  REQUIRE(on["exit"] == "0");
+  CHECK(off["hash"] == on["hash"]);
+  CHECK(std::stoull(off["dispatches"]) > 0);
+  CHECK(off["dispatches"] == on["dispatches"]);
+  CHECK(std::stoull(off["update_writes"]) > 0);
+  CHECK(off["push_sets"] == "0");
+  CHECK(on["push_sets"] == on["dispatches"]);
+  CHECK(on["update_writes"] == "0");
 }
