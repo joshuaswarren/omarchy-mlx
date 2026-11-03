@@ -730,6 +730,10 @@ struct GemvGroup {
   // is the deleted Multiply(Sigmoid(gate), out) output. The one
   // dispatch reads gate and out directly and rebuilds x per workgroup.
   std::optional<OutgatePlan> outgate;
+  // Norm prologue fold: set at plan time when the group's shared x is
+  // the deleted RMSNorm output. The one dispatch recomputes the norm per
+  // workgroup; a refused dispatch replays the RMSNorm node instead.
+  std::optional<NormPlan> norm;
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1299,6 +1303,46 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     claimed.insert(sigmoid->id());
     claimed.insert(tail.id());
   }
+  // Norm prologue plans: an RMSNorm over one 2048-wide bf16 row (the
+  // width the apple norm kernel the prologue reproduces covers) whose
+  // input is an Add output or an evaluated whole dense leaf and whose
+  // weight is an evaluated whole dense leaf. Whether the readers are all
+  // group members, and every device capability, is decided at group
+  // attach and dispatch; nothing is claimed until a group adopts the
+  // plan.
+  std::unordered_map<std::uintptr_t, NormPlan> norm_plans;
+  const bool norm_on = fuse_norm_qmv_enabled();
+  for (const auto& tail : tape) {
+    if (!norm_on || !is_op(&tail, typeid(fast::RMSNorm)) ||
+        tail.inputs().size() != 2 || claimed.count(tail.id()) ||
+        tail.dtype() != bfloat16 || stream_device(tail) == nullptr ||
+        tail.ndim() < 2 || tail.shape(-2) != 1 || tail.shape(-1) != 2048 ||
+        tail.size() != 2048) {
+      continue;
+    }
+    const array& raw = tail.inputs()[0];
+    const array& weight = tail.inputs()[1];
+    auto dense_leaf = [](const array& a) {
+      return a.data_shared_ptr() != nullptr && a.offset() == 0 &&
+          a.flags().row_contiguous && a.data_size() == 2048;
+    };
+    const array* raw_node = lookup(raw);
+    if (lookup(weight) != nullptr || weight.dtype() != bfloat16 ||
+        weight.size() != 2048 || !dense_leaf(weight) ||
+        raw.dtype() != bfloat16 || raw.size() != 2048 ||
+        (raw_node == nullptr ? !dense_leaf(raw)
+                             : !is_op(raw_node, typeid(Add)))) {
+      continue;
+    }
+    norm_plans.emplace(
+        tail.id(),
+        NormPlan{
+            raw,
+            weight,
+            tail,
+            static_cast<const fast::RMSNorm&>(tail.primitive()).state().second,
+            tail.primitive_ptr()});
+  }
   for (size_t i = 1; i < tape.size(); ++i) {
     const array& first = tape[i - 1];
     const array& second = tape[i];
@@ -1395,6 +1439,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     if (x_rows > 1) {
       x_has_plan = false;
     }
+    auto norm_it = norm_plans.find(x_id);
+    const bool x_has_norm = norm_it != norm_plans.end() && x_rows == 1;
     // The multi-token Add epilogue fold has one deterministic divergence
     // on the AGX subgroup column (k=896 n=512 tokens=16, one element);
     // until root-caused the token route plans WITHOUT epilogues and the
@@ -1408,7 +1454,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     for (size_t start = 0; start < nodes.size();
          start += kQmmVecMultiWeights) {
       GemvGroup group;
-      bool worth = x_has_plan && start == 0;
+      bool worth = (x_has_plan || x_has_norm) && start == 0;
       for (size_t i = start; i < nodes.size() && i < start + kQmmVecMultiWeights;
            ++i) {
         const array& node = *nodes[i];
@@ -1458,6 +1504,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       if (worth && start == 0 && x_has_plan) {
         group.outgate = std::move(plan_it->second);
+      }
+      if (worth && start == 0 && x_has_norm) {
+        group.norm = norm_it->second;
       }
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
@@ -1526,6 +1575,31 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     state->roles.emplace(
         plan.sigmoid_id, EagerRole{gi, EagerStep::skip});
     state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
+  }
+  // Norm prologue attach validation. The plan stays only when every
+  // reader of the norm output is a member of a planned group (the first
+  // group dispatch materializes x for the rest) and the norm and its
+  // producers share the member stream. The RMSNorm node then maps to the
+  // group as a skip role. A dispatch-time refusal replays the node (see
+  // the gemv role handler), so nothing here is a one-way door.
+  for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+    auto& group = state->gemv_groups[gi];
+    if (!group.norm) {
+      continue;
+    }
+    NormPlan& plan = *group.norm;
+    const Stream& member_stream = group.members[0].node.primitive().stream();
+    auto raw_node = lookup(plan.x_raw);
+    if (!norm_prologue_supported(member_stream) ||
+        by_x[plan.x.id()].size() != uses[plan.x.id()] ||
+        lookup(plan.x)->primitive().stream() != member_stream ||
+        (raw_node && (!is_op(raw_node, typeid(Add)) ||
+                      raw_node->primitive().stream() != member_stream))) {
+      group.norm.reset();
+      continue;
+    }
+    state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
+    claimed.insert(plan.x.id());
   }
   // SwiGLU store epilogue fold. When a planned group is exactly the
   // gate and up projections of a planned swiglu chain — two members,
@@ -1910,6 +1984,15 @@ bool outgate_fold_enabled() {
   return !legacy_g13;
 }
 
+// Read once per process; unset, empty and "0" are off.
+bool fuse_norm_qmv_enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("MLX_OMARCHY_FUSE_NORM_QMV");
+    return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+  }();
+  return on;
+}
+
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
@@ -2156,7 +2239,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
                         stream,
-                        group.outgate ? &*group.outgate : nullptr)
+                        group.outgate ? &*group.outgate : nullptr,
+                        group.norm ? &*group.norm : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {
@@ -2167,6 +2251,13 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
         throw std::runtime_error(
             "[mlx-omarchy] out-gate prologue group refused after fold "
             "adoption");
+      }
+      if (group.state == GemvGroup::State::failed && group.norm) {
+        // The skipped RMSNorm node runs now, ahead of the members that
+        // read its output (dispatch refusals allocate nothing).
+        std::vector<array> replay_outputs{group.norm->x};
+        group.norm->primitive->eval_gpu(
+            {group.norm->x_raw, group.norm->weight}, replay_outputs);
       }
     }
     return group.state == GemvGroup::State::done;

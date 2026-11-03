@@ -90,6 +90,12 @@ uint16_t bf16_store(float value) {
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
 #error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
 #endif
+#if defined(QMM_VEC_NORM) && \
+    (defined(QMM_VEC_OUTGATE) || !defined(USE_BF16) || \
+     !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI) || \
+     defined(QMM_VEC_TOKENS))
+#error "QMM_VEC_NORM builds on the bf16 subgroup single-token multi column"
+#endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
 // owning ROWS_PER_SLOT consecutive output rows (native qmv_fast keeps four
@@ -123,9 +129,14 @@ uint16_t bf16_store(float value) {
 // (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors
 // instead of reading the product; every other variant reads input_x.
 #if defined(QMM_VEC_OUTGATE)
-#define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#define PROLOGUE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#elif defined(QMM_VEC_NORM)
+#define PROLOGUE_XWORDS(x_base) norm_quad((x_base) / 8u)
 #else
-#define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
+#define PROLOGUE_XWORDS(x_base) input_x.values[(x_base) / 8u]
+#endif
+#ifndef QMM_VEC_NORM
+#define NORM_PROLOGUE()
 #endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
@@ -225,7 +236,7 @@ uvec4 outgate_quad(uint quad_index) {
   }
   return m;
 }
-#define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#define PROLOGUE_XWORDS(x_base) outgate_quad((x_base) / 8u)
 #endif
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
@@ -302,6 +313,90 @@ layout(push_constant) uniform Params {
   uint in_strides[4];
   uint out_strides[4];
 } params;
+#if defined(QMM_VEC_NORM)
+// Norm prologue (QMM_VEC_NORM): x = rms_norm(x_raw, weight), the exact
+// arithmetic of fast_norm_apple.comp for a 2048-wide bf16 row, so the
+// result is byte identical to the RMSNorm dispatch this prologue deletes.
+// That kernel runs 256 virtual threads; thread v sums the squares of its
+// eight contiguous elements in order (precise, no FMA), a 32-lane subgroupAdd
+// per virtual subgroup, then subgroup 0 adds the eight partials. This main
+// has 128 threads, so thread t plays virtual threads t and t + 128 (virtual
+// subgroups s and s + 4) with the same lane order and the same adds.
+// Every workgroup recomputes the scale; workgroup 0 stores the normalized
+// row so retained references to the deleted RMSNorm output stay valid
+// (bindings 25-27; the row, weight and output start at element 0, the host
+// refuses otherwise). The scale comes from params.alpha (eps) and the
+// divisor from params.matrix_k.
+#if SLOTS_PER_GROUP != 4 || ROWS_PER_SLOT != 2
+#error "QMM_VEC_NORM plays 256 virtual norm threads on 128 real ones"
+#endif
+layout(set = 0, binding = 25, std430) readonly buffer NormRaw {
+  uvec4 values[];
+} norm_raw;
+layout(set = 0, binding = 26, std430) readonly buffer NormWeight {
+  uvec4 values[];
+} norm_weight;
+layout(set = 0, binding = 27, std430) writeonly buffer NormOut {
+  uvec4 values[];
+} norm_out;
+shared float norm_partial[8];
+float norm_scale;
+float norm_lane_squares(uint quad_index) {
+  uvec4 q = norm_raw.values[quad_index];
+  precise float reg_sq = 0.0;
+  for (uint i = 0u; i < 4u; ++i) {
+    float lo = uintBitsToFloat(q[i] << 16u);
+    reg_sq += lo * lo;
+    float hi = uintBitsToFloat(q[i] & 0xFFFF0000u);
+    reg_sq += hi * hi;
+  }
+  return reg_sq;
+}
+void norm_prologue() {
+  uint thread = gl_LocalInvocationID.x;
+  uint sub_id = thread / 32u;
+  uint lane = thread % 32u;
+  float sub_low = subgroupAdd(norm_lane_squares(thread));
+  float sub_high = subgroupAdd(norm_lane_squares(thread + 128u));
+  if (lane == 0u) {
+    norm_partial[sub_id] = sub_low;
+    norm_partial[sub_id + 4u] = sub_high;
+  }
+  barrier();
+  if (sub_id == 0u) {
+    float v = (lane < 8u) ? norm_partial[lane] : 0.0;
+    float total = subgroupAdd(v);
+    if (lane == 0u) {
+      norm_partial[0] = total;
+    }
+  }
+  barrier();
+  float mean_square = norm_partial[0] / float(params.matrix_k);
+  norm_scale = inversesqrt(mean_square + params.alpha);
+}
+uint norm_word(uint x_word, uint w_word) {
+  float x_lo = uintBitsToFloat(x_word << 16u);
+  float x_hi = uintBitsToFloat(x_word & 0xFFFF0000u);
+  float w_lo = uintBitsToFloat(w_word << 16u);
+  float w_hi = uintBitsToFloat(w_word & 0xFFFF0000u);
+  precise float nw_lo = norm_scale * w_lo;
+  precise float nw_hi = norm_scale * w_hi;
+  precise float r_lo = x_lo * nw_lo;
+  precise float r_hi = x_hi * nw_hi;
+  return uint(bf16_store(r_lo)) | (uint(bf16_store(r_hi)) << 16u);
+}
+uvec4 norm_quad(uint quad_index) {
+  uvec4 x = norm_raw.values[quad_index];
+  uvec4 w = norm_weight.values[quad_index];
+  uvec4 m = {norm_word(x.x, w.x), norm_word(x.y, w.y),
+             norm_word(x.z, w.z), norm_word(x.w, w.w)};
+  if (gl_WorkGroupID.x == 0u) {
+    norm_out.values[quad_index] = m;
+  }
+  return m;
+}
+#define NORM_PROLOGUE() norm_prologue();
+#endif
 
 #ifndef USE_SUBGROUP
 shared float reduce_scratch[256];
@@ -459,7 +554,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #if defined(USE_FP16) || defined(USE_BF16)
 #define Q4_WORD(word, x_base) { \
   uint word_value = (word); \
-  uvec4 x_words = OUTGATE_XWORDS(x_base); \
+  uvec4 x_words = PROLOGUE_XWORDS(x_base); \
   Q4_QUAD(word_value, x_words.x, x_words.y) \
   Q4_QUAD(word_value >> 16u, x_words.z, x_words.w) \
 }
@@ -595,7 +690,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
     precise float dot[ROWS_PER_SLOT]; \
     precise float input_sum = 0.0; \
-    uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+    uvec4 xa = PROLOGUE_XWORDS(x_row + w * 8u); \
     Q8_X8(xa) \
     input_sum += x0; \
     input_sum += x1; \
@@ -634,8 +729,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
         wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
       } \
-      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-      uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+      uvec4 xa = PROLOGUE_XWORDS(x_row + w * 8u); \
+      uvec4 xb = PROLOGUE_XWORDS(x_row + w * 8u + 8u); \
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
       Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
       Q4_QUAD_ROWS(wb[r], xb.x, xb.y) \
@@ -651,7 +746,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         dot[r] = 0.0; \
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
       } \
-      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+      uvec4 xa = PROLOGUE_XWORDS(x_row + w * 8u); \
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
       Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
       Q4_ROWS_FINISH(w, S, B) \
@@ -1054,6 +1149,7 @@ void main() {
   uint s_base = 0u;
   uint b_base = 0u;
   uint x_row = params.lhs_offset;
+  NORM_PROLOGUE()
   precise float acc[ROWS_PER_SLOT];
   float total[ROWS_PER_SLOT];
   if ((params.flags & 65536u) != 0u) {
@@ -1722,8 +1818,8 @@ void main() {
       for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
         if (bt < batch) { \
           Q4_ROWS_BATCH_ROW(w, \
-            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-            uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+            uvec4 xa = PROLOGUE_XWORDS(x_row + w * 8u); \
+            uvec4 xb = PROLOGUE_XWORDS(x_row + w * 8u + 8u); \
             Q4_QUAD_ROWS_NIB(na, 0u, xa.x, xa.y) \
             Q4_QUAD_ROWS_NIB(na, 4u, xa.z, xa.w) \
             Q4_QUAD_ROWS_NIB(nb, 0u, xb.x, xb.y) \
@@ -1742,7 +1838,7 @@ void main() {
       for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
         if (bt < batch) { \
           Q4_ROWS_BATCH_ROW(w, \
-            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+            uvec4 xa = PROLOGUE_XWORDS(x_row + w * 8u); \
             Q4_QUAD_ROWS_NIB(na, 0u, xa.x, xa.y) \
             Q4_QUAD_ROWS_NIB(na, 4u, xa.z, xa.w)) \
         } \

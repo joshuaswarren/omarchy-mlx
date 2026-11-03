@@ -59,6 +59,12 @@ bool compute_available() {
   return true;
 }
 
+bool fold_available(const Stream& stream) {
+  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+  return caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u;
+}
+
 struct Linear {
   array w = zeros({1});
   array scales = zeros({1});
@@ -204,6 +210,12 @@ void check_case(
     int rows, int k, const std::vector<int>& ns, Dtype dtype, Data kind,
     bool want_norm, int expected_saved) {
   Stream stream = gpu_stream();
+  // The fold needs the 32-wide arithmetic subgroup column. Elsewhere (the
+  // x86 software rasterizer reports 8 lanes) the norm stays its own
+  // dispatch and only byte identity is asserted.
+  if (!fold_available(stream)) {
+    expected_saved = 0;
+  }
   set_compile_mode(CompileMode::disabled);
   array x = make_row(rows, k, dtype, kind, stream);
   array weight = make_weight(k, dtype, stream);

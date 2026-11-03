@@ -9016,11 +9016,28 @@ bool input_ready(const array& value, const Stream& stream) {
 
 } // namespace
 
+// Device side of the norm prologue contract, shared by the planner (which
+// adopts a plan only where this holds) and the dispatch: the bf16 subgroup
+// multi column with three extra bindings, and the apple RMSNorm kernel the
+// prologue reproduces being the one the deleted dispatch would have picked.
+bool norm_prologue_supported(const Stream& stream) {
+  auto& encoder = get_command_encoder(stream);
+  const auto& caps = encoder.device().capabilities();
+  return q4_word_enabled() &&
+      encoder.device().compute().binding_limit() >=
+      kQmmVecMultiBindings + 3 &&
+      caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0 &&
+      float_dtype_supported(bfloat16, caps) &&
+      apple_norm_enabled(encoder.device(), 2048u, 1u);
+}
+
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    NormPlan* norm) {
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -9088,6 +9105,21 @@ bool dispatch_quantized_gemv_group(
         x.ndim() < 2 || x.shape(-2) != 1) {
       return false;
     }
+  } else if (norm != nullptr) {
+    // The prologue deletes the RMSNorm that produced x (never
+    // evaluated), so x's readiness checks do not apply; the kernel
+    // reproduces fast_norm_apple.comp for one 2048-wide bf16 row, which
+    // is the only RMSNorm the dispatch it deletes could have been.
+    const array& raw = norm->x_raw;
+    const array& weight = norm->weight;
+    if (dtype != bfloat16 || !norm_prologue_supported(stream) ||
+        norm->x.id() != x.id() || x.dtype() != dtype || x.ndim() < 2 ||
+        x.shape(-2) != 1 || x.shape(-1) != 2048 ||
+        raw.dtype() != dtype || weight.dtype() != dtype ||
+        !whole_dense(raw, 2048u) || !whole_dense(weight, 2048u) ||
+        !input_ready(raw, stream) || !input_ready(weight, stream)) {
+      return false;
+    }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
       x.ndim() < 2 || (!token_route && x.shape(-2) != 1) ||
       !input_ready(x, stream) ||
@@ -9095,7 +9127,7 @@ bool dispatch_quantized_gemv_group(
       x.offset() % x.itemsize() != 0) {
     return false;
   }
-  if (token_route && outgate != nullptr) {
+  if (token_route && (outgate != nullptr || norm != nullptr)) {
     return false;
   }
   const int k = x.shape(-1);
@@ -9253,6 +9285,10 @@ bool dispatch_quantized_gemv_group(
     // references stay valid.
     outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
   }
+  if (norm != nullptr) {
+    // The deleted RMSNorm's output materializes the same way.
+    norm->x.set_data(allocator().malloc(norm->x.nbytes()));
+  }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
     // so their retained references stay valid (their only readers
@@ -9360,7 +9396,15 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
-  auto kernel = outgate != nullptr
+  if (norm != nullptr) {
+    params.alpha = norm->eps;
+    bindings[kQmmVecMultiBindings] = binding(norm->x_raw);
+    bindings[kQmmVecMultiBindings + 1] = binding(norm->weight);
+    bindings[kQmmVecMultiBindings + 2] = binding(norm->x);
+  }
+  auto kernel = norm != nullptr
+      ? ComputeKernel::QmmVecQ4MultiNormBF16
+      : outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
       : token_route
       ? (rows > 4

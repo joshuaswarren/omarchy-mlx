@@ -179,6 +179,22 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// Norm prologue fold (MLX_OMARCHY_FUSE_NORM_QMV): the group's shared x is
+// the output of RMSNorm(x_raw, weight) whose consumers are all
+// QuantizedMatmul nodes. The group dispatch recomputes the norm per
+// workgroup, byte identical to the deleted dispatch, and materializes x
+// so retained references stay valid. |x_raw| and |weight| start at element
+// 0, whole and dense; |eps| is the primitive's.
+struct NormPlan {
+  array x_raw;
+  array weight;
+  array x;
+  float eps;
+  // The RMSNorm primitive, kept because the eval loop detaches a skipped
+  // node before the group dispatch runs; a refused dispatch replays it.
+  std::shared_ptr<Primitive> primitive;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -197,7 +213,8 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
+    OutgatePlan* outgate = nullptr,
+    NormPlan* norm = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -249,6 +266,15 @@ bool fused_gemv_enabled(const Device& device);
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; default off on G13 parts other
 // than G13C (see fused_chain.cpp).
 bool outgate_fold_enabled();
+
+// Device side of the norm prologue contract (subgroup column, bindings,
+// the apple norm kernel selected for a 2048-wide row). The planner adopts a
+// NormPlan only where this holds; defined in primitives.cpp.
+bool norm_prologue_supported(const Stream& stream);
+
+// MLX_OMARCHY_FUSE_NORM_QMV=1 folds a decode RMSNorm into the prologue of
+// the Qmm group that consumes it. Read once per process; default off.
+bool fuse_norm_qmv_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off

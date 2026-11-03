@@ -1085,6 +1085,11 @@ enum class ComputeKernel : uint16_t {
   FastRopeHalfSplitF16,
   FastRopeFreqsHalfSplitF16,
   FastRopeFreqsHalfSplitBF16,
+  // Decode norm fold (qmm_vec.comp -DQMM_VEC_NORM): the single-row Qmm
+  // multi column computes the apple RMSNorm of its 2048-wide bf16 x row in
+  // its prologue, bit-exact, and the standalone RMSNorm dispatch is
+  // deleted. Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiNormBF16,
   Count,
 };
 
