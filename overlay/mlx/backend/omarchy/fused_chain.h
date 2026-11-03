@@ -179,20 +179,18 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
-// Norm prologue fold (MLX_OMARCHY_FUSE_NORM_QMV): the group's shared x is
-// the output of RMSNorm(x_raw, weight) whose consumers are all
-// QuantizedMatmul nodes. The group dispatch recomputes the norm per
-// workgroup, byte identical to the deleted dispatch, and materializes x
-// so retained references stay valid. |x_raw| and |weight| start at element
-// 0, whole and dense; |eps| is the primitive's.
+// Norm tail fold (MLX_OMARCHY_FUSE_NORM_QMV): |x_raw| is the Add-epilogue
+// sum row of one group member and the only input of the RMSNorm node whose
+// output is |x|. The last workgroup of the group dispatch runs that norm
+// (byte identical to the deleted dispatch) once every workgroup has stored
+// its columns, and writes |x|, so every reader of |x| is an ordinary
+// consumer. |weight| starts at element 0, whole and dense; |eps| is the
+// primitive's.
 struct NormPlan {
   array x_raw;
   array weight;
   array x;
   float eps;
-  // The RMSNorm primitive, kept because the eval loop detaches a skipped
-  // node before the group dispatch runs; a refused dispatch replays it.
-  std::shared_ptr<Primitive> primitive;
 };
 
 
@@ -267,13 +265,13 @@ bool fused_gemv_enabled(const Device& device);
 // than G13C (see fused_chain.cpp).
 bool outgate_fold_enabled();
 
-// Device side of the norm prologue contract (subgroup column, bindings,
-// the apple norm kernel selected for a 2048-wide row). The planner adopts a
+// Device side of the norm tail contract (subgroup column, bindings, the
+// apple norm kernel selected for a 2048-wide row). The planner adopts a
 // NormPlan only where this holds; defined in primitives.cpp.
-bool norm_prologue_supported(const Stream& stream);
+bool norm_tail_supported(const Stream& stream);
 
-// MLX_OMARCHY_FUSE_NORM_QMV=1 folds a decode RMSNorm into the prologue of
-// the Qmm group that consumes it. Read once per process; default off.
+// MLX_OMARCHY_FUSE_NORM_QMV=1 folds a decode RMSNorm into the tail of the
+// Qmm group that produces its input. Read once per process; default off.
 bool fuse_norm_qmv_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue

@@ -1,13 +1,13 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// MLX_OMARCHY_FUSE_NORM_QMV: the decode RmsNorm folds into the prologue of
-// the next single-row Qmm group. The fused result must be BYTE IDENTICAL to
-// fast::rms_norm followed by quantized_matmul, and must save exactly one
-// dispatch per fused norm. The flag is read once per process, so this binary
-// turns it on before main and builds today's two-kernel reference by
-// evaluating the norm output first (an evaluated leaf has no norm node to
-// fold).
+// MLX_OMARCHY_FUSE_NORM_QMV: the decode RmsNorm folds into the tail of the
+// Qmm group that produces its input (the group member's Add-epilogue sum):
+// the group's last workgroup runs the norm. The fused result must be BYTE
+// IDENTICAL to the separate norm dispatch and must save exactly one dispatch
+// per fused norm. The flag is read once per process, so this binary turns it
+// on before main and builds today's reference by evaluating the sum first (an
+// evaluated leaf has no producer group to fold into).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
@@ -139,6 +139,20 @@ struct Outcome {
   uint64_t dispatches;
 };
 
+struct Case {
+  // Producer group: Qmm over a 2048-wide row (members: the one whose sum
+  // feeds the norm, plus an optional second member), N = norm width.
+  int norm_width = 2048;
+  Dtype dtype = bfloat16;
+  Data kind = Data::normal;
+  bool with_add = true;
+  bool second_member = false;
+  std::vector<int> consumers{2048};
+  bool want_norm = false;
+  bool want_out = false;
+  int expected_saved = 1;
+};
+
 void expect_same_bytes(const array& a, const array& b, const Stream& stream) {
   array a32 = astype(a, float32, stream);
   array b32 = astype(b, float32, stream);
@@ -158,160 +172,173 @@ void expect_same_bytes(const array& a, const array& b, const Stream& stream) {
   CHECK_EQ(bad, 0);
 }
 
-// Today's path: the norm output is evaluated first, so the Qmm group sees an
-// evaluated leaf. Dispatches are summed over both evals.
-Outcome run_reference(
-    const array& x, const array& weight, float eps,
-    const std::vector<Linear>& linears, const Stream& stream) {
+struct Graph {
+  array x_prev;
+  array residual;
+  array norm_weight;
+  Linear producer;
+  Linear other;
+  std::vector<Linear> consumers;
+};
+
+// The residual-stream sum: Qmm(x_prev) + residual, one group member whose
+// Add epilogue is the norm's input (without the Add the norm reads a raw Qmm
+// output and nothing folds).
+array make_sum(const Graph& g, const Case& c, const Stream& s) {
+  array q = project(g.x_prev, g.producer, s);
+  return c.with_add ? add(q, g.residual, s) : q;
+}
+
+// Today's path: the sum is evaluated first, so the norm node reads an
+// evaluated leaf. Dispatches are summed over every eval.
+Outcome run_reference(const Graph& g, const Case& c, const Stream& s) {
   uint64_t before = counters().vk_compute_dispatches.load();
-  array y = fast::rms_norm(x, weight, eps, stream);
+  array sum = make_sum(g, c, s);
+  std::vector<array> pre{sum};
+  std::optional<array> other;
+  if (c.second_member) {
+    other = project(g.x_prev, g.other, s);
+    pre.push_back(*other);
+  }
+  eval(pre);
+  sync_stream(s);
+  array y = fast::rms_norm(sum, g.norm_weight, 1e-6f, s);
   y.eval();
-  sync_stream(stream);
-  std::vector<array> outs{y};
+  sync_stream(s);
+  std::vector<array> outs{sum, y};
   std::vector<array> consumers;
-  for (const Linear& l : linears) {
-    consumers.push_back(project(y, l, stream));
+  for (const Linear& l : g.consumers) {
+    consumers.push_back(project(y, l, s));
   }
   eval(consumers);
-  sync_stream(stream);
-  for (array& c : consumers) {
-    outs.push_back(c);
+  sync_stream(s);
+  outs.insert(outs.end(), consumers.begin(), consumers.end());
+  if (other) {
+    outs.push_back(*other);
   }
   return {outs, counters().vk_compute_dispatches.load() - before};
 }
 
-// Candidate: one eval over the consumers, the norm node is a tape ancestor.
-// `want_norm` also requests the norm output, which the fused dispatch must
-// materialize.
-Outcome run_candidate(
-    const array& x, const array& weight, float eps,
-    const std::vector<Linear>& linears, bool want_norm, const Stream& stream) {
-  array y = fast::rms_norm(x, weight, eps, stream);
+// Candidate: one eval over everything; the norm node is a tape descendant of
+// the producer group's epilogue.
+Outcome run_candidate(const Graph& g, const Case& c, const Stream& s) {
+  array sum = make_sum(g, c, s);
+  std::optional<array> other;
+  if (c.second_member) {
+    other = project(g.x_prev, g.other, s);
+  }
+  array y = fast::rms_norm(sum, g.norm_weight, 1e-6f, s);
   std::vector<array> consumers;
-  for (const Linear& l : linears) {
-    consumers.push_back(project(y, l, stream));
+  for (const Linear& l : g.consumers) {
+    consumers.push_back(project(y, l, s));
   }
   std::vector<array> roots = consumers;
-  if (want_norm) {
+  if (c.want_norm) {
     roots.push_back(y);
+  }
+  if (c.want_out) {
+    roots.push_back(sum);
+  }
+  if (other) {
+    roots.push_back(*other);
   }
   uint64_t before = counters().vk_compute_dispatches.load();
   eval(roots);
-  sync_stream(stream);
+  sync_stream(s);
   uint64_t dispatches = counters().vk_compute_dispatches.load() - before;
-  std::vector<array> outs{y};
-  for (array& c : consumers) {
-    outs.push_back(c);
+  // Outputs not requested by the eval are computed here, after the count.
+  std::vector<array> outs{sum, y};
+  outs.insert(outs.end(), consumers.begin(), consumers.end());
+  if (other) {
+    outs.push_back(*other);
   }
   return {outs, dispatches};
 }
 
-void check_case(
-    int rows, int k, const std::vector<int>& ns, Dtype dtype, Data kind,
-    bool want_norm, int expected_saved) {
+void check_case(Case c) {
   Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
   // The fold needs the 32-wide arithmetic subgroup column. Elsewhere (the
   // x86 software rasterizer reports 8 lanes) the norm stays its own
   // dispatch and only byte identity is asserted.
   if (!fold_available(stream)) {
-    expected_saved = 0;
+    c.expected_saved = 0;
   }
-  set_compile_mode(CompileMode::disabled);
-  array x = make_row(rows, k, dtype, kind, stream);
-  array weight = make_weight(k, dtype, stream);
-  std::vector<Linear> linears;
-  for (int n : ns) {
-    linears.push_back(make_linear(n, k, dtype, stream));
+  Graph g{
+      make_row(1, 2048, c.dtype, c.kind, stream),
+      make_row(1, c.norm_width, c.dtype, c.kind, stream),
+      make_weight(c.norm_width, c.dtype, stream),
+      make_linear(c.norm_width, 2048, c.dtype, stream),
+      make_linear(512, 2048, c.dtype, stream),
+      {}};
+  for (int n : c.consumers) {
+    g.consumers.push_back(make_linear(n, c.norm_width, c.dtype, stream));
   }
-  const float eps = 1e-6f;
-  Outcome ref = run_reference(x, weight, eps, linears, stream);
-  Outcome got = run_candidate(x, weight, eps, linears, want_norm, stream);
+  Outcome ref = run_reference(g, c, stream);
+  Outcome got = run_candidate(g, c, stream);
   CHECK_EQ(
       static_cast<int64_t>(ref.dispatches) -
           static_cast<int64_t>(got.dispatches),
-      expected_saved);
-  for (size_t i = 1; i < ref.outs.size(); ++i) {
-    INFO("consumer ", i);
+      c.expected_saved);
+  REQUIRE_EQ(ref.outs.size(), got.outs.size());
+  for (size_t i = 0; i < ref.outs.size(); ++i) {
+    INFO("output ", i);
     expect_same_bytes(ref.outs[i], got.outs[i], stream);
-  }
-  if (want_norm) {
-    INFO("norm output");
-    expect_same_bytes(ref.outs[0], got.outs[0], stream);
   }
 }
 
 } // namespace
 
-TEST_CASE("fused norm+qmv: one consumer saves one dispatch, bytes identical") {
+TEST_CASE("fused norm tail: the producer group writes the norm, one dispatch saved") {
   if (!compute_available()) {
     return;
   }
   for (Data kind : {Data::normal, Data::outliers, Data::uniform}) {
     for (int n : {2048, 6144}) {
       INFO("n ", n, " data ", static_cast<int>(kind));
-      check_case(1, 2048, {n}, bfloat16, kind, false, 1);
+      Case c;
+      c.kind = kind;
+      c.consumers = {n};
+      check_case(c);
     }
   }
 }
 
-TEST_CASE("fused norm+qmv: q/k/v consumers share one fused group dispatch") {
+TEST_CASE("fused norm tail: several consumers, a second group member, requested outputs") {
   if (!compute_available()) {
     return;
   }
-  check_case(1, 2048, {4096, 512}, bfloat16, Data::normal, false, 1);
-  check_case(1, 2048, {4096, 512, 512}, bfloat16, Data::outliers, false, 1);
+  Case c;
+  c.consumers = {4096, 512, 512};
+  c.kind = Data::outliers;
+  check_case(c);
+  c = Case{};
+  c.second_member = true;
+  check_case(c);
+  c = Case{};
+  c.want_norm = true;
+  c.want_out = true;
+  c.kind = Data::outliers;
+  check_case(c);
 }
 
-TEST_CASE("fused norm+qmv: a requested norm output is materialized") {
+TEST_CASE("fused norm tail: unsupported shapes fall back with identical bytes") {
   if (!compute_available()) {
     return;
   }
-  check_case(1, 2048, {2048}, bfloat16, Data::outliers, true, 1);
-  check_case(1, 2048, {2048, 6144}, bfloat16, Data::normal, true, 1);
-}
-
-TEST_CASE("fused norm+qmv: unsupported shapes fall back with identical bytes") {
-  if (!compute_available()) {
-    return;
-  }
+  Case c;
   // Wider row: the non-Apple tree norm kernel runs, not covered by the fold.
-  check_case(1, 4096, {2048}, bfloat16, Data::normal, false, 0);
+  c.norm_width = 4096;
+  c.expected_saved = 0;
+  check_case(c);
   // Float16 stays on the per-node path.
-  check_case(1, 2048, {2048}, float16, Data::normal, false, 0);
-  // More than one row never takes the single-row group.
-  check_case(2, 2048, {2048}, bfloat16, Data::normal, false, 0);
-}
-
-TEST_CASE("fused norm+qmv: a non-Qmm consumer of the norm output blocks the fold") {
-  if (!compute_available()) {
-    return;
-  }
-  Stream stream = gpu_stream();
-  set_compile_mode(CompileMode::disabled);
-  array x = make_row(1, 2048, bfloat16, Data::normal, stream);
-  array weight = make_weight(2048, bfloat16, stream);
-  Linear l = make_linear(2048, 2048, bfloat16, stream);
-  auto build = [&](bool leaf) {
-    array y = fast::rms_norm(x, weight, 1e-6f, stream);
-    if (leaf) {
-      y.eval();
-      sync_stream(stream);
-    }
-    array out = project(y, l, stream);
-    array side = multiply(y, array(2.0f, bfloat16), stream);
-    return std::vector<array>{out, side};
-  };
-  uint64_t before = counters().vk_compute_dispatches.load();
-  auto ref = build(true);
-  eval(ref);
-  sync_stream(stream);
-  uint64_t ref_dispatches = counters().vk_compute_dispatches.load() - before;
-  before = counters().vk_compute_dispatches.load();
-  auto got = build(false);
-  eval(got);
-  sync_stream(stream);
-  uint64_t dispatches = counters().vk_compute_dispatches.load() - before;
-  CHECK_EQ(dispatches, ref_dispatches);
-  expect_same_bytes(ref[0], got[0], stream);
-  expect_same_bytes(ref[1], got[1], stream);
+  c = Case{};
+  c.dtype = float16;
+  c.expected_saved = 0;
+  check_case(c);
+  // The norm reads a raw Qmm output (no Add epilogue): nothing to fold into.
+  c = Case{};
+  c.with_add = false;
+  c.expected_saved = 0;
+  check_case(c);
 }

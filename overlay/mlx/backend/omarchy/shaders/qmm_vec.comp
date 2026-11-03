@@ -90,11 +90,11 @@ uint16_t bf16_store(float value) {
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
 #error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
 #endif
-#if defined(QMM_VEC_NORM) && \
+#if defined(QMM_VEC_NORMTAIL) && \
     (defined(QMM_VEC_OUTGATE) || !defined(USE_BF16) || \
      !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI) || \
      defined(QMM_VEC_TOKENS))
-#error "QMM_VEC_NORM builds on the bf16 subgroup single-token multi column"
+#error "QMM_VEC_NORMTAIL builds on the bf16 subgroup single-token multi column"
 #endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
@@ -130,13 +130,11 @@ uint16_t bf16_store(float value) {
 // instead of reading the product; every other variant reads input_x.
 #if defined(QMM_VEC_OUTGATE)
 #define PROLOGUE_XWORDS(x_base) outgate_quad((x_base) / 8u)
-#elif defined(QMM_VEC_NORM)
-#define PROLOGUE_XWORDS(x_base) norm_row[(x_base) / 8u]
 #else
 #define PROLOGUE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
-#ifndef QMM_VEC_NORM
-#define NORM_PROLOGUE()
+#ifndef QMM_VEC_NORMTAIL
+#define NORM_TAIL()
 #endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
@@ -170,6 +168,11 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // store under the direct-KV flag (bit 12+i), which the host may aim at
 // one token row of a KV cache copy: out_strides[i] base element,
 // in_strides[i] the row gap, matrix_m the head dim.
+#ifdef QMM_VEC_NORMTAIL
+#define SUM_QUALIFIER coherent
+#else
+#define SUM_QUALIFIER writeonly
+#endif
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   uint values[]; \
@@ -186,7 +189,7 @@ layout(set = 0, binding = B + 3, std430) writeonly buffer Output##I { \
 layout(set = 0, binding = B + 4, std430) readonly buffer Addend##I { \
   STORAGE_TYPE values[]; \
 } addend##I; \
-layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
+layout(set = 0, binding = B + 5, std430) SUM_QUALIFIER buffer Sum##I { \
   STORAGE_TYPE values[]; \
 } sum##I;
 QMM_VEC_MULTI_WEIGHT(0, 1)
@@ -313,34 +316,36 @@ layout(push_constant) uniform Params {
   uint in_strides[4];
   uint out_strides[4];
 } params;
-#if defined(QMM_VEC_NORM)
-// Norm prologue (QMM_VEC_NORM): x = rms_norm(x_raw, weight), the exact
-// arithmetic of fast_norm_apple.comp for a 2048-wide bf16 row, so the
-// result is byte identical to the RMSNorm dispatch this prologue deletes.
-// That kernel runs 256 virtual threads; thread v sums the squares of its
-// eight contiguous elements in order (precise, no FMA), a 32-lane subgroupAdd
-// per virtual subgroup, then subgroup 0 adds the eight partials. This main
-// has 128 threads, so thread t plays virtual threads t and t + 128 (virtual
-// subgroups s and s + 4) with the same lane order and the same adds.
-// Every workgroup recomputes the scale; workgroup 0 stores the normalized
-// row so retained references to the deleted RMSNorm output stay valid
-// (bindings 25-27; the row, weight and output start at element 0, the host
-// refuses otherwise). The scale comes from params.alpha (eps) and the
-// divisor from params.matrix_k.
+#if defined(QMM_VEC_NORMTAIL)
+// Norm tail (QMM_VEC_NORMTAIL): the group's Add-epilogue sum row feeds an
+// RMSNorm whose dispatch this tail deletes. Every workgroup finishes its
+// columns, fences its stores (memoryBarrierBuffer), and counts itself in with
+// one atomicAdd; the workgroup that sees params.count - 1 arrivals is last,
+// so every other workgroup's stores are complete, and it alone runs the norm
+// (fast_norm_apple.comp for a 2048-wide bf16 row, byte identical: 256 virtual
+// threads, each summing the squares of eight contiguous elements in order
+// with precise adds, a 32-lane subgroupAdd per virtual subgroup, then
+// subgroup 0 adds the eight partials). This main has 128 threads, so thread
+// t plays virtual threads t and t + 128 (virtual subgroups s and s + 4) with
+// the same lane order and the same adds. The counter is a fresh zeroed buffer
+// per dispatch. Bindings 25-27: the norm weight, the normalized output, the
+// counter. The sum row is the epilogue array of member params.aux_offset,
+// read through that member's sum binding; the row and weight start at
+// element 0 (the host refuses otherwise). eps arrives in params.alpha.
 #if SLOTS_PER_GROUP != 4 || ROWS_PER_SLOT != 2
-#error "QMM_VEC_NORM plays 256 virtual norm threads on 128 real ones"
+#error "QMM_VEC_NORMTAIL plays 256 virtual norm threads on 128 real ones"
 #endif
-layout(set = 0, binding = 25, std430) readonly buffer NormRaw {
-  uvec4 values[];
-} norm_raw;
-layout(set = 0, binding = 26, std430) readonly buffer NormWeight {
+layout(set = 0, binding = 25, std430) readonly buffer NormWeight {
   uvec4 values[];
 } norm_weight;
-layout(set = 0, binding = 27, std430) writeonly buffer NormOut {
+layout(set = 0, binding = 26, std430) writeonly buffer NormOut {
   uvec4 values[];
 } norm_out;
+layout(set = 0, binding = 27, std430) coherent buffer NormCounter {
+  uint value;
+} norm_counter;
 shared float norm_partial[8];
-shared uvec4 norm_row[256];
+shared uint norm_arrival;
 float norm_lane_squares(uvec4 q) {
   precise float reg_sq = 0.0;
   for (uint i = 0u; i < 4u; ++i) {
@@ -367,15 +372,40 @@ uvec4 norm_quad(uvec4 x, uvec4 w, float scale) {
       norm_word(x.x, w.x, scale), norm_word(x.y, w.y, scale),
       norm_word(x.z, w.z, scale), norm_word(x.w, w.w, scale));
 }
-// The normalized row lands in shared memory once per workgroup (each of the
-// 128 threads takes quads t and t + 128), so the four column slots read it
-// instead of each renormalizing every quad they visit.
-void norm_prologue() {
+// The sum row is the Add-epilogue output of the member params.aux_offset
+// names, read back through that member's coherent sum binding (the host
+// binds the epilogue array there), eight bf16 values per quad.
+uint norm_sum_word(uint member, uint e) {
+  uint lo;
+  uint hi;
+  if (member == 0u) {
+    lo = uint(sum0.values[e]);
+    hi = uint(sum0.values[e + 1u]);
+  } else if (member == 1u) {
+    lo = uint(sum1.values[e]);
+    hi = uint(sum1.values[e + 1u]);
+  } else if (member == 2u) {
+    lo = uint(sum2.values[e]);
+    hi = uint(sum2.values[e + 1u]);
+  } else {
+    lo = uint(sum3.values[e]);
+    hi = uint(sum3.values[e + 1u]);
+  }
+  return lo | (hi << 16u);
+}
+uvec4 norm_raw_quad(uint quad_index) {
+  uint e = quad_index * 8u;
+  uint m = params.aux_offset;
+  return uvec4(
+      norm_sum_word(m, e), norm_sum_word(m, e + 2u),
+      norm_sum_word(m, e + 4u), norm_sum_word(m, e + 6u));
+}
+void norm_tail() {
   uint thread = gl_LocalInvocationID.x;
   uint sub_id = thread / 32u;
   uint lane = thread % 32u;
-  uvec4 xa = norm_raw.values[thread];
-  uvec4 xb = norm_raw.values[thread + 128u];
+  uvec4 xa = norm_raw_quad(thread);
+  uvec4 xb = norm_raw_quad(thread + 128u);
   float sub_low = subgroupAdd(norm_lane_squares(xa));
   float sub_high = subgroupAdd(norm_lane_squares(xb));
   if (lane == 0u) {
@@ -391,20 +421,27 @@ void norm_prologue() {
     }
   }
   barrier();
-  float mean_square = norm_partial[0] / float(params.matrix_k);
+  float mean_square = norm_partial[0] / 2048.0;
   float scale = inversesqrt(mean_square + params.alpha);
-  uvec4 ya = norm_quad(xa, norm_weight.values[thread], scale);
-  uvec4 yb = norm_quad(xb, norm_weight.values[thread + 128u], scale);
-  norm_row[thread] = ya;
-  norm_row[thread + 128u] = yb;
-  if (gl_WorkGroupID.x == 0u) {
-    norm_out.values[thread] = ya;
-    norm_out.values[thread + 128u] = yb;
+  norm_out.values[thread] =
+      norm_quad(xa, norm_weight.values[thread], scale);
+  norm_out.values[thread + 128u] =
+      norm_quad(xb, norm_weight.values[thread + 128u], scale);
+}
+void norm_tail_gate() {
+  memoryBarrierBuffer();
+  barrier();
+  if (gl_LocalInvocationID.x == 0u) {
+    norm_arrival = atomicAdd(norm_counter.value, 1u);
   }
   memoryBarrierShared();
   barrier();
+  if (norm_arrival == params.count - 1u) {
+    memoryBarrierBuffer();
+    norm_tail();
+  }
 }
-#define NORM_PROLOGUE() norm_prologue();
+#define NORM_TAIL() norm_tail_gate();
 #endif
 
 #ifndef USE_SUBGROUP
@@ -1158,7 +1195,6 @@ void main() {
   uint s_base = 0u;
   uint b_base = 0u;
   uint x_row = params.lhs_offset;
-  NORM_PROLOGUE()
   precise float acc[ROWS_PER_SLOT];
   float total[ROWS_PER_SLOT];
   if ((params.flags & 65536u) != 0u) {
@@ -1220,6 +1256,7 @@ void main() {
       }
     }
   }
+  NORM_TAIL()
 }
 #else
 void main() {

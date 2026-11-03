@@ -30,7 +30,7 @@ inline constexpr uint32_t kComputeBindingFloor = 4;
 // Twenty-five slots fit the widest kernel today: the multi-weight decode
 // GEMV binds x plus, per weight, packed words, scales, biases, the
 // output, an Add addend, and the Add output (kQmmVecMultiBindings); the
-// out-gate prologue variant adds three more. The triple-index scatter
+// out-gate prologue and norm tail variants add three more. The triple-index scatter
 // needs six.
 inline constexpr uint32_t kComputeBindingBudget = 28;
 // Bindings of the QmmVecQ4Multi kernels and their per-weight stride.
@@ -1085,11 +1085,12 @@ enum class ComputeKernel : uint16_t {
   FastRopeHalfSplitF16,
   FastRopeFreqsHalfSplitF16,
   FastRopeFreqsHalfSplitBF16,
-  // Decode norm fold (qmm_vec.comp -DQMM_VEC_NORM): the single-row Qmm
-  // multi column computes the apple RMSNorm of its 2048-wide bf16 x row in
-  // its prologue, bit-exact, and the standalone RMSNorm dispatch is
-  // deleted. Appended to keep profile kernel ids stable.
-  QmmVecQ4MultiNormBF16,
+  // Decode norm fold (qmm_vec.comp -DQMM_VEC_NORMTAIL): the last workgroup
+  // of the single-row Qmm multi column runs the apple RMSNorm over the
+  // group's 2048-wide bf16 Add-epilogue sum row, bit-exact, and the
+  // standalone RMSNorm dispatch is deleted. Appended to keep profile kernel
+  // ids stable.
+  QmmVecQ4MultiNormTailBF16,
   Count,
 };
 

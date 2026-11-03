@@ -9016,11 +9016,11 @@ bool input_ready(const array& value, const Stream& stream) {
 
 } // namespace
 
-// Device side of the norm prologue contract, shared by the planner (which
-// adopts a plan only where this holds) and the dispatch: the bf16 subgroup
-// multi column with three extra bindings, and the apple RMSNorm kernel the
-// prologue reproduces being the one the deleted dispatch would have picked.
-bool norm_prologue_supported(const Stream& stream) {
+// Device side of the norm tail contract, shared by the planner (which adopts
+// a plan only where this holds) and the dispatch: the bf16 subgroup multi
+// column with three extra bindings, and the apple RMSNorm kernel the tail
+// reproduces being the one the deleted dispatch would have picked.
+bool norm_tail_supported(const Stream& stream) {
   auto& encoder = get_command_encoder(stream);
   const auto& caps = encoder.device().capabilities();
   return q4_word_enabled() &&
@@ -9105,21 +9105,6 @@ bool dispatch_quantized_gemv_group(
         x.ndim() < 2 || x.shape(-2) != 1) {
       return false;
     }
-  } else if (norm != nullptr) {
-    // The prologue deletes the RMSNorm that produced x (never
-    // evaluated), so x's readiness checks do not apply; the kernel
-    // reproduces fast_norm_apple.comp for one 2048-wide bf16 row, which
-    // is the only RMSNorm the dispatch it deletes could have been.
-    const array& raw = norm->x_raw;
-    const array& weight = norm->weight;
-    if (dtype != bfloat16 || !norm_prologue_supported(stream) ||
-        norm->x.id() != x.id() || x.dtype() != dtype || x.ndim() < 2 ||
-        x.shape(-2) != 1 || x.shape(-1) != 2048 ||
-        raw.dtype() != dtype || weight.dtype() != dtype ||
-        !whole_dense(raw, 2048u) || !whole_dense(weight, 2048u) ||
-        !input_ready(raw, stream) || !input_ready(weight, stream)) {
-      return false;
-    }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
       x.ndim() < 2 || (!token_route && x.shape(-2) != 1) ||
       !input_ready(x, stream) ||
@@ -9127,7 +9112,12 @@ bool dispatch_quantized_gemv_group(
       x.offset() % x.itemsize() != 0) {
     return false;
   }
-  if (token_route && (outgate != nullptr || norm != nullptr)) {
+  if (token_route && outgate != nullptr) {
+    return false;
+  }
+  if (norm != nullptr &&
+      (token_route || outgate != nullptr || dtype != bfloat16 ||
+       !norm_tail_supported(stream))) {
     return false;
   }
   const int k = x.shape(-1);
@@ -9201,6 +9191,27 @@ bool dispatch_quantized_gemv_group(
     }
     params.shape[i] = static_cast<uint32_t>(n);
     total_groups += (static_cast<uint32_t>(n) + 7u) / 8u;
+  }
+  // Norm tail: the RMSNorm input must be one member's Add-epilogue sum (a
+  // fresh whole row this dispatch allocates), 2048 wide, and the weight an
+  // evaluated whole row. The group must be the plain bf16 subgroup column.
+  size_t norm_member = members.size();
+  if (norm != nullptr) {
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (members[i].epilogue &&
+          members[i].epilogue->id() == norm->x_raw.id() &&
+          !members[i].sum_window) {
+        norm_member = i;
+      }
+    }
+    if (norm_member == members.size() || swiglu_out ||
+        members[norm_member].node.size() != 2048u ||
+        norm->x_raw.dtype() != dtype || norm->weight.dtype() != dtype ||
+        norm->x.dtype() != dtype || norm->x.size() != 2048u ||
+        !whole_dense(norm->weight, 2048u) ||
+        !input_ready(norm->weight, stream)) {
+      return false;
+    }
   }
   if (swiglu_out &&
       (params.shape[0] != params.shape[1] || swiglu_out->dtype() != dtype ||
@@ -9279,6 +9290,7 @@ bool dispatch_quantized_gemv_group(
   // Contract satisfied: allocate every output, then bind. Unused
   // weight slots bind the first member's output so every binding the
   // shader declares is a valid buffer.
+  std::optional<array> norm_counter;
   if (outgate != nullptr) {
     // The deleted Multiply's output materializes: workgroup 0 of the
     // dispatch writes the product it recomputes, so retained
@@ -9286,8 +9298,14 @@ bool dispatch_quantized_gemv_group(
     outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
   }
   if (norm != nullptr) {
-    // The deleted RMSNorm's output materializes the same way.
+    // The deleted RMSNorm's output is written by the last workgroup. Its
+    // arrival counter is a fresh zeroed buffer held until the dispatch
+    // completes.
     norm->x.set_data(allocator().malloc(norm->x.nbytes()));
+    norm_counter.emplace(Shape{64}, uint32, nullptr, std::vector<array>{});
+    norm_counter->set_data(allocator().malloc(norm_counter->nbytes()));
+    std::memset(norm_counter->data<uint8_t>(), 0, norm_counter->nbytes());
+    encoder.add_temporary(*norm_counter);
   }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
@@ -9397,14 +9415,24 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
   if (norm != nullptr) {
+    // The sum row is read through the norm member's own sum binding
+    // (aux_offset names the member); bindings 25-27 carry the weight, the
+    // normalized output and the arrival counter.
     params.alpha = norm->eps;
-    bindings[kQmmVecMultiBindings] = binding(norm->x_raw);
-    bindings[kQmmVecMultiBindings + 1] = binding(norm->weight);
-    bindings[kQmmVecMultiBindings + 2] = binding(norm->x);
+    params.aux_offset = static_cast<uint32_t>(norm_member);
+    bindings[kQmmVecMultiBindings] = binding(norm->weight);
+    bindings[kQmmVecMultiBindings + 1] = binding(norm->x);
+    bindings[kQmmVecMultiBindings + 2] = binding(*norm_counter);
+    encoder.dispatch_compute(
+        ComputeKernel::QmmVecQ4MultiNormTailBF16,
+        bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
+    return true;
   }
-  auto kernel = norm != nullptr
-      ? ComputeKernel::QmmVecQ4MultiNormBF16
-      : outgate != nullptr
+  auto kernel = outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
       : token_route
       ? (rows > 4
