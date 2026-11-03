@@ -1,8 +1,6 @@
 # v0.7.36 release receipt
 
-DRAFT of the receipt: written while the release is still a draft. Rows marked PENDING are not yet run; nothing here claims them.
-
-Tag `v0.7.36` at `886ff2d1e4ec541d1420003927c8bc9a8670285e` (main; both CI workflows completed with success at that commit). Not published yet.
+Tag `v0.7.36` at `886ff2d1e4ec541d1420003927c8bc9a8670285e` (main; both CI workflows completed with success at that commit). Published 2026-11-03T06:22:45Z, latest, not a prerelease.
 
 ## Assets
 
@@ -17,7 +15,7 @@ Tag `v0.7.36` at `886ff2d1e4ec541d1420003927c8bc9a8670285e` (main; both CI workf
 
 The x86_64 wheel was built on the x86_64 development machine from a detached checkout of the tag commit, using the pinned whole-encoder bundle copied from the aarch64 build host and checked against the pin. The aarch64 wheel and the vendored wheel set were built on a 16-inch M1 Max from a clean detached checkout of the tag commit (about 4 minutes for the wheel).
 
-`python3 scripts/verify-release-assets.py v0.7.36` printed `VERIFIED: every uploaded asset matches what the release claims` on the draft once, after the upload. PENDING: the run after the notes are final, and the run on the published release.
+`python3 scripts/verify-release-assets.py v0.7.36` printed `VERIFIED: every uploaded asset matches what the release claims` on the draft after the upload, on the draft again after the notes were final (clean worktree at the tag commit), and on the published release, each time with the same result.
 
 ## Gates
 
@@ -47,7 +45,7 @@ Kernels: 13-inch M1 `7.1.12-2-20261013.18-sep-ARCH`, 16-inch M1 Max `7.1.12-2-20
 
 ## Attempts before these results
 
-All of these were failures of my battery or its harness, not of the release. The first-attempt logs are kept.
+All of these were failures of my battery or its harness, not of the release. The first-attempt logs are kept. The release notes were checked against this receipt before publishing; two claims in the notes draft were corrected (which gates ran on which machine, and a paragraph about pull request 331 that is not in this release).
 
 - **g10 on the 16-inch M1 Max, two attempts, both failed.** `PRIMED false after 90.8s (limit 90s)` with load average 1.80 at the start, then `PRIMED false after 91.2s (limit 90s)` with 1.29, each followed by `SPEAK_FAILED no audio event`. I first read this as primer-time variance; that was wrong. An instrumented run of the same flow (driver wait raised to 300 s, voice status logged every 20 s) showed the voice engine never usable: accelerator available, assets verified, dependencies missing (`mlx_audio, misaki, num2words, spacy, en-core-web-sm, phonemizer, espeakng-loader`), and `/api/speak` answering `voice dependencies unsatisfied`. g8 installs those packages into the shared gate home, and `run-all.sh` runs g8 before g10 and g12; I ran g10 first in a home where g8 had not run. The corrected run, g8 then g10 then g12 in the documented order, passed (rows above). Issue 335 tracks making g10 and g12 name the missing precondition.
 - **g10 on the 13-inch M1.** I queued it there to split host from release. It never started: the server refused the 9B pair on memory (above) and the driver waited its 1200 seconds for a server that had exited. It used the 13-inch GPU slot for about 20 minutes.
