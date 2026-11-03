@@ -889,3 +889,103 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
   }
 
 }
+
+TEST_CASE("chunked composed causal prefill is bit-identical to the whole pass") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& chunk_caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(chunk_caps.cooperative_matrix_f32_8 && chunk_caps.subgroup_size == 32u)) {
+    return;  // the chunked route lives in the bf16-direct coopmat composition
+  }
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  set_flash_enabled(false);
+  struct EnvRestore {
+    ~EnvRestore() {
+      unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+      set_flash_enabled(true);
+    }
+  } restore;
+
+  // Causal rows are independent too: a chunk starting at row r sees the keys up
+  // to causal_offset + r, so the chunk carries that offset into the QK matmul,
+  // the causal softmax and the PV matmul. The cap below gives 64-row chunks.
+  // length_q 200 ends in an 8-row tail chunk; length_k 320 over 128 queries is
+  // a cached prefix (offset 192, the chunked-prefill shape); batch 2 exercises
+  // the output's batch stride.
+  struct Case {
+    int batch;
+    int heads;
+    int kv_heads;
+    int length_q;
+    int length_k;
+  };
+  const Case cases[] = {
+      {1, 8, 8, 192, 192}, // MHA control, three equal chunks
+      {1, 8, 2, 192, 192}, // GQA repeats = 4
+      {1, 8, 2, 200, 200}, // GQA with a ragged tail chunk
+      {1, 8, 2, 128, 320}, // cached prefix: causal offset 192
+      {2, 8, 2, 200, 200}, // GQA, batch 2, ragged tail chunk
+  };
+  for (const auto& c : cases) {
+    array q = make_bf16({c.batch, c.heads, c.length_q, kHd}, 401 + c.heads, stream);
+    array k = make_bf16({c.batch, c.kv_heads, c.length_k, kHd}, 402 + c.heads, stream);
+    array v = make_bf16({c.batch, c.kv_heads, c.length_k, kHd}, 403 + c.heads, stream);
+    const uint64_t chunk_denom = static_cast<uint64_t>(c.batch) * c.heads *
+        c.length_k * sizeof(float);
+    unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    const uint64_t whole_dispatches =
+        dispatches_for([&] { return sdpa_causal(q, k, v, stream); }, stream);
+    std::vector<float> whole = flat(sdpa_causal(q, k, v, stream), stream);
+    setenv(
+        "MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES",
+        std::to_string(chunk_denom * 64).c_str(),
+        1);
+    const uint64_t chunked_dispatches =
+        dispatches_for([&] { return sdpa_causal(q, k, v, stream); }, stream);
+    std::vector<float> chunked = flat(sdpa_causal(q, k, v, stream), stream);
+    unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    // Without this the equality below passes trivially when both runs take the
+    // unchunked route; the chunked route issues several dispatches per chunk.
+    CHECK_MESSAGE(
+        chunked_dispatches > whole_dispatches,
+        "causal chunk route not taken: batch ",
+        c.batch,
+        " heads ",
+        c.heads,
+        "/",
+        c.kv_heads,
+        " q ",
+        c.length_q,
+        " k ",
+        c.length_k,
+        ": dispatches whole ",
+        whole_dispatches,
+        " chunked ",
+        chunked_dispatches);
+    REQUIRE_EQ(chunked.size(), whole.size());
+    size_t differing = 0;
+    for (size_t i = 0; i < whole.size(); ++i) {
+      differing += chunked[i] != whole[i] ? 1 : 0;
+    }
+    CHECK_MESSAGE(
+        differing == 0,
+        "chunked vs whole causal composed, batch ",
+        c.batch,
+        " heads ",
+        c.heads,
+        "/",
+        c.kv_heads,
+        " q ",
+        c.length_q,
+        " k ",
+        c.length_k,
+        ": ",
+        differing,
+        " of ",
+        whole.size(),
+        " elements differ");
+  }
+}
