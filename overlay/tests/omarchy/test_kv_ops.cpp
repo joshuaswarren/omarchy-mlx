@@ -217,6 +217,13 @@ TEST_CASE("producer-direct KV write is bit-exact against the merged pair") {
     skip("Vulkan device lacks required FP16 shader and storage features.");
     return;
   }
+  // The merged pair comes from the fused GEMV groups; pin that route on,
+  // since its unset default is off on some parts
+  // (omarchy::fused_gemv_off_default_part).
+  struct FusedGemvOn {
+    FusedGemvOn() { setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1); }
+    ~FusedGemvOn() { unsetenv("MLX_OMARCHY_FUSED_GEMV"); }
+  } fused_gemv_on;
 
   // Caches [1, 2, 8, 4]: two kv heads, eight slots, head dim 4. Rows
   // 0-2 hold distinct f16-exact values; the append targets row 3.
