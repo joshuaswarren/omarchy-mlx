@@ -6621,3 +6621,281 @@ TEST_CASE("gather_qmm bf16 2-bit decode is opt-in and within 1.5 bf16 steps of f
     }
   }
 }
+
+// Scalar-FMA bf16 Q4 prefill (shaders/qmm_fma.comp -DUSE_BF16): where the
+// cooperative-matrix qmm route is not reachable for the call (the same
+// predicate as QuantizedMatmul::eval_gpu: fp32 8x8x8 matrix, subgroup size
+// 32, 4 KiB of staging shared memory, MLX_OMARCHY_NO_COOPMAT unset), a
+// multi-row bf16 4-bit/group-64 transposed quantized_matmul runs
+// QmmPrefillFmaBF16 below 1024 rows and QmmPrefillFmaPreciseBF16 from 1024
+// rows; with MLX_OMARCHY_QMM_TILE_RB=0 the same call runs the original
+// QmmTileBF16. Both arms stay inside the tile kernel's derived host
+// bound (k-step f32 rounding plus one bf16 storage rounding). Shapes cover
+// a 64-column tail (n = 130) and three groups per row.
+TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative route") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_reachable = caps.cooperative_matrix_f32_8 &&
+      caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      (32u * 16u + 16u * 32u) * sizeof(float) <=
+          caps.max_compute_shared_memory_size;
+  std::cout << "[provenance] device=" << caps.device_name
+            << " cooperative_matrix_f32_8="
+            << (caps.cooperative_matrix_f32_8 ? 1 : 0)
+            << " subgroup_size=" << caps.subgroup_size
+            << " no_coopmat_flag="
+            << (omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") ? 1 : 0)
+            << " coopmat_reachable=" << (coopmat_reachable ? 1 : 0) << "\n";
+  if (coopmat_reachable) {
+    skip("the cooperative-matrix qmm route serves bf16 prefill on this device");
+    return;
+  }
+  if (omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA") ||
+      omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA_BF16")) {
+    skip("the scalar-FMA bf16 route is turned off");
+    return;
+  }
+  unsetenv("MLX_OMARCHY_QMM_TILE");
+  unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4, k = 192, n = 130;
+  std::mt19937 gen(20261101);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  HostQuantizedWeights rounded = host;
+  rounded.scales = round_trip(stream, host.scales, bfloat16);
+  rounded.biases = round_trip(stream, host.biases, bfloat16);
+  array w_words(host.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+  for (int m : {5, 77, 1030}) {
+    std::vector<float> x_values(static_cast<size_t>(m) * k);
+    for (auto& v : x_values) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_values, bfloat16);
+    std::vector<float> expected =
+        host_quantized_matmul(rounded, x_rt, m, n, k, group_size, bits);
+    array x(x_rt.begin(), Shape{m, k}, bfloat16);
+    eval({x, w_words, scales, biases});
+    omarchy::get_command_encoder(stream).synchronize();
+    struct Arm {
+      const char* rb;
+      omarchy::ComputeKernel kernel;
+    };
+    const Arm arms[] = {
+        {nullptr,
+         m >= 1024 ? omarchy::ComputeKernel::QmmPrefillFmaPreciseBF16
+                   : omarchy::ComputeKernel::QmmPrefillFmaBF16},
+        {"0", omarchy::ComputeKernel::QmmTileBF16},
+    };
+    std::vector<std::vector<float>> results;
+    for (const auto& arm : arms) {
+      if (arm.rb) {
+        setenv("MLX_OMARCHY_QMM_TILE_RB", arm.rb, 1);
+      } else {
+        unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+      }
+      array out = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      out.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const int64_t dispatched =
+          omarchy::trace::counters().last_dispatched_kernel.load();
+      INFO("m=" << m << " n=" << n << " k=" << k
+                << " rb=" << (arm.rb ? arm.rb : "unset"));
+      CHECK_EQ(dispatched, static_cast<int64_t>(arm.kernel));
+      std::vector<float> got = readback_f32(stream, out);
+      REQUIRE_EQ(got.size(), expected.size());
+      double m_max = 0.0;
+      for (float v : got) {
+        REQUIRE(std::isfinite(v));
+        m_max = std::max(m_max, std::fabs(static_cast<double>(v)));
+      }
+      const double m_bound = std::max(m_max * 2.0, 1.0);
+      const double bound =
+          (3.0 * k + 1.0) * m_bound * std::ldexp(1.0, -23) +
+          m_bound * std::ldexp(1.0, -8);
+      double max_diff = 0.0;
+      for (size_t i = 0; i < expected.size(); ++i) {
+        max_diff = std::max(
+            max_diff, std::fabs(static_cast<double>(got[i]) - expected[i]));
+      }
+      std::cout << "[qmm-fma-bf16] m=" << m << " kernel="
+                << static_cast<int>(arm.kernel) << " max_diff=" << max_diff
+                << " bound=" << bound << "\n";
+      CHECK(max_diff <= bound);
+      results.push_back(std::move(got));
+    }
+    size_t differ = 0;
+    for (size_t i = 0; i < results[0].size(); ++i) {
+      differ += results[0][i] != results[1][i] ? 1 : 0;
+    }
+    std::cout << "[qmm-fma-bf16] m=" << m << " fma vs tile: " << differ
+              << " of " << results[0].size() << " outputs differ\n";
+  }
+  unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+}
+
+TEST_CASE("bf16 linear-layer FMA over the cooperative matrix: the part rule") {
+  // Pure and per call: alternating parts in either order never inherits
+  // an earlier answer.
+  for (int round = 0; round < 2; ++round) {
+    CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M4 (G16G B1)"));
+    CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  }
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(
+      omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(
+      omarchy::matmul_bf16_fma_over_coopmat_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part(""));
+}
+
+// The rule through dispatch_matmul: on a part of
+// matmul_bf16_fma_over_coopmat_part whose driver exposes the cooperative
+// matrix, a bf16 linear layer (row-major lhs, transposed rhs) runs
+// MatmulBf16Fma, and the non-transposed orientation keeps
+// MatmulBF16Coopmat. Small-integer operands keep every partial sum exact,
+// so both routes must equal the host reference after one bf16 rounding.
+TEST_CASE("bf16 linear-layer matmul takes the FMA kernel over the cooperative matrix on G16G") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  std::cout << "[provenance] device=" << caps.device_name
+            << " cooperative_matrix_f32_8="
+            << (caps.cooperative_matrix_f32_8 ? 1 : 0)
+            << " subgroup_size=" << caps.subgroup_size << "\n";
+  if (!omarchy::matmul_bf16_fma_over_coopmat_part(caps.device_name) ||
+      !caps.cooperative_matrix_f32_8 || caps.subgroup_size != 32 ||
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") ||
+      omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_FMA")) {
+    skip("needs a G16G part with the cooperative matrix and both routes on");
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int m = 64, k = 256, n = 128;
+  std::mt19937 rng(20261101);
+  std::uniform_int_distribution<int> small(-4, 4);
+  auto integers = [&](size_t count) {
+    std::vector<float> values(count);
+    for (auto& v : values) {
+      v = static_cast<float>(small(rng));
+    }
+    return values;
+  };
+  auto a_values = integers(static_cast<size_t>(m) * k);
+  auto b_values = integers(static_cast<size_t>(k) * n); // (k, n)
+  std::vector<float> expected(static_cast<size_t>(m) * n);
+  {
+    auto sums = host_matmul_bf16_reference(a_values, b_values, 1, m, k, n);
+    for (size_t i = 0; i < sums.size(); ++i) {
+      expected[i] = host_bf16_round(sums[i]);
+    }
+  }
+  std::vector<float> b_t_values(b_values.size()); // (n, k)
+  for (int r = 0; r < k; ++r) {
+    for (int c = 0; c < n; ++c) {
+      b_t_values[static_cast<size_t>(c) * k + r] =
+          b_values[static_cast<size_t>(r) * n + c];
+    }
+  }
+  array a = astype(array(a_values.begin(), Shape{m, k}, float32), bfloat16, stream);
+  array b = astype(array(b_values.begin(), Shape{k, n}, float32), bfloat16, stream);
+  array w = astype(array(b_t_values.begin(), Shape{n, k}, float32), bfloat16, stream);
+  eval({a, b, w});
+  omarchy::get_command_encoder(stream).synchronize();
+  struct Leg {
+    const char* label;
+    array rhs;
+    omarchy::ComputeKernel kernel;
+  };
+  const Leg legs[] = {
+      {"linear a @ w.T", transpose(w, {1, 0}, stream),
+       omarchy::ComputeKernel::MatmulBf16Fma},
+      {"a @ b", b, omarchy::ComputeKernel::MatmulBF16Coopmat},
+  };
+  for (const auto& leg : legs) {
+    array out = matmul(a, leg.rhs, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t dispatched =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    INFO(leg.label);
+    CHECK_EQ(dispatched, static_cast<int64_t>(leg.kernel));
+    std::vector<float> got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), expected.size());
+    float max_abs_err = 0.0f;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      max_abs_err = std::max(max_abs_err, std::fabs(got[i] - expected[i]));
+    }
+    CHECK_EQ(max_abs_err, 0.0f);
+  }
+
+  // Fractional operands on the bf16 grid, both routes, the dense test's
+  // documented anchor bound against the double reference:
+  // |got - exact| <= P * (k / 8 * 4.5 * 2^-23 + 2^-7) + 2^-7, P the largest
+  // partial-sum magnitude.
+  std::uniform_real_distribution<float> frac(-2.0f, 2.0f);
+  auto grid = [&](size_t count) {
+    std::vector<float> values(count);
+    for (auto& v : values) {
+      v = host_bf16_round(frac(rng));
+    }
+    return values;
+  };
+  auto fa = grid(static_cast<size_t>(m) * k);
+  auto fb = grid(static_cast<size_t>(k) * n);
+  auto sums = host_matmul_bf16_reference(fa, fb, 1, m, k, n);
+  float partial_max = 0.0f;
+  for (float v : sums) {
+    partial_max = std::max(partial_max, std::fabs(v));
+  }
+  const float bound = partial_max *
+          (static_cast<float>(k / 8) * 4.5f * 0x1p-23f + 2.0f / 256.0f) +
+      2.0f / 256.0f;
+  std::vector<float> fb_t(fb.size());
+  for (int r = 0; r < k; ++r) {
+    for (int c = 0; c < n; ++c) {
+      fb_t[static_cast<size_t>(c) * k + r] = fb[static_cast<size_t>(r) * n + c];
+    }
+  }
+  array fa_dev = astype(array(fa.begin(), Shape{m, k}, float32), bfloat16, stream);
+  array fb_dev = astype(array(fb.begin(), Shape{k, n}, float32), bfloat16, stream);
+  array fw_dev = astype(array(fb_t.begin(), Shape{n, k}, float32), bfloat16, stream);
+  eval({fa_dev, fb_dev, fw_dev});
+  omarchy::get_command_encoder(stream).synchronize();
+  const std::pair<array, omarchy::ComputeKernel> frac_legs[] = {
+      {transpose(fw_dev, {1, 0}, stream), omarchy::ComputeKernel::MatmulBf16Fma},
+      {fb_dev, omarchy::ComputeKernel::MatmulBF16Coopmat},
+  };
+  for (const auto& [rhs, kernel] : frac_legs) {
+    array out = matmul(fa_dev, rhs, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    CHECK_EQ(omarchy::trace::counters().last_dispatched_kernel.load(),
+             static_cast<int64_t>(kernel));
+    std::vector<float> got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), sums.size());
+    float max_err = 0.0f;
+    for (size_t i = 0; i < sums.size(); ++i) {
+      REQUIRE(std::isfinite(got[i]));
+      max_err = std::max(max_err, std::fabs(got[i] - sums[i]));
+    }
+    std::cout << "[matmul-bf16-route] kernel=" << static_cast<int>(kernel)
+              << " fractional max_err=" << max_err << " bound=" << bound
+              << "\n";
+    CHECK(max_err <= bound);
+  }
+}

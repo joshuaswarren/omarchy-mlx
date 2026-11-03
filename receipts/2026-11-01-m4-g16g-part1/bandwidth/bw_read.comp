@@ -1,0 +1,43 @@
+#version 450
+// Streaming read: grid-stride xor over the source, UNROLL independent loads
+// in flight per iteration, VEC = 1 (uint), 2 (uvec2) or 4 (uvec4) per load.
+// vkbw pushes the buffer size in 32-bit words; the element count is that
+// divided by VEC, so the vec argument given to vkbw cannot change how many
+// bytes are read.
+#ifndef VEC
+#define VEC 4
+#endif
+#ifndef UNROLL
+#define UNROLL 4
+#endif
+#if VEC == 4
+#define T uvec4
+#elif VEC == 2
+#define T uvec2
+#else
+#define T uint
+#endif
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer S { T s[]; };
+layout(set = 0, binding = 1) writeonly buffer O { uint o[]; };
+layout(push_constant) uniform P { uint n; } p;
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  uint stride = gl_NumWorkGroups.x * 256u;
+  uint n = p.n / uint(VEC);
+  T acc = T(0);
+  for (uint i = gid; i < n; i += UNROLL * stride) {
+    T v[UNROLL];
+    for (uint u = 0u; u < UNROLL; ++u)
+      v[u] = s[min(i + u * stride, n - 1u)];
+    for (uint u = 0u; u < UNROLL; ++u)
+      acc ^= v[u];
+  }
+#if VEC == 4
+  o[gid] = acc.x ^ acc.y ^ acc.z ^ acc.w;
+#elif VEC == 2
+  o[gid] = acc.x ^ acc.y;
+#else
+  o[gid] = acc;
+#endif
+}
