@@ -117,6 +117,19 @@ gate_log() { # gate_log <logfile> <line...> — timestamped line to log AND stdo
   printf '%s\n' "$*" | tee -a "$f"
 }
 
+# gate_cmake_configure - reconfigure the current build tree with the C++ tests on
+# (g13, g15). On the aarch64 gate hosts cmake does not find the BLAS/LAPACK
+# headers itself (BLAS_INCLUDE_DIRS NOTFOUND, so no test built), so pass the
+# openblas include directory when it exists. Override with GATE_BLAS_INCLUDE_DIR.
+: "${GATE_BLAS_INCLUDE_DIR:=/usr/include/openblas}"
+gate_cmake_configure() {
+  local flags=(-DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_TESTS=ON)
+  if [[ -d "$GATE_BLAS_INCLUDE_DIR" ]]; then
+    flags+=("-DBLAS_INCLUDE_DIRS=$GATE_BLAS_INCLUDE_DIR" "-DLAPACK_INCLUDE_DIRS=$GATE_BLAS_INCLUDE_DIR")
+  fi
+  nice -n 19 cmake "${flags[@]}" .
+}
+
 # gate_log_wheel_identity <logfile> — print the INSTALLED wheel version and
 # (when EXPECTED_WHEEL_SHA256 is set) the version implied by the expected
 # asset, so every gate's log can be tied to a wheel identity. g1 calls this
