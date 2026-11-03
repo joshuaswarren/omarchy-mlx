@@ -585,10 +585,31 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
 }
 
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
-// key-value head only (the partial-sum tile for eight would not fit in shared memory), an explicit MLX_OMARCHY_SDPA_SPLIT_PV value only (pv_env > 0; there is no
-// per-chip default until one is measured), and V element offset, head stride and key stride multiples of 8 (16-byte loads).
-inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_t v_offset, int64_t v_head_stride, int64_t v_key_stride) {
-  return head_dim == 256 && group == 4u && pv_env > 0 && v_offset % 8u == 0u && v_head_stride % 8 == 0 && v_key_stride % 8 == 0;
+// key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
+// loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
+//
+// Per-chip default (width 256, decode measured with the 2B full-attention layers, receipts fusion-ab-jwm1-w7q-sdpa-pv256* on the 13-inch):
+//   G13G (Apple M1): on up to 768 keys. Measured decode change by context: +1.94 and +1.26 percent at 512 keys (two rows, 10 of 10 pairs faster),
+//     +1.43 at 640, +1.63 at 768 (5 of 5 faster each), +0.91 unresolved at 896 (2 of 5 slower), -1.18 at 1024, -2.09 at 2048, -2.75 at 4096.
+//   G13C, G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
+inline uint32_t sdpa_split_pv_wide_max_keys(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) return 768;
+  return 0;
+}
+
+inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_t k_len, const std::string& device_name,
+                               uint32_t v_offset, int64_t v_head_stride, int64_t v_key_stride) {
+  if (!(head_dim == 256 && group == 4u && v_offset % 8u == 0u && v_head_stride % 8 == 0 && v_key_stride % 8 == 0)) {
+    return false;
+  }
+  if (pv_env > 0) {
+    return true;
+  }
+  if (pv_env != 0) {  // unset: the per-chip default, measured only where the decode boundary above says so
+    uint32_t max_keys = sdpa_split_pv_wide_max_keys(device_name);
+    return max_keys != 0 && k_len <= max_keys;
+  }
+  return false;  // "0"
 }
 
 // Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) with the variable unset: the parts where the route defaults off because

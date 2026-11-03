@@ -16073,8 +16073,10 @@ void ScaledDotProductAttention::eval_gpu(
         const int pv_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV");
         const bool pv_aligned = split_params.aux_offset % 4u == 0u && v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0;
         const bool pv = !split_wide && pv_aligned && (pv_env > 0 || (pv_env < 0 && omarchy::sdpa_split_pv_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
-        // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide (explicit env value only).
-        const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, pv_env, split_params.aux_offset, v.strides()[1], v.strides()[2]);
+        // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
+        // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
+        const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, pv_env, static_cast<uint32_t>(k_len),
+                                                         decode_caps.device_name, split_params.aux_offset, v.strides()[1], v.strides()[2]);
         omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
         if (split_wide) {
           split_p1 = split_group == 1u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256
