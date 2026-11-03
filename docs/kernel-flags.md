@@ -42,6 +42,12 @@ A/B gating and qualification, not for normal operation.
 | `MLX_OMARCHY_GREEDY_PRUNE_TEST` | unset | Qualification only. `full` forces `mx.fast.greedy_quantized_argmax` onto its full exact path (every row, logsumexp, subtract, argmax); `keep` keeps every row as a survivor. Token-neutral by construction (receipt 2026-09-23-vocab-prune). |
 | `GDN_FALLBACK_DEBUG` | unset | Prints fused-eligibility inputs for the GDN prefill route when set. |
 
+## Driver-side variables the backend used to set
+
+| Variable | Since | Effect |
+| --- | --- | --- |
+| `HK_SUBMIT_POLL_US` | v0.7.38: the backend no longer sets it | The backend used to hand Honeykrisp a 2000 us submit poll at device init. That poll cost about 5.4 s of process CPU and about 1 W of system power on a 13-inch M1, and 1.7 s of process CPU and about 1.6 W of package power on a 16-inch M1 Max (vote off), at the same tokens per second; a value the user sets in the environment still reaches the driver unchanged. See `receipts/2026-11-03-hk-submit-poll/README.md` (#345). |
+
 ## mlx-lm serve patches (vendored in `patches/`, applied by
 `scripts/apply-mlx-lm-patches.sh`, wired into `install.sh`)
 
