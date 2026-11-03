@@ -24,7 +24,7 @@ if [[ "$MODE" == "build" ]]; then
   gate_begin "$LOG"
   gate_log "$LOG" "== reconfigure omarchy+tests (CPU-only) =="
   RC=0
-  nice -n 19 cmake -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_TESTS=ON . >>"$LOG" 2>&1 || RC=$?
+  gate_cmake_configure >>"$LOG" 2>&1 || RC=$?
   gate_log "$LOG" "CMAKE_CONFIGURE_EXIT $RC"
   [[ $RC -eq 0 ]] || { gate_log "$LOG" "GATE15_BUILD_EXIT 1"; exit 1; }
   gate_log "$LOG" "== build targets =="
