@@ -220,6 +220,13 @@ void main() {
   bool traditional = (params.flags & 2u) != 0u;
   bool head_seq_transpose = (params.flags & 4u) != 0u;
   bool passthrough = (params.flags & 8u) != 0u;
+#ifdef ROPE_HALF_SPLIT_ONLY
+  // Decode build: the host routes here only for the half-split form, so
+  // the traditional and passthrough branches fold away and the code the
+  // GPU fetches per dispatch shrinks; the half-split path is unchanged.
+  traditional = false;
+  passthrough = false;
+#endif
   while (index < params.count) {
     uint k;
     uint t;
@@ -397,6 +404,11 @@ void main() {
   bool traditional = (params.flags & 2u) != 0u;
   bool head_seq_transpose = (params.flags & 4u) != 0u;
   bool passthrough = (params.flags & 8u) != 0u;
+#ifdef ROPE_HALF_SPLIT_ONLY
+  // See the bf16 main: the host routes here only for the half-split form.
+  traditional = false;
+  passthrough = false;
+#endif
   while (index < params.count) {
     uint i;
     uint t;

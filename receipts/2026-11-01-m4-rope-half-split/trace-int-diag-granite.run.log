@@ -1,0 +1,4 @@
+int-diag 0 provenance: mlx-omarchy 0.32.4.dev202611020423+diag.749902d mx=0.32.4.dev202611020423+diag.749902d verified=match harness=75cdbbb core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:2ddb5c37713bcae3
+A rainbow forms when sunlight enters a water droplet in the air, causing it to refract and reflect inside the droplet. As the light refracts,
+[profile_generate] tokens=32 median_inter_token_ms=81.43 mean_inter_token_ms=87.23
+rc=0

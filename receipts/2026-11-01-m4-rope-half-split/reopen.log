@@ -1,0 +1,5 @@
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+device: Device(gpu, 0)
+device_name: Apple M4 (G16G B1)
+matmul max|gpu-cpu|=0.00e+00 qmm max|gpu-cpu|=2.67e-05
+REOPEN_OK

@@ -1077,6 +1077,14 @@ enum class ComputeKernel : uint16_t {
   // Appended to keep profile kernel ids stable.
   QmmPrefillFmaBF16,
   QmmPrefillFmaPreciseBF16,
+  // FastRope{,Freqs}{BF16,F16} built with only the half-split branch
+  // (shaders/fast_rope.comp -DROPE_HALF_SPLIT_ONLY): decode RoPE, whose
+  // cost on G16 follows code size. Appended to keep profile kernel ids
+  // stable.
+  FastRopeHalfSplitBF16,
+  FastRopeHalfSplitF16,
+  FastRopeFreqsHalfSplitF16,
+  FastRopeFreqsHalfSplitBF16,
   Count,
 };
 

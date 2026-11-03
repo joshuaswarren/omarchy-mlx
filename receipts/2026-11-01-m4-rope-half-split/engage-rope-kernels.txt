@@ -1,0 +1,17 @@
+end: {"k": "end", "t": 11918510968687, "dispatches": 4195, "dropped": 0, "submissions": 1718, "joins": 1637, "barriers": 4956, "barriers_skipped": 957}
+    809 FastRopeFreqsHalfSplitF16
+    808 FastRopeFreqsHalfSplitBF16
+    401 FastRopeHalfSplitF16
+     96 ElementwiseLiteF32
+     37 ElementwiseF32
+     36 RandomBitsU32
+     18 CastU32F32
+     13 CastF32BF16
+      9 FastRopeHalfSplitBF16
+      9 FastRopeFreqsBF16
+      9 FastRopeFreqsF16
+      5 CastF32F16
+      1 FastRopeBF16
+      1 ArangeI32
+      1 CastI32F32
+      1 FastRopeF16
