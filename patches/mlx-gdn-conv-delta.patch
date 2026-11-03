@@ -1,5 +1,5 @@
---- a/mlx/fast.h	2026-11-03 08:10:15.552668048 -0600
-+++ b/mlx/fast.h	2026-11-03 08:10:15.556668014 -0600
+--- a/mlx/fast.h	2026-11-03 12:54:14.291018605 -0600
++++ b/mlx/fast.h	2026-11-03 12:54:14.292018596 -0600
 @@ -229,6 +229,34 @@
      float qk_eps = 0.0f,
      StreamOrDevice s = {});
@@ -35,8 +35,8 @@
  // Greedy token of a transposed affine-quantized projection: the index
  // argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
  // logits = quantized_matmul(x, w, scales, biases, transpose=true).
---- a/mlx/fast.cpp	2026-11-03 08:10:15.583667783 -0600
-+++ b/mlx/fast.cpp	2026-11-03 08:10:15.590667723 -0600
+--- a/mlx/fast.cpp	2026-11-03 12:54:14.300018528 -0600
++++ b/mlx/fast.cpp	2026-11-03 12:54:14.301018519 -0600
 @@ -2368,6 +2368,76 @@
        /* inputs */ std::vector<array>{state, x, weight});
  }
@@ -114,16 +114,17 @@
  
  std::vector<array> GatedDeltaUpdate::vjp(
      const std::vector<array>& primals,
---- a/mlx/fast_primitives.h	2026-11-03 08:10:15.615667509 -0600
-+++ b/mlx/fast_primitives.h	2026-11-03 08:10:15.620667467 -0600
-@@ -705,6 +705,102 @@
+--- a/mlx/fast_primitives.h	2026-11-03 12:54:14.309018451 -0600
++++ b/mlx/fast_primitives.h	2026-11-03 12:54:14.311018434 -0600
+@@ -705,6 +705,101 @@
    float qk_eps_{0.0f};
  };
  
-+// Fused GDN decode conv + gated-delta step (MLX_OMARCHY_GDN_CONV_DELTA=1, or 2 with the gated norm folded in;
-+// default off). Qwen3.8-2B geometry only: B == 1, bf16, head dim 128, equal key and value head counts, 4 conv
-+// taps. Everything else, the flag being off, and non-GPU streams compose gdn_conv_update +
-+// gated_delta_update_raw (+ rms_norm_gated).
++// Fused GDN decode conv + gated-delta step. The caller decides whether to use it (the mlx-lm patch reads the mode from the
++// backend's single resolver: MLX_OMARCHY_GDN_CONV_DELTA overrides the per-chip default); the op itself fuses whenever its
++// geometry allows, in the form its inputs select: conv + delta (8 inputs) or conv + delta + the gated norm (10 inputs).
++// Qwen3.8-2B geometry only: B == 1, bf16, head dim 128, equal key and value head counts, 4 conv taps. Everything else
++// and non-GPU streams compose gdn_conv_update + gated_delta_update_raw (+ rms_norm_gated).
 +class GdnConvDeltaUpdate : public Custom {
 + public:
 +  GdnConvDeltaUpdate(
@@ -147,10 +148,8 @@
 +      const std::vector<array>& in,
 +      int key_dim,
 +      Stream s) {
-+    const char* flag = std::getenv("MLX_OMARCHY_GDN_CONV_DELTA");
 +    const bool with_norm = in.size() == 10;
-+    if (s.device == Device::cpu || flag == nullptr || flag[1] != '\0' ||
-+        (flag[0] != (with_norm ? '2' : '1')) || (in.size() != 8 && !with_norm) ||
++    if (s.device == Device::cpu || (in.size() != 8 && !with_norm) ||
 +        key_dim <= 0 || key_dim % 128 != 0) {
 +      return true;
 +    }
@@ -219,8 +218,8 @@
  class GatedDeltaUpdateVJP : public Custom {
   public:
    GatedDeltaUpdateVJP(
---- a/python/src/fast.cpp	2026-11-03 08:10:15.654667177 -0600
-+++ b/python/src/fast.cpp	2026-11-03 08:10:15.656667159 -0600
+--- a/python/src/fast.cpp	2026-11-03 12:54:14.320018357 -0600
++++ b/python/src/fast.cpp	2026-11-03 12:54:14.331018263 -0600
 @@ -749,6 +749,36 @@
                  Tuple of (conv_out [B, 1, C], new_state [B, K-1, C])
          )");
@@ -245,11 +244,11 @@
 +      "stream"_a = nb::none(), // optional, defaults to None
 +      R"(
 +            GDN decode conv + gated-delta step as one dispatch (Qwen3.8-2B
-+            geometry; default off, MLX_OMARCHY_GDN_CONV_DELTA=1). Bit-exact to
++            geometry; the caller chooses it, the mlx-lm patch by MLX_OMARCHY_GDN_CONV_DELTA or the per-chip default). Bit-exact to
 +            gdn_conv_update (SiLU and q/k norm folded) -> split -> reshape ->
 +            gated_delta_update_raw; everything it cannot fuse composes exactly
 +            those ops. With norm_gate [B, 1, Hv, 128] and norm_weight [128]
-+            (MLX_OMARCHY_GDN_CONV_DELTA=2) the first output is
++            (the gated-norm form) the first output is
 +            rms_norm_gated(delta output, norm_gate, norm_weight, norm_eps)
 +            instead. Returns (delta or normed output [B, 1, Hv, Dv], recurrent
 +            state [B, Hv, Dv, Dk], conv carry-out state [B, K-1, C]).
