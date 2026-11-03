@@ -41,7 +41,7 @@ On Linux, the GPU driver logs a page fault when a process with two compute submi
 
 ## How this release was gated
 
-The gates installed from the draft release's assets, with the draft's `SHA256SUMS` checked first, and `scripts/verify-release-assets.py v0.7.37` printed `VERIFIED` on the draft. Both wheels were built from clean checkouts of the tag commit.
+The gates installed from the draft release's assets. The `SHA256SUMS` asset lists the five other files, and every digest in it equals the digest GitHub reports for the uploaded asset. `scripts/verify-release-assets.py v0.7.37` printed `VERIFIED` on the draft. Both wheels were built from clean checkouts of the tag commit.
 
 On a 13-inch M1 (kernel `7.1.12-2-20261013.18-sep-ARCH`) every gate printed its own pass marker. Seven of them (g1, g3, g6, g7a, g7b, g8, g9) were rerun once after a first attempt failed in the harness, not in the release; the receipt lists both attempts:
 

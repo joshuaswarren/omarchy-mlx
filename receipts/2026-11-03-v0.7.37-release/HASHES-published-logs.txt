@@ -1,0 +1,15 @@
+# sha256 and bytes of the published (redacted) copies in logs/. The originals are listed in HASHES.txt.
+# python3 logs/redact-logs.py ORIGINAL_DIR OUT_DIR reproduces these files from the originals.
+
+90a2ac87aeb9453a7d1e18cec71c18816cadd7911f9966e29c7061b9e327afa2  18402  logs/build-ticket.out
+1d3f1f1569d64363c029cf6125f0314982bf56c033344fd3ad1a1d14e5179f83  6491  logs/decode.out
+a76b715a4c018c8dc296119b0ee35c70bff119a0ec22a9d6a3ac98a40b600114  2625  logs/decode.sh
+3c8d3efd9d5a0814366c13e535a5afaf70529990f58279c396685fc3fe8bd5fb  2652  logs/gates-batch.sh
+d2da17c903ab5fc086b01ab81c7a8d5daabf6939537106f0494522f5ffa3fc77  858  logs/gates-j1.out
+7290592ada5a8a4bf36b1a7073fe078e409a567182384b58c25365fb832137cd  1095  logs/gates-j2.out
+ac80ed6909c734ab9843af12ca1b581765b0df476c889046f2b2a65a0e33d3bb  3635  logs/gates-j3.out
+f46c6f0ceb3b997d2214d2ea4b94d9caca56d04c09bd48bb53094133b712fe65  5977  logs/gates-j4.out
+20491d4b3ece503a80e446c904dd66df82e61b0c9ac0484067e4072fe9bcea90  5269  logs/gates-k1.out
+cf79ed4ac688a3133fa54d4d78bbdda1d33acb1cf0f24a6970a2288e42b95a69  1086  logs/gates-k2.out
+e332b86e3f2fa181be530baed5fb5b3ab868dd90be5ed02cae6bbd280c1e28f8  3885  logs/gates-k3.out
+75c11bed69aa97eac114d6184cfa54fba54702614e03ab5699934013136616c4  2525  logs/rel-a64.sh

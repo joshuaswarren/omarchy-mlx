@@ -11,7 +11,7 @@ Tag `v0.7.37` is at `06d1038d2aa26ed235e65d2aa68677b9e904d65b`, main after #338.
 
 The x86_64 wheel was built on the x86_64 development machine. The clone was detached at the tag commit. The pinned whole-encoder bundle was checked against the aarch64 host's copy by hash. The aarch64 wheel and the vendored set were built on a 13-inch M1 from a detached clone of the tag commit. The build ticket took four minutes. The two wheel stamps differ by two minutes because each build stamps its own start time.
 
-`python3 scripts/verify-release-assets.py v0.7.37` printed `VERIFIED: every uploaded asset matches what the release claims` on the draft.
+The `SHA256SUMS` asset lists the five other files, and every digest in it equals the digest GitHub reports for the uploaded asset. `python3 scripts/verify-release-assets.py v0.7.37` printed `VERIFIED: every uploaded asset matches what the release claims` on the draft.
 
 ## Gates on the 13-inch M1
 
@@ -52,6 +52,10 @@ The uploaded aarch64 wheel went into a fresh venv from the vendored wheel set, w
 | 5 | 28.19 |
 
 The median is 28.19. The generated token ids hash to `775bf034e185c8f9` in all five runs. That is the digest the v0.7.34, v0.7.35 and v0.7.36 runs gave. The v0.7.36 median on the same machine was 27.66.
+
+## Logs
+
+The gate and decode logs named in `HASHES.txt` are in `logs/`, 54 KB in all, with the three scripts that produced them. Three kinds of private names were redacted before publishing: the home directory, host names and the name of a driver file. `logs/redact-logs.py` does it and is deterministic. `HASHES.txt` keeps the hashes of the originals. `HASHES-published-logs.txt` has the hashes of the files in `logs/`. A reader with the originals can run the script and compare.
 
 ## 16-inch M1 Max gates
 

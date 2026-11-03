@@ -1,0 +1,68 @@
+IDLE-GUARD-JOB-START 20261103T105633Z lane=w72 class=validation release v0.7.37 gate batch k3 g7a-packaged-icd g7b-system-install g9-speak-queue pin=06d1038d draft-assets longcap=30 host-13in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.96 SETTLE-SKIPPED
+GPU-TIMEOUTS before=37 boot=6cb62736-5e56-47f4-b8a5-244b1eab9252
+=== g7a-packaged-icd  10:56:35 free   23G ===
+BEGIN 2026-11-03T10:56:35Z tag=v0.7.37 boot_id=6cb62736-5e56-47f4-b8a5-244b1eab9252 uname=7.1.12-2-20261013.18-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+fixture_driver_sha e7631595df
+icd_source = packaged
+icd_path = /tmp/v0.7.37-sysinst/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+expected_sha = e7631595df
+expected_sha_source = packaged file
+driver_sha = e7631595df
+ICD_CONTRACT PASS
+GATE7A_EXIT 0
+g7a-packaged-icd_RC=0 10:56:35
+=== g7b-system-install  10:56:35 free   23G ===
+BEGIN 2026-11-03T10:56:35Z tag=v0.7.37 boot_id=6cb62736-5e56-47f4-b8a5-244b1eab9252 uname=7.1.12-2-20261013.18-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+Cloning into '$HOME/scratch/w72/rel-0737-host-13in/gates-main/v0.7.37-worktree'...
+Note: switching to '06d1038d2aa26ed235e65d2aa68677b9e904d65b'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+INSTALL_TREE $HOME/scratch/w72/rel-0737-host-13in/gates-main/v0.7.37-worktree HEAD=06d1038d2aa26ed235e65d2aa68677b9e904d65b
+VTAR $HOME/scratch/w72/rel-0737-host-13in/assets/omarchy-mlx-vendor-wheels-v0.7.37-cp314-aarch64.tar strip_rc=0 lock=present
+SYSINSTALL_EXIT 0
+== staged tree readback ==
+STAGED_OK usr/bin/mlx-omarchy
+STAGED_OK usr/bin/mlx-omarchy-chat
+STAGED_OK usr/bin/mlx-omarchy-parakeet
+STAGED_OK usr/lib/systemd/user/mlx-omarchy-chat.service
+STAGED_OK usr/share/applications/mlx-omarchy-chat.desktop
+STAGED_OK usr/share/omarchy-mlx/paths.sh
+STAGED_OK site-packages/mlx_omarchy_paths.py
+LAUNCHER_PATH_LEAK no
+GATE7B_EXIT 0
+g7b-system-install_RC=0 10:56:55
+=== g9-speak-queue  10:56:55 free   23G ===
+BEGIN 2026-11-03T10:56:55Z tag=v0.7.37 boot_id=6cb62736-5e56-47f4-b8a5-244b1eab9252 uname=7.1.12-2-20261013.18-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+G9_SPEAK_QUEUE_EXIT 0
+STATIC_JS $HOME/scratch/w72/rel-0737-host-13in/gates-main/v0.7.37-gate-home/.local/share/mlx-omarchy/mlx_omarchy_assistant/static/js
+SPEAK_QUEUE_SMOKE PASS chunks=7 overlaps=0 gaps=[] busy=0 order=[1, 2, 3, 4] done=[{'truncated': True, 't': 10.325333333333333}] errors=[]
+g9-speak-queue_RC=0 10:57:07
+BATCH_OK g7a-packaged-icd g7b-system-install g9-speak-queue
+GPU-TIMEOUTS after=37 delta=0
+.18-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+G9_SPEAK_QUEUE_EXIT 0
+STATIC_JS $HOME/scratch/w72/rel-0737-host-13in/gates-main/v0.7.37-gate-home/.local/share/mlx-omarchy/mlx_omarchy_assistant/static/js
+SPEAK_QUEUE_SMOKE PASS chunks=7 overlaps=0 gaps=[] busy=0 order=[1, 2, 3, 4] done=[{'truncated': True, 't': 10.325333333333333}] errors=[]
+g9-speak-queue_RC=0 10:57:07
+BATCH_OK g7a-packaged-icd g7b-system-install g9-speak-queue
