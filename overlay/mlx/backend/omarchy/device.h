@@ -536,6 +536,15 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
   return hv == hk;
 }
 
+// The fused GatedDelta conv + delta + gated norm op (fast::gdn_conv_delta_update with the gated norm folded in, the MLX_OMARCHY_GDN_CONV_DELTA value 2)
+// runs by default on the 13-inch (Apple M1, G13G) only: the 2B decode there measured +0.51 percent (5 of 5 pairs faster, identical tokens, dispatches per
+// token 251 to 215, 5 pairs x 128 tokens at ctx 512; receipts on the 13-inch ~/scratch/w7x-decode-gap/results/fusion-ab-jwm1-w7q-epilogue2.out). The 16-inch
+// (G13C) and the 14-inch (G14C) are unmeasured, so they keep the stock route until their own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value
+// overrides this everywhere.
+inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
+  return device_name.find("G13G") != std::string::npos;
+}
+
 // ArgMax, ArgMin and LogSumExp over a long row (8192 to 1048576 columns, the vocabulary row of a decode step): the parts whose default is the chunked
 // route of MLX_OMARCHY_ARGREDUCE_CHUNKED and MLX_OMARCHY_LSE_CHUNKED (one workgroup per 4096-column chunk plus a merge dispatch). Measured on G14C
 // (M2 Max, Qwen3.5-9B 4-bit decode, both on against both off, same tokens): about 3.9 percent on one boot and 3.2 percent on another,

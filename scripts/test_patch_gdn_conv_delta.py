@@ -70,6 +70,44 @@ class GatedDeltaNet:
 '''
 
 
+OLD_BRANCH = '''        gdn_fuse = os.environ.get("MLX_OMARCHY_GDN_CONV_DELTA")
+        if (
+            gdn_fuse in ("1", "2")
+            and mask is None
+            and S == 1
+            and cache is not None
+            and cache.lengths is None
+            and cache[1] is not None
+            and qkv.dtype == mx.bfloat16
+            and self.sharding_group is None
+            and mx.default_device() == mx.gpu
+            and hasattr(mx.fast, "gdn_conv_delta_update")
+        ):
+            inv_scale = self.head_k_dim**-0.5
+            out, state, new_conv_state = mx.fast.gdn_conv_delta_update(
+                conv_state,
+                qkv,
+                self.conv1d.weight,
+                a,
+                b,
+                self.A_log,
+                self.dt_bias,
+                cache[1],
+                self.key_dim,
+                inv_scale**2,
+                inv_scale,
+                1e-6,
+                *((z, self.norm.weight, self.norm.eps) if gdn_fuse == "2" else ()),
+            )
+            cache[0] = new_conv_state
+            cache[1] = state
+            cache.advance(S)
+            if gdn_fuse != "2":
+                out = self.norm(out, z)
+            return self.out_proj(out.reshape(B, S, -1))
+'''
+
+
 class Cache:
     def __init__(self, state=1, lengths=None):
         self.items = {0: "conv0", 1: state}
@@ -214,6 +252,82 @@ class PatchScript(unittest.TestCase):
         mod.mx._device = "gpu"
         del mod.mx.fast.gdn_conv_delta_update
         self.assertEqual(net(qkv=bf16, a="a", b="b", z="z", conv_state="CS", cache=Cache())[0], "composed")
+
+    def test_upgrade_replaces_an_earlier_patch(self):
+        # A file an earlier version of this patch wrote: its import block and its branch are replaced, not duplicated.
+        old = FIXTURE.replace(
+            "from dataclasses import dataclass, field\n",
+            "import os\nfrom dataclasses import dataclass, field\n",
+        ).replace(
+            """        if mask is not None:
+            qkv = mx.where(mask[..., None], qkv, 0)
+""",
+            OLD_BRANCH,
+        )
+        self.model.write_text(old)
+        r = self.run_patch()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = self.model.read_text()
+        self.assertEqual(text.count("_GDN_CONV_DELTA_DEFAULT"), 2)  # the resolver assignment and the branch
+        self.assertEqual(text.count('os.environ.get("MLX_OMARCHY_GDN_CONV_DELTA")'), 1)
+        self.assertNotIn("os.environ.get(\"MLX_OMARCHY_GDN_CONV_DELTA\")\n        if (", text)
+        compile(text, str(self.model), "exec")
+        again = self.run_patch()
+        self.assertIn("already patched", again.stdout)
+
+    def test_default_mode_comes_from_the_backend_abi(self):
+        # The backend answers with the mode for this device: 2 means conv + delta + gated norm, so the op runs with the flag unset.
+        stub = Path(self.tmp.name) / "stub"
+        pkg = stub / "mlx"
+        (pkg / "lib").mkdir(parents=True)
+        (pkg / "__init__.py").write_text("")
+        (pkg / "core.py").write_text("")
+        src = stub / "stub.c"
+        src.write_text("int mlx_omarchy_gdn_conv_delta_default(void) { return 2; }\n")
+        so = pkg / "lib" / "libmlx.so"
+        cc = subprocess.run(["cc", "-shared", "-fPIC", "-o", str(so), str(src)], capture_output=True, text=True)
+        if cc.returncode != 0:
+            self.skipTest("no C compiler for the stub library: " + cc.stderr[-200:])
+        import types
+
+        fake = types.ModuleType("mlx")
+        fake.__file__ = str(pkg / "__init__.py")
+        fake.__path__ = [str(pkg)]
+        core = types.ModuleType("mlx.core")
+        core.__file__ = str(pkg / "core.py")
+        fake.core = core
+        saved = {k: sys.modules.get(k) for k in ("mlx", "mlx.core")}
+
+        def restore():
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+
+        sys.modules["mlx"] = fake
+        sys.modules["mlx.core"] = core
+        self.addCleanup(restore)
+        self.run_patch()
+        os.environ.pop("MLX_OMARCHY_GDN_CONV_DELTA", None)
+        mod = self.load()
+        self.assertEqual(mod._GDN_CONV_DELTA_DEFAULT, "2")
+        self.install_fake_op(mod)
+        qkv = type("A", (), {"dtype": "bf16"})()
+        result = mod.GatedDeltaNet()(qkv=qkv, a="a", b="b", z="z", conv_state="CS", cache=Cache())
+        (args,) = mod.mx.fast.calls
+        self.assertEqual(args[12:], ("z", "NW", 1e-6))  # the gated norm is folded in
+        self.assertEqual(result, ("proj", ("reshape", "OUT", (1, 1, -1))))
+
+    def test_backend_without_the_symbol_keeps_the_stock_route(self):
+        # A wheel without the ABI symbol (or no mlx at all) resolves to "0": the stock route, exactly as before the default existed.
+        self.run_patch()
+        os.environ.pop("MLX_OMARCHY_GDN_CONV_DELTA", None)
+        mod = self.load()
+        self.assertEqual(mod._GDN_CONV_DELTA_DEFAULT, "0")
+        self.install_fake_op(mod)
+        self.assertEqual(self.call(mod, Cache())[0], "composed")
+        self.assertEqual(mod.mx.fast.calls, [])
 
 
 if __name__ == "__main__":

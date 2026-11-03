@@ -18,11 +18,15 @@
 #include <string>
 #include <vector>
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
+
+// The C ABI the mlx-lm patch reads for the per-chip default: 0 = the stock route, 1 = conv + delta, 2 = conv + delta + gated norm.
+extern "C" int mlx_omarchy_gdn_conv_delta_default(void);
 
 using namespace mlx::core;
 using mlx::core::omarchy::trace::counters;
@@ -212,6 +216,31 @@ TEST_CASE("the conv + delta + gated norm step is one dispatch where the sequence
     return;
   }
   CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the sequence into one dispatch");
+}
+
+TEST_CASE("the GDN conv + delta default is the 13-inch only, and the ABI resolves the mode") {
+  // The per-chip default: the fused conv + delta + gated norm route runs by default on the 13-inch (Apple M1, G13G) only.
+  CHECK(omarchy::gdn_conv_delta_norm_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part(""));
+  // The ABI the mlx-lm patch reads: an explicit flag value wins, "0" and anything else keep the stock route.
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
+  CHECK(mlx_omarchy_gdn_conv_delta_default() == 2);
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
+  CHECK(mlx_omarchy_gdn_conv_delta_default() == 1);
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "0", 1);
+  CHECK(mlx_omarchy_gdn_conv_delta_default() == 0);
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "3", 1);
+  CHECK(mlx_omarchy_gdn_conv_delta_default() == 0);
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  // Unset follows the per-chip default of this device.
+  if (gpu::is_available()) {
+    const auto& info = gpu::device_info(0);
+    auto it = info.find("device_name");
+    std::string name = it != info.end() ? std::get<std::string>(it->second) : std::string();
+    CHECK(mlx_omarchy_gdn_conv_delta_default() == (omarchy::gdn_conv_delta_norm_default_part(name) ? 2 : 0));
+  }
 }
 
 TEST_CASE("the norm form composes the sequence unless the flag is 2") {
