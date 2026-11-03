@@ -7,6 +7,8 @@ directory and shaped like the real collector payloads.
 import contextlib
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -528,6 +530,88 @@ class WorkflowYamlTests(unittest.TestCase):
 
     def test_mirror_script_is_referenced(self):
         self.assertIn("scripts/mirror_community_data.py", self.text)
+
+
+@unittest.skipUnless(yaml is not None, "PyYAML not installed")
+class WorkflowStepOrderTests(unittest.TestCase):
+    """Run the workflow's own shell steps in a throwaway clone.
+
+    The commit step leaves the checkout on the snapshot-only
+    `community-data` branch. The schema-identity step must still find its
+    script, which lives on main.
+    """
+
+    SCRIPT = "services/community-data/scripts/check_schema_identity.py"
+
+    @classmethod
+    def setUpClass(cls):
+        steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))[
+            "jobs"]["mirror"]["steps"]
+        cls.commit_run = next(
+            s["run"] for s in steps
+            if s.get("name") == "Commit snapshot to community-data")
+        cls.check_run = next(
+            s["run"] for s in steps
+            if s.get("name") == "Check deployed schema identity")
+
+    def sh(self, *args, cwd, env=None, check=True):
+        env = dict(os.environ if env is None else env,
+                   GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
+                   GIT_CONFIG_VALUE_0=os.devnull)
+        return subprocess.run(
+            list(args), cwd=cwd, env=env, check=check, text=True,
+            capture_output=True)
+
+    def lab(self, tmp, with_remote_branch):
+        origin = tmp / "origin.git"
+        seed = tmp / "seed"
+        self.sh("git", "init", "-q", "--bare", "-b", "main", str(origin),
+                cwd=tmp)
+        self.sh("git", "init", "-q", "-b", "main", str(seed), cwd=tmp)
+        script = seed / self.SCRIPT
+        script.parent.mkdir(parents=True)
+        script.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+        ident = ("-c", "user.name=t", "-c", "user.email=t@example.com")
+        self.sh("git", "add", ".", cwd=seed)
+        self.sh("git", *ident, "commit", "-q", "-m", "main", cwd=seed)
+        self.sh("git", "remote", "add", "origin", str(origin), cwd=seed)
+        self.sh("git", "push", "-q", "origin", "main", cwd=seed)
+        if with_remote_branch:
+            self.sh("git", "switch", "-q", "--orphan", "community-data",
+                    cwd=seed)
+            (seed / "snapshot").mkdir()
+            (seed / "snapshot" / "latest.jsonl").write_text(
+                '{"old": 1}\n', encoding="utf-8")
+            self.sh("git", "add", ".", cwd=seed)
+            self.sh("git", *ident, "commit", "-q", "-m", "old", cwd=seed)
+            self.sh("git", "push", "-q", "origin", "community-data", cwd=seed)
+        work = tmp / "work"
+        self.sh("git", "clone", "-q", str(origin), str(work), cwd=tmp)
+        sha = self.sh("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
+        self.sh("git", "checkout", "-q", "--detach", sha, cwd=work)
+        return work, sha
+
+    def run_steps(self, with_remote_branch):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            work, sha = self.lab(tmp, with_remote_branch)
+            runner_temp = tmp / "runner_temp"
+            (runner_temp / "snapshot").mkdir(parents=True)
+            (runner_temp / "snapshot" / "latest.jsonl").write_text(
+                '{"new": 1}\n', encoding="utf-8")
+            env = dict(os.environ, RUNNER_TEMP=str(runner_temp),
+                       BASE_URL="http://example.invalid", GITHUB_SHA=sha)
+            self.sh("bash", "-e", "-c", self.commit_run, cwd=work, env=env)
+            return self.sh("bash", "-e", "-c", self.check_run, cwd=work,
+                           env=env, check=False)
+
+    def test_check_script_is_reachable_after_the_first_snapshot(self):
+        result = self.run_steps(with_remote_branch=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_check_script_is_reachable_after_a_later_snapshot(self):
+        result = self.run_steps(with_remote_branch=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class ReadApiSummaryShape(unittest.TestCase):
