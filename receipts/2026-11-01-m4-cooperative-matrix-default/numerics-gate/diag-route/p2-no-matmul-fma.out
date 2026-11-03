@@ -1,0 +1,9 @@
+p2 0 provenance: mlx-omarchy 0.32.4.dev202611021807+91d9f8a mx=0.32.4.dev202611021807+91d9f8a verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:7e9a5d0a481cfd43
+{"m": 128, "n": 2048, "k": 2048, "sha": "6e17d8b1c92211ec", "ms_median": 2.3866, "no_matmul_fma": "1"}
+{"m": 128, "n": 512, "k": 2048, "sha": "f63ea815dd743e7d", "ms_median": 0.9855, "no_matmul_fma": "1"}
+{"m": 128, "n": 8192, "k": 2048, "sha": "2d07c05d8220066d", "ms_median": 6.503, "no_matmul_fma": "1"}
+{"m": 128, "n": 2048, "k": 8192, "sha": "38e587ccf21551a1", "ms_median": 7.204, "no_matmul_fma": "1"}
+{"m": 1, "n": 2048, "k": 2048, "sha": "c2bae65aaf5d3fbe", "ms_median": 0.5073, "no_matmul_fma": "1"}
+{"m": 1, "n": 512, "k": 2048, "sha": "f879c9f407d85086", "ms_median": 0.4322, "no_matmul_fma": "1"}
+{"m": 1, "n": 8192, "k": 2048, "sha": "acbecd343c93f919", "ms_median": 0.7759, "no_matmul_fma": "1"}
+{"m": 1, "n": 2048, "k": 8192, "sha": "2cb532cc2e5f7aeb", "ms_median": 0.7518, "no_matmul_fma": "1"}

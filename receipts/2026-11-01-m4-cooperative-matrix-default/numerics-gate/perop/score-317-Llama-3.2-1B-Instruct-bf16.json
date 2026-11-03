@@ -1,0 +1,219 @@
+{
+ "kind": "linear",
+ "cells": 21,
+ "cells_cand_no_worse": 21,
+ "worst_ratio": 1.0,
+ "check1_per_op": true,
+ "table": [
+  {
+   "cell": "layer0/down",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0019264150733894557,
+   "cand_rel_l2_mean": 0.0019264150733894557,
+   "base_max_abs": 0.05333375076294189,
+   "cand_max_abs": 0.05333375076294189,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/gate",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016564713037933668,
+   "cand_rel_l2_mean": 0.0016564713037933668,
+   "base_max_abs": 0.014608737246817327,
+   "cand_max_abs": 0.014608737246817327,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/k",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016649441276792762,
+   "cand_rel_l2_mean": 0.0016649441276792762,
+   "base_max_abs": 0.03111422377287454,
+   "cand_max_abs": 0.03111422377287454,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/o",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016625943300343183,
+   "cand_rel_l2_mean": 0.0016625943300343183,
+   "base_max_abs": 0.0009726310945552541,
+   "cand_max_abs": 0.0009726310945552541,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/q",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.001685083402936128,
+   "cand_rel_l2_mean": 0.001685083402936128,
+   "base_max_abs": 0.061402184629400836,
+   "cand_max_abs": 0.061402184629400836,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/up",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016610025412369472,
+   "cand_rel_l2_mean": 0.0016610025412369472,
+   "base_max_abs": 0.007685029075219063,
+   "cand_max_abs": 0.007685029075219063,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/v",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016400749855922973,
+   "cand_rel_l2_mean": 0.0016400749855922973,
+   "base_max_abs": 0.0030259027605445965,
+   "cand_max_abs": 0.0030259027605445965,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/down",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0009923161360188694,
+   "cand_rel_l2_mean": 0.0009923161360188694,
+   "base_max_abs": 0.3491094252357243,
+   "cand_max_abs": 0.3491094252357243,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/gate",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016660087840105072,
+   "cand_rel_l2_mean": 0.0016660087840105072,
+   "base_max_abs": 0.06213720981031656,
+   "cand_max_abs": 0.06213720981031656,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/k",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016495539722270517,
+   "cand_rel_l2_mean": 0.0016495539722270517,
+   "base_max_abs": 0.06141258424031548,
+   "cand_max_abs": 0.06141258424031548,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/o",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016593256400024995,
+   "cand_rel_l2_mean": 0.0016593256400024995,
+   "base_max_abs": 0.007686716067837551,
+   "cand_max_abs": 0.007686716067837551,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/q",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016695428802408906,
+   "cand_rel_l2_mean": 0.0016695428802408906,
+   "base_max_abs": 0.03125310118775815,
+   "cand_max_abs": 0.03125310118775815,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/up",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.001655914881014235,
+   "cand_rel_l2_mean": 0.001655914881014235,
+   "base_max_abs": 0.061815050430595875,
+   "cand_max_abs": 0.061815050430595875,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer15/v",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016609738289506965,
+   "cand_rel_l2_mean": 0.0016609738289506965,
+   "base_max_abs": 0.014345167408464476,
+   "cand_max_abs": 0.014345167408464476,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/down",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016630767643812296,
+   "cand_rel_l2_mean": 0.0016630767643812296,
+   "base_max_abs": 0.0037033045146017685,
+   "cand_max_abs": 0.0037033045146017685,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/gate",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016596493765744834,
+   "cand_rel_l2_mean": 0.0016596493765744834,
+   "base_max_abs": 0.01459177493234165,
+   "cand_max_abs": 0.01459177493234165,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/k",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016424590126745391,
+   "cand_rel_l2_mean": 0.0016424590126745391,
+   "base_max_abs": 0.03123388855601661,
+   "cand_max_abs": 0.03123388855601661,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/o",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016366602103632688,
+   "cand_rel_l2_mean": 0.0016366602103632688,
+   "base_max_abs": 0.0038377902692445787,
+   "cand_max_abs": 0.0038377902692445787,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/q",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016594539320533698,
+   "cand_rel_l2_mean": 0.0016594539320533698,
+   "base_max_abs": 0.03119293917552568,
+   "cand_max_abs": 0.03119293917552568,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/up",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016529010811760358,
+   "cand_rel_l2_mean": 0.0016529010811760358,
+   "base_max_abs": 0.01243495917879045,
+   "cand_max_abs": 0.01243495917879045,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer8/v",
+   "datasets": 2,
+   "base_rel_l2_mean": 0.0016580243195434014,
+   "cand_rel_l2_mean": 0.0016580243195434014,
+   "base_max_abs": 0.0039046780730132014,
+   "cand_max_abs": 0.0039046780730132014,
+   "outputs_identical": 2,
+   "cand_no_worse": true
+  }
+ ]
+}

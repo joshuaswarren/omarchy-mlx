@@ -1,0 +1,82 @@
+### main
+
+battery main 2026-11-02T01:44:57Z commit=a69d9e6 extra_env=none
+omarchy_runtime_tests rc=1 secs=45 new_gpu_kernel_errors=0 test cases:    59 |    58 passed | 1 failed | 0 skipped assertions: 27064 | 27063 passed | 1 failed |
+omarchy_primitive_tests rc=1 secs=8 new_gpu_kernel_errors=0 test cases:     107 |     105 passed | 2 failed | 0 skipped assertions: 2768364 | 2768364 passed | 0 failed |
+omarchy_matmul_family_tests rc=1 secs=118 new_gpu_kernel_errors=0 test cases:       43 |       42 passed | 1 failed | 0 skipped assertions: 83471259 | 83471258 passed | 1 failed |
+omarchy_fast_ops_tests rc=0 secs=7 new_gpu_kernel_errors=0 test cases:      49 |      49 passed | 0 failed | 0 skipped assertions: 1383978 | 1383974 passed | 4 failed |
+omarchy_kv_ops_tests rc=0 secs=1 new_gpu_kernel_errors=0 test cases:  16 |  16 passed | 0 failed | 0 skipped assertions: 781 | 781 passed | 0 failed |
+omarchy_indexing_ops_tests rc=1 secs=0 new_gpu_kernel_errors=0 test cases:   60 |   57 passed | 3 failed | 0 skipped assertions: 7259 | 7259 passed | 0 failed |
+omarchy_reduce_ops_tests rc=0 secs=1 new_gpu_kernel_errors=0 test cases:   36 |   36 passed | 0 failed | 0 skipped assertions: 7216 | 7216 passed | 0 failed |
+omarchy_shape_ops_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:  25 |  25 passed | 0 failed | 0 skipped assertions: 898 | 898 passed | 0 failed |
+omarchy_linalg_ops_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:     31 |     31 passed | 0 failed | 0 skipped assertions: 181183 | 181183 passed | 0 failed |
+omarchy_copy_offset_tests rc=0 secs=1 new_gpu_kernel_errors=0 test cases:  28 |  28 passed | 0 failed | 0 skipped assertions: 639 | 639 passed | 0 failed |
+omarchy_distributed_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:  9 |  9 passed | 0 failed | 0 skipped assertions: 36 | 36 passed | 0 failed |
+omarchy_compiled_tape_tests rc=1 secs=1 new_gpu_kernel_errors=0 test cases:    14 |    13 passed | 1 failed | 0 skipped assertions: 46207 | 46207 passed | 0 failed |
+omarchy_fft_ops_tests rc=0 secs=2 new_gpu_kernel_errors=0 test cases:   19 |   19 passed | 0 failed | 0 skipped assertions: 1379 | 1379 passed | 0 failed |
+omarchy_fft_general_tests rc=0 secs=2 new_gpu_kernel_errors=0 test cases:   14 |   14 passed | 0 failed | 0 skipped assertions: 4245 | 4245 passed | 0 failed |
+omarchy_eig_ops_tests rc=1 secs=0 new_gpu_kernel_errors=0 test cases:  9 |  1 passed | 8 failed | 0 skipped assertions: 12 | 12 passed | 0 failed |
+omarchy_take_fill_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    9 |    9 passed | 0 failed | 0 skipped assertions: 9054 | 9054 passed | 0 failed |
+omarchy_conv_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:   15 |   15 passed | 0 failed | 0 skipped assertions: 3749 | 3749 passed | 0 failed |
+omarchy_complex_ops_tests rc=1 secs=1 new_gpu_kernel_errors=0 test cases:  34 |  16 passed | 18 failed | 0 skipped assertions: 417 | 417 passed |  0 failed |
+omarchy_select_layout_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:   13 |   13 passed | 0 failed | 0 skipped assertions: 4500 | 4500 passed | 0 failed |
+omarchy_fast_regression_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:  2 |  2 passed | 0 failed | 0 skipped assertions: 16 | 16 passed | 0 failed |
+omarchy_scatter_determinism_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:  21 |  21 passed | 0 failed | 0 skipped assertions: 127 | 127 passed | 0 failed |
+omarchy_eq_math_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:   7 |   7 passed | 0 failed | 0 skipped assertions: 128 | 128 passed | 0 failed |
+omarchy_fused_chain_tests rc=0 secs=1 new_gpu_kernel_errors=0 test cases:     38 |     38 passed | 0 failed | 0 skipped assertions: 349347 | 349347 passed | 0 failed |
+omarchy_error_contract_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:  3 |  3 passed | 0 failed | 0 skipped assertions: 14 | 14 passed | 0 failed |
+omarchy_ane_bundle_tests rc=0 secs=1 new_gpu_kernel_errors=0 test cases:   48 |   48 passed | 0 failed | 0 skipped assertions: 8215 | 8215 passed | 0 failed |
+omarchy_qmv_batch_tests rc=0 secs=16 new_gpu_kernel_errors=0 test cases:  4 |  4 passed | 0 failed | 0 skipped assertions: 36 | 36 passed | 0 failed |
+omarchy_sdpa_decode_fused_tests rc=0 secs=0 new_gpu_kernel_errors=0 test cases:      7 |      7 passed | 0 failed | 0 skipped assertions: 100490 | 100490 passed | 0 failed |
+capsim-m1-honeykrisp-fork rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2468 | 2468 passed | 0 failed |
+capsim-m1-stock-no-coopmat rc=0 secs=1 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2466 | 2466 passed | 0 failed |
+capsim-subgroup-size-64 rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2466 | 2466 passed | 0 failed |
+capsim-small-shared-memory rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2466 | 2466 passed | 0 failed |
+capsim-no-cooperative-matrix rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2468 | 2468 passed | 0 failed |
+capsim-m1-g13-legacy rc=0 secs=0 new_gpu_kernel_errors=0 test cases:    7 |    7 passed | 0 failed | 0 skipped assertions: 2467 | 2467 passed | 0 failed |
+BATTERY_DONE 2026-11-02T01:48:23Z
+test cases with an ERROR line (the fast_ops `sdpa vjp dk dv ...` case is a may-fail case whose test case passes):
+  omarchy_compiled_tape_tests: compiled tape computes Real, Imag, and Conjugate on complex64
+  omarchy_complex_ops_tests: complex add subtract and negate are componentwise
+  omarchy_complex_ops_tests: complex cos matches host reference
+  omarchy_complex_ops_tests: complex divide matches a double reference
+  omarchy_complex_ops_tests: complex exp matches C99 for infinite arguments
+  omarchy_complex_ops_tests: complex exp matches host reference
+  omarchy_complex_ops_tests: complex extract and abs agree on broadcast transposed and offset views
+  omarchy_complex_ops_tests: complex inverse functions preserve finite and signed edge semantics
+  omarchy_complex_ops_tests: complex inverse trig roots logs and round match host references
+  omarchy_complex_ops_tests: complex maximum orders lexicographically
+  omarchy_complex_ops_tests: complex multiply matches a double reference
+  omarchy_complex_ops_tests: complex power matches host reference with zero-base cases
+  omarchy_complex_ops_tests: complex sign maps zero to itself and z to z/abs(z)
+  omarchy_complex_ops_tests: complex sin matches host reference
+  omarchy_complex_ops_tests: complex sinh/cosh/tan/tanh/log1p match host references
+  omarchy_complex_ops_tests: complex sqrt and log preserve signed branch cuts
+  omarchy_complex_ops_tests: complex square, logaddexp, and equality match host references
+  omarchy_complex_ops_tests: complex unary operations retain finite large-magnitude results
+  omarchy_complex_ops_tests: conjugate negates the imaginary component
+  omarchy_eig_ops_tests: eig batched matrices match per-matrix references
+  omarchy_eig_ops_tests: eig diagonal matrix exact spectrum and eigenvectors
+  omarchy_eig_ops_tests: eig repeated eigenvalues stay correct
+  omarchy_eig_ops_tests: eig rotation matrix conjugate pair on the unit circle
+  omarchy_eig_ops_tests: eig similarity transform recovers the exact spectrum
+  omarchy_eig_ops_tests: eig symmetric matrix matches host Jacobi and the eigh path
+  omarchy_eig_ops_tests: eig values-only matches the full path bit for bit
+  omarchy_eig_ops_tests: eig zero matrix converges with zero values
+  omarchy_fast_ops_tests: sdpa vjp dk dv match finite differences at rep=1 (path per gate)
+  omarchy_indexing_ops_tests: wide-row small-k partition covers rows, ties, and 16-bit dtypes
+  omarchy_indexing_ops_tests: wide-row small-k partition places NaNs and zero signs by the key map
+  omarchy_indexing_ops_tests: wide-row small-k partition selects the exact tail in one dispatch
+  omarchy_matmul_family_tests: gather_qmm sorted-expert tile route matches the f32 reference and the per-row route
+  omarchy_primitive_tests: Wave3 Conjugate Real Imag mirror upstream on real dtypes and compute on complex
+  omarchy_primitive_tests: unsupported compute shapes and dtypes refuse by name
+  omarchy_runtime_tests: recycled block is not rewritten by the previous owner in flight
+
+### p2
+
+battery p2 2026-11-02T04:28:55Z commit=91d9f8a extra_env=none
+omarchy_matmul_family_tests rc=1 secs=64 new_gpu_kernel_errors=0 test cases:       45 |       44 passed | 1 failed | 0 skipped assertions: 83487665 | 83487664 passed | 1 failed |
+BATTERY_DONE 2026-11-02T04:29:59Z
+test cases with an ERROR line (the fast_ops `sdpa vjp dk dv ...` case is a may-fail case whose test case passes):
+  omarchy_matmul_family_tests: gather_qmm sorted-expert tile route matches the f32 reference and the per-row route
+

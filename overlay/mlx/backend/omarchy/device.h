@@ -595,4 +595,14 @@ inline bool fused_gemv_off_default_part(const std::string& device_name) {
   return device_name.find("G16G") != std::string::npos;
 }
 
+// Dense bf16 matmul in the linear-layer orientation (row-major lhs, transposed rhs, alpha 1) where both the scalar-FMA kernel
+// (MatmulBf16Fma) and the bf16 cooperative-matrix tile (MatmulBF16Coopmat) qualify: the parts where the FMA kernel is the default,
+// because it was measured faster at the linear-layer shapes and in bf16 prefill:
+//   G16G (Apple M4, Honeykrisp Apple9 port with VK_KHR_cooperative_matrix): receipts/2026-11-01-m4-cooperative-matrix-default.
+// Elsewhere the cooperative matrix keeps the pick (receipts/2026-09-12-prefill-fma-qualify). Attention-shaped matmuls are not affected.
+// Keyed on the device name so an unmeasured part keeps the cooperative matrix; dispatch_matmul passes the executing device's name. Pure.
+inline bool matmul_bf16_fma_over_coopmat_part(const std::string& device_name) {
+  return device_name.find("G16G") != std::string::npos;
+}
+
 } // namespace mlx::core::omarchy

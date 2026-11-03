@@ -1,0 +1,6 @@
+Llama-3.2-1B-Instruct-bf16 8d40f9098d80a1510565233591a58ccf4dadba6a94934c1a514bf95201621efa config.json
+Llama-3.2-1B-Instruct-bf16 f5dc593b89368a9a44a8fc3b2dacd7a3d65e43acb4ffbd98a1a40fac9c2bd6da model.safetensors
+Llama-3.2-1B-Instruct-bf16 21d0047096a570c0602ab22be6dad6838e291c5e8494de3fe973bfbe4cce36d9 model.safetensors.index.json
+Llama-3.2-1B-Instruct-bf16 6f38c73729248f6c127296386e3cdde96e254636cc58b4169d3fd32328d9a8ec special_tokens_map.json
+Llama-3.2-1B-Instruct-bf16 79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4 tokenizer.json
+Llama-3.2-1B-Instruct-bf16 9823dcfdc1121869029da45192238e85cf44f0b232a6d9dc20e4fe6f4242a14e tokenizer_config.json

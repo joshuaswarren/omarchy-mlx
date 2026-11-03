@@ -1,0 +1,8 @@
+tampered c0[0]
+qmv_bits.py compare: matching baseline rc=0 (want 0), mismatching baseline rc=1 (want 1)
+tampered c0[0]
+rope_bits.py compare: matching baseline rc=0 (want 0), mismatching baseline rc=1 (want 1)
+tampered c0[0]
+sdpa_bits.py compare: matching baseline rc=0 (want 0), mismatching baseline rc=1 (want 1)
+tampered c0[0]
+qmm_fma_bits.py compare: matching baseline rc=0 (want 0), mismatching baseline rc=1 (want 1)
