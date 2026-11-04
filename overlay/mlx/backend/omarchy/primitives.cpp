@@ -4057,10 +4057,12 @@ static int decode_path_override(const char* name) {
 }
 
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
-// live): the largest pass length T (2..4) whose [1, T, K] bf16 x runs as
-// one batch-shared decode GEMV instead of the coopmat prefill tile. The cap
-// is 4 because above it a second GEMV block costs more than the tile on G13G
-// (PR #296). Unset, empty or 0 keeps the shipped route. Each row is
+// live): the largest pass length T whose [1, T, K] bf16 x runs as batch-shared
+// decode GEMV (one dispatch per block of 4 rows) instead of the coopmat prefill
+// tile. The cap is 4 on every part but G13C, where it is 8 (qmv_small_t_device_cap):
+// above 4 a second GEMV block costs more than the tile on G13G (PR #296). The
+// request is clamped to 8 here and to the part's cap at the call site. Unset,
+// empty or 0 keeps the shipped route. Each row is
 // bit-identical to the single-row GEMV, not to the coopmat chain, so the
 // route is opt-in until a numerics decision
 // (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
@@ -4070,7 +4072,17 @@ static int qmv_small_t_max_rows() {
     return 0;
   }
   int rows = std::atoi(v);
-  return rows >= 2 ? std::min(rows, 4) : 0;
+  if (rows < 2) {
+    return 0;
+  }
+  return std::min(rows, 8);
+}
+
+static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
+  if (requested_max < 2) return 0;
+  const std::string& name = encoder.device().capabilities().device_name;
+  int cap = (name.find("G13C") != std::string::npos) ? 8 : 4;
+  return std::min(requested_max, cap);
 }
 
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
@@ -8316,7 +8328,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // [1, T, K] x with 2 <= T <= the env limit against one 2D 4-bit group-64
   // transposed weight. Resolved before normalization because the GEMV reads
   // x through the same 16-byte uvec4 view as the single-row route.
-  const int small_t_max = qmv_small_t_max_rows();
+  const int small_t_max = qmv_small_t_device_cap(encoder, qmv_small_t_max_rows());
   const int small_t_rows = x.ndim() >= 2 ? x.shape(-2) : 1;
   bool small_t_candidate = small_t_max >= 2 && use_q4_word &&
       out.dtype() == bfloat16 && small_t_rows >= 2 &&
@@ -8595,16 +8607,23 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      omarchy::ComputeParams pass = params;
-      pass.matrix_m = 1u;
-      pass.shape[0] = params.matrix_m;
-      encoder.dispatch_compute(
-          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
-          bindings,
-          pass,
-          n_groups_qmm_vec,
-          1u,
-          1u);
+      constexpr uint32_t kBlockRows = 4u;
+      for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
+        uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
+        omarchy::ComputeParams block = params;
+        block.count = rows * params.matrix_n;
+        block.matrix_m = 1u;
+        block.shape[0] = rows;
+        block.lhs_offset = params.lhs_offset + row * params.matrix_k;
+        block.output_offset = params.output_offset + row * params.matrix_n;
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            bindings,
+            block,
+            n_groups_qmm_vec,
+            1u,
+            1u);
+      }
       return;
     }
   }
