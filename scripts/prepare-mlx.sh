@@ -213,6 +213,11 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-cpu-distributed-hold-output.patch"
 
+# Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update,
+# MLX_OMARCHY_GDN_CONV_DELTA, default off). Last in the series: it is written
+# against the fully patched fast.h / fast.cpp.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-gdn-conv-delta.patch"
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
 trap - EXIT
