@@ -40,11 +40,33 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
+#if defined(GDN_CONV_FUSED) && (defined(GDN_COMPOSED_ORDER) || defined(GDN_NATIVE_GQA_INDEX))
+#error GDN_CONV_FUSED covers the default-order equal-head build only
+#endif
+#if defined(GDN_NORM_FUSED) && !defined(GDN_CONV_FUSED)
+#error GDN_NORM_FUSED extends GDN_CONV_FUSED
+#endif
+
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
+#ifndef GDN_CONV_FUSED
 layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
 layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_buf;
 layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
+#else /* GDN_CONV_FUSED */
+// Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update): the conv
+// inputs ride slots 0..2 and the conv carry-out state slot 10; every other slot is as below.
+//   0 conv state [B, K-1, C]   1 qkv row [B, 1, C]   2 conv weight [C, K, 1]   10 conv state out
+layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
+layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
+layout(set = 0, binding = 2, std430) readonly buffer ConvW     { uint16_t v[]; } conv_w;
+layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
+#ifdef GDN_NORM_FUSED
+// Gated-norm epilogue (rms_norm_gated over each head's 128 outputs): 11 gate z [B, 1, Hv, 128], 12 norm weight [128].
+layout(set = 0, binding = 11, std430) readonly buffer NormGate   { uint16_t v[]; } norm_gate;
+layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#endif /* GDN_NORM_FUSED */
+#endif /* GDN_CONV_FUSED */
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { vec4     v[]; } s_in;
@@ -479,6 +501,137 @@ float gdn_beta_ew(float b_in) {
 }
 
 #endif /* GDN_COMPOSED_ORDER */
+#ifdef GDN_CONV_FUSED
+// Push-constant fields the fused build reuses (the delta fields it does not need):
+//   operation K (taps)   lhs_size K-1   reduce_size C (channels)   rhs_size key_dim
+//   lhs_offset conv state offset   rhs_offset qkv row offset   aux_size conv weight offset
+//   out_strides[0] conv state out offset   [1] q/k norm eps bits   [2] q scale bits   [3] k scale bits
+shared float gdn_norm_block[256];
+
+// The store gdn_conv_decode.comp uses (it keeps infinities; this file's bf16_store does not).
+uint16_t gdn_conv_bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+// One channel of gdn_conv_decode.comp with flag bit 0 (SiLU): the tap body, the roundings and the
+// SiLU chain are that file's statements verbatim.
+uint16_t gdn_conv_channel(uint channel) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  float accumulator = 0.0;
+  for (uint tap = 0u; tap < params.operation; ++tap) {
+    float value = tap < km1
+        ? bf16_load(conv_state.v[params.lhs_offset + tap * channels + channel])
+        : bf16_load(conv_x.v[params.rhs_offset + channel]);
+    accumulator += value *
+        bf16_load(conv_w.v[params.aux_size + channel * params.operation + tap]);
+  }
+  uint16_t conv_out = gdn_conv_bf16_store(accumulator);
+  float value = bf16_load(conv_out);
+  float sigmoid_value = 1.0 / (1.0 + exp(-value));
+  uint16_t sig_b = gdn_conv_bf16_store(sigmoid_value);
+  float silu = value * bf16_load(sig_b);
+  return gdn_conv_bf16_store(silu);
+}
+
+// The q/k rms-norm epilogue of gdn_conv_decode.comp (flag bit 1), non-APPLE build: given the
+// stored activated value, the half's reduced sum of squares and the scale bits.
+uint16_t gdn_conv_qk_norm(uint16_t activated, float sum_squares, uint scale_bits) {
+  float norm_value = bf16_load(activated);
+  float eps = uintBitsToFloat(params.out_strides[1]);
+  float mean_square = sum_squares / 128.0;
+  float norm = inversesqrt(mean_square + eps);
+  float scale = bf16_load(gdn_conv_bf16_store(uintBitsToFloat(scale_bits)));
+  precise float result = norm_value * (norm * 1.0);
+  float normed = bf16_load(gdn_conv_bf16_store(result));
+  return gdn_conv_bf16_store(normed * scale);
+}
+
+// The carry-out conv state of one channel: rows shift up, the last row is this step's x.
+void gdn_conv_state_out(uint channel) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  for (uint r = 0u; r + 1u < km1; ++r) {
+    conv_state_out.v[params.out_strides[0] + r * channels + channel] =
+        conv_state.v[params.lhs_offset + (r + 1u) * channels + channel];
+  }
+  conv_state_out.v[params.out_strides[0] + (km1 - 1u) * channels + channel] =
+      conv_x.v[params.rhs_offset + channel];
+}
+
+// Replaces the q, k and v reads: this thread owns the q, k and v channel of its value row (equal key
+// and value head counts, head dim 128). Fills sq[row] and sk[row]; returns the value element.
+float gdn_conv_prologue(uint head, uint row) {
+  const uint key_dim = params.rhs_size;
+  const uint q_channel = head * 128u + row;
+  const uint k_channel = key_dim + head * 128u + row;
+  const uint v_channel = 2u * key_dim + head * params.matrix_n + row;
+  uint16_t q_act = gdn_conv_channel(q_channel);
+  uint16_t k_act = gdn_conv_channel(k_channel);
+  float q_value = bf16_load(q_act);
+  float k_value = bf16_load(k_act);
+  gdn_norm_block[row] = q_value * q_value;
+  gdn_norm_block[128u + row] = k_value * k_value;
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    if (row < stride) {
+      gdn_norm_block[row] += gdn_norm_block[row + stride];
+      gdn_norm_block[128u + row] += gdn_norm_block[128u + row + stride];
+    }
+    barrier();
+  }
+  sq[row] = bf16_load(gdn_conv_qk_norm(q_act, gdn_norm_block[0], params.out_strides[2]));
+  sk[row] = bf16_load(gdn_conv_qk_norm(k_act, gdn_norm_block[128], params.out_strides[3]));
+  uint16_t v_act = gdn_conv_channel(v_channel);
+  gdn_conv_state_out(q_channel);
+  gdn_conv_state_out(k_channel);
+  gdn_conv_state_out(v_channel);
+  return bf16_load(v_act);
+}
+#ifdef GDN_NORM_FUSED
+// Epilogue: rms_norm_gated (fast_norm_gated.comp mode 0, the default non-APPLE row reduction, which
+// serves 128-wide rows) over this head's 128 outputs, replacing the y store. Statements are that
+// file's. Extra fields: params.shape[3] gate item offset, params.output_size norm weight item offset,
+// params.alpha the norm eps. The reduction is the file's 256-slot tree with the stride-128 step omitted
+// (it only ever adds the +0.0 of the 128 idle slots).
+shared float gdn_out_block[128];
+
+void gdn_norm_epilogue(uint head, uint row, float o_acc) {
+  // the delta kernel's own bf16 store of y, then the widen the norm kernel's input read performs
+  float value = bf16_load(bf16_store(o_acc));
+  float local_sq = 0.0;
+  local_sq += value * value;
+  gdn_out_block[row] = local_sq;
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    if (row < stride) {
+      gdn_out_block[row] += gdn_out_block[row + stride];
+    }
+    barrier();
+  }
+  float mean_square = gdn_out_block[0] / 128.0;
+  barrier();
+  float norm = inversesqrt(mean_square + params.alpha);
+  float weight = bf16_load(norm_w.v[params.output_size + row]);
+  precise float norm_weight = norm * weight;
+  precise float result = value * norm_weight;
+  float normed = bf16_load(gdn_conv_bf16_store(result));
+  float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + row]);
+  float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+  precise float silu = gate * sigmoid_value;
+  precise float prod = silu * normed;
+  y_buf.v[params.output_offset + head * params.matrix_n + row] = gdn_conv_bf16_store(prod);
+}
+#endif /* GDN_NORM_FUSED */
+#define GDN_V_ELEM gdn_v_elem
+#else /* GDN_CONV_FUSED */
+#define GDN_V_ELEM bf16_load(v_buf.v[params.aux_size + head * dv + row])
+#endif /* GDN_CONV_FUSED */
+
 void main() {
   uint dk = params.matrix_m;
   uint dv = params.matrix_n;
@@ -505,10 +658,14 @@ void main() {
     sq[i] = bf16_load(q_buf.v[params.lhs_offset + khead * dk + i]);
   }
 #else
+#ifdef GDN_CONV_FUSED
+  const float gdn_v_elem = gdn_conv_prologue(head, row);
+#else /* GDN_CONV_FUSED */
   for (uint i = row; i < dk; i += 128u) {
     sk[i] = bf16_load(k_buf.v[params.rhs_offset + head * dk + i]);
     sq[i] = bf16_load(q_buf.v[params.lhs_offset + head * dk + i]);
   }
+#endif /* GDN_CONV_FUSED */
 #endif
   barrier();
 
@@ -611,7 +768,7 @@ void main() {
   float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk, g,
                              (params.flags & 512u) != 0u);
 #endif /* GDN_COMPOSED_ORDER */
-  float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
+  float delta = (GDN_V_ELEM - kv_acc) * beta;
   sdelta[row] = delta;
   barrier();
 
@@ -623,5 +780,9 @@ void main() {
   float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row],
                                 (params.flags & 512u) != 0u);
 #endif /* GDN_COMPOSED_ORDER */
+#ifdef GDN_NORM_FUSED
+  gdn_norm_epilogue(head, row, o_acc);
+#else /* GDN_NORM_FUSED */
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
+#endif /* GDN_NORM_FUSED */
 }

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -534,6 +535,32 @@ inline bool gdn_bf16a_untiled_default(const std::string& device_name, int hk, in
 inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) {
   if (!gdn_bf16a_untiled_default(device_name, hk, hv)) return false;
   return hv == hk;
+}
+
+// The fused GatedDelta conv + delta + gated norm op (fast::gdn_conv_delta_update with the gated norm folded in, the MLX_OMARCHY_GDN_CONV_DELTA value 2)
+// runs by default on the 13-inch (Apple M1, G13G) only: the 2B decode there measured +0.51 percent (5 of 5 pairs faster, identical tokens, dispatches per
+// token 251 to 215, 5 pairs x 128 tokens at ctx 512; receipts on the 13-inch ~/scratch/w7x-decode-gap/results/fusion-ab-jwm1-w7q-epilogue2.out). The 16-inch
+// (G13C) and the 14-inch (G14C) are unmeasured, so they keep the stock route until their own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value
+// overrides this everywhere.
+inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
+  return device_name.find("G13G") != std::string::npos;
+}
+
+// The one resolver for the fused GatedDelta conv + delta op's mode: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated
+// norm fused. An explicit MLX_OMARCHY_GDN_CONV_DELTA value ("0", "1", "2"; anything else reads as 0) overrides the per-chip default. The C ABI
+// (mlx_omarchy_gdn_conv_delta_default, eval.cpp) wraps this for the mlx-lm patch, and the op's dispatch consults it directly: both sides see the same answer.
+inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
+  const char* env = std::getenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  if (env != nullptr && env[0] != '\0') {
+    if (env[0] == '1' && env[1] == '\0') {
+      return 1;
+    }
+    if (env[0] == '2' && env[1] == '\0') {
+      return 2;
+    }
+    return 0;
+  }
+  return gdn_conv_delta_norm_default_part(device_name) ? 2 : 0;
 }
 
 // ArgMax, ArgMin and LogSumExp over a long row (8192 to 1048576 columns, the vocabulary row of a decode step): the parts whose default is the chunked
