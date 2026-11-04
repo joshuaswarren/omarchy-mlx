@@ -8577,6 +8577,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       const auto& geometry = qmm_geometry();
       vec_kernel = geometry.word;
       qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      if (geometry.word ==
+              omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16 &&
+          batch == 1u &&
+          decode_path_override("MLX_OMARCHY_QMM_WORD_PAIR") == 1) {
+        constexpr uint32_t kPairColumns = 64u;
+        uint32_t pair_groups =
+            (params.matrix_n + kPairColumns - 1u) / kPairColumns;
+        if (pair_groups <= omarchy::kMaxComputeGroupCountX) {
+          vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordPairSubgroupBF16;
+          qmm_groups = pair_groups;
+        }
+      }
     }
     encoder.dispatch_compute(
         vec_kernel,

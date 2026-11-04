@@ -11,22 +11,33 @@
 //
 // The flag is read once per process, so each scenario runs in a child
 // process (this binary re-execs itself) and the parent compares the bytes.
+//
+// The pair test checks exact bytes and dispatches; bytes alone cannot prove
+// that the optional kernel ran.
 
 #include <dlfcn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <iterator>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/ops.h"
@@ -68,6 +79,18 @@ array make_x(int k, std::mt19937& rng) {
   return astype(
       array(host.data(), Shape{1, 1, k}, float32), bfloat16);
 }
+
+// Batched QMM can emit an input-copy dispatch before the QMM dispatch.
+bool is_qmm_word_kernel(int id) {
+  using K = omarchy::ComputeKernel;
+  return id == static_cast<int>(K::QmmVecQ4WordSubgroupBF16) ||
+      id == static_cast<int>(K::QmmVecQ4WordSubgroupBF16R2S16) ||
+      id == static_cast<int>(K::QmmVecQ4WordSubgroupBatch4BF16) ||
+      id == static_cast<int>(K::QmmVecQ4WordPairSubgroupBF16);
+}
+
+std::vector<std::pair<int, uint32_t>> traced_dispatch(
+    const std::function<void()>& run);
 
 // One scenario: build the decode-shaped graphs and evaluate everything.
 int scenario(const std::string& name, const std::string& out) {
@@ -118,6 +141,66 @@ int scenario(const std::string& name, const std::string& out) {
     eval(act, d);
     outs.push_back(act);
     outs.push_back(d);
+  } else if (name == "wpair") {
+    struct WCase {
+      const char* label;
+      int n;
+      int k;
+      int batch;
+      bool qmv_batch_off;
+    };
+    const WCase cases[] = {
+        {"full", 6144, 2048, 1, false},
+        {"partial_fast", 96, 2048, 1, false},
+        {"partial_tail", 100, 2048, 1, false},
+        {"tail_k", 2176, 2176, 1, false},
+        {"tiny", 65, 2048, 1, false},
+        {"batch4_default", 6144, 2048, 3, false},
+        {"batch_geom_noopt", 6144, 2048, 3, true},
+        {"batch5_ineligible", 6144, 2048, 5, false},
+    };
+    std::vector<std::string> labels;
+    std::vector<std::pair<int, uint32_t>> dispatches;
+    std::vector<int> counts;
+    for (const auto& c : cases) {
+      std::mt19937 rng(20261104u + c.n * 7u + c.k * 13u + c.batch);
+      auto l = make_lin(c.n, c.k, rng);
+      array x = make_x(c.k, rng);
+      if (c.batch != 1) {
+        x = repeat(x, c.batch, 0);
+      }
+      eval(x, l.w, l.s, l.b);
+      if (c.qmv_batch_off) {
+        setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);
+      }
+      array o = qmm(x, l);
+      auto seen = traced_dispatch([&] {
+        eval(o);
+        omarchy::get_command_encoder(default_stream(Device::gpu)).synchronize();
+      });
+      if (c.qmv_batch_off) {
+        unsetenv("MLX_OMARCHY_QMV_BATCH");
+      }
+      int qmm_id = -1;
+      uint32_t qmm_gx = 0;
+      int qmm_rows = 0;
+      for (const auto& d : seen) {
+        if (is_qmm_word_kernel(d.first)) {
+          ++qmm_rows;
+          qmm_id = d.first;
+          qmm_gx = d.second;
+        }
+      }
+      labels.push_back(c.label);
+      dispatches.push_back({qmm_id, qmm_gx});
+      counts.push_back(qmm_rows);
+      outs.push_back(o);
+    }
+    std::ofstream ids(out + ".ids");
+    for (size_t i = 0; i < dispatches.size(); ++i) {
+      ids << labels[i] << " " << dispatches[i].first << " "
+          << dispatches[i].second << " " << counts[i] << "\n";
+    }
   } else if (name == "name") {
     std::ofstream f(out);
     f << mlx::core::omarchy::qmm_geometry_name();
@@ -137,20 +220,50 @@ int scenario(const std::string& name, const std::string& out) {
   return 0;
 }
 
-uint64_t fnv(const std::string& path) {
-  std::ifstream f(path, std::ios::binary);
-  uint64_t h = 1469598103934665603ull;
-  char buf[65536];
-  while (f.read(buf, sizeof(buf)) || f.gcount() > 0) {
-    for (std::streamsize i = 0; i < f.gcount(); ++i) {
-      h ^= static_cast<unsigned char>(buf[i]);
-      h *= 1099511628211ull;
-    }
-    if (!f) {
-      break;
+bool identical_files(const std::string& first, const std::string& second) {
+  std::ifstream a(first, std::ios::binary);
+  std::ifstream b(second, std::ios::binary);
+  if (!a || !b || a.peek() == std::char_traits<char>::eof() ||
+      b.peek() == std::char_traits<char>::eof()) {
+    return false;
+  }
+  return std::equal(
+      std::istreambuf_iterator<char>(a),
+      std::istreambuf_iterator<char>(),
+      std::istreambuf_iterator<char>(b),
+      std::istreambuf_iterator<char>());
+}
+
+// Ordered (kernel id, workgroup count) pairs dispatched while `run`
+// evaluates, from the encoder's MLX_OMARCHY_TRACE_DISPATCH lines on stderr
+// (the test_qmv_batch.cpp capture pattern; the workgroup count is kept so
+// the W2 pair check sees the changed grid, not only a changed id).
+std::vector<std::pair<int, uint32_t>> traced_dispatch(
+    const std::function<void()>& run) {
+  std::fflush(stderr);
+  int saved = dup(2);
+  std::FILE* sink = std::tmpfile();
+  dup2(fileno(sink), 2);
+  setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+  run();
+  unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+  std::fflush(stderr);
+  dup2(saved, 2);
+  close(saved);
+  std::rewind(sink);
+  std::vector<std::pair<int, uint32_t>> dispatches;
+  char line[512];
+  while (std::fgets(line, sizeof(line), sink)) {
+    int id = -1;
+    uint32_t gx = 0;
+    if (std::sscanf(
+            line, "[rtmod] DISPATCH kernel=%d count=%*u gx=%u", &id, &gx) ==
+        2) {
+      dispatches.push_back({id, gx});
     }
   }
-  return h;
+  std::fclose(sink);
+  return dispatches;
 }
 
 int run_child(const char* name, const char* out) {
@@ -241,12 +354,150 @@ int main(int argc, char** argv) {
         ++failures;
         continue;
       }
-      if (fnv(base) != fnv(other)) {
+      if (!identical_files(base, other)) {
         std::cout << "FAIL: " << geometry << " " << name
                   << " bytes differ from 2x4\n";
         ++failures;
       } else {
         std::cout << "ok: " << geometry << " " << name << " identical\n";
+      }
+    }
+  }
+  // Equal bytes are insufficient when the optional route does not engage.
+  {
+    const auto& gcaps = mlx::core::omarchy::device().capabilities();
+    bool qualifies = gcaps.subgroup_size == 32u &&
+        (gcaps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u;
+    if (!qualifies) {
+      std::cout << "skip: W2 word-pair needs a 32-lane arithmetic subgroup"
+                << " (device subgroup " << gcaps.subgroup_size << ")\n";
+    } else {
+      const std::vector<std::string> expected = {
+          "full",
+          "partial_fast",
+          "partial_tail",
+          "tail_k",
+          "tiny",
+          "batch4_default",
+          "batch_geom_noopt",
+          "batch5_ineligible"};
+      const size_t kSingleCases = 5;
+      const auto prefix = (std::filesystem::temp_directory_path() /
+                           ("omarchy-qmm-pair-" + std::to_string(getpid())))
+                              .string();
+      std::string base = prefix + "-base.bin";
+      std::string cand = prefix + "-cand.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x16", 1);
+      unsetenv("MLX_OMARCHY_QMM_WORD_PAIR");
+      int rb = run_child("wpair", base.c_str());
+      setenv("MLX_OMARCHY_QMM_WORD_PAIR", "1", 1);
+      int rc = run_child("wpair", cand.c_str());
+      unsetenv("MLX_OMARCHY_QMM_WORD_PAIR");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      auto read_rows = [](const std::string& path) {
+        std::vector<std::array<std::string, 4>> rows;
+        std::ifstream f(path);
+        std::string label, id, gx, count;
+        while (f >> label >> id >> gx >> count) {
+          rows.push_back({label, id, gx, count});
+        }
+        return rows;
+      };
+      auto rows_b = read_rows(base + ".ids");
+      auto rows_c = read_rows(cand + ".ids");
+      if (rb != 0 || rc != 0) {
+        std::cout << "FAIL: W2 word-pair child rc " << rb << "/" << rc
+                  << "\n";
+        ++failures;
+      } else {
+        auto rows_ok = [&](const std::vector<std::array<std::string, 4>>& rows,
+                           const char* arm) {
+          if (rows.size() != expected.size()) {
+            std::cout << "FAIL: W2 word-pair " << arm << " trace has "
+                      << rows.size() << " rows, want " << expected.size()
+                      << " (one dispatch per named case)\n";
+            ++failures;
+            return false;
+          }
+          for (size_t i = 0; i < rows.size(); ++i) {
+            if (rows[i][0] != expected[i]) {
+              std::cout << "FAIL: W2 word-pair " << arm << " row " << i
+                        << " is " << rows[i][0] << ", want " << expected[i]
+                        << "\n";
+              ++failures;
+              return false;
+            }
+            if (rows[i][3] != "1") {
+              std::cout << "FAIL: W2 word-pair " << arm << " case "
+                        << rows[i][0] << " saw " << rows[i][3]
+                        << " QMM dispatches, want 1 (capture broken)\n";
+              ++failures;
+              return false;
+            }
+          }
+          return true;
+        };
+        bool ok_b = rows_ok(rows_b, "baseline");
+        bool ok_c = rows_ok(rows_c, "candidate");
+        if (ok_b && ok_c) {
+          size_t engaged = 0;
+          size_t batch_moved = 0;
+          for (size_t i = 0; i < rows_b.size(); ++i) {
+            bool differs = rows_b[i][1] != rows_c[i][1] ||
+                rows_b[i][2] != rows_c[i][2];
+            if (i < kSingleCases) {
+              if (differs) {
+                ++engaged;
+              }
+            } else if (differs) {
+              ++batch_moved;
+            }
+          }
+          if (engaged != kSingleCases || batch_moved != 0) {
+            std::cout << "FAIL: WORD_PAIR=1 engagement " << engaged << "/"
+                      << kSingleCases << " single-row cases, batch routes moved "
+                      << batch_moved << " (the candidate dispatch must differ"
+                      << " on every single-row case and match on every batch"
+                      << " case)\n";
+            ++failures;
+          }
+          const std::vector<std::array<uint32_t, 2>> pair_grids = {
+              {192, 96},  // full, n = 6144
+              {3, 2},     // partial_fast, n = 96
+              {4, 2},     // partial_tail, n = 100
+              {68, 34},   // tail_k, n = 2176
+              {3, 2},     // tiny, n = 65
+          };
+          const int base_id = static_cast<int>(
+              omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16);
+          const int pair_id =
+              static_cast<int>(omarchy::ComputeKernel::QmmVecQ4WordPairSubgroupBF16);
+          bool grids_ok = true;
+          for (size_t i = 0; i < kSingleCases; ++i) {
+            if (rows_b[i][1] != std::to_string(base_id) ||
+                std::stoul(rows_b[i][2]) != pair_grids[i][0] ||
+                rows_c[i][1] != std::to_string(pair_id) ||
+                std::stoul(rows_c[i][2]) != pair_grids[i][1]) {
+              std::cout << "FAIL: W2 word-pair case " << rows_b[i][0]
+                        << " dispatched kernel " << rows_b[i][1] << "/"
+                        << rows_c[i][1] << " on grid " << rows_b[i][2] << "/"
+                        << rows_c[i][2] << ", want baseline " << base_id << "/"
+                        << pair_grids[i][0] << " and pair " << pair_id << "/"
+                        << pair_grids[i][1] << "\n";
+              grids_ok = false;
+              ++failures;
+            }
+          }
+          if (!identical_files(base, cand)) {
+            std::cout << "FAIL: W2 word-pair bytes differ from the unpaired"
+                      << " 2x16 kernel\n";
+            ++failures;
+          } else if (engaged == kSingleCases && batch_moved == 0 && grids_ok) {
+            std::cout << "ok: W2 word-pair engaged and byte-identical over "
+                      << kSingleCases << " single-row and "
+                      << (rows_b.size() - kSingleCases) << " batch cases\n";
+          }
+        }
       }
     }
   }

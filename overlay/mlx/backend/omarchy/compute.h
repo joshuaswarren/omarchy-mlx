@@ -1097,6 +1097,7 @@ enum class ComputeKernel : uint16_t {
   // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
   GatedDeltaDecodeConvNormBF16Pf,
   GatedDeltaDecodeConvNormBF16PfWide,
+  QmmVecQ4WordPairSubgroupBF16,
   Count,
 };
 
