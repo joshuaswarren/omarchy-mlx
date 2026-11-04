@@ -144,8 +144,13 @@ const QmmGeometry& qmm_geometry() {
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
     }
+    if (v == "1x16") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R1S16,
+          K::QmmVecQ4MultiSubgroupBF16R1S16, "1x16"};
+    }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16 1x16");
   }();
   return geometry;
 }

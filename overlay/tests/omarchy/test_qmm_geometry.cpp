@@ -225,8 +225,20 @@ int main(int argc, char** argv) {
       ++failures;
     }
   }
+  {
+    setenv("MLX_OMARCHY_QMM_GEOM", "1x16", 1);
+    int rc = run_child("name", "/tmp/w7p-geom-name.bin");
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    std::ifstream f("/tmp/w7p-geom-name.bin");
+    std::string got;
+    std::getline(f, got);
+    if (rc != 0 || got != "1x16") {
+      std::cout << "FAIL: 1x16 geometry unavailable (rc " << rc << ")\n";
+      ++failures;
+    }
+  }
   // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x16", "2x4"}) {
+  for (const char* geometry : {"2x16", "2x4", "1x16"}) {
     for (const char* name : {"single", "group", "swiglu"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";

@@ -303,6 +303,8 @@
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r1s16.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r1s16.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
@@ -1769,6 +1771,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16,
           qmm_vec_q4_multi_subgroup_bf16_r2s16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R1S16:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r1s16,
+          qmm_vec_q4_word_subgroup_bf16_r1s16_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R1S16:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r1s16,
+          qmm_vec_q4_multi_subgroup_bf16_r1s16_size};
     case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
       return {
           qmm_vec_q4_multi_subgroup_bf16,
