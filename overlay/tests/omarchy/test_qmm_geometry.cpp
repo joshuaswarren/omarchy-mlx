@@ -92,6 +92,13 @@ int scenario(const std::string& name, const std::string& out) {
     auto o2 = qmm(x, small);
     eval(o2);
     outs.push_back(o2);
+  } else if (name == "boundary") {
+    auto x = make_x(64, rng);
+    auto l = make_lin(1048568, 64, rng);
+    eval(x, l.w, l.s, l.b);
+    auto o = qmm(x, l);
+    eval(o);
+    outs.push_back(o);
   } else if (name == "group") {
     auto x = make_x(2048, rng);
     auto a = make_lin(4096, 2048, rng);
@@ -260,6 +267,20 @@ int main(int argc, char** argv) {
       } else {
         std::cout << "ok: " << geometry << " " << name << " identical\n";
       }
+    }
+  }
+  if (caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0) {
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x16", 1);
+    int base_rc = run_child("boundary", "/tmp/w7p-geom-boundary-base.bin");
+    setenv("MLX_OMARCHY_QMM_GEOM", "1x16", 1);
+    int candidate_rc = run_child("boundary", "/tmp/w7p-geom-boundary-other.bin");
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    if (base_rc != 0 || candidate_rc != 0 ||
+        fnv("/tmp/w7p-geom-boundary-base.bin") !=
+            fnv("/tmp/w7p-geom-boundary-other.bin")) {
+      std::cout << "FAIL: 1x16 boundary differs from 2x16\n";
+      ++failures;
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")

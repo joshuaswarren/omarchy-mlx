@@ -8582,12 +8582,20 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       const auto& geometry = qmm_geometry();
       vec_kernel = geometry.word;
       qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R1S16 &&
+          qmm_groups > omarchy::kMaxComputeGroupCountX) {
+        vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16;
+        qmm_groups = (params.matrix_n + 31u) / 32u;
+      }
+    }
+    if (qmm_groups > omarchy::kMaxComputeGroupCountX) {
+      throw std::invalid_argument("[quantized_matmul] decode output exceeds the dispatch limit");
     }
     encoder.dispatch_compute(
         vec_kernel,
         bindings,
         params,
-        std::min(qmm_groups, omarchy::kMaxComputeGroupCountX),
+        qmm_groups,
         1u,
         1u);
     return;
