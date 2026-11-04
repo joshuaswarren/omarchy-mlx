@@ -1090,6 +1090,10 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable.
   QmmVecQ4WordSubgroupBF16R2S16,
   QmmVecQ4MultiSubgroupBF16R2S16,
+  // Software-pipelined variant of the 2x16 decode Q4 word kernel (qmm_vec.comp -DQMM_WORD_PIPE=1): the same
+  // lane-to-word mapping and the same per-column chain, only the load schedule differs. Appended to keep
+  // profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S16Pipe,
   Count,
 };
 

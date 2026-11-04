@@ -8565,6 +8565,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       const auto& geometry = qmm_geometry();
       vec_kernel = geometry.word;
       qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      // Software-pipelined word kernel (MLX_OMARCHY_QMM_WORD_PIPE=1): the LEAF of the geometry selection, so it composes with
+      // MLX_OMARCHY_QMM_GEOM and the per-chip default instead of racing them. Same lane-to-word mapping, same per-column chain and
+      // rounding as the geometry's word kernel (only the load schedule differs), so the result is bit-identical.
+      if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16 &&
+          decode_path_override("MLX_OMARCHY_QMM_WORD_PIPE") != 0) {
+        vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16Pipe;
+      }
     }
     encoder.dispatch_compute(
         vec_kernel,

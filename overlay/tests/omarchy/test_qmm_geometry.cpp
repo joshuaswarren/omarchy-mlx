@@ -250,6 +250,32 @@ int main(int argc, char** argv) {
       }
     }
   }
+  // The software-pipelined word kernel (MLX_OMARCHY_QMM_WORD_PIPE=1) is the leaf of the geometry selection: same lane-to-word
+  // mapping, same per-column chain and rounding, only the load schedule differs - so its bytes must equal the unpipelined kernel's.
+  // The scenarios cover the pair-word walk (n = 6144, 4096, 512), the single-word tail (n = 100, not a multiple of 8), the grouped
+  // multi-weight path and the swiglu pair.
+  for (const char* name : {"single", "group", "swiglu"}) {
+    std::string base = "/tmp/w7p-pipe-base.bin";
+    std::string other = "/tmp/w7p-pipe-other.bin";
+    unsetenv("MLX_OMARCHY_QMM_WORD_PIPE");
+    int rc = run_child(name, base.c_str());
+    setenv("MLX_OMARCHY_QMM_WORD_PIPE", "1", 1);
+    int rc2 = run_child(name, other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_WORD_PIPE");
+    if (rc != 0 || rc2 != 0) {
+      std::cout << "FAIL: " << name << " pipe child rc " << rc << "/"
+                << rc2 << "\n";
+      ++failures;
+      continue;
+    }
+    if (fnv(base) != fnv(other)) {
+      std::cout << "FAIL: " << name
+                << " pipelined bytes differ from the unpipelined kernel\n";
+      ++failures;
+    } else {
+      std::cout << "ok: " << name << " pipelined bytes identical\n";
+    }
+  }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
             << " failures " << failures << "\n";
   return failures == 0 ? 0 : 1;
