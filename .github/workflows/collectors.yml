@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'install.sh'
+      - 'scripts/apply-mlx-lm-patches.sh'
+      - 'scripts/patch-mlx-lm-*.py'
       - 'scripts/collect*.py'
       - 'scripts/test_collect*.py'
       - 'scripts/mlx_provenance.py'
@@ -14,6 +16,8 @@ on:
   push:
     paths:
       - 'install.sh'
+      - 'scripts/apply-mlx-lm-patches.sh'
+      - 'scripts/patch-mlx-lm-*.py'
       - 'scripts/collect*.py'
       - 'scripts/test_collect*.py'
       - 'scripts/mlx_provenance.py'
