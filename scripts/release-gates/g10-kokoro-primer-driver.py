@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from voice_status import primer_failure_line
 
 HOME, LOG = sys.argv[1], sys.argv[2]
 RUNTIME = os.path.join(HOME, "assistant", "application.json")
@@ -95,9 +96,7 @@ def main() -> int:
     say(f"PRIMED {'true' if primed else 'false'} after "
         f"{time.monotonic() - t0:.1f}s (limit {PRIMED_TIMEOUT_S:.0f}s)")
     if not primed:
-        deps = voice.get("dependencies", {})
-        say(f"PRIMER_NOT_LANDED usable={voice.get('usable')} state={voice.get('state')} "
-            f"dependencies.missing={deps.get('missing')} reasons={voice.get('reasons')}")
+        say(primer_failure_line(voice))
 
     cid = call("POST", "/api/conversations", {"save": False})["id"]
     t0 = time.monotonic()
