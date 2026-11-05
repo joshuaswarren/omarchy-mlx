@@ -240,7 +240,7 @@ TEST_CASE("default allocator limits never sit below what the heap can hold") {
   // 56.7 GiB limit: first 16-token step 228 s, against 1.2 s with the limit
   // at the heap, also on a 60 GiB heap). The gc ceiling does the same
   // with its trim once it sits below the weights (60 GiB heap, 95% ceiling;
-  // decode measured slower, see the pull request description). The limit
+  // decode was measured slower in matched diagnostic pairs). The limit
   // must also not sit below the gc ceiling, the order Metal uses.
   const size_t weights = 62329924224ull;
   const size_t heaps[] = {16 * kGiB, 32 * kGiB, 47 * kGiB, 60 * kGiB, 63 * kGiB};

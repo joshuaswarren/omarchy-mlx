@@ -56,8 +56,9 @@ inline constexpr uint64_t kPendingCompletion = UINT64_MAX;
 // model whose weights fit the heap but exceed the limit loses the cache
 // on every allocation. The gc ceiling is the heap as well: a ceiling below
 // the weights (95% of a 60 GiB heap is 57 GiB, under a 58 GiB model) makes
-// every malloc release cached buffers, and decode was measured slower (see
-// the pull request description). The ceiling still trims the cache by its
+// every malloc release cached buffers, and that was measured to slow decode
+// (matched diagnostic pairs, gpt-oss-120b weights on a 60 GiB heap). The
+// ceiling still trims the cache by its
 // overshoot (A20). The limit is not below the gc ceiling,
 // the order Metal uses, so by default both fire only past the whole heap:
 // tuning either below the heap is what changes cache behaviour.
