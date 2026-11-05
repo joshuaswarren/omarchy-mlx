@@ -299,6 +299,12 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # in Python. Set MLX_OMARCHY_GDN_RAW_REPEAT=1 to expand q/k here instead. The
 # 9B route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
+# GDN decode conv + delta (+ gated norm) as one dispatch, mx.fast.gdn_conv_delta_update
+# (Qwen3.5 / Qwen3.8 qwen3_5.py). The backend decides per chip (13-inch M1: mode 2, the
+# default since #352; every other chip keeps the stock route) and a wheel without the op
+# or the C ABI symbol composes the old path, so applying it everywhere is safe. Apply it
+# after the conv, norm and raw-gates patches above. MLX_OMARCHY_GDN_CONV_DELTA=0 turns it off.
+python3 "$ROOT/scripts/patch-mlx-lm-qwen35-gdn-conv-delta.py" "$VENV"
 # Qwen3-Next dense MLP, single-token rows: write silu(gate) * up as raw ops so
 # the backend's GEMV store-epilogue fold fires (32 fewer dispatches per
 # Qwen3.5-9B decode token). Same operands and bf16 rounding as the compiled
