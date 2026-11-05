@@ -84,6 +84,7 @@ def main() -> int:
     say(f"VOICE_SETUP_COMPLETE {setup_s:.1f}s")
 
     primed = False
+    voice = {}
     t0 = time.monotonic()
     while time.monotonic() - t0 < PRIMED_TIMEOUT_S:
         voice = call("GET", "/api/status").get("voice", {}).get("synthesis", {})
@@ -93,6 +94,10 @@ def main() -> int:
         time.sleep(2)
     say(f"PRIMED {'true' if primed else 'false'} after "
         f"{time.monotonic() - t0:.1f}s (limit {PRIMED_TIMEOUT_S:.0f}s)")
+    if not primed:
+        deps = voice.get("dependencies", {})
+        say(f"PRIMER_NOT_LANDED usable={voice.get('usable')} state={voice.get('state')} "
+            f"dependencies.missing={deps.get('missing')} reasons={voice.get('reasons')}")
 
     cid = call("POST", "/api/conversations", {"save": False})["id"]
     t0 = time.monotonic()
