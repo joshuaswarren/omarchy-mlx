@@ -117,14 +117,15 @@ VulkanAllocator::VulkanAllocator()
           [](VulkanBuffer* buf) { return buf->size; },
           [this](VulkanBuffer* buf) { destroy_buffer(buf); }) {
   size_t total = is_available() ? capability_report(0).total_memory : 0;
-  memory_limit_ = total > 0 ? (total / 100) * 90 : (1ull << 32);
+  heap_bytes_ = total;
+  memory_limit_ = default_memory_limit(total);
   // Metal's `gc_limit_` is `min(0.95 * max_rec, 0.95 * memsize)` —
   // Honeykrisp has no separate max-recommended, so the ceiling is
   // 0.95 of the host-visible heap. cache_limit_ matches the same
   // fraction; a single number drives both the malloc gate and the
   // free-side pool cap, so changing one or the other never gets them
   // out of sync.
-  size_t ceiling = total > 0 ? (total / 100) * 95 : (1ull << 32);
+  size_t ceiling = default_gc_limit(total);
   gc_limit_ = ceiling;
   cache_limit_ = ceiling;
 }

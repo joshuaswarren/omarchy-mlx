@@ -231,6 +231,51 @@ TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
   }
 }
 
+TEST_CASE("default allocator limits never sit below what the heap can hold") {
+  namespace omarchy = mlx::core::omarchy;
+  constexpr size_t kGiB = size_t{1} << 30;
+  // The memory limit is where malloc drops the reuse cache; below the
+  // resident weights that happens on every allocation (gpt-oss-120b, 58.05
+  // GiB of weights on a 63 GiB heap (HK_SYSMEM set explicitly) with a
+  // 56.7 GiB limit: first 16-token step 228 s, against 1.2 s with the limit
+  // at the heap, also on a 60 GiB heap). It must also
+  // not sit below the gc ceiling, the order Metal uses.
+  const size_t weights = 62329924224ull;
+  const size_t heaps[] = {16 * kGiB, 32 * kGiB, 47 * kGiB, 60 * kGiB, 63 * kGiB};
+  for (size_t heap : heaps) {
+    CHECK(omarchy::default_memory_limit(heap) >= omarchy::default_gc_limit(heap));
+    CHECK(omarchy::default_gc_limit(heap) == (heap / 100) * 95);
+    if (heap > weights) {
+      // A model that fits the heap is under the limit: no cache drop.
+      CHECK(omarchy::default_memory_limit(heap) > weights);
+    }
+  }
+  // No device (total 0): the same 4 GiB fallback as before for both.
+  CHECK(omarchy::default_memory_limit(0) == 4 * kGiB);
+  CHECK(omarchy::default_gc_limit(0) == 4 * kGiB);
+
+  // The open-batch quarantine budget (eval.cpp, limit / 16) is tuned
+  // against 90% of the heap and stays there: only the cache behaviour
+  // changes with the memory limit. A caller that lowers the limit still
+  // lowers the budget; raising the limit does not raise it.
+  for (size_t heap : heaps) {
+    const size_t base = (heap / 100) * 90;
+    CHECK(omarchy::default_batch_limit(
+              omarchy::default_memory_limit(heap), heap) == base);
+    CHECK(omarchy::default_batch_limit(base / 2, heap) == base / 2);
+    CHECK(omarchy::default_batch_limit(heap * 2, heap) == base);
+  }
+  CHECK(omarchy::default_batch_limit(omarchy::default_memory_limit(0), 0) ==
+        4 * kGiB);
+
+  // The constructor must use the helpers: a revert of its memory limit to
+  // 90% of the heap passes the pure checks above but puts the default
+  // limit below the gc ceiling here (on a host with a device).
+  auto& alloc = omarchy::allocator();
+  CHECK(alloc.get_memory_limit() >= alloc.get_gc_limit());
+  CHECK(alloc.batch_limit() <= alloc.get_memory_limit());
+}
+
 int main(int argc, char** argv) {
   return doctest::Context(argc, argv).run();
 }

@@ -133,11 +133,12 @@ void eval(array& arr) {
     // Node budget: flush the batch so a long graph cannot pin unbounded
     // temporaries behind one open command buffer. Byte budget: flush
     // once the intermediates freed under this batch, which nothing can
-    // recycle before it submits, reach their share of the memory limit
-    // (kBatchByteBudgetDivisor). Work budget (MLX_OMARCHY_BATCH_WORK,
-    // issue #19): flush once the batch's summed dispatch work-groups
-    // reach the per-submission GPU-time proxy, so one submission never
-    // holds the queue long enough to stutter the desktop.
+    // recycle before it submits, reach their share of the batch limit (the
+    // memory limit, capped at 90% of the heap; kBatchByteBudgetDivisor).
+    // Work budget (MLX_OMARCHY_BATCH_WORK, issue #19): flush once the
+    // batch's summed dispatch work-groups reach the per-submission GPU-time
+    // proxy, so one submission never holds the queue long enough to stutter
+    // the desktop.
     auto& alloc = omarchy::allocator();
     // First-batch-early (MLX_OMARCHY_BATCH_FIRST): per host thread, reset at
     // every finalize (graph end).
@@ -154,7 +155,7 @@ void eval(array& arr) {
             omarchy::batch_work_budget(
                 encoder.device().hardware_capabilities().device_name)) ||
         alloc.pending_quarantine_bytes() >=
-            alloc.get_memory_limit() / omarchy::kBatchByteBudgetDivisor) {
+            alloc.batch_limit() / omarchy::kBatchByteBudgetDivisor) {
       encoder.commit();
     }
   }
