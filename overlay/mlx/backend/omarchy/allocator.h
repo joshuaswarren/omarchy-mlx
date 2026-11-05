@@ -50,6 +50,38 @@ struct VulkanBuffer {
 // batch; submit() replaces it with the real completion value.
 inline constexpr uint64_t kPendingCompletion = UINT64_MAX;
 
+// Default allocator limits from the Vulkan host-visible heap size
+// (0 = no device: 4 GiB). The memory limit is where malloc drops the
+// whole reuse cache; it must not sit below what the heap can hold, or a
+// model whose weights fit the heap but exceed the limit loses the cache
+// on every allocation. The gc ceiling is the heap as well: a ceiling below
+// the weights (95% of a 60 GiB heap is 57 GiB, under a 58 GiB model) makes
+// every malloc release cached buffers, and that was measured to slow decode
+// (matched diagnostic pairs, gpt-oss-120b weights on a 60 GiB heap). The
+// ceiling still trims the cache by its
+// overshoot (A20). The limit is not below the gc ceiling,
+// the order Metal uses, so by default both fire only past the whole heap:
+// tuning either below the heap is what changes cache behaviour.
+// The open-batch quarantine budget (eval.cpp) keeps its old base, 90% of
+// the heap, so only the cache behaviour moves with the default limit.
+// The BEGIN/END markers delimit the text a standalone test harness extracts;
+// keep them.
+// BEGIN default limits
+inline size_t default_memory_limit(size_t heap_bytes) {
+  return heap_bytes > 0 ? heap_bytes : (size_t{1} << 32);
+}
+
+inline size_t default_gc_limit(size_t heap_bytes) {
+  return heap_bytes > 0 ? heap_bytes : (size_t{1} << 32);
+}
+
+inline size_t default_batch_limit(size_t memory_limit, size_t heap_bytes) {
+  const size_t base =
+      heap_bytes > 0 ? (heap_bytes / 100) * 90 : (size_t{1} << 32);
+  return memory_limit < base ? memory_limit : base;
+}
+// END default limits
+
 class VulkanAllocator : public allocator::Allocator {
  public:
   Buffer malloc(size_t size) override;
@@ -77,6 +109,13 @@ class VulkanAllocator : public allocator::Allocator {
     std::swap(memory_limit_, limit);
     return limit;
   }
+  // Bytes the evaluator divides by kBatchByteBudgetDivisor for the open-
+  // batch quarantine budget: the memory limit, capped at the default 90%
+  // of the heap (see default_batch_limit).
+  size_t batch_limit() const {
+    std::unique_lock lk(mutex_);
+    return default_batch_limit(memory_limit_, heap_bytes_);
+  }
   size_t get_wired_limit() const {
     std::unique_lock lk(mutex_);
     return wired_limit_;
@@ -96,7 +135,7 @@ class VulkanAllocator : public allocator::Allocator {
   }
   // Working-set ceiling (Metal: `gc_limit_`). When `active + cache + size`
   // would exceed it, malloc releases cached buffers before allocating.
-  // Defaults to 95% of `total_memory` (Honeykrisp reports a single
+  // Defaults to `total_memory` (Honeykrisp reports a single
   // unified host-visible heap on Apple-UMA, so there is no separate
   // "max_recommended_working_set_size" like Metal exposes).
   size_t get_gc_limit() const {
@@ -179,10 +218,11 @@ class VulkanAllocator : public allocator::Allocator {
 
   mutable std::mutex mutex_;
   size_t memory_limit_;
+  size_t heap_bytes_{0};
   size_t wired_limit_{0};
   size_t cache_limit_;
   // Metal's `gc_limit_`: working-set ceiling above which malloc
-  // proactively releases cached buffers. Defaults to 95% of the device
+  // proactively releases cached buffers. Defaults to the device
   // host-visible heap (Honeykrisp's reported `total_memory`); oMLX can
   // raise it with `set_memory_limit` when the dflash acquire raises the
   // working set.

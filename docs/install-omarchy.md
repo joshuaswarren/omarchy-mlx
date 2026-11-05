@@ -177,9 +177,13 @@ loads. The formula is `max(50% of MemTotal, MemTotal − 16 GiB)`. Round the
 result down to 1 MiB. Clamp it to 60 GiB. The clamp follows the per-process GPU
 virtual-address window (~64 GiB). The 2026-10-05 heap-budget probe
 committed 63 GiB before the 64th allocation failed to map, so a larger heap
-cannot be used. On MemTotal ≤ 32 GiB the formula never beats the 50%
-default. Those hosts, 16 GB machines included, keep the stock heap
-byte-for-byte. An explicit `HK_SYSMEM` (absolute bytes, as before) still
+cannot be used. The default MLX memory limit and gc ceiling both equal
+the heap, whatever its source (the default above, `HK_SYSMEM` or a drirc
+value), so a model whose resident weights and working set stay under the
+heap does not have its buffer cache cleared or trimmed on every
+allocation. On MemTotal ≤ 32 GiB the formula
+never beats the 50% default. Those hosts, 16 GB machines included, keep
+the stock heap byte-for-byte. An explicit `HK_SYSMEM` (absolute bytes, as before) still
 wins. So does a `heap_memory_percent` set in a drirc file (`$DRIRC_CONFIGDIR`,
 `drirc.d`, `/etc/drirc`, `~/.drirc`). The default is applied only when
 neither is present. It applies only inside MLX processes. Every other
