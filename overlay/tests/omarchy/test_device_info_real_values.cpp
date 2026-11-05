@@ -238,16 +238,21 @@ TEST_CASE("default allocator limits never sit below what the heap can hold") {
   // resident weights that happens on every allocation (gpt-oss-120b, 58.05
   // GiB of weights on a 63 GiB heap (HK_SYSMEM set explicitly) with a
   // 56.7 GiB limit: first 16-token step 228 s, against 1.2 s with the limit
-  // at the heap, also on a 60 GiB heap). It must also
-  // not sit below the gc ceiling, the order Metal uses.
+  // at the heap, also on a 60 GiB heap). The gc ceiling does the same
+  // with its trim once it sits below the weights (60 GiB heap, 95% ceiling;
+  // decode measured slower, see the pull request description). The limit
+  // must also not sit below the gc ceiling, the order Metal uses.
   const size_t weights = 62329924224ull;
   const size_t heaps[] = {16 * kGiB, 32 * kGiB, 47 * kGiB, 60 * kGiB, 63 * kGiB};
   for (size_t heap : heaps) {
     CHECK(omarchy::default_memory_limit(heap) >= omarchy::default_gc_limit(heap));
-    CHECK(omarchy::default_gc_limit(heap) == (heap / 100) * 95);
+    CHECK(omarchy::default_gc_limit(heap) == heap);
     if (heap > weights) {
-      // A model that fits the heap is under the limit: no cache drop.
+      // A model that fits the heap is under the limit and under the gc
+      // ceiling: no cache drop and no trim on every allocation. (95% of
+      // a 60 GiB heap, 57 GiB, was below the 58.05 GiB weights.)
       CHECK(omarchy::default_memory_limit(heap) > weights);
+      CHECK(omarchy::default_gc_limit(heap) > weights);
     }
   }
   // No device (total 0): the same 4 GiB fallback as before for both.

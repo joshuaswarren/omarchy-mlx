@@ -54,10 +54,13 @@ inline constexpr uint64_t kPendingCompletion = UINT64_MAX;
 // (0 = no device: 4 GiB). The memory limit is where malloc drops the
 // whole reuse cache; it must not sit below what the heap can hold, or a
 // model whose weights fit the heap but exceed the limit loses the cache
-// on every allocation. The gc ceiling stays at 95% of the heap (A20) and
-// still trims the cache by its overshoot. The limit is not below the gc
-// ceiling, the order Metal uses, so by default it fires only past the
-// whole heap: tuning it below the heap is what changes cache behaviour.
+// on every allocation. The gc ceiling is the heap as well: a ceiling below
+// the weights (95% of a 60 GiB heap is 57 GiB, under a 58 GiB model) makes
+// every malloc release cached buffers, and decode was measured slower (see
+// the pull request description). The ceiling still trims the cache by its
+// overshoot (A20). The limit is not below the gc ceiling,
+// the order Metal uses, so by default both fire only past the whole heap:
+// tuning either below the heap is what changes cache behaviour.
 // The open-batch quarantine budget (eval.cpp) keeps its old base, 90% of
 // the heap, so only the cache behaviour moves with the default limit.
 // The BEGIN/END markers delimit the text a standalone test harness extracts;
@@ -68,7 +71,7 @@ inline size_t default_memory_limit(size_t heap_bytes) {
 }
 
 inline size_t default_gc_limit(size_t heap_bytes) {
-  return heap_bytes > 0 ? (heap_bytes / 100) * 95 : (size_t{1} << 32);
+  return heap_bytes > 0 ? heap_bytes : (size_t{1} << 32);
 }
 
 inline size_t default_batch_limit(size_t memory_limit, size_t heap_bytes) {
@@ -131,7 +134,7 @@ class VulkanAllocator : public allocator::Allocator {
   }
   // Working-set ceiling (Metal: `gc_limit_`). When `active + cache + size`
   // would exceed it, malloc releases cached buffers before allocating.
-  // Defaults to 95% of `total_memory` (Honeykrisp reports a single
+  // Defaults to `total_memory` (Honeykrisp reports a single
   // unified host-visible heap on Apple-UMA, so there is no separate
   // "max_recommended_working_set_size" like Metal exposes).
   size_t get_gc_limit() const {
@@ -218,7 +221,7 @@ class VulkanAllocator : public allocator::Allocator {
   size_t wired_limit_{0};
   size_t cache_limit_;
   // Metal's `gc_limit_`: working-set ceiling above which malloc
-  // proactively releases cached buffers. Defaults to 95% of the device
+  // proactively releases cached buffers. Defaults to the device
   // host-visible heap (Honeykrisp's reported `total_memory`); oMLX can
   // raise it with `set_memory_limit` when the dflash acquire raises the
   // working set.
