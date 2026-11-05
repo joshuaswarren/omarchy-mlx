@@ -354,6 +354,9 @@ omarchy_shader(qmm_vec_q4_word_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_
 omarchy_shader(qmm_vec_q4_word_subgroup_f32 shaders/qmm_vec.comp -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_f16 shaders/qmm_vec.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
+# Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
+# Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 # Batch-shared decode GEMV (default on, MLX_OMARCHY_QMV_BATCH=0 disables): up to four x rows
 # against one 2D weight, weight words read once per block.
 omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_BATCH=4)
@@ -374,6 +377,7 @@ omarchy_shader(qmm_vec_q4_multi_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC
 omarchy_shader(qmm_vec_q4_multi_subgroup_f32 shaders/qmm_vec.comp -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1)
 omarchy_shader(qmm_vec_q4_multi_subgroup_f16 shaders/qmm_vec.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 # Multi-token (verify / small-batch) variants: the multi column with the
 # token dimension inside the k walk; params.matrix_m carries the live
@@ -468,6 +472,12 @@ omarchy_shader(gated_delta_decode_bf16 shaders/gated_delta_decode.comp -DQKV_BF1
 omarchy_shader(gated_delta_decode_perrow_bf16 shaders/gated_delta_decode_perrow.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_decode_perrow_pf_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_decode_perrow_pfw_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1)
+# Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update), default order, equal head counts.
+omarchy_shader(gated_delta_decode_perrow_pf_conv_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1)
+# ... and with the gated-norm (rms_norm_gated) epilogue folded in.
+omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)
 omarchy_shader(gated_delta_decode_gqa_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_perrow_composed_bf16 shaders/gated_delta_decode_perrow.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)

@@ -38,6 +38,11 @@ Chromium, no GPU) → on the ANE gate host, each in its own
 gpuwin window announced to the coordination pane first: **g7c** packaged
 ANE worker verify, **g7d** fresh-image parakeet transcribe.
 
+g10 (primer) and g12 (streamed read-aloud) need the voice packages that g8
+installs into the same gate home. Both refuse before starting the server and
+name the missing package (`gate_require_voice_runtime` in `env.sh`), so run g8
+first or install the packages.
+
 Publish + Latest only if every gate exits 0 and
 `python3 scripts/verify-release-assets.py <tag>` prints `VERIFIED` on the
 DRAFT. Gate runners must NEVER set `MLX_OMARCHY_PAIR_DEV_QUALIFICATION`

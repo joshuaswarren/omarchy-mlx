@@ -612,13 +612,10 @@ bool Runtime::init_impl() {
       throw;
     }
   }
-  // Honeykrisp bounded syncobj poll (HK_SUBMIT_POLL_US, mesa-1
-  // hk/submit-latency): removes the host wake-up premium on the short
-  // submit->wait round trips of stepwise loops (Parakeet TDT tdt_decode
-  // 341 -> 254 ms, -25%, transcript pins unchanged) and backs off after
-  // missed budgets, so long waits do not spin. An explicit user value
-  // wins; drivers without the knob ignore the variable.
-  setenv("HK_SUBMIT_POLL_US", "2000", 0);
+  // Honeykrisp's bounded syncobj poll (HK_SUBMIT_POLL_US) is NOT turned on here. It made the host issue zero-timeout syncobj waits for most of every
+  // wait (about 21000 expired waits per decoded token on a 13-inch M1): 5 s more process CPU and about 1 W more system power over a 400-token decode,
+  // for no change in tok/s, and no gain in Parakeet tdt_decode either (receipts/2026-11-03-hk-submit-poll). The variable stays available: a value set in
+  // the environment reaches the driver untouched.
 
   if (!vk::load_loader()) {
     error =

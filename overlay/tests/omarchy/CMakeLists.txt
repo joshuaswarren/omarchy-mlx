@@ -328,6 +328,19 @@ doctest_discover_tests(omarchy_gdn_decode_batch_tests)
 add_test(NAME omarchy_gdn_decode_batch_tests
          COMMAND omarchy_gdn_decode_batch_tests)
 
+# Fused GDN decode conv + gated-delta step (MLX_OMARCHY_GDN_CONV_DELTA): the
+# production pair's bytes from one dispatch.
+add_executable(omarchy_gdn_conv_delta_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_conv_delta.cpp)
+target_link_libraries(omarchy_gdn_conv_delta_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_conv_delta_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_conv_delta_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_gdn_conv_delta_tests)
+add_test(NAME omarchy_gdn_conv_delta_tests
+         COMMAND omarchy_gdn_conv_delta_tests)
+
 # Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on): per-row bit
 # identity over many random datasets, plus trace-proven engagement.
 add_executable(omarchy_qmv_batch_tests
@@ -551,6 +564,18 @@ target_link_options(omarchy_decode_dispatch_count
 add_test(NAME omarchy_decode_dispatch_count
          COMMAND omarchy_decode_dispatch_count)
 
+# QmmGeometry: the decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM) keeps
+# the base bytes in every accepted geometry, refuses an unknown value and
+# reports the chip-gated default.
+add_executable(omarchy_qmm_geometry_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_qmm_geometry.cpp)
+target_link_libraries(omarchy_qmm_geometry_tests PRIVATE mlx)
+target_compile_options(omarchy_qmm_geometry_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_qmm_geometry_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_qmm_geometry_tests COMMAND omarchy_qmm_geometry_tests)
+
 # Bf16FusedDecode: the fused single-query decode SDPA stays one dispatch,
 # agrees with the f32-score composition it replaced, and refuses uncovered
 # decode shapes by falling through to that composition.
@@ -671,7 +696,9 @@ foreach(_capsim_profile IN ITEMS
             subgroup-size-64
             small-shared-memory
             no-cooperative-matrix
-            m1-g13-legacy)
+            m1-g13-legacy
+            workgroup-256
+            workgroup-128)
   add_test(NAME omarchy_capability_sim_tests/${_capsim_profile}
            COMMAND omarchy_capability_sim_tests ${_capsim_profile})
   set_tests_properties(omarchy_capability_sim_tests/${_capsim_profile}

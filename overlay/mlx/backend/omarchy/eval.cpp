@@ -7,6 +7,7 @@
 
 #include "mlx/backend/gpu/eval.h"
 
+#include <cstdlib>
 #include <vector>
 
 #ifdef MLX_OMARCHY_GPU_PROFILING
@@ -18,6 +19,8 @@
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/primitives.h"
+#include "mlx/device.h"
+#include "mlx/stream.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/scheduler.h"
 
@@ -133,11 +136,12 @@ void eval(array& arr) {
     // Node budget: flush the batch so a long graph cannot pin unbounded
     // temporaries behind one open command buffer. Byte budget: flush
     // once the intermediates freed under this batch, which nothing can
-    // recycle before it submits, reach their share of the memory limit
-    // (kBatchByteBudgetDivisor). Work budget (MLX_OMARCHY_BATCH_WORK,
-    // issue #19): flush once the batch's summed dispatch work-groups
-    // reach the per-submission GPU-time proxy, so one submission never
-    // holds the queue long enough to stutter the desktop.
+    // recycle before it submits, reach their share of the batch limit (the
+    // memory limit, capped at 90% of the heap; kBatchByteBudgetDivisor).
+    // Work budget (MLX_OMARCHY_BATCH_WORK, issue #19): flush once the
+    // batch's summed dispatch work-groups reach the per-submission GPU-time
+    // proxy, so one submission never holds the queue long enough to stutter
+    // the desktop.
     auto& alloc = omarchy::allocator();
     // First-batch-early (MLX_OMARCHY_BATCH_FIRST): per host thread, reset at
     // every finalize (graph end).
@@ -154,7 +158,7 @@ void eval(array& arr) {
             omarchy::batch_work_budget(
                 encoder.device().hardware_capabilities().device_name)) ||
         alloc.pending_quarantine_bytes() >=
-            alloc.get_memory_limit() / omarchy::kBatchByteBudgetDivisor) {
+            alloc.batch_limit() / omarchy::kBatchByteBudgetDivisor) {
       encoder.commit();
     }
   }
@@ -213,6 +217,16 @@ mlx_omarchy_trace_snapshot(
 extern "C" __attribute__((visibility("default"))) std::uint64_t
 mlx_omarchy_trace_snapshot_abi_size(void) {
   return sizeof(mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot);
+}
+
+// The mode the fused GatedDelta conv + delta op runs in: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated norm
+// fused. Resolved by omarchy::gdn_conv_delta_resolved_mode (device.h): an explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides, unset follows the per-chip
+// default. The mlx-lm patch reads this once at import: without the symbol (an older wheel) the patch keeps the stock route.
+extern "C" __attribute__((visibility("default"))) int
+mlx_omarchy_gdn_conv_delta_default(void) {
+  auto& encoder = omarchy::get_command_encoder(default_stream(Device::gpu));
+  const std::string& name = encoder.device().capabilities().device_name;
+  return omarchy::gdn_conv_delta_resolved_mode(name);
 }
 
 #ifdef MLX_OMARCHY_GPU_PROFILING

@@ -1085,6 +1085,18 @@ enum class ComputeKernel : uint16_t {
   FastRopeHalfSplitF16,
   FastRopeFreqsHalfSplitF16,
   FastRopeFreqsHalfSplitBF16,
+  // Decode column-geometry variants of the bf16 subgroup Q4 word and multi
+  // kernels (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>); appended to keep profile
+  // kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S16,
+  QmmVecQ4MultiSubgroupBF16R2S16,
+  // Fused GDN decode conv + gated-delta step (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED, plain and
+  // -DGDN_PF_WIDE): default order, equal head counts. Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvBF16Pf,
+  GatedDeltaDecodeConvBF16PfWide,
+  // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
+  GatedDeltaDecodeConvNormBF16Pf,
+  GatedDeltaDecodeConvNormBF16PfWide,
   Count,
 };
 

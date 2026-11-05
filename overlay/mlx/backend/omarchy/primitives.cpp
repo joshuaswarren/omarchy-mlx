@@ -100,6 +100,56 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
   return row_length != 2048u || rows <= 64u;
 }
 
+// Decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>, read
+// once): the bf16 subgroup Q4 word and multi kernels run <rows> columns per
+// slot and <slots> 32-lane slots per workgroup. Every column keeps the same
+// per-lane chain, so the bytes are identical in every geometry; only the
+// columns and threads per workgroup change. Unset: 2x16 on G13G and G13C
+// (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
+// context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
+// identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
+// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
+// every other chip until its paired A/B lands. The accepted overrides are
+// 2x4 and 2x16.
+struct QmmGeometry {
+  uint32_t columns;
+  omarchy::ComputeKernel word;
+  omarchy::ComputeKernel multi;
+  const char* name;
+};
+const QmmGeometry& qmm_geometry() {
+  static const QmmGeometry geometry = [] {
+    using K = omarchy::ComputeKernel;
+    const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
+    const std::string v = env == nullptr ? std::string() : std::string(env);
+    if (v.empty()) {
+      const std::string& chip = omarchy::device().capabilities().device_name;
+      if (chip.find("G13G") != std::string::npos ||
+          chip.find("G13C") != std::string::npos) {
+        return QmmGeometry{
+            32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+            K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
+      }
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
+          "2x4"};
+    }
+    if (v == "2x16") {
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+          K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
+    }
+    if (v == "2x4") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
+          "2x4"};
+    }
+    throw std::invalid_argument(
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16");
+  }();
+  return geometry;
+}
+
 bool apple_norm_enabled(
     const omarchy::Device& device,
     size_t row_length,
@@ -4007,10 +4057,12 @@ static int decode_path_override(const char* name) {
 }
 
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
-// live): the largest pass length T (2..4) whose [1, T, K] bf16 x runs as
-// one batch-shared decode GEMV instead of the coopmat prefill tile. The cap
-// is 4 because above it a second GEMV block costs more than the tile on G13G
-// (PR #296). Unset, empty or 0 keeps the shipped route. Each row is
+// live): the largest pass length T whose [1, T, K] bf16 x runs as batch-shared
+// decode GEMV (one dispatch per block of 4 rows) instead of the coopmat prefill
+// tile. The cap is 4 on every part but G13C, where it is 8 (qmv_small_t_device_cap):
+// above 4 a second GEMV block costs more than the tile on G13G (PR #296). The
+// request is clamped to 8 here and to the part's cap at the call site. Unset,
+// empty or 0 keeps the shipped route. Each row is
 // bit-identical to the single-row GEMV, not to the coopmat chain, so the
 // route is opt-in until a numerics decision
 // (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
@@ -4020,7 +4072,17 @@ static int qmv_small_t_max_rows() {
     return 0;
   }
   int rows = std::atoi(v);
-  return rows >= 2 ? std::min(rows, 4) : 0;
+  if (rows < 2) {
+    return 0;
+  }
+  return std::min(rows, 8);
+}
+
+static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
+  if (requested_max < 2) return 0;
+  const std::string& name = encoder.device().capabilities().device_name;
+  int cap = (name.find("G13C") != std::string::npos) ? 8 : 4;
+  return std::min(requested_max, cap);
 }
 
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
@@ -8266,7 +8328,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // [1, T, K] x with 2 <= T <= the env limit against one 2D 4-bit group-64
   // transposed weight. Resolved before normalization because the GEMV reads
   // x through the same 16-byte uvec4 view as the single-row route.
-  const int small_t_max = qmv_small_t_max_rows();
+  const int small_t_max = qmv_small_t_device_cap(encoder, qmv_small_t_max_rows());
   const int small_t_rows = x.ndim() >= 2 ? x.shape(-2) : 1;
   bool small_t_candidate = small_t_max >= 2 && use_q4_word &&
       out.dtype() == bfloat16 && small_t_rows >= 2 &&
@@ -8510,11 +8572,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         scales.ndim() == 2 && biases.ndim() == 2) {
       vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
     }
+    uint32_t qmm_groups = n_groups_qmm_vec;
+    if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16) {
+      const auto& geometry = qmm_geometry();
+      vec_kernel = geometry.word;
+      qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+    }
     encoder.dispatch_compute(
         vec_kernel,
         bindings,
         params,
-        std::min(n_groups_qmm_vec, omarchy::kMaxComputeGroupCountX),
+        std::min(qmm_groups, omarchy::kMaxComputeGroupCountX),
         1u,
         1u);
     return;
@@ -8539,16 +8607,23 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      omarchy::ComputeParams pass = params;
-      pass.matrix_m = 1u;
-      pass.shape[0] = params.matrix_m;
-      encoder.dispatch_compute(
-          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
-          bindings,
-          pass,
-          n_groups_qmm_vec,
-          1u,
-          1u);
+      constexpr uint32_t kBlockRows = 4u;
+      for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
+        uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
+        omarchy::ComputeParams block = params;
+        block.count = rows * params.matrix_n;
+        block.matrix_m = 1u;
+        block.shape[0] = rows;
+        block.lhs_offset = params.lhs_offset + row * params.matrix_k;
+        block.output_offset = params.output_offset + row * params.matrix_n;
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            bindings,
+            block,
+            n_groups_qmm_vec,
+            1u,
+            1u);
+      }
       return;
     }
   }
@@ -9016,6 +9091,10 @@ bool input_ready(const array& value, const Stream& stream) {
 
 } // namespace
 
+const char* qmm_geometry_name() {
+  return qmm_geometry().name;
+}
+
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
@@ -9113,6 +9192,13 @@ bool dispatch_quantized_gemv_group(
   }
   ComputeParams params;
   uint32_t total_groups = 0;
+  // Columns per workgroup of the kernel selected below: the geometry applies
+  // to the bf16 subgroup single-token multi kernel only.
+  const uint32_t group_columns =
+      (!token_route && outgate == nullptr && dtype == bfloat16 &&
+       subgroup_ready)
+      ? qmm_geometry().columns
+      : 8u;
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
     if (node.inputs().size() != 4 || node.inputs()[0].id() != x.id() ||
@@ -9168,7 +9254,8 @@ bool dispatch_quantized_gemv_group(
       params.flags |= 256u << i;
     }
     params.shape[i] = static_cast<uint32_t>(n);
-    total_groups += (static_cast<uint32_t>(n) + 7u) / 8u;
+    total_groups +=
+        (static_cast<uint32_t>(n) + group_columns - 1u) / group_columns;
   }
   if (swiglu_out &&
       (params.shape[0] != params.shape[1] || swiglu_out->dtype() != dtype ||
@@ -9178,7 +9265,7 @@ bool dispatch_quantized_gemv_group(
   if (swiglu_out) {
     // Paired epilogue: every workgroup computes the same column slice
     // of both weights, so the gate count is weight 0's alone.
-    total_groups = (params.shape[0] + 7u) / 8u;
+    total_groups = (params.shape[0] + group_columns - 1u) / group_columns;
     params.flags |= 65536u;
   }
   if (total_groups > kMaxComputeGroupCountX) {
@@ -9375,7 +9462,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            ComputeKernel::QmmVecQ4MultiSubgroupBF16)
+            qmm_geometry().multi)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
@@ -14781,6 +14868,151 @@ void GdnConvUpdate::eval_gpu(
       1);
 }
 
+// Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update,
+// MLX_OMARCHY_GDN_CONV_DELTA). One dispatch of gated_delta_decode_perrow_pf.comp
+// -DGDN_CONV_FUSED replaces GdnConvDecodeBF16 + the untiled prefetch delta
+// kernel; the conv, SiLU and q/k norm statements are gdn_conv_decode.comp's and
+// the delta body is the unfused kernel's, so the bytes must match the pair.
+// That only holds where the unfused route would pick the same delta kernel, so
+// this mirrors GatedDeltaUpdate::eval_gpu's choice for the one geometry the op
+// covers (decode, raw gates, bf16 A_log, equal head counts, no mask) and runs
+// the composed fallback everywhere else (the same pattern as the VJP).
+void GdnConvDeltaUpdate::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  // Inputs: conv state, qkv row, conv weight, a, b, A_log, dt_bias, recurrent state, and optionally the
+  // gate z and the norm weight (then output 0 is rms_norm_gated(delta output, z, weight)).
+  // Outputs: delta output, recurrent state out, conv carry-out state.
+  const bool with_norm = inputs.size() == 10;
+  const int B = inputs.at(1).shape(0);
+  const int C = inputs.at(1).shape(2);
+  const int K = inputs.at(2).shape(1);
+  const int Hv = inputs.at(3).shape(2);
+  const uint32_t dk = 128;
+  // The unfused route's kernel choice (GatedDeltaUpdate::eval_gpu), restated for this geometry.
+  const std::string& device_name = encoder.device().capabilities().device_name;
+  const bool tile_on = gdn_decode_tile_enabled(encoder);
+  const bool bf16a_untiled_default =
+      decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
+      omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
+  static const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
+  array h0 = inputs.at(7);
+  const bool dense_inputs = [&] {
+    for (const auto& x : inputs) {
+      if (!x.flags().row_contiguous) {
+        return false;
+      }
+    }
+    return true;
+  }();
+  const uint32_t h0_offset = dense_inputs
+      ? checked_item_offset(h0, h0.size(), tag, outputs.at(0))
+      : 0u;
+  const bool gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
+  const bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
+  const bool apple_norm = apple_norm_enabled(encoder.device(), size_t{128}, size_t{static_cast<size_t>(B) * C});
+  const bool supported = B == 1 && K == 4 && decode_tile == false && gdn_pf && !apple_norm &&
+      encoder.device().compute().binding_limit() >= (with_norm ? 13u : 11u);
+  if (!supported) {
+    auto result = fallback_(inputs);
+    settle(result);
+    encoder.synchronize("gdn_conv_delta_fallback");
+    for (int i = 0; i < 3; ++i) {
+      outputs.at(i).copy_shared_buffer(result.at(i));
+    }
+    return;
+  }
+  array in_state = inputs.at(0);
+  array in_x = inputs.at(1);
+  array in_w = inputs.at(2);
+  array a_in = inputs.at(3);
+  array b_in = inputs.at(4);
+  array A_log = inputs.at(5);
+  array dt_bias = inputs.at(6);
+  array& out = outputs.at(0);
+  array& hf = outputs.at(1);
+  array& conv_state_out = outputs.at(2);
+  // The recurrent-state output and the conv carry-out are fresh allocations, never
+  // aliases of the inputs: other workgroups keep reading the old conv state while
+  // the channel's owner writes the new one.
+  out.set_data(allocate_omarchy(out.nbytes()));
+  hf.set_data(allocate_omarchy(hf.nbytes()));
+  conv_state_out.set_data(allocate_omarchy(conv_state_out.nbytes()));
+  const bool wide_default = bf16a_untiled_default &&
+      omarchy::gdn_pf_wide_default(device_name, Hv, Hv);
+  const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
+  const bool pf_wide_want = pf_wide_env != nullptr
+      ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
+      : wide_default;
+  const bool pf_wide = pf_wide_want && (dk % 32u) == 0u;
+  omarchy::ComputeParams params;
+  params.count = dk;
+  params.operation = checked_u32(K, tag, out);
+  params.lhs_size = checked_u32(K - 1, tag, out);
+  params.rhs_size = checked_u32(static_cast<size_t>(key_dim()), tag, out);
+  params.reduce_size = checked_u32(C, tag, out);
+  params.matrix_m = dk;
+  params.matrix_n = dk;
+  params.matrix_k = checked_u32(static_cast<size_t>(B) * Hv, tag, out);
+  params.lhs_offset = checked_item_offset(in_state, in_state.size(), tag, out);
+  params.rhs_offset = checked_item_offset(in_x, in_x.size(), tag, out);
+  params.aux_size = checked_item_offset(in_w, in_w.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.shape[1] = h0_offset;
+  params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
+  params.dims = 1u;
+  // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
+  // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads.
+  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
+  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+  params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
+  params.in_strides[1] = checked_item_offset(dt_bias, dt_bias.size(), tag, out);
+  params.in_strides[2] = checked_u32(Hv, tag, out);
+  params.in_strides[3] = 0u;
+  params.flags |= 8u;
+  params.out_strides[0] = checked_item_offset(conv_state_out, conv_state_out.size(), tag, out);
+  params.out_strides[1] = std::bit_cast<uint32_t>(qk_eps());
+  params.out_strides[2] = std::bit_cast<uint32_t>(qk_scale_q());
+  params.out_strides[3] = std::bit_cast<uint32_t>(qk_scale_k());
+  array norm_gate = with_norm ? inputs.at(8) : a_in;
+  array norm_weight = with_norm ? inputs.at(9) : a_in;
+  if (with_norm) {
+    // The epilogue's fields (see gated_delta_decode_perrow_pf.comp): gate and weight item offsets, eps.
+    params.shape[3] = checked_item_offset(norm_gate, norm_gate.size(), tag, out);
+    params.output_size = checked_item_offset(norm_weight, norm_weight.size(), tag, out);
+    params.alpha = norm_eps();
+  }
+  std::array<omarchy::ComputeBinding, 13> bindings{
+      binding(in_state),
+      binding(in_x),
+      binding(in_w),
+      binding(a_in),
+      binding(b_in),
+      binding(h0),
+      binding(out),
+      binding(hf),
+      binding(A_log),
+      binding(dt_bias),
+      binding(conv_state_out),
+      binding(norm_gate),
+      binding(norm_weight)};
+  const omarchy::ComputeKernel kernel = with_norm
+      ? (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfWide
+                 : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Pf)
+      : (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
+                 : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
+  encoder.dispatch_compute(
+      kernel,
+      std::span<const omarchy::ComputeBinding>(bindings.data(), with_norm ? 13u : 11u),
+      params,
+      static_cast<uint32_t>(B * Hv),
+      1,
+      1);
+}
+
 bool LayerNorm::use_fallback(Stream s) {
   return false;
 }
@@ -15776,7 +16008,7 @@ void ScaledDotProductAttention::eval_gpu(
       (decode_caps.subgroup_operations & kDecodeSubgroupFeatures) ==
           kDecodeSubgroupFeatures;
   // The composition-exact bf16 arm uses no subgroup operations at all - its
-  // per-thread work and barriers need only the 1024-thread workgroup and the
+  // per-thread work and barriers need only the 256-thread workgroup and the
   // static shared the arm declares (29,952 bytes at query width 64, 30,720
   // at the Qwen3.8 full-attention width 256, against the 32 KiB device
   // limit) - so it gates on those alone and engages on any device that
@@ -15830,8 +16062,8 @@ void ScaledDotProductAttention::eval_gpu(
   // 448..544 contract regime (502.9 vs 339.8 us at 512), where the shipped
   // <=2048 bound had been routing decode to the slower arm.
   const bool decode_bf16_ready =
-      decode_caps.max_compute_work_group_invocations >= 1024u &&
-      decode_caps.max_compute_work_group_size[0] >= 1024u &&
+      decode_caps.max_compute_work_group_invocations >= 256u &&
+      decode_caps.max_compute_work_group_size[0] >= 256u &&
       decode_caps.max_compute_shared_memory_size >=
           decode_bf16_shared_required;
   const bool decode_bf16_probe = q.dtype() == bfloat16;
@@ -15872,7 +16104,7 @@ void ScaledDotProductAttention::eval_gpu(
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
   // Split-K decode route (bf16, head width 128 or 256, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
-  // fused kernel above is one 1024-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
+  // fused kernel above is one 256-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
   // blocks and reads each K and V row once per group. Float32 arithmetic in a different order, so the result is not bit-equal to the
   // fused kernel (gated against a float64 reference in test_sdpa_split.cpp). MLX_OMARCHY_SDPA_DECODE_SPLIT: any non-empty value other than "0" forces the route, "0" disables it, unset or empty
   // follows omarchy::sdpa_split_default. Needs 16-byte K rows (element offset and strides multiples of 8) and even V offset and strides.

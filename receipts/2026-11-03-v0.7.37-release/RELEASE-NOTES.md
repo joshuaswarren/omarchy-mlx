@@ -55,10 +55,10 @@ On a 13-inch M1 (kernel `7.1.12-2-20261013.18-sep-ARCH`) every gate printed its 
 - g8 Kokoro: `G8_KOKORO_EXIT 0`.
 - g9 read-aloud: `SPEAK_QUEUE_SMOKE PASS`.
 
-On a 16-inch M1 Max (kernel `7.1.12-2-20261103.2-lab-ARCH`, AGX vote off) the rest passed. The 9B gates run on this machine, because the product's own memory budget refuses the 9B pair on 15 GiB.
+On a 16-inch M1 Max (kernel `7.1.12-2-20261103.2-lab-ARCH`, AGX vote off by that kernel's default) the rest passed. The 9B gates run on this machine.
 
 - g2 online 9B: `GATE PASS`. The chat answered and the compare chose `cat` (0.7192).
-- g4 offline: `GATE PASS` with outbound traffic denied. g5 Laya: exit 0.
+- g4 offline: `GATE PASS`, with `OUTBOUND_DENIED True` in its log. g5 Laya: exit 0.
 - g10 Kokoro primer: `GATE10 PASS`. Primed after 26.4 s (limit 90 s), first audio 0.248 s (limit 2.0 s).
 - g12 Kokoro stream: `GATE12 PASS`. First audio 0.351 s (limit 1.5 s), 20 chunks, 10.90 s of audio, none starved, no errors.
 - g11 card 9B: `CARD_CHECK PASS`.

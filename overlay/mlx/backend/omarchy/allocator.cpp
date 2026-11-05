@@ -117,14 +117,18 @@ VulkanAllocator::VulkanAllocator()
           [](VulkanBuffer* buf) { return buf->size; },
           [this](VulkanBuffer* buf) { destroy_buffer(buf); }) {
   size_t total = is_available() ? capability_report(0).total_memory : 0;
-  memory_limit_ = total > 0 ? (total / 100) * 90 : (1ull << 32);
-  // Metal's `gc_limit_` is `min(0.95 * max_rec, 0.95 * memsize)` —
-  // Honeykrisp has no separate max-recommended, so the ceiling is
-  // 0.95 of the host-visible heap. cache_limit_ matches the same
-  // fraction; a single number drives both the malloc gate and the
-  // free-side pool cap, so changing one or the other never gets them
-  // out of sync.
-  size_t ceiling = total > 0 ? (total / 100) * 95 : (1ull << 32);
+  heap_bytes_ = total;
+  memory_limit_ = default_memory_limit(total);
+  // Metal's `gc_limit_` is `min(0.95 * max_rec, 0.95 * memsize)`.
+  // Honeykrisp has no separate max-recommended and the default heap is
+  // already kept below the host memory (an explicit HK_SYSMEM is not), so
+  // the ceiling is the whole host-visible heap: a ceiling below the
+  // resident weights of a model that fits the heap makes every malloc
+  // release cached buffers.
+  // cache_limit_ matches it; a single number drives both the malloc gate
+  // and the free-side pool cap, so changing one or the other never gets
+  // them out of sync.
+  size_t ceiling = default_gc_limit(total);
   gc_limit_ = ceiling;
   cache_limit_ = ceiling;
 }
@@ -173,7 +177,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
   // the driver. This is the A20 fix — without it, KV-cache growth across
   // decode steps adds a fresh size class per step and the cache keeps
   // every prior class around, climbing into the Honeykrisp heap until
-  // vkAllocateMemory returns OOM. The ceiling is set to 95% of
+  // vkAllocateMemory returns OOM. The ceiling is set to the whole
   // total_memory in the constructor and is shared with `cache_limit_`,
   // so the free-side cap and the malloc-side gate can never disagree.
   if (active_memory_ + buffer_cache_.cache_size() + size > gc_limit_) {
