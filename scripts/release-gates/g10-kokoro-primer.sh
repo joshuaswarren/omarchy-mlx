@@ -16,6 +16,7 @@ ASSIST="$GATE_ROOT/${TAG}-assist-primer"
 : > "$LOG"
 gate_begin "$LOG"
 gate_log_wheel_identity "$LOG"
+gate_require_voice_runtime "$LOG" || { gate_log "$LOG" "GATE10_EXIT 1"; exit 1; }
 gate_log "$LOG" "loadavg_before=$(cat /proc/loadavg)"
 
 gate_refuse_existing "$ASSIST"

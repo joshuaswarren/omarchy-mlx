@@ -117,6 +117,20 @@ gate_log() { # gate_log <logfile> <line...> — timestamped line to log AND stdo
   printf '%s\n' "$*" | tee -a "$f"
 }
 
+# gate_require_voice_runtime <logfile> — refuse before the server starts when a
+# voice package that g8 installs is missing from the gate home. Without it the
+# primer never lands and the failure reads like a slow primer (issue 335).
+gate_require_voice_runtime() {
+  local py="$GATE_HOME/.local/share/mlx-omarchy/venv/bin/python" mod
+  local missing=()
+  for mod in mlx_audio misaki num2words spacy en_core_web_sm phonemizer espeakng_loader; do
+    "$py" -c "import $mod" >/dev/null 2>&1 || missing+=("$mod")
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then return 0; fi
+  gate_log "$1" "voice runtime missing from the gate home: ${missing[*]}. Run g8 first, or install it."
+  return 1
+}
+
 # gate_cmake_configure - reconfigure the current build tree with the C++ tests on
 # (g13, g15). On the aarch64 gate hosts cmake does not find the BLAS/LAPACK
 # headers itself (BLAS_INCLUDE_DIRS NOTFOUND, so no test built), so pass the

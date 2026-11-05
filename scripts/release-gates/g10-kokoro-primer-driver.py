@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from voice_status import primer_failure_line
 
 HOME, LOG = sys.argv[1], sys.argv[2]
 RUNTIME = os.path.join(HOME, "assistant", "application.json")
@@ -84,6 +85,7 @@ def main() -> int:
     say(f"VOICE_SETUP_COMPLETE {setup_s:.1f}s")
 
     primed = False
+    voice = {}
     t0 = time.monotonic()
     while time.monotonic() - t0 < PRIMED_TIMEOUT_S:
         voice = call("GET", "/api/status").get("voice", {}).get("synthesis", {})
@@ -93,6 +95,8 @@ def main() -> int:
         time.sleep(2)
     say(f"PRIMED {'true' if primed else 'false'} after "
         f"{time.monotonic() - t0:.1f}s (limit {PRIMED_TIMEOUT_S:.0f}s)")
+    if not primed:
+        say(primer_failure_line(voice))
 
     cid = call("POST", "/api/conversations", {"save": False})["id"]
     t0 = time.monotonic()
