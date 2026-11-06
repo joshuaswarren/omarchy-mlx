@@ -26,15 +26,24 @@ import statistics
 
 
 def kernel_names(path):
+    with open(path, encoding="utf-8") as source:
+        text = re.sub(r"/\*.*?\*/|//[^\n]*", "", source.read(), flags=re.DOTALL)
+    enum = re.search(r"\benum\s+class\s+ComputeKernel\b[^{]*\{(.*?)\};", text, re.DOTALL)
+    if enum is None:
+        raise ValueError(f"missing ComputeKernel enum in {path}")
     names = []
-    for line in open(path):
-        m = re.match(r"\s+(\w+)\s*,\s*$", line)
-        if m and not line.strip().startswith("//"):
-            names.append(m.group(1))
-        else:
-            m2 = re.match(r"\s+(\w+)\s*=\s*\d+", line)
-            if m2:
-                names.append(m2.group(1))
+    for entry in enum.group(1).split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        member = re.fullmatch(r"(\w+)(?:\s*=\s*(\d+))?", entry)
+        if member is None:
+            raise ValueError(f"unsupported ComputeKernel entry {entry!r} in {path}")
+        name, value = member.groups()
+        index = int(value) if value is not None else len(names)
+        if index != len(names):
+            raise ValueError(f"non-sequential ComputeKernel id {index} in {path}")
+        names.append(name)
     return names
 
 
