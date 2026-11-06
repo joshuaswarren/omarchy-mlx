@@ -1,0 +1,11 @@
+Token-digest validation, one run per arm, fixed 512-token prompt, 128 greedy decode tokens.
+Captured 2026-11-06 04:19 and 04:20 UTC on boot A, before pair 1. Not repeated on boot B.
+Both arms use the same venv, model files and prompt ids; only MLX_OMARCHY_ROPE_NORM_FUSE differs.
+
+arm ON  (MLX_OMARCHY_ROPE_NORM_FUSE=1)  started 04:19:22Z  child rc 0  wall 11.18 s  GPU timeouts before/after 0/0
+arm OFF (MLX_OMARCHY_ROPE_NORM_FUSE=0)  started 04:20:32Z  child rc 0  wall 11.01 s  GPU timeouts before/after 0/0
+
+stdout of both arms (identical; sha256 ebaa4b508feea75eafc7fb17fdee1c4f0a04315a3c37a257e441ab175c135198):
+CAPTURE_PROMPT_SHA256 bf856d911c4ea145058088ba28a47a3c27923242c7f44305e6120acc80b87535 n 512 vocab 151936
+CAPTURE_TOKENS_SHA256 fc31fd0e7a886c3608be5d351fdb2159e0581539b447cc581ae056a9ce62408e ntok 128
+M2_INFERENCE_DRAIN_OK
