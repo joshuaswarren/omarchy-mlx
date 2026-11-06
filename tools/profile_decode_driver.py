@@ -29,6 +29,7 @@ parser.add_argument("--model", required=True)
 parser.add_argument("--prompt", default="The history of France begins in antiquity.")
 parser.add_argument("--warmup-tokens", type=int, default=16)
 parser.add_argument("--tokens", type=int, default=32)
+parser.add_argument("--prompt-tokens", type=int, default=0, help="repeat the prompt, cut to exactly N tokens")
 parser.add_argument("--out", required=True, help="driver windows jsonl")
 a = parser.parse_args()
 
@@ -43,6 +44,8 @@ prompt = a.prompt
 # Warmup: full compile/warm path on a throwaway cache.
 cache = make_prompt_cache(model)
 ids = tok.encode(prompt)
+if a.prompt_tokens:
+    ids = (ids * (a.prompt_tokens // len(ids) + 1))[: a.prompt_tokens]
 it = generate_step(mx.array(ids), model, prompt_cache=cache)
 for n in range(a.warmup_tokens):
     next(it)
