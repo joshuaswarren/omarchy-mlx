@@ -4,6 +4,8 @@
 
 **Scope: Qwen3-4B-Instruct-2507 4-bit, a 512-token prompt, 128 decode tokens. Other models, prompt sizes and chips are not measured here.**
 
+The two arms of every run here are set by the `MLX_OMARCHY_ROPE_NORM_FUSE` toggle, with `MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE` cleared. The timed runs did not capture backend dispatch, so what those runs dispatched is not recorded; the [dispatch census](#dispatch-census-new-runs-not-the-timed-runs) shows, in two separate new runs on the same pinned build, the kernel-call difference the toggle selects.
+
 ## Result
 
 Eight paired runs, 3 rounds per arm. A pair value is median(fold ON) / median(fold OFF) over its 3 rounds. Ratios are computed by `analyze.py` from `pairs.tsv` (tok/s rounded to 0.01 in the table).
@@ -25,7 +27,7 @@ Eight paired runs, 3 rounds per arm. A pair value is median(fold ON) / median(fo
 | range | 1.0063 to 1.0126 | 1.0048 to 1.0072 |
 | median, ON-first pairs / OFF-first pairs | 1.0111 / 1.0109 | 1.0061 / 1.0056 |
 
-Mean decode over all rounds: 20.83 tok/s ON, 20.65 tok/s OFF. Prefill is about 173 tok/s on both arms. Every pair favors the fold. Both order groups have a median ratio above 1 (1.0111 ON-first, 1.0109 OFF-first).
+Mean decode over all rounds: 20.83 tok/s ON, 20.65 tok/s OFF. Prefill is about 173 tok/s on both arms. Every pair favors the ON arm (the fold, identified by the toggle as scoped above). Both order groups have a median ratio above 1 (1.0111 ON-first, 1.0109 OFF-first).
 
 Prefill and decode of one run come from the same pass: prefill rate is 512 over the time to the first token, decode rate is 127 tokens over the time from the first to the last token, at depth 512.
 
@@ -49,6 +51,20 @@ Run notes, pair 8 (the other seven pairs ran once each, in order, on boot A):
 - ON arm repeat, boot B, 12:41 to 12:43 UTC, retained. The kernel release string is unchanged, and the preflight check above passed on boot B against the same pins; the kernel image file on disk was replaced between the boots and was not hashed. Pair 8's two arms therefore ran 6.6 hours apart, across a reboot.
 
 Pair 8's ratio (1.0106) sits inside the range of the other seven. Pairs 1 to 7, all on boot A, have a median decode ratio of 1.0111. Start and finish times, boot and the raw result file hash of every retained arm are in `runs.tsv`.
+
+## Dispatch census (new runs, not the timed runs)
+
+Two separate runs, one per arm, with `fold_dispatch_probe.py` (in this directory): load the model, run the same seeded 512-token prompt twice per arm (9 and 41 greedy tokens, fully drained), and take the per-decode-step values from the difference, so prefill cancels. Ran 2026-11-06 on boot B, after the timed runs, with the same pinned interpreter, `mlx.core` extension, `libmlx.so` and patched `qwen3.py` as the timed arms (probe sha256 `a369896541f6e4226cce64744c1a2bdd1d5f6e4712e62ae094f31aecf9375114`). Full stdout of both runs: `dispatch-census-on.log`, `dispatch-census-off.log`.
+
+| per decode step | ON (fused) | OFF (composed) |
+|---|---|---|
+| `mx.fast.rope_rms_norm` calls | 72 | 0 |
+| `gpu_primitive_dispatches` | 1062 | 1134 |
+| `vk_compute_dispatches` | 369 | 441 |
+
+72 calls per step is 2 per layer (q and k) over 36 layers: the fused call exists and is used with the toggle on, and is absent with it off. The generated tokens are identical across the arms at both lengths (`CAPTURE`-style sha256 of the 9-token and 41-token greedy sequences match between the arms). Guard records for both runs: child rc 0, stderr empty, GPU timeouts 0 before and after, drain marker present, wall 10.05 s (ON) and 10.18 s (OFF).
+
+Limits of this census. It shows the two dispatch paths the toggle selects on this pinned build. It is not evidence of what the historical timed runs dispatched; those runs are identified by the toggle and their preflight pins only. The libmlx counters used here measure GPU primitive and Vulkan compute dispatches; they do not count CPU-stream tensor dispatches, so this census does not measure CPU dispatches.
 
 ## Provenance
 
