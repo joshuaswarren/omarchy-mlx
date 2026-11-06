@@ -1,4 +1,4 @@
-pair	order	arm	round	prefill_tok_s	decode_tok_s	peak_gib	load_avg_before
+pair	order	arm	round	prefill_tok_s	decode_tok_s	peak_gib	load_avg_after_run
 1	on-first	on	0	172.9	20.83	2.34	0.29
 1	on-first	on	1	172.93	20.08	2.34	0.29
 1	on-first	on	2	173.97	20.9	2.34	0.31

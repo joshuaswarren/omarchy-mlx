@@ -38,7 +38,7 @@ Greedy generation of the 128 tokens from the fixed 512-token prompt gives the sa
 - ON arm: `MLX_OMARCHY_ROPE_NORM_FUSE=1`. OFF arm: `MLX_OMARCHY_ROPE_NORM_FUSE=0`. Same venv, same model files, same seeded prompt ids.
 - One harness invocation per arm: `t7b-mlx-omarchy.py --sizes 512 --rounds 3 --gen 128 --prefill-step 512 --pause 30`. The harness is in this directory (sha256 `5fe9de4903f8e1586060d4bbdfa7ca4d5e115f17a473f4bb03fe4bda080bae32`).
 - Pairs 1 to 4 ran the ON arm first, pairs 5 to 8 the OFF arm first: two blocked order groups, not a randomized order design. `runs.tsv` records the start time of each arm.
-- Load-average gate under 1.0 before each run (highest observed 0.34), 30 s pause between runs, peak memory 2.34 GiB in every run.
+- Before each run the harness waits until the load average is under 1.0 (its default gate), with a 30 s pause between runs. The `load_avg_after_run` column of `pairs.tsv` is the load average read after that run's generation loop (highest 0.34); the harness does not record the value that passed the gate. Peak memory was 2.34 GiB in every run.
 - Preflight before every arm, which a run must pass to start: the interpreter, the `mlx.core` extension (`7542a0bc…`) and `libmlx.so` (`6236fae2…`) are hashed and compared with pinned values, together with the hostname, kernel release and boot id. All 16 retained arms carry the same interpreter, extension and `libmlx.so` pins, on both boots.
 - Raw per-round values: `pairs.tsv`. The 16 raw result files carry identical environment records (package version, Honeykrisp and Mesa versions, kernel release, model and weight hashes) apart from timestamps. Run date 2026-11-06.
 
@@ -67,12 +67,12 @@ model Qwen3-4B-Instruct-2507-4bit, snapshot 50d427756c6b1b2fe0c0a10f67fbda1fc8e8
 
 ```
 python3 analyze.py            # prints the table above from pairs.tsv
-MLX_OMARCHY_ROPE_NORM_FUSE=1 python t7b-mlx-omarchy.py --model <Qwen3-4B-Instruct-2507-4bit dir> \
+env -u MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE MLX_OMARCHY_ROPE_NORM_FUSE=1 python t7b-mlx-omarchy.py --model <Qwen3-4B-Instruct-2507-4bit dir> \
     --host-label "<machine label>" --out on.json --sizes 512 --rounds 3 --gen 128 --prefill-step 512 --pause 30
-MLX_OMARCHY_ROPE_NORM_FUSE=0 python t7b-mlx-omarchy.py ... --out off.json   # same arguments
+env -u MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE MLX_OMARCHY_ROPE_NORM_FUSE=0 python t7b-mlx-omarchy.py ... --out off.json   # same arguments
 ```
 
-Run the harness with the interpreter of the packaged install, on an idle machine.
+Run the harness with the interpreter of the packaged install, on an idle machine. The specific override `MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE` takes precedence over the general toggle, so the run commands clear it; the preflight chains of the timed runs pinned the patched `qwen3.py` and cleared it the same way.
 
 ## Relation to the release figure
 
