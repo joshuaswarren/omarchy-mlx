@@ -6086,7 +6086,6 @@ TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
     return;
   }
   Stream stream = gpu_stream();
-  Stream cpu = default_stream(Device::cpu);
   // 64 rows over 32 experts: 2 rows per expert, past the 64-row floor but under the
   // measured break-even (H71: 0.55x at 1 row per expert, 0.81x at 2, 1.36x at 4).
   const int experts = 32;
@@ -6098,14 +6097,14 @@ TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
     rhs_v.insert(rhs_v.end(), rows / experts, static_cast<uint32_t>(e));
   }
   array w = astype(
-      random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+      random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, stream),
       bfloat16,
-      cpu);
-  auto parts = quantize(w, 64, 4, "affine", std::nullopt, cpu);
+      stream);
+  auto parts = quantize(w, 64, 4, "affine", std::nullopt, stream);
   array x = astype(
-      random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+      random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, stream),
       bfloat16,
-      cpu);
+      stream);
   array rhs(rhs_v.begin(), Shape{rows}, uint32);
   setenv("MLX_OMARCHY_GATHER_QMM_TILE", "1", 1);
   array out = gather_qmm(
@@ -6121,7 +6120,7 @@ TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
 // Sorted-expert prefill route of gather_qmm (shaders/gather_qmm_tile.comp):
 // x is [B, 1, K] with one expert id per row and the ids sorted, the shape
 // mlx-lm's SwitchLinear passes at N*k >= 64 rows. The tile kernel must equal
-// an f32 reference built on the CPU stream, and the per-row subgroup route
+// an f32 reference built on the GPU stream, and the per-row subgroup route
 // (MLX_OMARCHY_GATHER_QMM_TILE=0), whatever the expert-run lengths: runs
 // shorter than a 32-row tile, runs spanning tiles, an expert with no rows,
 // and ids that are not actually sorted.
@@ -6130,7 +6129,6 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     return;
   }
   Stream stream = gpu_stream();
-  Stream cpu = default_stream(Device::cpu);
   auto rel_l2 = [](const std::vector<float>& got, const std::vector<float>& want) {
     double num = 0.0, den = 0.0;
     for (size_t i = 0; i < want.size(); ++i) {
@@ -6157,20 +6155,20 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     }
     const int rows = static_cast<int>(rhs_v.size());
     array w = astype(
-        random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+        random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, stream),
         dtype,
-        cpu);
-    auto parts = quantize(w, 64, 4, "affine", std::nullopt, cpu);
+        stream);
+    auto parts = quantize(w, 64, 4, "affine", std::nullopt, stream);
     array x = astype(
-        random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+        random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, stream),
         dtype,
-        cpu);
+        stream);
     array rhs(rhs_v.begin(), Shape{rows}, uint32);
     array w_deq = dequantize(
-        parts[0], parts[1], parts[2], 64, 4, "affine", std::nullopt, float32, cpu);
-    array w_sel = take(w_deq, rhs, 0, cpu);
+        parts[0], parts[1], parts[2], 64, 4, "affine", std::nullopt, float32, stream);
+    array w_sel = take(w_deq, rhs, 0, stream);
     array reference = matmul(
-        astype(x, float32, cpu), swapaxes(w_sel, 1, 2, cpu), cpu);
+        astype(x, float32, stream), swapaxes(w_sel, 1, 2, stream), stream);
     reference.eval();
     const float* ref_data = reference.data<float>();
     std::vector<float> expected(ref_data, ref_data + reference.size());
