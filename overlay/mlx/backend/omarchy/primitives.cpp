@@ -4081,7 +4081,7 @@ static int qmv_small_t_max_rows() {
 static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
   if (requested_max < 2) return 0;
   const std::string& name = encoder.device().capabilities().device_name;
-  int cap = (name.find("G13C") != std::string::npos) ? 8 : 4;
+  int cap = (name.find("G13C") != std::string::npos || name.find("G14C") != std::string::npos) ? 8 : 4;
   return std::min(requested_max, cap);
 }
 
