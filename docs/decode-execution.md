@@ -177,6 +177,8 @@ The [profiler](../overlay/mlx/backend/omarchy/gpu_profiler.h#L14-L49)
 adds GPU timestamps and an execution barrier for each measured dispatch.
 Those commands change scheduling.
 
+For per-token GPU profiler NDJSON, `tools/analyze_decode_profile.py` maps event kernel IDs through the `ComputeKernel` enum in `compute.h`. Its offline regression needs no GPU: `python3 -m unittest discover -s tests -p test_analyze_decode_profile.py -v`.
+
 | Signal | Meaning and limit |
 | --- | --- |
 | `gpu_primitive_dispatches` | GPU evaluator entries, including entries that return without recording work. Not a shader count. |
