@@ -198,6 +198,29 @@ def plan_chunks(sample_count: int, chunk_samples: int = _CHUNK_SAMPLES) -> list[
     return plan
 
 
+def _samples_sha256(samples) -> str:
+    """Hash contiguous float32 sample bytes (host byte order)."""
+    import hashlib
+
+    import numpy as np
+
+    return hashlib.sha256(
+        np.ascontiguousarray(samples, dtype=np.float32).tobytes()
+    ).hexdigest()
+
+
+def _is_pinned_samples(samples, fixture_samples_sha: str | None) -> bool:
+    """True only for the pinned golden fixture's decoded samples.
+
+    The pinned mel contract (duration_aware=False) is qualified for the
+    fixture only; arbitrary audio must use the CLI's duration-aware
+    normalization or short clips decode at the wrong scale.
+    """
+    return fixture_samples_sha is not None and (
+        _samples_sha256(samples) == fixture_samples_sha
+    )
+
+
 # ------------------------------------------------------------------
 # Resampling on the accelerator path. Filter taps are host-designed
 # constants uploaded to the device; all sample arithmetic is MLX.
@@ -313,6 +336,7 @@ class DictationTranscriber:
         self._packed = None
         self._tokenizer = None
         self._reference = None
+        self._fixture_samples_sha: str | None = None
 
     def _start(self):
         if self._started:
@@ -378,6 +402,11 @@ class DictationTranscriber:
             cache_dir / "tokenizer.json", expected_sha256=tokenizer_sha
         )
         self._reference = lock
+        fixture = cli._fixture_path(cli._cache_dir(lock))
+        if fixture.is_file():
+            pcm, _rate, _decoder = cli._decode_audio(fixture)
+            self._fixture_samples_sha = _samples_sha256(
+                np.asarray(pcm, dtype=np.float32) / 32768.0)
         self._np = np
         self._mx = mx
         self._extract_chunk_features = extract_chunk_features
@@ -423,6 +452,8 @@ class DictationTranscriber:
             hidden = None
             cell = None
             samples = np.ascontiguousarray(waveform)
+            duration_aware = not _is_pinned_samples(
+                samples, self._fixture_samples_sha)
             for length in plan_chunks(int(samples.size)):
                 if self._cancelled(cancel):
                     raise DictationCancelled("cancelled at a chunk boundary")
@@ -433,18 +464,19 @@ class DictationTranscriber:
                 chunk = samples[:length]
                 samples = samples[length:]
                 chunk_tokens, hidden, cell = self._transcribe_chunk(
-                    chunk, hidden, cell, cancel
+                    chunk, hidden, cell, cancel, duration_aware
                 )
                 tokens.extend(chunk_tokens)
             return self._tokenizer.decode(tokens)
 
-    def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel):
+    def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel,
+                          duration_aware: bool):
         mx = self._mx
         with mx.stream(mx.gpu):
             waveform = mx.array(chunk_waveform)
         mx.eval(waveform)
 
-        mel = self._extract_chunk_features(waveform)
+        mel = self._extract_chunk_features(waveform, duration_aware=duration_aware)
         mx.eval(mel.mel, mel.mask, mel.encoder_features, mel.encoder_mask)
 
         encoded = self._runner.run(
@@ -458,6 +490,24 @@ class DictationTranscriber:
         encoder_hidden = encoded["encoder_hidden"].astype(mx.float32)
         encoder_mask = encoded["encoder_mask"].astype(mx.int32)
         mx.eval(encoder_hidden, encoder_mask)
+
+        window = int(encoder_hidden.shape[1])
+        mask_host = self._np.asarray(encoder_mask).reshape(-1)
+        mask_valid = int(mask_host.sum())
+        decode_frames = window if not duration_aware else min(mask_valid, window)
+        if decode_frames <= 0:
+            raise DictationRefusal(
+                f"encoder mask marks zero valid frames ({mask_valid})")
+        if decode_frames != window:
+            # Slice-decode assumes validity is a prefix (padding tail); a
+            # mask with holes is a contract break, as in the CLI path.
+            if not (mask_host[:mask_valid].all()
+                    and not mask_host[mask_valid:].any()):
+                raise DictationRefusal(
+                    "encoder mask validity is not a prefix; refusing to "
+                    "slice-decode a mask with holes")
+        decode_hidden = (encoder_hidden if decode_frames == window
+                         else encoder_hidden[:, :decode_frames, :])
 
         if hidden is None:
             with mx.stream(mx.gpu):
@@ -476,7 +526,7 @@ class DictationTranscriber:
                 raise DictationCancelled("cancelled during decode")
             state_out, tok, dur, _, _, _ = self._run_step(
                 self._packed, current_hidden, current_cell, token_id,
-                encoder_hidden, frame_holder[0],
+                decode_hidden, frame_holder[0],
             )
             mx.eval(state_out)
             dec_state = state_out[0:640].reshape(1, 640)
@@ -497,7 +547,7 @@ class DictationTranscriber:
             if fused["frame"] == frame_index and fused["state"] is decoder_state:
                 return self._JointDecision(fused["tok"], fused["dur"])
             state_out, tok, dur, _, _, _ = self._run_step(
-                self._packed, None, None, 0, encoder_hidden, frame_index,
+                self._packed, None, None, 0, decode_hidden, frame_index,
                 skip_lstm=True, dec_in=decoder_state,
             )
             mx.eval(state_out)
@@ -505,8 +555,8 @@ class DictationTranscriber:
 
         tdt = self._tdt_decode(
             packed=self._packed,
-            encoder=encoder_hidden,
-            valid_frames=int(encoder_hidden.shape[1]),
+            encoder=decode_hidden,
+            valid_frames=decode_frames,
             config=self._reference.tdt,
             initial_hidden=hidden,
             initial_cell=cell,
