@@ -19,9 +19,9 @@
 //                     slot wait (when all slots are executing) plus
 //                     BeginCommandBuffer, and the host clock at begin.
 //                     Buffer mode emits this record at flush instead and
-//                     adds "bt0"/"bt1" (query-pool cursor indices, -1
-//                     when the pair was dropped) and "t0"/"t1" (the
-//                     buffer's GPU ticks, omitted when unavailable)
+//                     adds "bt0"/"bt1" (query-pool cursor indices) and
+//                     "t0"/"t1" (the buffer's GPU ticks, omitted when
+//                     unavailable)
 //   {"k":"d",...}     per compute dispatch (per-dispatch mode only):
 //                     kernel enum, groups,
 //                     params.count, host record cost, raw GPU ticks (t0
@@ -168,16 +168,11 @@ class GpuProfiler {
       p.owner = owner_id(owner);
       p.begin_cost = begin_cost;
       p.begin_t = host_ns();
-      if (s.cursor + 2 > kPoolQueries) {
-        p.skipped = true;
-        dropped_++;
-      } else {
-        p.bt0 = static_cast<int64_t>(s.cursor);
-        p.bt1 = p.bt0 + 1;
-        vk::device_table().CmdWriteTimestamp(
-            cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, s.cursor);
-        s.cursor = 1; // bt1 is written by on_buffer_end before EndCommandBuffer
-      }
+      p.bt0 = s.cursor;
+      p.bt1 = p.bt0 + 1;
+      vk::device_table().CmdWriteTimestamp(
+          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, s.cursor);
+      s.cursor = 1; // bt1 is written by on_buffer_end before EndCommandBuffer
       s.buffers.push_back(p);
       return;
     }
@@ -311,12 +306,9 @@ class GpuProfiler {
       return;
     }
     PendingBuffer& p = s.buffers.back();
-    if (!p.skipped) {
-      vk::device_table().CmdWriteTimestamp(
-          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool,
-          static_cast<uint32_t>(p.bt1));
-      s.cursor = static_cast<uint32_t>(p.bt1) + 1;
-    }
+    vk::device_table().CmdWriteTimestamp(
+        cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, p.bt1);
+    s.cursor = p.bt1 + 1;
   }
 
   // Called at the end of a successful submit(); sub is 0 for submissions
@@ -423,9 +415,8 @@ class GpuProfiler {
     uint64_t owner{0};
     uint64_t begin_cost{0};
     uint64_t begin_t{0};
-    int64_t bt0{-1};
-    int64_t bt1{-1};
-    bool skipped{false};
+    uint32_t bt0{0};
+    uint32_t bt1{0};
   };
 
   // Per-ring-slot recording state: one query pool per slot so an in-flight
@@ -510,19 +501,16 @@ class GpuProfiler {
     for (size_t i = 0; i < s.buffers.size(); ++i) {
       const PendingBuffer& p = s.buffers[i];
       emitf("{\"k\":\"b\",\"o\":%" PRIu64 ",\"dur\":%" PRIu64
-            ",\"t\":%" PRIu64 ",\"bt0\":%" PRId64 ",\"bt1\":%" PRId64,
+            ",\"t\":%" PRIu64 ",\"bt0\":%" PRIu32 ",\"bt1\":%" PRIu32,
             p.owner,
             p.begin_cost,
             p.begin_t,
             p.bt0,
             p.bt1);
-      if (!p.skipped && p.bt1 >= 0 &&
-          static_cast<uint64_t>(p.bt1) < ticks.size() &&
-          ticks[static_cast<size_t>(p.bt1)] >=
-              ticks[static_cast<size_t>(p.bt0)]) {
+      if (p.bt1 < ticks.size() && ticks[p.bt1] >= ticks[p.bt0]) {
         emitf(",\"t0\":%" PRIu64 ",\"t1\":%" PRIu64,
-              ticks[static_cast<size_t>(p.bt0)],
-              ticks[static_cast<size_t>(p.bt1)]);
+              ticks[p.bt0],
+              ticks[p.bt1]);
       }
       emitf("}\n");
     }
