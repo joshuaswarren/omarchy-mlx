@@ -1052,3 +1052,26 @@ TEST_CASE("in-place store into a bf16 input buffer keeps its read and narrows") 
   CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[i])") != std::string::npos);
   CHECK(glsl.find("state[") == std::string::npos);
 }
+
+TEST_CASE("C-style cast to the bf16 template parameter rounds like Metal") {
+  // sconv_decode: `float conv_r = (float)((T)acc);` with T=bfloat16_t means
+  // CONSTRUCT a bfloat16_t from acc - a round to the bf16 grid. The template
+  // resolver substituted the type name first, leaving `(float)acc`, a no-op:
+  // the conv output skipped Metal's bf16 rounding and the kernel diverged
+  // from the reference (2026-11-07 recheck, 423/4096 outputs bad).
+  const char* source =
+      "template <typename T>\n"
+      "[[kernel]] void k(\n"
+      "    const device float* a [[buffer(0)]],\n"
+      "    device bfloat16_t* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  float conv_r = (float)((T)a[i]);\n"
+      "  y[i] = (T)conv_r;\n"
+      "}\n"
+      "template [[host_name(\"k__bfloat16_t\")]] [[kernel]] decltype(k)<bfloat16_t>(\n"
+      "    const device float*, device bfloat16_t*, uint);\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("_mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("_mlx_float_to_bf16(") != std::string::npos);
+}

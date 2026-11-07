@@ -351,6 +351,7 @@ int translate_c_style_casts_once(std::string& code) {
       {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"},
       {"int", "int"}, {"uint", "uint"},
       {"float", "float"}, {"bool", "bool"},
+      {"_bf16_cast", "_mlx_bf16_round_trip"},
       {"int32_t", "int"}, {"uint32_t", "uint"},
       {"int64_t", "uint"}, {"uint64_t", "uint"},
       {"size_t", "uint"},
@@ -1270,6 +1271,16 @@ void resolve_kernel_templates(
       if (value == "bfloat16_t" || value == "bfloat16" ||
           value == "uint16_t") {
         const auto bfloat_name = name;  // the template parameter name (e.g. T)
+        // C-style casts `(T)x`: Metal constructs a bfloat16_t from x - a
+        // round to the bf16 grid. Rewritten to the concrete type FIRST so the
+        // later `(T)name` word substitution cannot turn the cast into a
+        // no-op `(float)x` (sconv_decode conv_r lost its rounding,
+        // 2026-11-07 recheck); the cast scanner maps bfloat16_t casts to
+        // _mlx_bf16_round_trip.
+        // Injected as a neutral token: translate_types renames the literal
+        // bfloat16_t to float before the cast scanner runs.
+        replace_all(body, "(" + bfloat_name + ")", "(_bf16_cast)");
+        replace_all(header, "(" + bfloat_name + ")", "(_bf16_cast)");
         // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
         // Word-bounded: a longer identifier ending in the template name
         // (POST in the residual+RMSNorm kernel) must not lose its tail.
