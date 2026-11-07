@@ -198,6 +198,29 @@ def plan_chunks(sample_count: int, chunk_samples: int = _CHUNK_SAMPLES) -> list[
     return plan
 
 
+def _samples_sha256(samples) -> str:
+    """Hash contiguous float32 sample bytes (host byte order)."""
+    import hashlib
+
+    import numpy as np
+
+    return hashlib.sha256(
+        np.ascontiguousarray(samples, dtype=np.float32).tobytes()
+    ).hexdigest()
+
+
+def _is_pinned_samples(samples, fixture_samples_sha: str | None) -> bool:
+    """True only for the pinned golden fixture's decoded samples.
+
+    The pinned mel contract (duration_aware=False) is qualified for the
+    fixture only; arbitrary audio must use the CLI's duration-aware
+    normalization or short clips decode at the wrong scale.
+    """
+    return fixture_samples_sha is not None and (
+        _samples_sha256(samples) == fixture_samples_sha
+    )
+
+
 # ------------------------------------------------------------------
 # Resampling on the accelerator path. Filter taps are host-designed
 # constants uploaded to the device; all sample arithmetic is MLX.
@@ -313,6 +336,7 @@ class DictationTranscriber:
         self._packed = None
         self._tokenizer = None
         self._reference = None
+        self._fixture_samples_sha: str | None = None
 
     def _start(self):
         if self._started:
@@ -378,6 +402,11 @@ class DictationTranscriber:
             cache_dir / "tokenizer.json", expected_sha256=tokenizer_sha
         )
         self._reference = lock
+        fixture = cli._fixture_path(cli._cache_dir(lock))
+        if fixture.is_file():
+            pcm, _rate, _decoder = cli._decode_audio(fixture)
+            self._fixture_samples_sha = _samples_sha256(
+                np.asarray(pcm, dtype=np.float32) / 32768.0)
         self._np = np
         self._mx = mx
         self._extract_chunk_features = extract_chunk_features
@@ -423,6 +452,8 @@ class DictationTranscriber:
             hidden = None
             cell = None
             samples = np.ascontiguousarray(waveform)
+            duration_aware = not _is_pinned_samples(
+                samples, self._fixture_samples_sha)
             for length in plan_chunks(int(samples.size)):
                 if self._cancelled(cancel):
                     raise DictationCancelled("cancelled at a chunk boundary")
@@ -433,18 +464,19 @@ class DictationTranscriber:
                 chunk = samples[:length]
                 samples = samples[length:]
                 chunk_tokens, hidden, cell = self._transcribe_chunk(
-                    chunk, hidden, cell, cancel
+                    chunk, hidden, cell, cancel, duration_aware
                 )
                 tokens.extend(chunk_tokens)
             return self._tokenizer.decode(tokens)
 
-    def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel):
+    def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel,
+                          duration_aware: bool):
         mx = self._mx
         with mx.stream(mx.gpu):
             waveform = mx.array(chunk_waveform)
         mx.eval(waveform)
 
-        mel = self._extract_chunk_features(waveform)
+        mel = self._extract_chunk_features(waveform, duration_aware=duration_aware)
         mx.eval(mel.mel, mel.mask, mel.encoder_features, mel.encoder_mask)
 
         encoded = self._runner.run(

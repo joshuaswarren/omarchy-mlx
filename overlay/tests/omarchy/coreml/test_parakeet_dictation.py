@@ -112,6 +112,17 @@ class ProbeTest(unittest.TestCase):
 
 
 class CliLocatorTest(unittest.TestCase):
+    def test_pinned_sample_detection(self):
+        """Only the fixture's own decoded samples use the pinned mel
+        contract; unknown audio and a missing fixture must not."""
+        waveform = np.linspace(-1.0, 1.0, 16_000, dtype=np.float32)
+        sha = pd._samples_sha256(waveform)
+        self.assertTrue(pd._is_pinned_samples(waveform, sha))
+        self.assertFalse(pd._is_pinned_samples(waveform * 0.5, sha))
+        self.assertFalse(pd._is_pinned_samples(waveform, None))
+        # Chunked reads see different sample bytes than the whole clip.
+        self.assertFalse(pd._is_pinned_samples(waveform[:8000], sha))
+
     def test_loads_pinned_product_module(self):
         cli = pd.load_cli_module()
         self.assertTrue(callable(cli._load_pin))
@@ -311,7 +322,7 @@ class HardwareDictationTest(unittest.TestCase):
         cli = pd.load_cli_module()
         lock = cli.ReferenceLock.load()
         fixture = cli._fixture_path(cli._cache_dir(lock))
-        pcm, rate, _decoder = cli._decode_flac(fixture)
+        pcm, rate, _decoder = cli._decode_audio(fixture)
         waveform = np.asarray(pcm, dtype=np.float32) / 32768.0
         return waveform, rate
 
