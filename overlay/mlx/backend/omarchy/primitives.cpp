@@ -13166,27 +13166,61 @@ void GatedDeltaUpdate::eval_gpu(
     const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
                                                       : wide_default;
     const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
-    const bool state_bf16 = (h0.dtype() == bfloat16);
-    const omarchy::ComputeKernel kernel = state_bf16
-        ? (gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeGqaStateBF16
-                     : omarchy::ComputeKernel::GatedDeltaDecodeStateBF16)
-        : (decode_tile
-            ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
-                        : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
-                                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
-            : gdn_pf
-            ? (composed ? (pf_gqa ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa
-                                  : omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed)
-                        : pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide
-                                  : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
-            : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
-                        : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled));
+    // The bf16 recurrent state swaps the variant inside the selected route:
+    // every route keeps its own head indexing, binding order and prefetch
+    // shape, so the f32-A_log native GQA mapping and the tile / prefetch /
+    // untiled opt-outs keep working with a bf16 state.
+    const omarchy::ComputeKernel base = decode_tile
+        ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
+                    : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
+                                : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
+        : gdn_pf
+        ? (composed ? (pf_gqa ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa
+                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed)
+                    : pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide
+                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
+        : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
+                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled);
+    omarchy::ComputeKernel kernel = base;
+    if (h0.dtype() == bfloat16) {
+      switch (base) {
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeGqaStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeComposedStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeUntiledStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeUntiledComposedStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfWideStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfComposedStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfComposedGqaStateBF16;
+          break;
+        default:
+          break;
+      }
+    }
     encoder.dispatch_compute(
         kernel,
         bindings,
         params,
         static_cast<uint32_t>(B * Hv),
-        (decode_tile || state_bf16) ? static_cast<uint32_t>(Dv / 32) : 1u,
+        decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
         1);
     return;
   }

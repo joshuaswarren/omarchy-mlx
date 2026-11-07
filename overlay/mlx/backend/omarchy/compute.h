@@ -1097,9 +1097,20 @@ enum class ComputeKernel : uint16_t {
   // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
   GatedDeltaDecodeConvNormBF16Pf,
   GatedDeltaDecodeConvNormBF16PfWide,
-  // Fused gated-delta decode with bf16 recurrent state (shaders/gated_delta_decode.comp -DSTATE_BF16=1, plain and -DGDN_NATIVE_GQA_INDEX).
+  // Fused gated-delta decode with bf16 recurrent state: every decode route
+  // keeps its own variant (order, head indexing, prefetch shape) and swaps
+  // to the -DSTATE_BF16 twin of the same route when the recurrent state is
+  // bf16. Selection swaps the twin inside the existing route tree, so the
+  // opt-outs and the native GQA key indexing keep working per route.
   GatedDeltaDecodeStateBF16,
   GatedDeltaDecodeGqaStateBF16,
+  GatedDeltaDecodeComposedStateBF16,
+  GatedDeltaDecodeUntiledStateBF16,
+  GatedDeltaDecodeUntiledComposedStateBF16,
+  GatedDeltaDecodePfStateBF16,
+  GatedDeltaDecodePfWideStateBF16,
+  GatedDeltaDecodePfComposedStateBF16,
+  GatedDeltaDecodePfComposedGqaStateBF16,
   Count,
 };
 

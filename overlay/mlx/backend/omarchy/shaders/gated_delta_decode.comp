@@ -15,9 +15,11 @@
 //
 // Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
 // (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
-// promotes them to the q/k dtype; bf16 widening is exact); state and the
-// final state store stay f32; the output store rounds to bf16 RNE, the same
-// store cast.comp applies everywhere. See receipts/2026-09-21-gdn-decode-fused.
+// promotes them to the q/k dtype; bf16 widening is exact); state rides f32,
+// or bf16 in the -DSTATE_BF16 builds (each word widened, and the final store
+// rounded, through the same bf16_load/bf16_store RNE sites); the output
+// store rounds to bf16 RNE, the same store cast.comp applies everywhere.
+// See receipts/2026-09-21-gdn-decode-fused.
 
 // GDN_COMPOSED_ORDER builds a separate kernel (the *Composed entries in
 // compute.h) that primitives.cpp dispatches only for flag bit 9 (A_log f32,
