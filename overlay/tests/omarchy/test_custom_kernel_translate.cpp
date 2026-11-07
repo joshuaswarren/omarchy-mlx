@@ -951,3 +951,104 @@ TEST_CASE("hoisted compound index: multidimensional sinks hoist only the effectf
   CHECK(glsl.find("i++") == glsl.rfind("i++"));
   CHECK(glsl.find("j--") == glsl.rfind("j--"));
 }
+
+namespace {
+// True when every ( and [ in `text` closes in order.
+bool brackets_balanced(const std::string& text) {
+  std::string stack;
+  for (char c : text) {
+    if (c == '(' || c == '[') {
+      stack.push_back(c);
+    } else if (c == ')' || c == ']') {
+      if (stack.empty() || stack.back() != (c == ')' ? '(' : '[')) {
+        return false;
+      }
+      stack.pop_back();
+    }
+  }
+  return stack.empty();
+}
+}  // namespace
+
+TEST_CASE("bf16 input read with a nested subscript keeps its brackets balanced") {
+  // inkling_banded_mask_v2: proj[(size_t)d * st[0] + (size_t)dist * st[1]].
+  // The read rewrite stopped at the FIRST ']' (the one closing st[0]) and
+  // produced `_mlx_bf16_to_float(_b0.data[... st[0])] ...` — glslc then
+  // failed with "scalar integer expression required" (2026-11 recheck).
+  const char* source =
+      "[[kernel]] void nested_read(\n"
+      "    const device bfloat16_t* proj [[buffer(0)]],\n"
+      "    const constant int64_t* st [[buffer(1)]],\n"
+      "    device float* y [[buffer(2)]],\n"
+      "    uint d [[thread_position_in_grid]]) {\n"
+      "  y[d] = (float)proj[(size_t)d * st[0] + (size_t)d * st[1]];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto at = glsl.find("_mlx_bf16_to_float(_b0.data[");
+  REQUIRE(at != std::string::npos);
+  // The whole statement (not a prefix of it) must close in order.
+  const auto begin = glsl.rfind('\n', at) + 1;
+  const auto statement = glsl.substr(begin, glsl.find(";", at) - begin);
+  CHECK(brackets_balanced(statement));
+  CHECK(statement.find("_mlx_arg1[0])]") == std::string::npos);
+}
+
+TEST_CASE("bf16 output store with a nested subscript keeps its brackets balanced") {
+  const char* source =
+      "[[kernel]] void nested_store(\n"
+      "    const device float* v [[buffer(0)]],\n"
+      "    const constant int* ix [[buffer(1)]],\n"
+      "    device bfloat16_t* out [[buffer(2)]],\n"
+      "    uint d [[thread_position_in_grid]]) {\n"
+      "  out[ix[d] + d] = v[d];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto at = glsl.find("_b2.data[");
+  REQUIRE(at != std::string::npos);
+  const auto begin = glsl.rfind('\n', at) + 1;
+  const auto statement = glsl.substr(begin, glsl.find(";", at) - begin);
+  CHECK(brackets_balanced(statement));
+  CHECK(statement.find("] = _mlx_float_to_bf16(") != std::string::npos);
+}
+
+TEST_CASE("int64 stride reads narrow to int so they can index a GLSL array") {
+  // inkling_banded_mask_v2: `x[d * x_strides[0]]` made a 64-bit array index
+  // (`_b3.data[uint(d) * _mlx_arg4[0] ...]`); glslc rejects it with "scalar
+  // integer expression required". GLSL indexes with 32-bit ints only.
+  const char* source =
+      "[[kernel]] void stride_index(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    const constant int64_t* x_strides [[buffer(1)]],\n"
+      "    device float* y [[buffer(2)]],\n"
+      "    uint d [[thread_position_in_grid]]) {\n"
+      "  y[d] = x[(size_t)d * x_strides[0] + x_strides[1]];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("int(_mlx_arg1[0])") != std::string::npos);
+  CHECK(glsl.find("int(_mlx_arg1[1])") != std::string::npos);
+  // No stride read is left at 64 bits.
+  const auto body = glsl.substr(glsl.find("void main()"));
+  for (auto at = body.find("_mlx_arg1["); at != std::string::npos;
+       at = body.find("_mlx_arg1[", at + 1)) {
+    CHECK(body.substr(at >= 4 ? at - 4 : 0, 4) == "int(");
+  }
+}
+
+TEST_CASE("in-place store into a bf16 input buffer keeps its read and narrows") {
+  // Qwen3.5 GDN state update: `x[i] = x[i] + 1;` writes into a bf16 INPUT
+  // buffer. The old code rewrote the read first and then narrowed the store
+  // with a dedicated regex; the helper must do both in one pass, and the
+  // right-hand read must survive as a bf16 read (not a bare `x[` token).
+  const char* source =
+      "[[kernel]] void inplace(\n"
+      "    device bfloat16_t* state [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  state[i] = state[i] + 1;\n"
+      "  y[i] = 0.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("_b0.data[i] = _mlx_float_to_bf16(") != std::string::npos);
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[i])") != std::string::npos);
+  CHECK(glsl.find("state[") == std::string::npos);
+}

@@ -1973,6 +1973,52 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
   }
 }
 
+// Rewrites every `NAME[index]` of a bf16 buffer. The index ends at its
+// MATCHING ']': the old `[^\]]+` regex stopped at the first ']' and split
+// `proj[(size_t)d * st[0] + st[1]]` into unbalanced GLSL (inkling
+// banded_mask_v2, 2026-11 recheck). `NAME[index] = rhs;` becomes a bf16 store;
+// `read_for_loads` also rewrites plain loads (inputs only).
+void rewrite_bfloat_subscripts(
+    std::string& body,
+    const std::string& name,
+    const std::string& storage,
+    bool read_for_loads) {
+  const std::regex head("\\b" + regex_escape(name) + R"(\s*\[)");
+  size_t from = 0;
+  std::smatch found;
+  while (from < body.size()) {
+    if (!std::regex_search(body.cbegin() + from, body.cend(), found, head)) {
+      return;
+    }
+    const size_t start = from + found.position(0);
+    const size_t open = start + found.length(0) - 1;
+    const size_t close = matching_delimiter(body, open, '[', ']');
+    const std::string index = body.substr(open + 1, close - open - 1);
+    const size_t after = body.find_first_not_of(" \t\r\n", close + 1);
+    const bool assigns = after != std::string::npos && body[after] == '=' &&
+        (after + 1 >= body.size() || body[after + 1] != '=');
+    const size_t semi = assigns ? body.find(';', after) : std::string::npos;
+    std::string replacement;
+    size_t end = close + 1;
+    if (semi != std::string::npos) {
+      // The right-hand side may read the same buffer (`x[i] = x[i] + 1;`):
+      // rewrite those reads first, or the store replacement leaves a bare
+      // `x[` token behind and the buffer-use check refuses the kernel.
+      std::string rhs = trim(body.substr(after + 1, semi - after - 1));
+      rewrite_bfloat_subscripts(rhs, name, storage, true);
+      replacement = storage + "[" + index + "] = _mlx_float_to_bf16(" + rhs + ");";
+      end = semi + 1;
+    } else if (read_for_loads) {
+      replacement = "_mlx_bf16_to_float(" + storage + "[" + index + "])";
+    } else {
+      from = close + 1;
+      continue;
+    }
+    body.replace(start, end - start, replacement);
+    from = start + replacement.size();
+  }
+}
+
 void translate_bfloat_parameter(
     std::string& body,
     const Parameter& parameter,
@@ -1980,10 +2026,7 @@ void translate_bfloat_parameter(
   const std::string escaped = regex_escape(parameter.name);
   const std::string storage = "_b" + std::to_string(parameter.binding) + ".data";
   if (output) {
-    body = std::regex_replace(
-        body,
-        std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\]\s*=\s*([^;]+);)"),
-        storage + "[$1] = _mlx_float_to_bf16($2);");
+    rewrite_bfloat_subscripts(body, parameter.name, storage, false);
     if (std::regex_search(body, std::regex("\\b" + escaped + R"(\s*\[)"))) {
       throw std::runtime_error(
           "bfloat16 output supports direct assignment only");
@@ -1991,21 +2034,10 @@ void translate_bfloat_parameter(
   } else if (parameter.scalar) {
     replace_word(body, parameter.name, "_mlx_bf16_to_float(" + storage + "[0])");
   } else {
-    body = std::regex_replace(
-        body,
-        std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\])"),
-        "_mlx_bf16_to_float(" + storage + "[$1])");
-    // The read pass rewrote in-place stores into a bf16 INPUT buffer
-    // (state-cache updates, e.g. Qwen3.5 GDN recurrent_state) into
-    // '_mlx_bf16_to_float(slot) = rhs;' — an assignment to a call.
-    // Narrow instead: slot = _mlx_float_to_bf16(rhs), which is exactly
-    // the round-to-nearest-even bf16 store the MSL performed.
-    body = std::regex_replace(
-        body,
-        std::regex(
-            R"(_mlx_bf16_to_float\()" + regex_escape(storage) +
-            R"(\[([^\]]*)\]\)\s*=\s*([^;]+);)"),
-        storage + "[$1] = _mlx_float_to_bf16($2);");
+    // Loads and in-place stores (state-cache updates, e.g. Qwen3.5 GDN
+    // recurrent_state: `slot = rhs;` becomes slot = _mlx_float_to_bf16(rhs),
+    // the round-to-nearest-even store the MSL performed).
+    rewrite_bfloat_subscripts(body, parameter.name, storage, true);
     if (std::regex_search(body, std::regex("\\b" + escaped + R"(\s*\[)"))) {
       throw std::runtime_error("unsupported bfloat16 buffer expression");
     }
@@ -2747,6 +2779,29 @@ Translation translate_msl(
       body.find("float16_t") != std::string::npos;
   needs_int64 = needs_int64 || body.find("int64_t") != std::string::npos ||
       body.find("uint64_t") != std::string::npos;
+  // mlx injects `NAME_strides` as `constant int64_t*`; GLSL array subscripts
+  // take 32-bit ints only, so `x[d * x_strides[0]]` would index with an
+  // int64 (glslc: "scalar integer expression required", inkling
+  // banded_mask_v2, 2026-11 recheck). Narrow each stride read to int.
+  for (const auto& parameter : parameters) {
+    const std::string& n = parameter.name;
+    if (parameter.type != "int64_t" || parameter.scalar || n.size() < 8 ||
+        n.compare(n.size() - 8, 8, "_strides") != 0) {
+      continue;
+    }
+    const std::regex head("(^|[^.\\w])" + regex_escape(n) + R"(\s*\[)");
+    size_t from = 0;
+    std::smatch found;
+    while (from < body.size() &&
+           std::regex_search(body.cbegin() + from, body.cend(), found, head)) {
+      const size_t name_at = from + found.position(0) + found.length(1);
+      const size_t open = from + found.position(0) + found.length(0) - 1;
+      const size_t close = matching_delimiter(body, open, '[', ']');
+      body.insert(close + 1, ")");
+      body.insert(name_at, "int(");
+      from = close + 6;
+    }
+  }
   // Rename parameter tokens in the body to the safe internal aliases the
   // macros above define. A parameter literally named `x` (or y/z/w/...)
   // must not survive as a preprocessor macro: any GLSL swizzle spelled
