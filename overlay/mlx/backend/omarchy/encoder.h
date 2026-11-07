@@ -530,6 +530,14 @@ class MLX_API CommandEncoder {
   // and the allocator's noncoherent flush keep exactly the visibility
   // the unconditional path provides.
   static bool gated_barriers();
+  // Barrier-price diagnostics, default off, NOT correct for production:
+  // MLX_OMARCHY_DIAG_SKIP_DEP_BARRIER drops the vkCmdPipelineBarrier that
+  // record_dependency_barrier() would record (the tracker still runs).
+  // MLX_OMARCHY_DIAG_SKIP_READBACK_BARRIER drops the submit-close
+  // ALL_COMMANDS -> HOST_READ barrier. Each prices one barrier class; a
+  // digest change means that class is load-bearing.
+  static bool diag_skip_dep_barrier();
+  static bool diag_skip_readback_barrier();
 
   // Wave scheduling (MLX_OMARCHY_WAVE_SCHED, default off; requires gated
   // barriers). Arrival-ordered nodes buffered by the open batch instead

@@ -103,6 +103,14 @@ ordered records digest was identical (`dbf70497`), with +2.9% decode.
 Other SoCs should re-run their own digest gate. Skip and emit counts appear
 in the GPU profile and in the runtime-test trace counters.
 
+Two diagnostic switches price one barrier class each and are not safe for
+production. `MLX_OMARCHY_DIAG_SKIP_DEP_BARRIER=1` drops the full dependency
+barrier that the tracker records. `MLX_OMARCHY_DIAG_SKIP_READBACK_BARRIER=1`
+drops the submit-close device-to-host barrier. Both are off by default, and
+an unset environment records exactly the barriers described above. A changed
+output digest under either switch shows that the dropped class is
+load-bearing for that workload.
+
 Wave scheduling is scheduling only, and results are bit-identical.
 `MLX_OMARCHY_WAVE_SCHED=1` buffers the open batch's dispatches, copies, and
 fills. It does not record them in tape order. At submit it records them in

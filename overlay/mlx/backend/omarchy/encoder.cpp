@@ -169,6 +169,16 @@ bool CommandEncoder::gated_barriers() {
   return on;
 }
 
+bool CommandEncoder::diag_skip_dep_barrier() {
+  static const bool on = env_flag("MLX_OMARCHY_DIAG_SKIP_DEP_BARRIER");
+  return on;
+}
+
+bool CommandEncoder::diag_skip_readback_barrier() {
+  static const bool on = env_flag("MLX_OMARCHY_DIAG_SKIP_READBACK_BARRIER");
+  return on;
+}
+
 bool CommandEncoder::batch_needs_barrier(
     std::span<const TrackedRange> reads,
     std::span<const TrackedRange> writes) const {
@@ -210,17 +220,19 @@ void CommandEncoder::record_dependency_barrier() {
       VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
   full.dstAccessMask =
       VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-  vk::device_table().CmdPipelineBarrier(
-      cmd_,
-      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-      0,
-      1,
-      &full,
-      0,
-      nullptr,
-      0,
-      nullptr);
+  if (!diag_skip_dep_barrier()) {
+    vk::device_table().CmdPipelineBarrier(
+        cmd_,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0,
+        1,
+        &full,
+        0,
+        nullptr,
+        0,
+        nullptr);
+  }
   tracked_reads_.clear();
   tracked_writes_.clear();
   head_synced_ = true;
@@ -1129,7 +1141,7 @@ void CommandEncoder::submit() {
   uint64_t submitted = 0;
 
   if (recording_) {
-    if (gated_barriers()) {
+    if (gated_barriers() && !diag_skip_readback_barrier()) {
       VkMemoryBarrier readback{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
       readback.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
       readback.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
