@@ -491,6 +491,24 @@ class DictationTranscriber:
         encoder_mask = encoded["encoder_mask"].astype(mx.int32)
         mx.eval(encoder_hidden, encoder_mask)
 
+        window = int(encoder_hidden.shape[1])
+        mask_host = self._np.asarray(encoder_mask).reshape(-1)
+        mask_valid = int(mask_host.sum())
+        decode_frames = window if not duration_aware else min(mask_valid, window)
+        if decode_frames <= 0:
+            raise DictationRefusal(
+                f"encoder mask marks zero valid frames ({mask_valid})")
+        if decode_frames != window:
+            # Slice-decode assumes validity is a prefix (padding tail); a
+            # mask with holes is a contract break, as in the CLI path.
+            if not (mask_host[:mask_valid].all()
+                    and not mask_host[mask_valid:].any()):
+                raise DictationRefusal(
+                    "encoder mask validity is not a prefix; refusing to "
+                    "slice-decode a mask with holes")
+        decode_hidden = (encoder_hidden if decode_frames == window
+                         else encoder_hidden[:, :decode_frames, :])
+
         if hidden is None:
             with mx.stream(mx.gpu):
                 hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
@@ -508,7 +526,7 @@ class DictationTranscriber:
                 raise DictationCancelled("cancelled during decode")
             state_out, tok, dur, _, _, _ = self._run_step(
                 self._packed, current_hidden, current_cell, token_id,
-                encoder_hidden, frame_holder[0],
+                decode_hidden, frame_holder[0],
             )
             mx.eval(state_out)
             dec_state = state_out[0:640].reshape(1, 640)
@@ -529,7 +547,7 @@ class DictationTranscriber:
             if fused["frame"] == frame_index and fused["state"] is decoder_state:
                 return self._JointDecision(fused["tok"], fused["dur"])
             state_out, tok, dur, _, _, _ = self._run_step(
-                self._packed, None, None, 0, encoder_hidden, frame_index,
+                self._packed, None, None, 0, decode_hidden, frame_index,
                 skip_lstm=True, dec_in=decoder_state,
             )
             mx.eval(state_out)
@@ -537,8 +555,8 @@ class DictationTranscriber:
 
         tdt = self._tdt_decode(
             packed=self._packed,
-            encoder=encoder_hidden,
-            valid_frames=int(encoder_hidden.shape[1]),
+            encoder=decode_hidden,
+            valid_frames=decode_frames,
             config=self._reference.tdt,
             initial_hidden=hidden,
             initial_cell=cell,
