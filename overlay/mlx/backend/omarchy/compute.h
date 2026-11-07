@@ -1097,6 +1097,9 @@ enum class ComputeKernel : uint16_t {
   // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
   GatedDeltaDecodeConvNormBF16Pf,
   GatedDeltaDecodeConvNormBF16PfWide,
+  // Fused gated-delta decode with bf16 recurrent state (shaders/gated_delta_decode.comp -DSTATE_BF16=1, plain and -DGDN_NATIVE_GQA_INDEX).
+  GatedDeltaDecodeStateBF16,
+  GatedDeltaDecodeGqaStateBF16,
   Count,
 };
 

@@ -12873,8 +12873,10 @@ void GatedDeltaUpdate::eval_gpu(
       Hv % Hk == 0 &&
       Dk == 128 && Dv == 128 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
-      v.dtype() == bfloat16 && h0.dtype() == float32 &&
-      outputs.at(0).dtype() == bfloat16 && outputs.at(1).dtype() == float32;
+      v.dtype() == bfloat16 &&
+      ((h0.dtype() == float32 && outputs.at(1).dtype() == float32) ||
+       (h0.dtype() == bfloat16 && outputs.at(1).dtype() == bfloat16)) &&
+      outputs.at(0).dtype() == bfloat16;
   if (raw_gates_mode) {
     // Raw-gates contract: a/b/dt_bias bf16 (the Qwen3.8 checkpoint);
     // A_log bf16 or f32 (the Qwen3.5-9B conversion stores it f32 - the
@@ -13164,23 +13166,27 @@ void GatedDeltaUpdate::eval_gpu(
     const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
                                                       : wide_default;
     const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
-    const omarchy::ComputeKernel kernel = decode_tile
-        ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
-                    : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
-                                : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
-        : gdn_pf
-        ? (composed ? (pf_gqa ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa
-                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed)
-                    : pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide
-                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
-        : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
-                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled);
+    const bool state_bf16 = (h0.dtype() == bfloat16);
+    const omarchy::ComputeKernel kernel = state_bf16
+        ? (gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeGqaStateBF16
+                     : omarchy::ComputeKernel::GatedDeltaDecodeStateBF16)
+        : (decode_tile
+            ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
+                        : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
+                                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
+            : gdn_pf
+            ? (composed ? (pf_gqa ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa
+                                  : omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed)
+                        : pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide
+                                  : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
+            : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
+                        : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled));
     encoder.dispatch_compute(
         kernel,
         bindings,
         params,
         static_cast<uint32_t>(B * Hv),
-        decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
+        (decode_tile || state_bf16) ? static_cast<uint32_t>(Dv / 32) : 1u,
         1);
     return;
   }
