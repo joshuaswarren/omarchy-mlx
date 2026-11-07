@@ -9,14 +9,21 @@
 // code (no branches in the dispatch path, no getenv). With it defined,
 // set MLX_OMARCHY_GPU_PROFILE=<path> (and optionally
 // MLX_OMARCHY_GPU_PROFILE_LABEL=<name>) to append one NDJSON event stream
-// to <path> for the life of the process:
+// to <path> for the life of the process. Set
+// MLX_OMARCHY_GPU_PROFILE_DISPATCH=0 for buffer-level mode (default is
+// per-dispatch mode):
 //
 //   {"k":"meta",...}  once: device name, timestamp period and valid bits,
 //                     pool capacity, label, host clock start
 //   {"k":"b",...}     per command buffer begin: host cost of the ring
 //                     slot wait (when all slots are executing) plus
-//                     BeginCommandBuffer, and the host clock at begin
-//   {"k":"d",...}     per compute dispatch: kernel enum, groups,
+//                     BeginCommandBuffer, and the host clock at begin.
+//                     Buffer mode emits this record at flush instead and
+//                     adds "bt0"/"bt1" (query-pool cursor indices) and
+//                     "t0"/"t1" (the buffer's GPU ticks, omitted when
+//                     unavailable)
+//   {"k":"d",...}     per compute dispatch (per-dispatch mode only):
+//                     kernel enum, groups,
 //                     params.count, host record cost, raw GPU ticks (t0
 //                     written after the pre-dispatch barrier, t1 after the
 //                     dispatch, both at BOTTOM_OF_PIPE), the binding
@@ -31,15 +38,21 @@
 //   {"k":"j",...}     per join: host cost of the completion-timeline wait
 //                     and of the noncoherent invalidate, plus the caller reason
 //   {"k":"end",...}   at exit: totals incl. barrier decisions ("barriers",
-//                     "barriers_skipped"; transfer/fill decisions included)
+//                     "barriers_skipped"; transfer/fill decisions included);
+//                     buffer mode adds "dispatches_total" (per-dispatch
+//                     mode accounts dispatches through the k=d records)
 //
 // GPU ticks convert to nanoseconds with meta.period_ns; tick wraparound
 // wraps at 2^valid_bits. Kernel enum values map to names by their
 // declaration order in overlay/mlx/backend/omarchy/compute.h (the
 // analysis script parses that header; no name table lives in C++).
 //
-// Profiling adds two timestamps and an execution barrier per dispatch, plus
-// a query-pool reset per command buffer. The barrier isolates t0 from later
+// Per-dispatch mode (the default) adds two timestamps and an execution
+// barrier per dispatch; buffer mode (MLX_OMARCHY_GPU_PROFILE_DISPATCH=0)
+// adds one BOTTOM_OF_PIPE timestamp pair per command buffer (t0 after
+// BeginCommandBuffer, t1 before EndCommandBuffer) and no per-dispatch
+// commands. Both add a query-pool reset per command buffer. In
+// per-dispatch mode the barrier isolates t0 from later
 // compute work in Honeykrisp's timestamp-bearing stream. These commands
 // perturb scheduling; profiled timings are not release performance. Results
 // are read during join_last_completion (which completes every submission
@@ -123,11 +136,10 @@ class GpuProfiler {
     }
   }
 
-  // Called right after BeginCommandBuffer on ring slot `slot`. Flushes any
-  // unread timestamps of the PREVIOUS batch recorded into this slot (the
-  // encoder only reuses a slot whose submission completed, so the results
-  // are guaranteed available), then records the pool reset so the new
-  // batch starts from a clean query range.
+  // Buffer mode defers the k=b record to flush (it gains the buffer's
+  // GPU tick pair there) and records t0 right after BeginCommandBuffer.
+  // Per-dispatch mode flushes the previous batch's unread timestamps here
+  // (slot reuse implies completion) and resets the pool for the new batch.
   void on_begin(
       const void* owner,
       int slot,
@@ -136,12 +148,39 @@ class GpuProfiler {
     if (out_ == nullptr) {
       return;
     }
+    Ctx* ctx = find(owner);
+    if (!dispatch_enabled_) {
+      if (ctx == nullptr) {
+        emitf("{\"k\":\"b\",\"o\":%" PRIu64 ",\"dur\":%" PRIu64
+              ",\"t\":%" PRIu64 "}\n",
+              owner_id(owner),
+              begin_cost,
+              host_ns());
+        return;
+      }
+      flush_slot(*ctx, slot, ctx->slots[slot].last_sub);
+      SlotCtx& s = ctx->slots[slot];
+      s.cursor = 0;
+      s.pending.clear();
+      s.buffers.clear();
+      vk::device_table().CmdResetQueryPool(cmd, s.pool, 0, kPoolQueries);
+      PendingBuffer p{};
+      p.owner = owner_id(owner);
+      p.begin_cost = begin_cost;
+      p.begin_t = host_ns();
+      p.bt0 = s.cursor;
+      p.bt1 = p.bt0 + 1;
+      vk::device_table().CmdWriteTimestamp(
+          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, s.cursor);
+      s.cursor = 1; // bt1 is written by on_buffer_end before EndCommandBuffer
+      s.buffers.push_back(p);
+      return;
+    }
     emitf("{\"k\":\"b\",\"o\":%" PRIu64 ",\"dur\":%" PRIu64
           ",\"t\":%" PRIu64 "}\n",
           owner_id(owner),
           begin_cost,
           host_ns());
-    Ctx* ctx = find(owner);
     if (ctx == nullptr) {
       return;
     }
@@ -162,6 +201,10 @@ class GpuProfiler {
       VkCommandBuffer cmd,
       bool barrier) {
     if (out_ == nullptr) {
+      return;
+    }
+    if (!dispatch_enabled_) {
+      dispatches_total_++;
       return;
     }
     Ctx* ctx = find(owner);
@@ -212,7 +255,7 @@ class GpuProfiler {
       uint32_t gz,
       uint64_t host_cost,
       uint32_t tape) {
-    if (out_ == nullptr) {
+    if (out_ == nullptr || !dispatch_enabled_) {
       return;
     }
     Ctx* ctx = find(owner);
@@ -246,6 +289,26 @@ class GpuProfiler {
       s.cursor = p.tick_index + 2;
     }
     dispatches_++;
+  }
+
+  // Buffer mode only: writes the buffer's closing timestamp; called by the
+  // encoder right before EndCommandBuffer.
+  void on_buffer_end(const void* owner, int slot, VkCommandBuffer cmd) {
+    if (out_ == nullptr || dispatch_enabled_) {
+      return;
+    }
+    Ctx* ctx = find(owner);
+    if (ctx == nullptr) {
+      return;
+    }
+    SlotCtx& s = ctx->slots[slot];
+    if (s.buffers.empty()) {
+      return;
+    }
+    PendingBuffer& p = s.buffers.back();
+    vk::device_table().CmdWriteTimestamp(
+        cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, p.bt1);
+    s.cursor = p.bt1 + 1;
   }
 
   // Called at the end of a successful submit(); sub is 0 for submissions
@@ -347,6 +410,15 @@ class GpuProfiler {
     std::array<char, 48> prim{};
   };
 
+  // Buffer mode: one per command buffer; the k=b record emitted at flush.
+  struct PendingBuffer {
+    uint64_t owner{0};
+    uint64_t begin_cost{0};
+    uint64_t begin_t{0};
+    uint32_t bt0{0};
+    uint32_t bt1{0};
+  };
+
   // Per-ring-slot recording state: one query pool per slot so an in-flight
   // batch's timestamps survive while a newer batch records.
   struct SlotCtx {
@@ -354,6 +426,7 @@ class GpuProfiler {
     uint32_t cursor{0};
     uint64_t last_sub{0};
     std::vector<PendingDispatch> pending;
+    std::vector<PendingBuffer> buffers;
   };
 
   struct Ctx {
@@ -371,8 +444,7 @@ class GpuProfiler {
     }
     emitf("{\"k\":\"end\",\"t\":%" PRIu64 ",\"dispatches\":%" PRIu64
           ",\"dropped\":%u,\"submissions\":%" PRIu64 ",\"joins\":%" PRIu64
-          ",\"barriers\":%" PRIu64 ",\"barriers_skipped\":%" PRIu64
-          "}\n",
+          ",\"barriers\":%" PRIu64 ",\"barriers_skipped\":%" PRIu64,
           host_ns(),
           dispatches_,
           dropped_,
@@ -380,6 +452,10 @@ class GpuProfiler {
           joins_,
           barriers_emitted_,
           barriers_skipped_);
+    if (!dispatch_enabled_) {
+      emitf(",\"dispatches_total\":%" PRIu64, dispatches_total_);
+    }
+    emitf("}\n");
     std::fclose(out_);
     out_ = nullptr;
   }
@@ -387,34 +463,56 @@ class GpuProfiler {
   GpuProfiler(const GpuProfiler&) = delete;
   GpuProfiler& operator=(const GpuProfiler&) = delete;
 
-  // Read back and emit one slot's pending dispatches. Caller guarantees
-  // the slot's submission has completed (slot reuse or a full join).
+  // Read back and emit one slot's pending buffer spans and dispatches.
+  // Caller guarantees the slot's submission has completed (slot reuse or a
+  // full join).
   void flush_slot(Ctx& ctx, int slot, uint64_t sub) {
     SlotCtx& s = ctx.slots[slot];
-    if (s.pending.empty() || valid_bits_ == 0 || s.last_sub == 0) {
+    if (s.pending.empty() && s.buffers.empty()) {
+      s.cursor = 0;
+      return;
+    }
+    if (valid_bits_ == 0 || s.last_sub == 0) {
       s.pending.clear();
+      s.buffers.clear();
       s.cursor = 0;
       return;
     }
     uint32_t queries = s.cursor;
-    if (queries == 0) {
-      s.pending.clear();
-      return;
+    std::vector<uint64_t> ticks;
+    if (queries > 0) {
+      ticks.resize(queries);
+      VkResult result = vk::device_table().GetQueryPoolResults(
+          device_,
+          s.pool,
+          0,
+          queries,
+          queries * sizeof(uint64_t),
+          ticks.data(),
+          sizeof(uint64_t),
+          VK_QUERY_RESULT_64_BIT);
+      if (result != VK_SUCCESS) {
+        s.pending.clear();
+        s.buffers.clear();
+        s.cursor = 0;
+        return;
+      }
     }
-    std::vector<uint64_t> ticks(queries);
-    VkResult result = vk::device_table().GetQueryPoolResults(
-        device_,
-        s.pool,
-        0,
-        queries,
-        queries * sizeof(uint64_t),
-        ticks.data(),
-        sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT);
-    if (result != VK_SUCCESS) {
-      s.pending.clear();
-      s.cursor = 0;
-      return;
+    for (size_t i = 0; i < s.buffers.size(); ++i) {
+      const PendingBuffer& p = s.buffers[i];
+      emitf("{\"k\":\"b\",\"o\":%" PRIu64 ",\"dur\":%" PRIu64
+            ",\"t\":%" PRIu64 ",\"bt0\":%" PRIu32 ",\"bt1\":%" PRIu32,
+            p.owner,
+            p.begin_cost,
+            p.begin_t,
+            p.bt0,
+            p.bt1);
+      if (p.bt1 < ticks.size() && ticks[p.bt1] >= ticks[p.bt0]) {
+        emitf(",\"t0\":%" PRIu64 ",\"t1\":%" PRIu64,
+              ticks[p.bt0],
+              ticks[p.bt1]);
+      }
+      emitf("}\n");
     }
     for (size_t i = 0; i < s.pending.size(); ++i) {
       const PendingDispatch& p = s.pending[i];
@@ -452,6 +550,7 @@ class GpuProfiler {
       emitf("]}\n");
     }
     s.pending.clear();
+    s.buffers.clear();
     s.cursor = 0;
   }
 
@@ -466,6 +565,9 @@ class GpuProfiler {
           stderr, "[prof] cannot open MLX_OMARCHY_GPU_PROFILE path %s\n", path);
       return;
     }
+    const char* dispatch_env = std::getenv("MLX_OMARCHY_GPU_PROFILE_DISPATCH");
+    dispatch_enabled_ =
+        dispatch_env == nullptr || std::strcmp(dispatch_env, "0") != 0;
     valid_bits_ = device.capabilities().queue_timestamp_valid_bits;
     period_ns_ = device.capabilities().timestamp_period;
     device_ = device.handle();
@@ -509,7 +611,9 @@ class GpuProfiler {
   uint32_t valid_bits_{0};
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
+  bool dispatch_enabled_{true};
   uint64_t dispatches_{0};
+  uint64_t dispatches_total_{0};
   uint64_t submissions_{0};
   uint64_t joins_{0};
   uint32_t dropped_{0};
@@ -547,6 +651,7 @@ class GpuProfiler {
   void attach(const void*, const Device&) {}
   void on_begin(const void*, int, VkCommandBuffer, uint64_t) {}
   void before_dispatch(const void*, int, VkCommandBuffer, bool) {}
+  void on_buffer_end(const void*, int, VkCommandBuffer) {}
   void on_barrier(bool) {}
   void after_dispatch(
       const void*,
