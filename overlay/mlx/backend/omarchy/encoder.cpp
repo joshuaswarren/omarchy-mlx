@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/encoder.h"
+#include <map>
+#include <mutex>
+#include <string>
+#include <tuple>
+#include <vector>
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -179,17 +184,100 @@ bool CommandEncoder::diag_skip_readback_barrier() {
   return on;
 }
 
+namespace {
+
+// MLX_OMARCHY_DIAG_BARRIER_CENSUS=<path> (diagnostic, default off): count
+// every dependency barrier the tracker emits by hazard kind plus the
+// producer and consumer node labels, and every tracked node, then write
+// a TSV at process exit. Direct-record path only (not wave scheduling).
+struct BarrierCensus {
+  std::mutex mu;
+  std::vector<std::string> labels{"(none)"};
+  std::map<std::string, uint32_t> ids;
+  std::map<std::tuple<uint8_t, uint32_t, uint32_t>, uint64_t> edges;
+  std::map<uint32_t, uint64_t> nodes;
+};
+
+void census_write();
+
+BarrierCensus& census() {
+  static BarrierCensus c;
+  static const bool registered = (std::atexit(census_write), true);
+  (void)registered;
+  return c;
+}
+
+bool census_on() {
+  static const bool on = []() {
+    const char* p = std::getenv("MLX_OMARCHY_DIAG_BARRIER_CENSUS");
+    return p != nullptr && *p != '\0';
+  }();
+  return on;
+}
+
+// Count one tracked node and return its label id.
+uint32_t census_node(std::string_view prim, const std::string& what) {
+  auto& c = census();
+  std::lock_guard<std::mutex> lock(c.mu);
+  std::string key(prim);
+  key += '|';
+  key += what;
+  auto it = c.ids.find(key);
+  if (it == c.ids.end()) {
+    it = c.ids.emplace(key, static_cast<uint32_t>(c.labels.size())).first;
+    c.labels.push_back(key);
+  }
+  c.nodes[it->second]++;
+  return it->second;
+}
+
+void census_edge(const BarrierWhy& why, uint32_t consumer) {
+  auto& c = census();
+  std::lock_guard<std::mutex> lock(c.mu);
+  c.edges[{why.kind, why.label, consumer}]++;
+}
+
+void census_write() {
+  auto& c = census();
+  static const char* kinds[] = {"HEAD", "RAW", "WAW", "WAR"};
+  FILE* f = std::fopen(std::getenv("MLX_OMARCHY_DIAG_BARRIER_CENSUS"), "w");
+  if (f == nullptr) {
+    return;
+  }
+  for (const auto& [key, n] : c.edges) {
+    std::fprintf(
+        f, "EDGE\t%s\t%s\t%s\t%llu\n", kinds[std::get<0>(key)],
+        c.labels[std::get<1>(key)].c_str(), c.labels[std::get<2>(key)].c_str(),
+        static_cast<unsigned long long>(n));
+  }
+  for (const auto& [id, n] : c.nodes) {
+    std::fprintf(
+        f, "NODE\t%s\t%llu\n", c.labels[id].c_str(),
+        static_cast<unsigned long long>(n));
+  }
+  std::fclose(f);
+}
+
+} // namespace
+
 bool CommandEncoder::batch_needs_barrier(
     std::span<const TrackedRange> reads,
-    std::span<const TrackedRange> writes) const {
+    std::span<const TrackedRange> writes,
+    BarrierWhy* why) const {
   auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
     return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
+  };
+  auto hit = [why](BarrierWhy::Kind kind, const TrackedRange& tracked) {
+    if (why != nullptr) {
+      *why = {kind, tracked.label};
+    }
+    return true;
   };
   // Read after write and write after write.
   for (const auto& r : reads) {
     for (const auto& w : tracked_writes_) {
       if (overlaps(r, w)) {
-        return true;
+        return hit(BarrierWhy::Raw, w);
       }
     }
   }
@@ -199,12 +287,12 @@ bool CommandEncoder::batch_needs_barrier(
   for (const auto& w : writes) {
     for (const auto& tw : tracked_writes_) {
       if (overlaps(w, tw)) {
-        return true;
+        return hit(BarrierWhy::Waw, tw);
       }
     }
     for (const auto& tr : tracked_reads_) {
       if (overlaps(w, tr)) {
-        return true;
+        return hit(BarrierWhy::War, tr);
       }
     }
   }
@@ -391,7 +479,13 @@ void CommandEncoder::copy_buffer(
   if (gated_barriers()) {
     TrackedRange read{src, src_offset, tracked_range_end(src_offset, size)};
     TrackedRange write{dst, dst_offset, tracked_range_end(dst_offset, size)};
-    if (!head_synced_ || batch_needs_barrier({&read, 1}, {&write, 1})) {
+    BarrierWhy why;
+    const uint32_t census_cur =
+        census_on() ? census_node(trace::current_prim(), "copy") : 0;
+    if (!head_synced_ || batch_needs_barrier({&read, 1}, {&write, 1}, &why)) {
+      if (census_on()) {
+        census_edge(why, census_cur);
+      }
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -399,6 +493,8 @@ void CommandEncoder::copy_buffer(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
+    read.label = census_cur;
+    write.label = census_cur;
     tracked_reads_.push_back(read);
     tracked_writes_.push_back(write);
   }
@@ -438,7 +534,13 @@ void CommandEncoder::fill_buffer(
   }
   if (gated_barriers()) {
     TrackedRange write{dst, offset, tracked_range_end(offset, size)};
-    if (!head_synced_ || batch_needs_barrier({}, {&write, 1})) {
+    BarrierWhy why;
+    const uint32_t census_cur =
+        census_on() ? census_node(trace::current_prim(), "fill") : 0;
+    if (!head_synced_ || batch_needs_barrier({}, {&write, 1}, &why)) {
+      if (census_on()) {
+        census_edge(why, census_cur);
+      }
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -446,6 +548,7 @@ void CommandEncoder::fill_buffer(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
+    write.label = census_cur;
     tracked_writes_.push_back(write);
   }
   vk::device_table().CmdFillBuffer(cmd_, dst, offset, size, value);
@@ -775,8 +878,17 @@ void CommandEncoder::dispatch_compute_pipeline(
         wr[nw++] = ranges[i];
       }
     }
+    BarrierWhy why;
+    const uint32_t census_cur = census_on()
+        ? census_node(
+              trace::current_prim(),
+              "k" + std::to_string(static_cast<int>(profile_kernel)))
+        : 0;
     if (!head_synced_ ||
-        batch_needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
+        batch_needs_barrier({rd.data(), nr}, {wr.data(), nw}, &why)) {
+      if (census_on()) {
+        census_edge(why, census_cur);
+      }
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -787,9 +899,11 @@ void CommandEncoder::dispatch_compute_pipeline(
     }
     for (size_t i = 0; i < nr; ++i) {
       tracked_reads_.push_back(rd[i]);
+      tracked_reads_.back().label = census_cur;
     }
     for (size_t i = 0; i < nw; ++i) {
       tracked_writes_.push_back(wr[i]);
+      tracked_writes_.back().label = census_cur;
     }
     if (export_dep_masks()) {
       // Compute the two exported signals (design 22b395d): (a) whether

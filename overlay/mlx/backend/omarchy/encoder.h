@@ -258,6 +258,17 @@ struct TrackedRange {
   VkBuffer buffer;
   VkDeviceSize offset;
   VkDeviceSize end;
+  // Census label of the node that tracked this range (0 = none); only
+  // written under MLX_OMARCHY_DIAG_BARRIER_CENSUS.
+  uint32_t label{0};
+};
+
+// First hazard that forced a dependency barrier: kind and the label of
+// the earlier node whose tracked range it hit. Default = batch head.
+struct BarrierWhy {
+  enum Kind : uint8_t { Head, Raw, Waw, War };
+  Kind kind{Head};
+  uint32_t label{0};
 };
 
 // One buffered node's access sets for wave scheduling: the byte ranges a
@@ -603,7 +614,8 @@ class MLX_API CommandEncoder {
   uint64_t dep_seq_{0};
   bool batch_needs_barrier(
       std::span<const TrackedRange> reads,
-      std::span<const TrackedRange> writes) const;
+      std::span<const TrackedRange> writes,
+      BarrierWhy* why = nullptr) const;
   void record_dependency_barrier();
   void reset_dependency_tracking();
   std::vector<TrackedRange> tracked_reads_;
