@@ -770,6 +770,29 @@ def test_ref_flux_norm_rope_small_case(monkeypatch):
 
 # ---------------------------------------------------------------- dry run
 
+def test_ref_flux_single_reads_the_fused_buffer_row_stride(monkeypatch):
+    # The single kernel indexes the fused buffer with FUSED_DIM as the row
+    # stride (upstream: fused_dim = spec.qkv_mlp_out_dim, 27648 for this
+    # config), not 3*dim. The reference used 3*dim, so every row past the
+    # first was read from the wrong offset and 288816/294912 outputs compared
+    # bad (2026-11-07 rerun, fused_single_norm_rope).
+    monkeypatch.setattr(defs, "FLUX", dict(dim=64, heads=1, hd=64, eps=1e-6,
+                                           img=1, txt=1))
+    inp = defs.build_flux_single(seed=5)
+    fused = inp["fused"][0].astype(np.float64)
+    row_stride = fused.shape[-1]
+    assert row_stride != 3 * defs.FLUX["dim"], \
+        "the builder row stride must differ from 3*dim for this case to bite"
+    nq = np.repeat(inp["norm_q"][None].astype(np.float64), fused.shape[0], axis=0)
+    nk = np.repeat(inp["norm_k"][None].astype(np.float64), fused.shape[0], axis=0)
+    want = _flux_expected(fused, nq, nk,
+                          inp["cos_vals"].astype(np.float64),
+                          inp["sin_vals"].astype(np.float64), 64, 1e-6)
+    got = defs.ref_flux_single(inp)
+    for got_o, want_o in zip(got, want):
+        assert got_o.shape == (1, 1, fused.shape[0], 64)
+        assert np.allclose(got_o, want_o, rtol=1e-12, atol=0)
+
 def test_reference_only_dry_run_structure(capsys):
     run = pytest.importorskip("tools.kernel_recheck.run")
     for name in ("qk_relu_squared", "custom_depthwise_conv1d"):
