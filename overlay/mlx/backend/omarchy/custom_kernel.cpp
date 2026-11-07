@@ -2001,8 +2001,12 @@ void rewrite_bfloat_subscripts(
     std::string replacement;
     size_t end = close + 1;
     if (semi != std::string::npos) {
-      replacement = storage + "[" + index + "] = _mlx_float_to_bf16(" +
-          trim(body.substr(after + 1, semi - after - 1)) + ");";
+      // The right-hand side may read the same buffer (`x[i] = x[i] + 1;`):
+      // rewrite those reads first, or the store replacement leaves a bare
+      // `x[` token behind and the buffer-use check refuses the kernel.
+      std::string rhs = trim(body.substr(after + 1, semi - after - 1));
+      rewrite_bfloat_subscripts(rhs, name, storage, true);
+      replacement = storage + "[" + index + "] = _mlx_float_to_bf16(" + rhs + ");";
       end = semi + 1;
     } else if (read_for_loads) {
       replacement = "_mlx_bf16_to_float(" + storage + "[" + index + "])";

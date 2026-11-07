@@ -1033,3 +1033,22 @@ TEST_CASE("int64 stride reads narrow to int so they can index a GLSL array") {
     CHECK(body.substr(at >= 4 ? at - 4 : 0, 4) == "int(");
   }
 }
+
+TEST_CASE("in-place store into a bf16 input buffer keeps its read and narrows") {
+  // Qwen3.5 GDN state update: `x[i] = x[i] + 1;` writes into a bf16 INPUT
+  // buffer. The old code rewrote the read first and then narrowed the store
+  // with a dedicated regex; the helper must do both in one pass, and the
+  // right-hand read must survive as a bf16 read (not a bare `x[` token).
+  const char* source =
+      "[[kernel]] void inplace(\n"
+      "    device bfloat16_t* state [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  state[i] = state[i] + 1;\n"
+      "  y[i] = 0.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("_b0.data[i] = _mlx_float_to_bf16(") != std::string::npos);
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[i])") != std::string::npos);
+  CHECK(glsl.find("state[") == std::string::npos);
+}
