@@ -148,7 +148,7 @@ def probe_runtime(*, verify_cache: bool = False) -> dict:
     checks = (
         ("deps", lambda: cli._check_runtime_deps()),
         ("platform", lambda: cli._check_ane_capability()),
-        ("assets", lambda: cli._verify_assets(cli._load_pin())),
+        ("assets", lambda: cli._load_pin()["assets"]),
         ("worker", lambda: cli._worker_path()),
     )
     for name, check in checks:
@@ -323,7 +323,6 @@ class DictationTranscriber:
             pin = cli._load_pin()
             cli._check_runtime_deps()
             cli._check_ane_capability()
-            cli._verify_assets(pin)
             worker = cli._worker_path()
             share = cli._share_dir()
         except (cli.TranscribeRefusal, cli.ReferenceError) as error:
@@ -363,6 +362,7 @@ class DictationTranscriber:
         island = AneIsland(
             worker, share / "libane" / "libane-strict.so",
             share / "bundles", scratch, self._deadline_ms_value(),
+            seal_assets=pin["assets"],
         )
         self._island = island
         self._runner = EncoderRunner(
