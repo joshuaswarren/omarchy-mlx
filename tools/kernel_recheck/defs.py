@@ -260,7 +260,13 @@ def build_mask(seed=4):
     B, LQ, H, D_REL, S = 2, 16, 4, 8, 32
     rel = bf16(r.standard_normal((B, LQ, H, D_REL)))
     proj = bf16(r.standard_normal((D_REL, 16)))
-    kshape = np.zeros((B, S, 4), dtype=np.float32)   # shape carrier, unread
+    # Shape carrier. The v1 kernel ignores it (B/H/LQ/S are template args);
+    # the v2 kernel reads S from kshape_shape[2] (upstream contract:
+    # shape_ref.shape[2] == S) and ref_mask_v2 reads S from shape[1], so the
+    # carrier must be (B, S, S). The 2026-11-07 rerun fed (B, S, 4): the
+    # kernel computed S=4, wrote 512 of 4096 cells, and every unwritten cell
+    # compared bad (3067/4096).
+    kshape = np.zeros((B, S, S), dtype=np.float32)
     return {"rel": rel, "proj": proj, "kshape": kshape}
 
 
