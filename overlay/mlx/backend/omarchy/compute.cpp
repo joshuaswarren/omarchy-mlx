@@ -360,6 +360,15 @@
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
 #include "gated_delta_decode_gqa_bf16.h"
+#include "gated_delta_decode_state_bf16.h"
+#include "gated_delta_decode_gqa_state_bf16.h"
+#include "gated_delta_decode_composed_state_bf16.h"
+#include "gated_delta_decode_perrow_state_bf16.h"
+#include "gated_delta_decode_perrow_composed_state_bf16.h"
+#include "gated_delta_decode_perrow_pf_state_bf16.h"
+#include "gated_delta_decode_perrow_pfw_state_bf16.h"
+#include "gated_delta_decode_perrow_pf_composed_state_bf16.h"
+#include "gated_delta_decode_perrow_pf_composed_gqa_state_bf16.h"
 #include "gated_delta_decode_perrow_composed_bf16.h"
 #include "gated_delta_decode_perrow_pf_composed_bf16.h"
 #include "gated_delta_decode_perrow_pf_composed_gqa_bf16.h"
@@ -1289,6 +1298,24 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_perrow_pfw_conv_norm_bf16,
           gated_delta_decode_perrow_pfw_conv_norm_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeStateBF16:
+      return {gated_delta_decode_state_bf16, gated_delta_decode_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeGqaStateBF16:
+      return {gated_delta_decode_gqa_state_bf16, gated_delta_decode_gqa_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeComposedStateBF16:
+      return {gated_delta_decode_composed_state_bf16, gated_delta_decode_composed_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeUntiledStateBF16:
+      return {gated_delta_decode_perrow_state_bf16, gated_delta_decode_perrow_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeUntiledComposedStateBF16:
+      return {gated_delta_decode_perrow_composed_state_bf16, gated_delta_decode_perrow_composed_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodePfStateBF16:
+      return {gated_delta_decode_perrow_pf_state_bf16, gated_delta_decode_perrow_pf_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodePfWideStateBF16:
+      return {gated_delta_decode_perrow_pfw_state_bf16, gated_delta_decode_perrow_pfw_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodePfComposedStateBF16:
+      return {gated_delta_decode_perrow_pf_composed_state_bf16, gated_delta_decode_perrow_pf_composed_state_bf16_size};
+    case ComputeKernel::GatedDeltaDecodePfComposedGqaStateBF16:
+      return {gated_delta_decode_perrow_pf_composed_gqa_state_bf16, gated_delta_decode_perrow_pf_composed_gqa_state_bf16_size};
     case ComputeKernel::FastRopeFreqsF32:
       return {fast_rope_freqs_f32, fast_rope_freqs_f32_size};
     case ComputeKernel::FastRopeFreqsF16:

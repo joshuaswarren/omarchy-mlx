@@ -15,9 +15,11 @@
 //
 // Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
 // (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
-// promotes them to the q/k dtype; bf16 widening is exact); state and the
-// final state store stay f32; the output store rounds to bf16 RNE, the same
-// store cast.comp applies everywhere. See receipts/2026-09-21-gdn-decode-fused.
+// promotes them to the q/k dtype; bf16 widening is exact); state rides f32,
+// or bf16 in the -DSTATE_BF16 builds (each word widened, and the final store
+// rounded, through the same bf16_load/bf16_store RNE sites); the output
+// store rounds to bf16 RNE, the same store cast.comp applies everywhere.
+// See receipts/2026-09-21-gdn-decode-fused.
 
 // GDN_COMPOSED_ORDER builds a separate kernel (the *Composed entries in
 // compute.h) that primitives.cpp dispatches only for flag bit 9 (A_log f32,
@@ -42,9 +44,17 @@ layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_b
 layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { uint16_t v[]; } s_in;
+#else
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { float    v[]; } s_in;
+#endif
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 7, std430) buffer         SOut  { uint16_t v[]; } s_out;
+#else
 layout(set = 0, binding = 7, std430) buffer         SOut  { float    v[]; } s_out;
+#endif
 // Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
 // carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
 // dt_bias (bf16).
@@ -302,7 +312,11 @@ void main() {
   uint head_base = head * dv * dk;
   uint tile_base = params.shape[1] + head_base + row0 * dk;
   for (uint r = 0u; r < ROWS; ++r) {
+#ifdef STATE_BF16
+    tile[r * TILE_STRIDE + lane] = bf16_load(s_in.v[tile_base + r * dk + lane]);
+#else
     tile[r * TILE_STRIDE + lane] = s_in.v[tile_base + r * dk + lane];
+#endif
   }
   barrier();
 
@@ -335,6 +349,10 @@ void main() {
   barrier();
   uint out_base = params.shape[2] + head_base + row0 * dk;
   for (uint r = 0u; r < ROWS; ++r) {
+#ifdef STATE_BF16
+    s_out.v[out_base + r * dk + lane] = bf16_store(tile[r * TILE_STRIDE + lane]);
+#else
     s_out.v[out_base + r * dk + lane] = tile[r * TILE_STRIDE + lane];
+#endif
   }
 }

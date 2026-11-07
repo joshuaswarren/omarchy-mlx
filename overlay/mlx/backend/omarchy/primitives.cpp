@@ -12873,8 +12873,10 @@ void GatedDeltaUpdate::eval_gpu(
       Hv % Hk == 0 &&
       Dk == 128 && Dv == 128 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
-      v.dtype() == bfloat16 && h0.dtype() == float32 &&
-      outputs.at(0).dtype() == bfloat16 && outputs.at(1).dtype() == float32;
+      v.dtype() == bfloat16 &&
+      ((h0.dtype() == float32 && outputs.at(1).dtype() == float32) ||
+       (h0.dtype() == bfloat16 && outputs.at(1).dtype() == bfloat16)) &&
+      outputs.at(0).dtype() == bfloat16;
   if (raw_gates_mode) {
     // Raw-gates contract: a/b/dt_bias bf16 (the Qwen3.8 checkpoint);
     // A_log bf16 or f32 (the Qwen3.5-9B conversion stores it f32 - the
@@ -13164,7 +13166,11 @@ void GatedDeltaUpdate::eval_gpu(
     const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
                                                       : wide_default;
     const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
-    const omarchy::ComputeKernel kernel = decode_tile
+    // The bf16 recurrent state swaps the variant inside the selected route:
+    // every route keeps its own head indexing, binding order and prefetch
+    // shape, so the f32-A_log native GQA mapping and the tile / prefetch /
+    // untiled opt-outs keep working with a bf16 state.
+    const omarchy::ComputeKernel base = decode_tile
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
                     : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
                                 : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
@@ -13175,6 +13181,40 @@ void GatedDeltaUpdate::eval_gpu(
                               : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
         : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled);
+    omarchy::ComputeKernel kernel = base;
+    if (h0.dtype() == bfloat16) {
+      switch (base) {
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeGqaStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeComposedStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeUntiledStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeUntiledComposedStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16PfWide:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfWideStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfComposedStateBF16;
+          break;
+        case omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa:
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodePfComposedGqaStateBF16;
+          break;
+        default:
+          break;
+      }
+    }
     encoder.dispatch_compute(
         kernel,
         bindings,
