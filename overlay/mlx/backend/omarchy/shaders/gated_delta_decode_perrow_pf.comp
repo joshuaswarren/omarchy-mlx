@@ -20,9 +20,11 @@
 //
 // Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
 // (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
-// promotes them to the q/k dtype; bf16 widening is exact); state and the
-// final state store stay f32; the output store rounds to bf16 RNE, the same
-// store cast.comp applies everywhere. See receipts/2026-09-21-gdn-decode-fused.
+// promotes them to the q/k dtype; bf16 widening is exact); state rides f32,
+// or bf16 in the -DSTATE_BF16 builds (each word widened, and the final store
+// rounded, through the same bf16_load/bf16_store RNE sites); the output
+// store rounds to bf16 RNE, the same store cast.comp applies everywhere.
+// See receipts/2026-09-21-gdn-decode-fused.
 
 // GDN_COMPOSED_ORDER builds a separate kernel (the *Composed entries in
 // compute.h) that primitives.cpp dispatches only for flag bit 9 (A_log f32,
@@ -36,7 +38,7 @@
 #version 460
 
 #extension GL_EXT_shader_16bit_storage : require
-#ifdef QKV_BF16
+#if defined(QKV_BF16) || defined(STATE_BF16)
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
@@ -69,9 +71,17 @@ layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[];
 #endif /* GDN_CONV_FUSED */
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { u16vec4  v[]; } s_in;
+#else
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { vec4     v[]; } s_in;
+#endif
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 7, std430) buffer         SOut  { u16vec4  v[]; } s_out;
+#else
 layout(set = 0, binding = 7, std430) buffer         SOut  { vec4     v[]; } s_out;
+#endif
 // Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
 // carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
 // dt_bias (bf16).
@@ -114,6 +124,28 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
+// STATE_BF16 builds read and store the recurrent state as bf16: the vec4
+// state words widen and store through gdn_s_load4/gdn_s_save4. Four bf16
+// words pack into one u16vec4 exactly as four f32 words pack into one vec4,
+// so the vec4 index math and the dispatch offset checks are unchanged. The
+// default builds expand the GDN_SLOAD4/GDN_SSAVE4 macros to the original
+// expressions token for token.
+#ifdef STATE_BF16
+vec4 gdn_s_load4(u16vec4 w) {
+  return vec4(bf16_load(w.x), bf16_load(w.y), bf16_load(w.z), bf16_load(w.w));
+}
+
+u16vec4 gdn_s_save4(float a, float b, float c, float d) {
+  return u16vec4(
+      bf16_store(a), bf16_store(b), bf16_store(c), bf16_store(d));
+}
+#define GDN_SLOAD4(idx) gdn_s_load4(s_in.v[idx])
+#define GDN_SSAVE4(a, b, c, d) gdn_s_save4(a, b, c, d)
+#else
+#define GDN_SLOAD4(idx) s_in.v[idx]
+#define GDN_SSAVE4(a, b, c, d) vec4(a, b, c, d)
+#endif
+
 shared float sk[128];
 shared float sq[128];
 shared float sdelta[128];
@@ -136,14 +168,14 @@ float gdn_kv_walk_wide(uint sbase, uint dk) {
   float kv = 0.0f;
   uint q = sbase >> 2u;
   for (uint i = 0u; i < dk; i += 32u) {
-    vec4 w0 = s_in.v[q + (i >> 2u)];
-    vec4 w1 = s_in.v[q + (i >> 2u) + 1u];
-    vec4 w2 = s_in.v[q + (i >> 2u) + 2u];
-    vec4 w3 = s_in.v[q + (i >> 2u) + 3u];
-    vec4 w4 = s_in.v[q + (i >> 2u) + 4u];
-    vec4 w5 = s_in.v[q + (i >> 2u) + 5u];
-    vec4 w6 = s_in.v[q + (i >> 2u) + 6u];
-    vec4 w7 = s_in.v[q + (i >> 2u) + 7u];
+    vec4 w0 = GDN_SLOAD4(q + (i >> 2u));
+    vec4 w1 = GDN_SLOAD4(q + (i >> 2u) + 1u);
+    vec4 w2 = GDN_SLOAD4(q + (i >> 2u) + 2u);
+    vec4 w3 = GDN_SLOAD4(q + (i >> 2u) + 3u);
+    vec4 w4 = GDN_SLOAD4(q + (i >> 2u) + 4u);
+    vec4 w5 = GDN_SLOAD4(q + (i >> 2u) + 5u);
+    vec4 w6 = GDN_SLOAD4(q + (i >> 2u) + 6u);
+    vec4 w7 = GDN_SLOAD4(q + (i >> 2u) + 7u);
     kv = fma(w0.x, skg[i], kv);
     kv = fma(w0.y, skg[i + 1u], kv);
     kv = fma(w0.z, skg[i + 2u], kv);
@@ -194,8 +226,8 @@ float gdn_kv_walk(uint sbase, uint dk, float g, bool mlx_order) {
   float kv = 0.0f;
   uint q = sbase >> 2u;
   for (uint i = 0u; i < dk; i += 8u) {
-    vec4 a = s_in.v[q + (i >> 2u)];
-    vec4 b = s_in.v[q + (i >> 2u) + 1u];
+    vec4 a = GDN_SLOAD4(q + (i >> 2u));
+    vec4 b = GDN_SLOAD4(q + (i >> 2u) + 1u);
 #ifndef GDN_COMPOSED_ORDER
     kv = fma(a.x, skg[i], kv);
     kv = fma(a.y, skg[i + 1u], kv);
@@ -261,8 +293,8 @@ float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd,
   uint qi = sbase >> 2u;
   uint qo = obase >> 2u;
   for (uint i = 0u; i < dk; i += 8u) {
-    vec4 a = s_in.v[qi + (i >> 2u)];
-    vec4 b = s_in.v[qi + (i >> 2u) + 1u];
+    vec4 a = GDN_SLOAD4(qi + (i >> 2u));
+    vec4 b = GDN_SLOAD4(qi + (i >> 2u) + 1u);
 #ifndef GDN_COMPOSED_ORDER
     float n0 = fma(a.x, g, gdn_dk_term(sd, sk[i]));
     float n1 = fma(a.y, g, gdn_dk_term(sd, sk[i + 1u]));
@@ -319,8 +351,8 @@ float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd,
       n7 = fma(b.w, g, d7);
     }
 #endif /* GDN_COMPOSED_ORDER */
-    s_out.v[qo + (i >> 2u)] = vec4(n0, n1, n2, n3);
-    s_out.v[qo + (i >> 2u) + 1u] = vec4(n4, n5, n6, n7);
+    s_out.v[qo + (i >> 2u)] = GDN_SSAVE4(n0, n1, n2, n3);
+    s_out.v[qo + (i >> 2u) + 1u] = GDN_SSAVE4(n4, n5, n6, n7);
 #ifndef GDN_COMPOSED_ORDER
     o = fma(n0, sq[i], o);
     o = fma(n1, sq[i + 1u], o);
@@ -371,14 +403,14 @@ float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
   uint qi = sbase >> 2u;
   uint qo = obase >> 2u;
   for (uint i = 0u; i < dk; i += 32u) {
-    vec4 w0 = s_in.v[qi + (i >> 2u) + 0u];
-    vec4 w1 = s_in.v[qi + (i >> 2u) + 1u];
-    vec4 w2 = s_in.v[qi + (i >> 2u) + 2u];
-    vec4 w3 = s_in.v[qi + (i >> 2u) + 3u];
-    vec4 w4 = s_in.v[qi + (i >> 2u) + 4u];
-    vec4 w5 = s_in.v[qi + (i >> 2u) + 5u];
-    vec4 w6 = s_in.v[qi + (i >> 2u) + 6u];
-    vec4 w7 = s_in.v[qi + (i >> 2u) + 7u];
+    vec4 w0 = GDN_SLOAD4(qi + (i >> 2u) + 0u);
+    vec4 w1 = GDN_SLOAD4(qi + (i >> 2u) + 1u);
+    vec4 w2 = GDN_SLOAD4(qi + (i >> 2u) + 2u);
+    vec4 w3 = GDN_SLOAD4(qi + (i >> 2u) + 3u);
+    vec4 w4 = GDN_SLOAD4(qi + (i >> 2u) + 4u);
+    vec4 w5 = GDN_SLOAD4(qi + (i >> 2u) + 5u);
+    vec4 w6 = GDN_SLOAD4(qi + (i >> 2u) + 6u);
+    vec4 w7 = GDN_SLOAD4(qi + (i >> 2u) + 7u);
     { // words 0..7 of the block
       float n0 = fma(w0.x, g, gdn_dk_term(sd, sk[i]));
       float n1 = fma(w0.y, g, gdn_dk_term(sd, sk[i + 1u]));
@@ -388,8 +420,8 @@ float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
       float n5 = fma(w1.y, g, gdn_dk_term(sd, sk[i + 5u]));
       float n6 = fma(w1.z, g, gdn_dk_term(sd, sk[i + 6u]));
       float n7 = fma(w1.w, g, gdn_dk_term(sd, sk[i + 7u]));
-      s_out.v[qo + (i >> 2u) + 0u] = vec4(n0, n1, n2, n3);
-      s_out.v[qo + (i >> 2u) + 1u] = vec4(n4, n5, n6, n7);
+      s_out.v[qo + (i >> 2u) + 0u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 1u] = GDN_SSAVE4(n4, n5, n6, n7);
       o = fma(n0, sq[i], o);
       o = fma(n1, sq[i + 1u], o);
       o = fma(n2, sq[i + 2u], o);
@@ -408,8 +440,8 @@ float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
       float n5 = fma(w3.y, g, gdn_dk_term(sd, sk[i + 13u]));
       float n6 = fma(w3.z, g, gdn_dk_term(sd, sk[i + 14u]));
       float n7 = fma(w3.w, g, gdn_dk_term(sd, sk[i + 15u]));
-      s_out.v[qo + (i >> 2u) + 2u] = vec4(n0, n1, n2, n3);
-      s_out.v[qo + (i >> 2u) + 3u] = vec4(n4, n5, n6, n7);
+      s_out.v[qo + (i >> 2u) + 2u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 3u] = GDN_SSAVE4(n4, n5, n6, n7);
       o = fma(n0, sq[i + 8u], o);
       o = fma(n1, sq[i + 9u], o);
       o = fma(n2, sq[i + 10u], o);
@@ -428,8 +460,8 @@ float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
       float n5 = fma(w5.y, g, gdn_dk_term(sd, sk[i + 21u]));
       float n6 = fma(w5.z, g, gdn_dk_term(sd, sk[i + 22u]));
       float n7 = fma(w5.w, g, gdn_dk_term(sd, sk[i + 23u]));
-      s_out.v[qo + (i >> 2u) + 4u] = vec4(n0, n1, n2, n3);
-      s_out.v[qo + (i >> 2u) + 5u] = vec4(n4, n5, n6, n7);
+      s_out.v[qo + (i >> 2u) + 4u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 5u] = GDN_SSAVE4(n4, n5, n6, n7);
       o = fma(n0, sq[i + 16u], o);
       o = fma(n1, sq[i + 17u], o);
       o = fma(n2, sq[i + 18u], o);
@@ -448,8 +480,8 @@ float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
       float n5 = fma(w7.y, g, gdn_dk_term(sd, sk[i + 29u]));
       float n6 = fma(w7.z, g, gdn_dk_term(sd, sk[i + 30u]));
       float n7 = fma(w7.w, g, gdn_dk_term(sd, sk[i + 31u]));
-      s_out.v[qo + (i >> 2u) + 6u] = vec4(n0, n1, n2, n3);
-      s_out.v[qo + (i >> 2u) + 7u] = vec4(n4, n5, n6, n7);
+      s_out.v[qo + (i >> 2u) + 6u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 7u] = GDN_SSAVE4(n4, n5, n6, n7);
       o = fma(n0, sq[i + 24u], o);
       o = fma(n1, sq[i + 25u], o);
       o = fma(n2, sq[i + 26u], o);

@@ -328,6 +328,18 @@ doctest_discover_tests(omarchy_gdn_decode_batch_tests)
 add_test(NAME omarchy_gdn_decode_batch_tests
          COMMAND omarchy_gdn_decode_batch_tests)
 
+# End-to-end bf16 recurrent state for GDN decode.
+add_executable(omarchy_gdn_bf16_state_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_bf16_state.cpp)
+target_link_libraries(omarchy_gdn_bf16_state_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_bf16_state_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_bf16_state_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_gdn_bf16_state_tests)
+add_test(NAME omarchy_gdn_bf16_state_tests
+         COMMAND omarchy_gdn_bf16_state_tests)
+
 # Fused GDN decode conv + gated-delta step (MLX_OMARCHY_GDN_CONV_DELTA): the
 # production pair's bytes from one dispatch.
 add_executable(omarchy_gdn_conv_delta_tests

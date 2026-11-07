@@ -27,10 +27,16 @@ for name, filename in expected.items():
     actual, args = found[name]
     if actual != filename:
         raise SystemExit(f"{name}: expected {filename}, found {actual}")
+# Every gated_delta decode/prefill variant compiles, the base routes and the
+# -DSTATE_BF16 twins alike: the dispatch table must never outgrow the SPIR-V.
+targets = sorted(n for n in found if n.startswith("gated_delta"))
+for name in targets:
+    filename, args = found[name]
     flags = re.findall(r"-D\w+=\d+", args)
     with tempfile.NamedTemporaryFile(suffix=".spv") as out:
         command = ["glslc", "-O", "--target-env=vulkan1.3", *flags,
                    f"{shader_dir}/{filename}", "-o", out.name]
         subprocess.run(command, check=True)
     print(f"compile OK: {name} ({' '.join(flags) or 'no defines'})")
+print(f"{len(targets)} gated_delta variants compiled")
 PY

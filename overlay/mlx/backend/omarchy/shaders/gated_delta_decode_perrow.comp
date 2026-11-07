@@ -20,9 +20,11 @@
 //
 // Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
 // (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
-// promotes them to the q/k dtype; bf16 widening is exact); state and the
-// final state store stay f32; the output store rounds to bf16 RNE, the same
-// store cast.comp applies everywhere. See receipts/2026-09-21-gdn-decode-fused.
+// promotes them to the q/k dtype; bf16 widening is exact); state rides f32,
+// or bf16 in the -DSTATE_BF16 builds (each word widened, and the final store
+// rounded, through the same bf16_load/bf16_store RNE sites); the output
+// store rounds to bf16 RNE, the same store cast.comp applies everywhere.
+// See receipts/2026-09-21-gdn-decode-fused.
 
 // GDN_COMPOSED_ORDER builds a separate kernel (the *Composed entries in
 // compute.h) that primitives.cpp dispatches only for flag bit 9 (A_log f32,
@@ -36,7 +38,7 @@
 #version 460
 
 #extension GL_EXT_shader_16bit_storage : require
-#ifdef QKV_BF16
+#if defined(QKV_BF16) || defined(STATE_BF16)
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
@@ -47,9 +49,17 @@ layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_b
 layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { uint16_t v[]; } s_in;
+#else
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { float    v[]; } s_in;
+#endif
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 7, std430) buffer         SOut  { uint16_t v[]; } s_out;
+#else
 layout(set = 0, binding = 7, std430) buffer         SOut  { float    v[]; } s_out;
+#endif
 // Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
 // carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
 // dt_bias (bf16).
@@ -248,9 +258,17 @@ void main() {
   float kv_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
 #ifndef GDN_COMPOSED_ORDER
+#ifdef STATE_BF16
+    kv_acc += bf16_load(s_in.v[params.shape[1] + row_base + i]) * g * sk[i];
+#else
     kv_acc += s_in.v[params.shape[1] + row_base + i] * g * sk[i];
+#endif
 #else /* GDN_COMPOSED_ORDER */
+#ifdef STATE_BF16
+    precise float s_g = bf16_load(s_in.v[params.shape[1] + row_base + i]) * g;
+#else
     precise float s_g = s_in.v[params.shape[1] + row_base + i] * g;
+#endif
     precise float term = s_g * sk[i];
     kv_acc += term;
 #endif /* GDN_COMPOSED_ORDER */
@@ -267,14 +285,26 @@ void main() {
   float o_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
 #ifndef GDN_COMPOSED_ORDER
+#ifdef STATE_BF16
+    float s = bf16_load(s_in.v[params.shape[1] + row_base + i]) * g;
+#else
     float s = s_in.v[params.shape[1] + row_base + i] * g;
+#endif
     float ns = s + sdelta[row] * sk[i];
 #else /* GDN_COMPOSED_ORDER */
+#ifdef STATE_BF16
+    precise float s_g = bf16_load(s_in.v[params.shape[1] + row_base + i]) * g;
+#else
     precise float s_g = s_in.v[params.shape[1] + row_base + i] * g;
+#endif
     precise float dk_term = delta * sk[i];
     precise float ns = s_g + dk_term;
 #endif /* GDN_COMPOSED_ORDER */
+#ifdef STATE_BF16
+    s_out.v[params.shape[2] + head_base + row * dk + i] = bf16_store(ns);
+#else
     s_out.v[params.shape[2] + head_base + row * dk + i] = ns;
+#endif
 #ifndef GDN_COMPOSED_ORDER
     o_acc += ns * sq[i];
 #else /* GDN_COMPOSED_ORDER */
