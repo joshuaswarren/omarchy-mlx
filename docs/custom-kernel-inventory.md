@@ -126,7 +126,7 @@ boundary explicit rather than importing a general C++ or MSL frontend. Port a
 kernel only when it falls outside that boundary and has a maintained reference
 implementation.
 
-## Vulkan translation status (GPU recheck, 2026-10-08 full + 2026-11-07 rerun)
+## Vulkan translation status (GPU recheck, 2026-10-08 full + 2026-11-07 reruns)
 
 The bounded MSL subset (see "Current implementation" above) was rechecked
 against all 26 kernels of section (b) on the Vulkan GPU. Each kernel ran in
@@ -135,7 +135,7 @@ fresh translation cache per run and NaN/inf/checksum validation of every
 output. Float kernels allow at most 2 bf16 ulp at magnitude; integer and
 bit kernels compare exactly (docs/numerics-gate.md rule 1).
 
-Two runs feed the table; every row names its wheel, chip, kernel release
+Three runs feed the table; every row names its wheel, chip, kernel release
 and date:
 
 - **2026-10-08 full recheck**, all 26 kernels, M2 Max (G14C), wheel
@@ -149,22 +149,36 @@ and date:
   COMPILE-FAIL on 2026-10-08 now compile and execute; their rows below
   carry their first GPU numerics result, and `inkling_sconv_decode` /
   `inkling_moe_down_combine` / `inkling_banded_mask_v2` fail the fp64
-  reference in ways that need a numerics fix, not a translation fix.
+  reference at this point in time (the final rerun below traces those
+  failures to translator and harness artifacts, not the kernels).
+- **2026-11-07 final rerun**, the same 12 kernels, M1 (T8103), wheel
+  `0.32.4.dev202611071357+d04e8da83` (adds the translator fix of PR #376:
+  a C-style cast of a bf16 template parameter constructs a bfloat16_t, so
+  it now emits the bf16 rounding the Metal source means) running the
+  harness of `1a32fde5d` (sha-pinned in the run ticket). All 12 PASS.
+  The final table below carries the measured rows of this run. The four
+  WRONG rows of the first rerun were proven to be artifacts outside the
+  kernels: two translator artifacts (`inkling_sconv_decode` /
+  `inkling_moe_down_combine` lost their Metal bf16 rounding to the
+  translator's `(T)` cast substitution, #376) and two harness artifacts
+  (`inkling_banded_mask_v2` was fed a shape carrier that violated the
+  kernel's `shape_ref.shape[2] == S` contract; `fused_single_norm_rope`'s
+  reference indexed the fused buffer with the wrong row stride, #379).
 
 | Kernel | Status | Detail | Wheel | Chip | `uname -r` | Date |
 |---|---|---|---|---|---|---|
-| `bitlinear_matmul` | PASS | maxdiff 0.000477148 | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `fused_double_norm_rope` | PASS | maxdiff 0.00789396 | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `fused_single_norm_rope` | WRONG | 288816/294912 outputs bad, maxdiff 164691 (unchanged from 2026-10-08: reference-artifact diagnosis still stands) | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `inkling_banded_mask` | PASS | maxdiff 0.00374421 | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `inkling_banded_mask_v2` | WRONG | 3067/4096 outputs bad, maxdiff inf (compiled since #374; first GPU numerics result) | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `inkling_sconv_decode` | WRONG | 423/4096 outputs bad, maxdiff 3.90625e+297 (compiled since #374; first GPU numerics result) | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `inkling_moe_route` | PASS | maxdiff 0.00214481 | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `inkling_moe_down_combine` | WRONG | 52/512 outputs bad, maxdiff 0.313559 (compiled since #374; first GPU numerics result) | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `mlx_vlm_llguidance_mask` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `custom_depthwise_conv1d` | PASS | maxdiff 7.13119e-05 | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `qk_relu_squared` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `mlx_audio_phonon_unpack_base5_v1` | PASS | exact, maxdiff 0 | `3530d9154` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `bitlinear_matmul` | PASS | maxdiff 0.000477148 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `fused_double_norm_rope` | PASS | maxdiff 0.00789396 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `fused_single_norm_rope` | PASS | maxdiff 0.0299573 (288816/294912 WRONG in the first rerun: reference read the wrong row stride, fixed #379) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `inkling_banded_mask` | PASS | maxdiff 0.00374421 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `inkling_banded_mask_v2` | PASS | maxdiff 0.00374421, identical to `inkling_banded_mask` in the receipt (same band geometry and reference; confirmed against `out-2/rerun.log`) (3067/4096 WRONG in the first rerun: harness fed a `(B,S,4)` shape carrier against the kernel's `shape_ref.shape[2] == S` contract) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `inkling_sconv_decode` | PASS | exact, maxdiff 0 (423/4096 WRONG in the first rerun: translator turned `(T)` casts of the bf16 template parameter into no-op float casts, fixed #376) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `inkling_moe_route` | PASS | maxdiff 0.00214481 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `inkling_moe_down_combine` | PASS | exact, maxdiff 0 (52/512 WRONG in the first rerun: same lost bf16 rounding as sconv_decode, fixed #376) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `mlx_vlm_llguidance_mask` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `custom_depthwise_conv1d` | PASS | maxdiff 7.13119e-05 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `qk_relu_squared` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
+| `mlx_audio_phonon_unpack_base5_v1` | PASS | exact, maxdiff 0 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
 | `cbq_gather_mm` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `cbq_gather_mm_v2` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `cbq_gather_mm_v3` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
@@ -180,19 +194,22 @@ and date:
 | `situ_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_pair_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 
-**Counts: 11 PASS / 4 WRONG / 2 COMPILE-FAIL / 9 REFUSED = 26**
+**Counts: 15 PASS / 0 WRONG / 2 COMPILE-FAIL / 9 REFUSED = 26**
 
 `maxdiff` is the runner's worst relative error against the reference. `0` is
 an exact integer or bit match. `1e+308` is the runner's sentinel for equal
-±inf values, which make the difference undefined. The five COMPILE-FAIL
-kernels need the cast scanner rewritten with a real parser, or MSL
-pre-normalization before the scanner; three regex-based rewrites each failed
-differently, and the failed forms are recorded in
-`receipts/2026-10-08-kernel-recheck/README.md`. No kernel in the final run
-produced a silent wrong value inside tolerance: a wrong value fails the run
-(exit 3). Translated GLSL is cached under `~/.cache/mlx-omarchy/spirv`,
-keyed by the kernel source and the translator hash; the runner uses a fresh
-cache directory per run.
+±inf values, which make the difference undefined. The 2026-10-08 tail rows
+(`cbq_*`, `kda_glue_*`, `moe_route_fused`, `situ_*`) have not been rerun on
+the current translator; the nested-C-cast COMPILE-FAILs they carry were
+fixed by #374/#376 for the inventoried twelve, and the `kda_glue_pre/post`
+rows await their own GPU rerun. The four WRONG rows of the first 2026-11-07
+rerun were proven to be artifacts outside the kernels: a wrong value still
+fails the run (exit 3). The regex-based rewrite failures behind the
+2026-10-08 COMPILE-FAIL rows (three attempts, each failing differently) are
+recorded in `receipts/2026-10-08-kernel-recheck/README.md`; the parser-based
+fixes that landed instead are PRs #374/#376. Translated GLSL is
+cached under `~/.cache/mlx-omarchy/spirv`, keyed by the kernel source and
+the translator hash; the runner uses a fresh cache directory per run.
 
 The verified model kernels also have a second compile route that bypasses
 this translator entirely: metal2vk (clang plus a patched clspv) compiles the
