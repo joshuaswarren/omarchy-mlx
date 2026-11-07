@@ -115,7 +115,23 @@ class CliLocatorTest(unittest.TestCase):
     def test_loads_pinned_product_module(self):
         cli = pd.load_cli_module()
         self.assertTrue(callable(cli._load_pin))
-        self.assertTrue(callable(cli._verify_assets))
+
+    def test_every_cli_attribute_dictation_uses_exists(self):
+        """Dictation drives the CLI module; a renamed or removed CLI helper
+        must fail here, not at the first resident start on hardware."""
+        import ast
+
+        tree = ast.parse(Path(pd.__file__).read_text(encoding="utf-8"))
+        used = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "cli"
+        }
+        cli = pd.load_cli_module()
+        missing = sorted(name for name in used if not hasattr(cli, name))
+        self.assertEqual(missing, [])
 
     def test_loads_extensionless_installed_script(self):
         """The installed CLI has no .py suffix; the loader must cope."""
