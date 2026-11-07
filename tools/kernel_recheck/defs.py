@@ -244,14 +244,15 @@ def ref_flux_single(inp):
     d = FLUX
     dim, hd, heads, eps = d["dim"], d["hd"], d["heads"], d["eps"]
     s_tot = d["img"] + d["txt"]
-    rows = inp["fused"][0].astype(np.float64).reshape(-1)
+    fused = inp["fused"][0].astype(np.float64)
+    rows = fused.reshape(-1)
     nq = np.repeat(inp["norm_q"][None], s_tot, axis=0)
     nk = np.repeat(inp["norm_k"][None], s_tot, axis=0)
     return _flux_kernel_emulation(
         rows, nq, nk,
         inp["cos_vals"].reshape(-1).astype(np.float64),
         inp["sin_vals"].reshape(-1).astype(np.float64),
-        (dim, hd, heads, s_tot, 3 * dim), eps)
+        (dim, hd, heads, s_tot, fused.shape[-1]), eps)
 
 
 # ---------------------------------------------------------------- inkling
