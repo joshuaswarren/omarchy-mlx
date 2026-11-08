@@ -169,7 +169,8 @@ and date:
   `cbq_*`), M1 (T8103), wheel `0.32.4.dev202611071357+d04e8da83`, same
   sha-pinned harness. `kda_glue_post` moved from COMPILE-FAIL to WRONG
   (it compiles and runs; 53 of 12288 elements disagree with the reference
-  `kda_glue_pre` compiled and ran on the 2026-11-08 confirmation rerun
+  and the cause is not yet identified). `kda_glue_pre` compiled and ran
+  on the 2026-11-08 confirmation rerun
   (wheel `0.32.4.dev202611081835+d04e8da83`, carrying the translator fix
   of 944c5f0e2: the chained-cast collapse now stays balanced and the
   alias rewrites match only the callee position and adjacent cast spans),
@@ -178,7 +179,7 @@ and date:
   literal-bfloat16 locals, the same class of gap as `kda_glue_post`'s
   53-element disagreement). The same rerun reproduced the twelve
   inventoried rows' table values exactly, so the fix changed no passing
-  kernel's numerics, and the nine
+  kernel's numerics. The nine
   `cbq_*` rows refuse exactly as before, by design.
 
 | Kernel | Status | Detail | Wheel | Chip | `uname -r` | Date |
