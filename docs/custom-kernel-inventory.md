@@ -164,6 +164,15 @@ and date:
   (`inkling_banded_mask_v2` was fed a shape carrier that violated the
   kernel's `shape_ref.shape[2] == S` contract; `fused_single_norm_rope`'s
   reference indexed the fused buffer with the wrong row stride, #379).
+- **2026-11-08 perf rerun**, the 11 kernels of the 2026-10-08 tail that
+  the inventoried twelve do not cover (`kda_glue_pre/post` and the nine
+  `cbq_*`), M1 (T8103), wheel `0.32.4.dev202611071357+d04e8da83`, same
+  sha-pinned harness. `kda_glue_post` moved from COMPILE-FAIL to WRONG
+  (it compiles and runs; 53 of 12288 elements disagree with the reference
+  and the cause is not yet identified),
+  `kda_glue_pre` is still COMPILE-FAIL but on a different cause (a
+  constructor-call syntax error, not the nested C-cast), and the nine
+  `cbq_*` rows refuse exactly as before, by design.
 
 | Kernel | Status | Detail | Wheel | Chip | `uname -r` | Date |
 |---|---|---|---|---|---|---|
@@ -179,30 +188,32 @@ and date:
 | `custom_depthwise_conv1d` | PASS | maxdiff 7.13119e-05 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
 | `qk_relu_squared` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
 | `mlx_audio_phonon_unpack_base5_v1` | PASS | exact, maxdiff 0 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `cbq_gather_mm` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_gather_mm_v2` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_gather_mm_v3` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_gather_mm_v4` | REFUSED | `as_type<bfloat4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_gather_mm_v3_situ` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_gather_mm_v4_situ` | REFUSED | `as_type<bfloat4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_gather_mm_glu` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_grad_d` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `cbq_grad_x` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `kda_glue_pre` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
-| `kda_glue_post` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm_v2` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm_v3` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm_v4` | REFUSED | `as_type<bfloat4>` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm_v3_situ` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm_v4_situ` | REFUSED | `as_type<bfloat4>` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm_glu` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_grad_d` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_grad_x` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `kda_glue_pre` | COMPILE-FAIL | MSL compiles to a shader that fails at `syntax error, unexpected SEMICOLON, expecting RIGHT_PAREN or COMMA` (line 71) plus a `__FAST_MATH__` reserved-identifier warning: a translator gap on a constructor call, not the old nested C-cast (which #374/#376 fixed) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `kda_glue_post` | WRONG | 53/12288 outputs bad, maxdiff 0.0155039 (worst absolute element: got -0.7734375, want -0.78515625, a 3-ulp bf16 gap): it compiles and runs now, but it disagrees with the reference on 53 elements and the cause is not yet identified (2026-10-08: COMPILE-FAIL, nested C-casts) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
 | `moe_route_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_pair_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 
-**Counts: 15 PASS / 0 WRONG / 2 COMPILE-FAIL / 9 REFUSED = 26**
+**Counts: 15 PASS / 1 WRONG / 1 COMPILE-FAIL / 9 REFUSED = 26**
 
 `maxdiff` is the runner's worst relative error against the reference. `0` is
 an exact integer or bit match. `1e+308` is the runner's sentinel for equal
-±inf values, which make the difference undefined. The 2026-10-08 tail rows
-(`cbq_*`, `kda_glue_*`, `moe_route_fused`, `situ_*`) have not been rerun on
-the current translator; the nested-C-cast COMPILE-FAILs they carry were
-fixed by #374/#376 for the inventoried twelve, and the `kda_glue_pre/post`
-rows await their own GPU rerun. The four WRONG rows of the first 2026-11-07
+±inf values, which make the difference undefined. The `cbq_*`,
+`kda_glue_*`, `moe_route_fused` and `situ_*` rows were rerun on the
+current translator on 2026-11-08 except the last three rows, which still
+carry their 2026-10-08 results. The nine `cbq_*` rows refuse by design
+(device
+pointer arithmetic, `as_type<char4>`, `as_type<bfloat4>`): they need new
+translator support, not a rerun. The four WRONG rows of the first 2026-11-07
 rerun were proven to be artifacts outside the kernels: a wrong value still
 fails the run (exit 3). The regex-based rewrite failures behind the
 2026-10-08 COMPILE-FAIL rows (three attempts, each failing differently) are
