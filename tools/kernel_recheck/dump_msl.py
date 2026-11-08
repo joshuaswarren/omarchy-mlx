@@ -159,6 +159,15 @@ def generated_msl(name):
     pieces.append("\n".join(rendered) + "\n")
     pieces.append(source)
     pieces.append("\n}\n")
+    if spec.get("header"):
+        # mx.fast.metal_kernel places the user header BEFORE the kernel at
+        # runtime (translate_msl splits the header as source[:[[kernel]]);
+        # appending it anywhere else makes the helpers body text (inline
+        # survives, emitted inside main) and diverges from the run.
+        pieces.insert(
+            0,
+            (Path(__file__).parent / "sources" / spec["header"]).read_text()
+            + "\n")
     if template:
         pieces.append(
             f"\ntemplate [[host_name(\"{kernel_name}\")]] [[kernel]] "

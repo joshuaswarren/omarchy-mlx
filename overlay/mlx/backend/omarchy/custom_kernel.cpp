@@ -456,13 +456,34 @@ void translate_c_style_casts(std::string& code) {
   // constructor arguments after the scan (glslc: GL_NV_explicit_typecast /
   // syntax error — kda_glue_pre/post, 2026-10-08 KernelRecheck). Repeat
   // until stable for chains longer than two.
+  //
+  // The collapse must stay balanced AND keep the inner cast's semantics:
+  // `(float)(bfloat16_t)(x)` is round-to-bf16 then promote, so the pair
+  // becomes `_mlx_bf16_round_trip` (the 2026-11-08 rerun of kda_glue_pre
+  // failed to compile on the previous `"("` replacement, which deleted one
+  // `)` per match and silently dropped the bf16 rounding). Every other
+  // scalar inner cast is a no-op under promotion, so the pair is dropped.
   static const std::regex chain(
-      R"(\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\)\s*\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\))");
+      R"(\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\)\s*\(\s*(bfloat16_t|float16_t|float|int|uint|bool|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\))");
   std::string prev;
   int guard = 0;
   while (code != prev && guard++ < 32) {
     prev = code;
-    code = std::regex_replace(code, chain, "(");
+    std::ostringstream collapsed;
+    auto begin = std::sregex_iterator(code.begin(), code.end(), chain);
+    auto end_it = std::sregex_iterator();
+    if (begin == end_it) {
+      break;
+    }
+    size_t last = 0;
+    for (auto it = begin; it != end_it; ++it) {
+      const auto& m = *it;
+      collapsed << code.substr(last, static_cast<size_t>(m.position()) - last);
+      collapsed << (m.str(1) == "bfloat16_t" ? "_mlx_bf16_round_trip" : "");
+      last = static_cast<size_t>(m.position()) + m.length();
+    }
+    collapsed << code.substr(last);
+    code = collapsed.str();
   }
   // Run to a fixpoint: each pass rewrites the OUTERMOST remaining casts;
   // casts inside a rewritten constructor argument are handled by later
@@ -662,6 +683,12 @@ void translate_device_pointer_aliases(
                 body[e - 1] == '_'))
           e--;
         if (e >= tend) continue;
+        // The functional-cast form is `T(NAME)`: the identifier must start
+        // immediately after the call's own '('. The looser walk-back also
+        // matched the callee's first argument (`float(nq * cs[2])` → the
+        // whole call collapsed to a first-element read, kda_glue_pre
+        // compile-fail, 2026-11-08 rerun).
+        if (e == 0 || e - 1 != p) continue;
         if (e > 0 && (std::isalnum(static_cast<unsigned char>(body[e - 1])) ||
                       body[e - 1] == '_'))
           continue;
@@ -712,6 +739,19 @@ void translate_device_pointer_aliases(
         if (!(std::isalnum(static_cast<unsigned char>(t.front())) || t.front() == '_') ||
             !(std::isalnum(static_cast<unsigned char>(t.back())) || t.back() == '_'))
           continue;
+        // Form (b) is `(T)NAME[i]`: the cast span must end immediately
+        // before NAME (whitespace only). A wider span means the alias sits
+        // inside a larger expression — `float(nq) * cs[2]` erased the call
+        // `(nq)` as if it were a cast (kda_glue_pre compile-fail,
+        // 2026-11-08 rerun).
+        bool gap_only_ws = true;
+        for (size_t k = close_paren + 1; k < pos; ++k) {
+          if (body[k] != ' ' && body[k] != '\t') {
+            gap_only_ws = false;
+            break;
+          }
+        }
+        if (!gap_only_ws) continue;
         // strip the cast '(T)': from open_paren to close_paren inclusive
         body.erase(open_paren, close_paren - open_paren + 1);
         p = pos - (close_paren - open_paren + 1);  // rescan at NAME start
