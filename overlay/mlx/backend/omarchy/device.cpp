@@ -977,7 +977,8 @@ DeviceSupport classify_physical_device(
   bool apple = props.vendorID == kAppleVendorId;
   bool honeykrisp_name =
       contains_case_insensitive(props.deviceName, "honeykrisp");
-  bool honeykrisp_driver = driver_id == kMesaHoneykrispDriverId;
+  bool honeykrisp_driver = driver_id == kMesaHoneykrispDriverId ||
+      driver_id == kAuroraBorealisDriverId;
 
   if (apple || honeykrisp_name || honeykrisp_driver) {
     s.supported = true;
