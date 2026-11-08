@@ -11,6 +11,7 @@
 #include "doctest/doctest.h"
 #include "mlx/fast.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
@@ -342,6 +343,81 @@ TEST_CASE("nested c-style casts rewrite inside constructor arguments") {
   auto glsl = translate(source, 1);
   CHECK(glsl.find("(int)(") == std::string::npos);
   CHECK(glsl.find("(4 - 1)") != std::string::npos);
+}
+
+namespace {
+std::size_t paren_balance(const std::string& s) {
+  return std::count(s.begin(), s.end(), '(') -
+      std::count(s.begin(), s.end(), ')');
+}
+}
+
+TEST_CASE("chained scalar cast collapse stays balanced") {
+  // kda_glue_pre: `float yq = (float)(bfloat16_t)((float)cq * (float)sq_);`
+  // — the 2026-10-08 collapse replaced the cast pair with a bare "(",
+  // deleting one ')' per match, so the emitted line held an unclosed paren
+  // and glslc died on "unexpected SEMICOLON". Replacement "" (the pair is
+  // a no-op under the literal-bfloat16 promotion) keeps the parens
+  // balanced; the bf16 rounding of the TEMPLATE path is covered by the
+  // _bf16_cast mapping, which never enters this collapse.
+  const char* source =
+      "[[kernel]] void glue_style(\n"
+      "    const device bfloat16_t* hp [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t cq = (bfloat16_t)hp[c];\n"
+      "  float sq_ = cq * 0.5f;\n"
+      "  float yq = (float)(bfloat16_t)((float)cq * (float)sq_);\n"
+      "  y[c] = yq;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(paren_balance(glsl) == 0);
+  CHECK(glsl.find("(float)(") == std::string::npos);
+}
+
+TEST_CASE("alias functional cast matches only the callee position") {
+  // kda_glue_pre: `float(nq * cs[2])` with `constant float* cs = cons;` —
+  // the alias pass walked back from `cs(` and accepted `nq` as the cast
+  // type token, replacing the WHOLE call (including its closing paren)
+  // with a first-element read: the kernel lost the expression and its
+  // balance in one rewrite. The form is `T(cs)` only: the identifier must
+  // start immediately after the call's own '('.
+  const char* source =
+      "[[kernel]] void glue_style(\n"
+      "    const constant float* cons [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  constant float* cs = cons;\n"
+      "  float nq = 2.0f;\n"
+      "  y[c] = float(nq * cs[2]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(paren_balance(glsl) == 0);
+  CHECK(glsl.find("nq") != std::string::npos);
+  CHECK(glsl.find("nq(_mlx_arg0[") == std::string::npos);
+  CHECK(glsl.find("(0) + (2)]") != std::string::npos);
+}
+
+TEST_CASE("alias cast-strip erases only casts adjacent to the alias") {
+  // kda_glue_pre: `float(nq) * cs[2]` — the (b) walk-back ate `nq` as the
+  // cast type and erased `(nq)` wholesale, leaving `float * cs[2]` (the
+  // variable became the bare word "float"). The cast span must end
+  // immediately before the alias.
+  const char* source =
+      "[[kernel]] void glue_style(\n"
+      "    const constant float* cons [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  constant float* cs = cons;\n"
+      "  float nq = 2.0f;\n"
+      "  y[c] = (float)(nq) * cs[2];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(paren_balance(glsl) == 0);
+  CHECK(glsl.find("nq") != std::string::npos);
+  CHECK(glsl.find("float * ") == std::string::npos);
+  CHECK(glsl.find("(0) + (2)]") != std::string::npos);
 }
 
 TEST_CASE("const multi-declarator lines keep comma declarators") {

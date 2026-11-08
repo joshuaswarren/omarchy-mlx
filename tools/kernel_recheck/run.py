@@ -178,6 +178,11 @@ def _single(name):
     refs = spec["ref"](inputs)
     outs_np = [np.array(o.astype(mx.float32)) if o.dtype == mx.bfloat16
                else np.array(o) for o in outs]
+    dump_dir = os.environ.get("KERNEL_RECHECK_DUMP_DIR")
+    if dump_dir:
+        Path(dump_dir).mkdir(parents=True, exist_ok=True)
+        for i, o in enumerate(outs_np):
+            np.save(Path(dump_dir) / f"{name}.out{i}.npy", o)
     ok, worst, detail = check(name, spec, inputs, refs, outs_np)
     if ok:
         print(f"RESULT pass maxdiff {worst:.6g}")
