@@ -299,6 +299,13 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # in Python. Set MLX_OMARCHY_GDN_RAW_REPEAT=1 to expand q/k here instead. The
 # 9B route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
+# GDN bf16 recurrent state handoff (#377): the backend defaults the decode state to
+# bfloat16 only when the caller passes no initial state, and the wrapper always hands
+# it the fp32 zeros/prefill carry. Cast the state on the raw decode route so the
+# default engages end to end. Kill switch MLX_OMARCHY_GDN_STATE_F32=1. Applies to
+# both series' raw sites; requires the #377 backend (bf16 state twins) — on an
+# older wheel the cast would push the step into the composed fallback.
+python3 "$ROOT/scripts/patch-mlx-lm-gdn-state-bf16.py" "$VENV"
 # GDN decode conv + delta (+ gated norm) as one dispatch, mx.fast.gdn_conv_delta_update
 # (Qwen3.5 / Qwen3.8 qwen3_5.py). The backend decides per chip (13-inch M1: mode 2, the
 # default since #352; every other chip keeps the stock route) and a wheel without the op
