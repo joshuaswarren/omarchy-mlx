@@ -17,12 +17,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <iostream>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
@@ -643,5 +646,106 @@ TEST_CASE("gdn raw decode bf16 A_log: the wide prefetch kernel equals the plain 
     CHECK_EQ(tiled.kernel, kind(K::GatedDeltaDecodeBF16));
     CHECK(same(wide.run, plain.run, s));
     CHECK_EQ(wide.run.dispatches, plain.run.dispatches);
+  }
+}
+
+// Numerics-gate check 1 (docs/numerics-gate.md) for the untiled and wide decode defaults on G13C and G14C
+// (issue 369): the per-op fp64 output and state error of each candidate kernel must be no worse than the
+// tiled kernel's error on the same operands. The reference recomputes the decode recurrence in double
+// precision from the bf16-rounded operands the kernels actually consumed.
+namespace {
+
+std::vector<float> read_f32(const array& value, Stream s) {
+  array copy = astype(value, float32, s);
+  copy.eval();
+  omarchy::get_command_encoder(s).synchronize("gdn_bf16a_check1_readback");
+  const float* data = copy.data<float>();
+  return {data, data + copy.size()};
+}
+
+struct RefOut {
+  std::vector<double> y;
+  std::vector<double> state;
+};
+
+RefOut fp64_reference(const std::vector<float>& q, const std::vector<float>& k, const std::vector<float>& v,
+                      const std::vector<float>& a, const std::vector<float>& b, const std::vector<float>& alog,
+                      const std::vector<float>& dtb, const std::vector<float>& h0, int hk, int hv, int dk, int dv) {
+  const int rep = hv / hk;
+  RefOut out{std::vector<double>(size_t(hv) * dv), std::vector<double>(size_t(hv) * dv * dk)};
+  for (int j = 0; j < hv; ++j) {
+    const int src = j / rep;
+    const double beta = 1.0 / (1.0 + std::exp(-double(b[j])));
+    const double x = double(a[j]) + double(dtb[j]);
+    const double la = x > 0.0 ? x + std::log1p(std::exp(-x)) : std::log1p(std::exp(x));
+    const double gate = std::exp(-std::exp(double(alog[j])) * la);
+    for (int dvi = 0; dvi < dv; ++dvi) {
+      const size_t row = (size_t(j) * dv + dvi) * dk;
+      double kv = 0.0;
+      for (int dki = 0; dki < dk; ++dki) {
+        kv += double(h0[row + dki]) * double(k[size_t(src) * dk + dki]);
+      }
+      const double delta = (double(v[size_t(j) * dv + dvi]) - kv) * beta;
+      double y = 0.0;
+      for (int dki = 0; dki < dk; ++dki) {
+        const size_t idx = row + dki;
+        const double updated = double(h0[idx]) * gate + delta * double(k[size_t(src) * dk + dki]);
+        out.state[idx] = updated;
+        y += updated * double(q[size_t(src) * dk + dki]);
+      }
+      out.y[size_t(j) * dv + dvi] = y;
+    }
+  }
+  return out;
+}
+
+double max_abs(const std::vector<float>& got, const std::vector<double>& want) {
+  double err = 0.0;
+  for (size_t i = 0; i < want.size(); ++i) {
+    err = std::max(err, std::abs(double(got[i]) - want[i]));
+  }
+  return err;
+}
+
+} // namespace
+
+TEST_CASE("gdn raw decode bf16 A_log: per-op fp64 error of the untiled and wide kernels is no worse than the tiled kernel") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_bf16a_check1");
+  for (const auto& [hk, hv] : std::vector<std::pair<int, int>>{{16, 16}, {16, 32}, {16, 48}}) {
+    Shape27 sh;
+    sh.Hk = hk;
+    sh.Hv = hv;
+    Inputs in = make_inputs(sh, false, s);
+    eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_bf16a_check1_inputs");
+    auto qd = read_f32(in.q, s), kd = read_f32(in.k, s), vd = read_f32(in.v, s), ad = read_f32(in.a, s),
+         bd = read_f32(in.b, s), lgd = read_f32(in.a_log, s), dbd = read_f32(in.dt_bias, s),
+         h0d = read_f32(in.h0, s);
+    const RefOut ref = fp64_reference(qd, kd, vd, ad, bd, lgd, dbd, h0d, hk, hv, sh.Dk, sh.Dv);
+    auto run_err = [&](const std::vector<EnvVar>& env) {
+      EnvRun r = run_env(in, in.q, in.k, env, s);
+      const auto y = read_f32(r.run.out[0], s);
+      const auto st = read_f32(r.run.out[1], s);
+      return std::pair{std::max(max_abs(y, ref.y), max_abs(st, ref.state)), r.kernel};
+    };
+    const auto tiled = run_err({{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, {"MLX_OMARCHY_GDN_PF_WIDE", "0"}});
+    const auto plain = run_err({{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_WIDE", "0"}});
+    std::cout << "[gdn_bf16a_check1] Hk " << hk << " Hv " << hv << ": tiled err " << tiled.first << " (kernel "
+              << tiled.second << "), untiled err " << plain.first << " (kernel " << plain.second << ")";
+    double wide_err = -1.0;
+    if (hv == hk) {
+      const auto wide = run_err({{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_WIDE", "1"}});
+      wide_err = wide.first;
+      std::cout << ", wide err " << wide.first << " (kernel " << wide.second << ")";
+    }
+    std::cout << "\n";
+    CHECK_MESSAGE(plain.first <= tiled.first + 1e-6, "Hk ", hk, " Hv ", hv, ": untiled fp64 error ", plain.first,
+                  " exceeds the tiled kernel's ", tiled.first);
+    if (hv == hk) {
+      CHECK_MESSAGE(wide_err <= tiled.first + 1e-6, "Hk ", hk, " Hv ", hv, ": wide fp64 error ", wide_err,
+                    " exceeds the tiled kernel's ", tiled.first);
+    }
   }
 }
