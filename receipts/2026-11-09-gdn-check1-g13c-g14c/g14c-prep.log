@@ -1,0 +1,187 @@
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
+  0      0   0      0   0      0      0      0                              0100  3.26M   0  3.26M   0      0  2.30M      0           00:01          3.06M100  4.28M   0  4.28M   0      0  2.30M      0           00:01          3.06M100  4.28M   0  4.28M   0      0  2.30M      0           00:01          3.06M100  4.28M   0  4.28M   0      0  2.30M      0           00:01          3.06M
+patching file CMakeLists.txt
+Hunk #2 succeeded at 167 (offset 1 line).
+Hunk #3 succeeded at 430 (offset 1 line).
+patching file mlx/CMakeLists.txt
+Hunk #1 succeeded at 109 (offset 6 lines).
+patching file tests/CMakeLists.txt
+Hunk #1 succeeded at 51 (offset 5 lines).
+patching file mlx/device.cpp
+patching file mlx/transforms.cpp
+Hunk #2 succeeded at 233 (offset 6 lines).
+patching file mlx/transforms.h
+patching file mlx/transforms.cpp
+patching file mlx/fast.h
+patching file mlx/fast.cpp
+patching file mlx/fast_primitives.h
+patching file python/src/fast.cpp
+patching file setup.py
+patching file mlx/io/safetensors.cpp
+patching file mlx/io/load.cpp
+Hunk #1 succeeded at 13 (offset 2 lines).
+Hunk #2 succeeded at 241 (offset 6 lines).
+patching file mlx/export.cpp
+Hunk #2 succeeded at 900 (offset 1 line).
+patching file mlx/linalg.cpp
+patching file python/src/buffer.h
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1207 (offset 154 lines).
+Hunk #2 succeeded at 1310 (offset 154 lines).
+patching file mlx/ops.cpp
+Hunk #2 succeeded at 5185 (offset 135 lines).
+Hunk #3 succeeded at 5443 (offset 134 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1090 (offset 151 lines).
+patching file mlx/backend/common/metal_kernel.cpp
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1327 (offset 150 lines).
+patching file mlx/fast.h
+Hunk #1 succeeded at 99 (offset 29 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 413 (offset 13 lines).
+Hunk #2 succeeded at 453 (offset 13 lines).
+patching file python/src/fast.cpp
+Hunk #1 succeeded at 461 (offset 50 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1231 (offset -143 lines).
+patching file setup.py
+patching file mlx/fast.h
+patching file mlx/fast.cpp
+patching file mlx/fast_primitives.h
+patching file python/src/fast.cpp
+patching file mlx/fast.h
+Hunk #1 succeeded at 131 (offset -6 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1656 (offset 74 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 516 (offset -30 lines).
+patching file python/src/fast.cpp
+patching file mlx/fast.h
+Hunk #1 succeeded at 160 with fuzz 1 (offset 41 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1782 with fuzz 1 (offset 305 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 450 (offset 14 lines).
+Hunk #2 succeeded at 460 (offset 14 lines).
+patching file mlx/backend/no_gpu/primitives.cpp
+Hunk #1 succeeded at 190 with fuzz 3.
+patching file python/src/fast.cpp
+Hunk #1 succeeded at 549 (offset 50 lines).
+patching file mlx/fast.h
+Hunk #1 succeeded at 180 (offset -6 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1837 (offset 74 lines).
+patching file mlx/fast_primitives.h
+patching file mlx/backend/no_gpu/primitives.cpp
+patching file python/src/fast.cpp
+patching file mlx/backend/no_gpu/primitives.cpp
+Hunk #1 succeeded at 206 (offset 13 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1971 (offset 779 lines).
+patching file mlx/fast.h
+Hunk #1 succeeded at 246 (offset 129 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 796 (offset 265 lines).
+patching file python/src/fast.cpp
+Hunk #1 succeeded at 991 (offset 242 lines).
+patching file mlx/fast.cpp
+patching file mlx/fast.h
+patching file mlx/fast_primitives.h
+patching file python/src/fast.cpp
+patching file mlx/fast.cpp
+patching file mlx/fast.h
+Hunk #1 succeeded at 71 (offset 16 lines).
+patching file python/src/fast.cpp
+patching file mlx/backend/gpu/primitives.cpp
+patching file python/tests/test_ops.py
+patching file mlx/transforms.cpp
+Hunk #1 succeeded at 368 (offset 36 lines).
+patching file python/tests/test_eval.py
+patching file mlx/backend/common/common.cpp
+patching file python/tests/test_ops.py
+patching file tests/ops_tests.cpp
+patching file mlx/backend/cpu/primitives.cpp
+patching file mlx/backend/gpu/primitives.cpp
+patching file python/tests/test_ops.py
+patching file mlx/backend/cpu/primitives.cpp
+patching file mlx/backend/gpu/primitives.cpp
+patching file python/tests/test_ops.py
+patching file python/mlx/optimizers/optimizers.py
+patching file python/tests/test_optimizers.py
+patching file mlx/backend/common/common.cpp
+patching file mlx/backend/common/slicing.cpp
+patching file tests/ops_tests.cpp
+patching file python/src/convert.cpp
+patching file python/tests/test_zero_copy.py
+patching file mlx/primitives.cpp
+Hunk #1 succeeded at 4610 (offset -29 lines).
+patching file python/tests/test_vmap.py
+patching file mlx/ops.cpp
+Hunk #1 succeeded at 4442 (offset 2 lines).
+patching file python/tests/test_ops.py
+Hunk #1 succeeded at 2618 (offset -26 lines).
+patching file mlx/backend/cpu/reduce.cpp
+patching file mlx/backend/common/utils.cpp
+patching file mlx/fft.cpp
+patching file mlx/primitives.cpp
+Hunk #1 succeeded at 2195 (offset -29 lines).
+Hunk #2 succeeded at 2263 (offset -29 lines).
+patching file mlx/primitives.h
+patching file python/tests/test_fft.py
+Hunk #1 succeeded at 470 (offset -12 lines).
+patching file mlx/backend/cpu/compiled.cpp
+patching file mlx/backend/cpu/primitives.cpp
+patching file python/mlx/optimizers/optimizers.py
+Hunk #1 succeeded at 985 (offset -5 lines).
+patching file mlx/backend/cpu/quantized.cpp
+patching file python/src/array.cpp
+patching file python/tests/test_array.py
+patching file python/src/convert.cpp
+Hunk #1 succeeded at 637 (offset -4 lines).
+Hunk #2 succeeded at 653 (offset -4 lines).
+Hunk #3 succeeded at 748 (offset -4 lines).
+patching file python/tests/test_array.py
+Hunk #1 succeeded at 599 (offset 1 line).
+patching file mlx/compile.cpp
+Hunk #1 succeeded at 651 (offset 1 line).
+Hunk #2 succeeded at 674 (offset 1 line).
+Hunk #3 succeeded at 695 (offset 1 line).
+Hunk #4 succeeded at 714 (offset 1 line).
+Hunk #5 succeeded at 780 (offset 1 line).
+patching file python/tests/test_compile.py
+Hunk #1 succeeded at 762 (offset -3 lines).
+patching file mlx/io/load.cpp
+Hunk #1 succeeded at 301 (offset 9 lines).
+patching file python/tests/test_load.py
+patching file mlx/backend/cpu/binary.cpp
+patching file mlx/backend/cpu/binary_ops.h
+patching file mlx/backend/cpu/simd/accelerate_simd.h
+patching file mlx/backend/cpu/simd/base_simd.h
+patching file mlx/backend/no_gpu/primitives.cpp
+patching file mlx/backend/no_cpu/primitives.cpp
+Hunk #1 succeeded at 66 (offset -53 lines).
+patching file mlx/compile.cpp
+patching file mlx/export.cpp
+Hunk #1 succeeded at 385 (offset 1 line).
+patching file mlx/ops.cpp
+Hunk #1 succeeded at 3309 (offset 2 lines).
+patching file mlx/primitives.cpp
+Hunk #1 succeeded at 2192 (offset -29 lines).
+Hunk #2 succeeded at 2374 (offset -29 lines).
+Hunk #3 succeeded at 2405 (offset -29 lines).
+patching file mlx/primitives.h
+patching file python/tests/test_ops.py
+patching file tests/ops_tests.cpp
+Hunk #2 succeeded at 2089 (offset -23 lines).
+Hunk #3 succeeded at 3722 (offset -23 lines).
+patching file mlx/backend/cpu/distributed.cpp
+patching file mlx/fast.h
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 2376 (offset 8 lines).
+patching file mlx/fast_primitives.h
+patching file python/src/fast.cpp
+$WORKTREE/.work/mlx
+prepare-mlx: Python fast bindings have matching mlx/fast.h declarations
