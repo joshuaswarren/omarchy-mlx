@@ -1,0 +1,10 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_bf16a_check1 mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-e7631595df)" subgroup_size=32
+[gdn_bf16a_check1] Hk 16 Hv 16: tiled err 0.0832068 (kernel 455), untiled err 0.0832068 (kernel 480), wide err 0.0832068 (kernel 638)
+[gdn_bf16a_check1] Hk 16 Hv 32: tiled err 0.064196 (kernel 455), untiled err 0.064196 (kernel 480)
+[gdn_bf16a_check1] Hk 16 Hv 48: tiled err 0.0502079 (kernel 455), untiled err 0.0502079 (kernel 480)
+===============================================================================
+[doctest] test cases: 1 | 1 passed | 0 failed | 9 skipped
+[doctest] assertions: 4 | 4 passed | 0 failed |
+[doctest] Status: SUCCESS!
