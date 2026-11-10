@@ -116,7 +116,10 @@ A/B gating and qualification, not for normal operation.
   copies of the growing cache stop. The decode part has a bound, so a short prompt with a large `max_tokens` does not hold
   KV it will not use. A quantized cache (`kv_bits`) and the other cache classes keep the upstream growth.
   `MLX_OMARCHY_KV_PRESIZE=0` (read per call) restores the upstream growth. The batched server route (`BatchKVCache`) is not
-  covered by this patch.
+  covered by this patch. The automatic prefill chunk is chosen before the cache exists, so it cannot count the cache. After
+  the first chunk makes the cache resident, `generate_step` chooses the chunk again from the headroom that is left, minus a
+  1 GiB workspace that matches the serve budget. The new chunk is never larger than the first one. An explicit
+  `prefill_step_size` and `kv_bits` skip this step.
 - The patches are idempotent and fail loudly on mlx-lm version drift.
 
 ## Acceptance bar
