@@ -110,6 +110,13 @@ A/B gating and qualification, not for normal operation.
   on the CPU tiny model). Kill switch `MLX_OMARCHY_SERVER_LOGPROB_READ=1`
   (read once at import) restores the upstream always-read; the 0.31.3
   series keeps upstream behavior.
+- `mlx-lm-kv-presize.patch`, default on. `KVCache` grows by one block of 256 tokens for every prefill chunk, and each growth
+  builds the larger buffer while the old one is still alive. `generate_step` now gives each `KVCache` a reserve: the prompt
+  plus the first 1024 decode tokens, or `max_tokens` when that is smaller. Prefill then allocates the cache once and the
+  copies of the growing cache stop. The decode part has a bound, so a short prompt with a large `max_tokens` does not hold
+  KV it will not use. A quantized cache (`kv_bits`) and the other cache classes keep the upstream growth.
+  `MLX_OMARCHY_KV_PRESIZE=0` (read per call) restores the upstream growth. The batched server route (`BatchKVCache`) is not
+  covered by this patch.
 - The patches are idempotent and fail loudly on mlx-lm version drift.
 
 ## Acceptance bar
