@@ -72,7 +72,7 @@ void rope_trig_gate(
     int dims,
     float base,
     float scale,
-    const array& out);
+    const Stream& stream);
 } // namespace mlx::core::fast
 
 namespace mlx::core {
@@ -9899,7 +9899,7 @@ bool dispatch_rope_pair(
   // One gate call covers both sides: the shared offset, T, dims, base,
   // and scale make the theta bound identical.
   fast::rope_trig_gate(
-      "rope_pair", q_in, offset, nullptr, dims, base, scale, q_node);
+      "rope_pair", q_in, offset, nullptr, dims, base, scale, stream);
   if (kv_window) {
     auto& window = *kv_window;
     bind_kv_window_storage(window, stream);
@@ -15376,8 +15376,7 @@ void rope_trig_gate(
     int dims,
     float base,
     float scale,
-    const array& out) {
-  Stream stream = out.primitive().stream();
+    const Stream& stream) {
   int T = in.shape(-2);
   float worst_offset;
   if (offset.size() == 1) {
@@ -15549,7 +15548,7 @@ void RoPE::eval_gpu(
       dims_,
       base_,
       scale_,
-      out);
+      s);
 
 
   // Producer-direct KV write: when the eager planner claimed this
@@ -16143,7 +16142,7 @@ void ScaledDotProductAttention::eval_gpu(
       const auto& fold_state = static_cast<const fast::RoPE&>(*rope_plan->primitive);
       rope_trig_gate(
           tag, rope_plan->inputs[0], rope_plan->inputs[1], nullptr, std::get<1>(fold_state.state()),
-          std::get<3>(fold_state.state()), std::get<4>(fold_state.state()), rope_plan->rope);
+          std::get<3>(fold_state.state()), std::get<4>(fold_state.state()), s);
     }
     const array& rope_q = fold_rope ? rope_plan->inputs[0] : q;
     const array& rope_offset = fold_rope ? rope_plan->inputs[1] : q;
