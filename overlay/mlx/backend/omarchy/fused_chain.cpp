@@ -1875,6 +1875,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 
   // q RoPE into the split-K attention: R = RoPE(q, offset, norm weight) whose only reader is the decode attention S. Static conditions only
   // (the route, device and cache length are known when S evaluates); S either folds R into split pass 1 or evaluates R's primitive itself.
+  size_t fold_sdpa = 0;
+  size_t fold_q_not_rope = 0;
+  size_t fold_rope_other = 0;
+  size_t fold_static = 0;
+  size_t fold_planned = 0;
+  std::string fold_first_q;
   if (rope_sdpa_fold_enabled()) {
     for (const auto& sdpa : tape) {
       if (!is_op(&sdpa, typeid(fast::ScaledDotProductAttention)) ||
@@ -1882,6 +1888,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           sdpa.shape().size() != 4 || sdpa.shape(0) != 1 ||
           sdpa.shape(2) != 1 || sdpa.shape(3) != 128) {
         continue;
+      }
+      ++fold_sdpa;
+      if (fold_sdpa == 1) {
+        fold_first_q = sdpa.inputs()[0].has_primitive() ? sdpa.inputs()[0].primitive().name() : "<leaf>";
       }
       const auto attention_state =
           static_cast<const fast::ScaledDotProductAttention&>(sdpa.primitive())
@@ -1892,6 +1902,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           uses[rope->id()] != 1 || claimed.count(rope->id()) ||
           state->rope_redirect_roles.count(rope->id()) ||
           rope->primitive().stream() != sdpa.primitive().stream()) {
+        ++(is_op(rope, typeid(fast::RoPE)) ? fold_rope_other : fold_q_not_rope);
         continue;
       }
       const auto& rope_primitive =
@@ -1911,11 +1922,19 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           rope->shape(2) != 1 || rope->shape(3) != 128 ||
           q.strides()[3] != 1 || kv_heads <= 0 ||
           rope->shape(1) != 4 * kv_heads) {
+        ++fold_static;
         continue;
       }
       state->rope_sdpa_plans.emplace(sdpa.id(), RopeSdpaPlan{*rope, rope->inputs(), rope->primitive_ptr()});
       state->rope_sdpa_skip.insert(rope->id());
       claimed.insert(rope->id());
+      ++fold_planned;
+    }
+    if (std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr && fold_sdpa > 0) {
+      std::fprintf(
+          stderr,
+          "[rope-sdpa-plan] sdpa=%zu q_not_rope=%zu rope_other=%zu static=%zu planned=%zu first_q_producer=%s\n",
+          fold_sdpa, fold_q_not_rope, fold_rope_other, fold_static, fold_planned, fold_first_q.c_str());
     }
   }
 }
