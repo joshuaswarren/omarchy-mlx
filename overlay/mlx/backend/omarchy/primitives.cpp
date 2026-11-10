@@ -9374,27 +9374,8 @@ bool dispatch_quantized_gemv_group(
       }
       if (member.sum_window) {
         auto& window = *member.sum_window;
-        if (window.in_place) {
-          // The planner proved the cache buffer's only in-tape consumer
-          // is this SliceUpdate: the epilogue writes its rows straight
-          // into the live cache and no fresh copy exists.
-          window.node.copy_shared_buffer(
-              window.base,
-              window.base.strides(),
-              window.base.flags(),
-              window.base.data_size());
-        } else {
-          window.node.set_data(allocator().malloc(window.node.nbytes()));
-          copy_gpu(
-              window.base,
-              window.node,
-              window.base.flags().contiguous ? CopyType::Vector
-                                             : CopyType::General,
-              stream);
-        }
-        encoder.add_temporary(window.node);
+        bind_kv_window_storage(window, stream);
         commit_values_kv_write(window.node);
-        encoder.add_temporary(window.base);
       }
     }
   }
@@ -9921,15 +9902,7 @@ bool dispatch_rope_pair(
       "rope_pair", q_in, offset, nullptr, dims, base, scale, q_node);
   if (kv_window) {
     auto& window = *kv_window;
-    window.node.set_data(allocator().malloc(window.node.nbytes()));
-    copy_gpu(
-        window.base,
-        window.node,
-        window.base.flags().contiguous ? CopyType::Vector
-                                       : CopyType::General,
-        stream);
-    encoder.add_temporary(window.node);
-    encoder.add_temporary(window.base);
+    bind_kv_window_storage(window, stream);
   } else {
     k_node.set_data(allocator().malloc(k_node.nbytes()));
   }
@@ -15591,13 +15564,9 @@ void RoPE::eval_gpu(
       : nullptr;
   if (kv_window) {
     omarchy::KvDirectWindow& window = *kv_window;
-    // In place, the values side has already installed the shared
-    // storage; otherwise the node must still be unallocated. Either
-    // way the rope writes its rows into the buffer the member array
-    // exposes.
+    // The rope writes its rows into the buffer the member array exposes.
     if (
-        window.node.data_shared_ptr() !=
-            (window.in_place ? window.base.data_shared_ptr() : nullptr) ||
+        window.node.data_shared_ptr() != nullptr ||
         window.base.data_shared_ptr() == nullptr ||
         window.base.dtype() != out.dtype() ||
         (out.dtype() == bfloat16 && (kv_window->offset & 1u) != 0u) ||
@@ -15615,17 +15584,7 @@ void RoPE::eval_gpu(
           "[mlx-omarchy] direct KV write committed values but the keys "
           "window is not dispatchable");
     }
-    if (!window.in_place) {
-      window.node.set_data(allocate_omarchy(window.node.nbytes()));
-      copy_gpu(
-          window.base,
-          window.node,
-          window.base.flags().contiguous ? CopyType::Vector
-                                         : CopyType::General,
-          s);
-    }
-    encoder.add_temporary(window.node);
-    encoder.add_temporary(window.base);
+    omarchy::bind_kv_window_storage(window, s);
   }
   bool kv_direct = kv_window != nullptr;
   // The kernel never rotates in place: the input binding is readonly, the

@@ -907,16 +907,24 @@ std::optional<DirectGeometry> direct_window_geometry(const array& member) {
   return geometry;
 }
 
+// A producer-direct window may write its cache in place only when this
+// SliceUpdate holds the last handle to the cache and to its storage: no
+// other tape node, view, snapshot, or caller can then still read the
+// pre-update rows (MLX buffer donation). Ask before a plan copies the
+// base handle, which would count as a second holder.
+// MLX_OMARCHY_KV_INPLACE=0 forces the copy.
+bool kv_window_in_place(const array& member) {
+  return (std::getenv("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+          env_flag("MLX_OMARCHY_KV_INPLACE")) &&
+      member.inputs()[0].is_donatable();
+}
+
 // Keys: the RoPE kernel writes (matrix, time, feature) output strides,
 // so the window's (batch, kv-head) axes must form one regular matrix
 // axis. The RoPE fence (forward, scalar offset, fused-path conditions)
 // is re-checked at dispatch; aborting there unwinds to the merged pair
 // dispatch.
-DirectPlan plan_keys_window(
-    const array& member,
-    const array* update,
-    const std::unordered_map<std::uintptr_t, size_t>& uses,
-    const std::unordered_map<std::uintptr_t, size_t>& view_uses) {
+DirectPlan plan_keys_window(const array& member, const array* update) {
   DirectPlan plan;
   if (!is_op(update, typeid(fast::RoPE))) {
     return plan;
@@ -935,14 +943,7 @@ DirectPlan plan_keys_window(
     return plan;
   }
   const auto& upd = member.inputs()[1];
-  // In place only when the cache buffer's single in-tape consumer is
-  // this SliceUpdate: no other node may still need the pre-update rows.
-  // In place when every consumer of the cache buffer is a pure view
-  // (the returned keys[..., :offset] slice reads post-write bytes).
-  auto use_it = uses.find(member.inputs()[0].id());
-  auto view_it = view_uses.find(member.inputs()[0].id());
-  bool in_place = use_it != uses.end() && use_it->second > 0 &&
-      view_it != view_uses.end() && view_it->second == use_it->second;
+  const bool in_place = kv_window_in_place(member);
   uint32_t matrix_stride;
   if (upd.ndim() == 4) {
     uint64_t heads = static_cast<uint64_t>(upd.shape(1));
@@ -978,8 +979,7 @@ DirectPlan plan_values_window(
     const std::unordered_map<std::uintptr_t, size_t>& uses,
     const std::vector<GemvGroup>& groups,
     const std::unordered_map<std::uintptr_t, size_t>& dense_roles,
-    std::vector<DenseGemvGroup>& dense_groups,
-    const std::unordered_map<std::uintptr_t, size_t>& view_uses) {
+    std::vector<DenseGemvGroup>& dense_groups) {
   DirectPlan plan;
   auto use_count = [&](const array& value) {
     auto it = uses.find(value.id());
@@ -1124,6 +1124,7 @@ DirectPlan plan_values_window(
   for (const array* view : chain) {
     plan.view_chain.push_back(*view);
   }
+  const bool in_place = kv_window_in_place(member);
   plan.window = KvDirectWindow{
       member,
       base,
@@ -1135,13 +1136,7 @@ DirectPlan plan_values_window(
       geometry->ndim,
       /*row_gap=*/geometry->strides[1],
       /*head_dim=*/head_dim,
-      /*in_place=*/[&] {
-        auto use_it = uses.find(base.id());
-        auto view_it = view_uses.find(base.id());
-        return use_it != uses.end() && use_it->second > 0 &&
-            view_it != view_uses.end() &&
-            view_it->second == use_it->second;
-      }()};
+      in_place};
   if (plan.kind == DirectKind::none) {
     plan.kind = DirectKind::values_sum;
   }
@@ -1182,22 +1177,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   eager_state = state;
   std::unordered_map<std::uintptr_t, const array*> nodes;
   std::unordered_map<std::uintptr_t, size_t> uses;
-  // Per-input count of consumers that are pure views (Slice, Transpose,
-  // Reshape). Views materialize nothing and read their input whenever
-  // the consuming graph reads them, so an array whose consumers are ALL
-  // views is safely writable in place by a later producer (the views
-  // observe the post-write bytes).
-  std::unordered_map<std::uintptr_t, size_t> view_uses;
   nodes.reserve(tape.size());
   for (const auto& node : tape) {
     nodes.emplace(node.id(), &node);
-    bool node_is_view = is_op(&node, typeid(Slice)) ||
-        is_op(&node, typeid(Transpose)) || is_op(&node, typeid(Reshape));
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
-      if (node_is_view) {
-        ++view_uses[input.id()];
-      }
     }
   }
   auto lookup = [&](const array& ref) -> const array* {
@@ -1660,8 +1644,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           classifiable = false;
           break;
         }
-        plans[side] = plan_keys_window(
-                pair.nodes[side], update, uses, view_uses);
+        plans[side] = plan_keys_window(pair.nodes[side], update);
         if (plans[side].kind == DirectKind::none) {
           plans[side] = plan_values_window(
               pair.nodes[side],
@@ -1669,8 +1652,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
               uses,
               state->gemv_groups,
               state->dense_gemv_roles,
-              state->dense_gemv_groups,
-              view_uses);
+              state->dense_gemv_groups);
         }
       }
       if (!classifiable || plans[0].kind == DirectKind::none ||
@@ -2009,6 +1991,26 @@ void commit_values_kv_write(const array& sum_node) {
   }
 }
 
+void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
+  if (window.in_place) {
+    window.node.copy_shared_buffer(
+        window.base,
+        window.base.strides(),
+        window.base.flags(),
+        window.base.data_size());
+  } else {
+    window.node.set_data(allocator().malloc(window.node.nbytes()));
+    copy_gpu(
+        window.base,
+        window.node,
+        window.base.flags().contiguous ? CopyType::Vector : CopyType::General,
+        stream);
+  }
+  auto& encoder = get_command_encoder(stream);
+  encoder.add_temporary(window.node);
+  encoder.add_temporary(window.base);
+}
+
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
@@ -2118,22 +2120,7 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
           group.sum_windows.clear();
           break;
         }
-        if (w.in_place) {
-          w.node.copy_shared_buffer(
-              w.base, w.base.strides(), w.base.flags(), w.base.data_size());
-        } else {
-          // Not provably exclusive: materialize a fresh cache copy and
-          // let the window scatter target it (the merged pair dispatch
-          // this replaces does exactly the same copy).
-          w.node.set_data(allocator().malloc(w.node.nbytes()));
-          copy_gpu(
-              w.base,
-              w.node,
-              w.base.flags().contiguous ? CopyType::Vector : CopyType::General,
-              stream);
-        }
-        get_command_encoder(stream).add_temporary(w.node);
-        get_command_encoder(stream).add_temporary(w.base);
+        bind_kv_window_storage(w, stream);
         commit_values_kv_write(w.node);
       }
       group.state = dispatch_dense_gemv_group(
