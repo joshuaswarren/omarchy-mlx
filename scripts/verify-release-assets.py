@@ -373,6 +373,12 @@ def main():
                          "release that intentionally ships fewer platforms "
                          "than the stable default (e.g. linux_aarch64)")
     args = ap.parse_args()
+    with tempfile.TemporaryDirectory(prefix="verify-release-") as work:
+        run_checks(args, Path(work))
+
+
+def run_checks(args, work):
+    """Run every check. All downloads go into ``work``; main() removes it on any exit."""
     repo_root = Path(args.repo_root) if args.repo_root else \
         Path(__file__).resolve().parent.parent
     if not (repo_root / "receipts").is_dir():
@@ -394,14 +400,12 @@ def main():
     # SHA256SUMS is the hash source of record for the whole asset set and
     # works on a draft release (gh resolves drafts for the owner).
     sums = {}
-    sums_dir = Path(tempfile.mkdtemp(prefix="verify-release-"))
-    if download_asset(args.repo, args.tag, "SHA256SUMS", sums_dir):
-        sums_file = sums_dir / "SHA256SUMS"
+    if download_asset(args.repo, args.tag, "SHA256SUMS", work):
+        sums_file = work / "SHA256SUMS"
         if sums_file.exists():
             sums = parse_sha256sums(sums_file.read_text(errors="replace"))
 
-    wheels = download_wheels(args.repo, args.tag,
-                             tempfile.mkdtemp(prefix="verify-release-"))
+    wheels = download_wheels(args.repo, args.tag, work)
     alias = next((w for w in wheels if w.name == ALIAS_WHEEL), None)
     wheels = [w for w in wheels if w.name != ALIAS_WHEEL]
     if not wheels:
@@ -496,15 +500,14 @@ def main():
         if not expected:
             continue
         print(f"\n== {asset['name']} (recorded in {src})")
-        nonwheel_dir = Path(tempfile.mkdtemp(prefix="verify-release-"))
         proc = run(["gh", "release", "download", args.tag, "--repo",
                     args.repo, "--pattern", asset["name"], "--dir",
-                    str(nonwheel_dir), "--clobber"])
+                    str(work), "--clobber"])
         if proc.returncode != 0:
             all_failures.append(f"{asset['name']}: download failed")
             continue
         got = hashlib.sha256(
-            (nonwheel_dir / asset["name"]).read_bytes()).hexdigest()
+            (work / asset["name"]).read_bytes()).hexdigest()
         if got == expected:
             print(f"   PASS sha256 matches recorded ({got})")
         else:
