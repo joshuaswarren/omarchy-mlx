@@ -838,6 +838,74 @@ class PersistentWorkerTests(unittest.TestCase):
         self.assertIsNone(self.s._worker)
         self.s.close()  # idempotent
 
+    def _busy_worker(self, conn, assets_dir):
+        while True:
+            try:
+                msg = conn.recv()
+            except (EOFError, OSError):
+                break
+            if msg.get("type") == "shutdown":
+                break
+            if msg.get("type") == "speak":
+                conn.send({"type": "chunk", "id": msg["id"],
+                           "sample_rate": 24000, "data": b"\x00\x01" * 8})
+                time.sleep(60)
+
+    def test_shutdown_stops_a_busy_worker_within_the_bound(self):
+        accel_patch, deps_patch = self._green()
+        with accel_patch, deps_patch, \
+                mock.patch.object(synthesis, "_worker_main", self._busy_worker):
+            chunks = self.s.synthesize_chunks("hello", threading.Event())
+            next(chunks)
+            process = self.s._worker.process
+            outcome = []
+
+            def consume():
+                try:
+                    list(chunks)
+                except Exception as exc:
+                    outcome.append(exc)
+
+            consumer = threading.Thread(target=consume)
+            consumer.start()
+            started = time.monotonic()
+            self.s.shutdown()
+            elapsed = time.monotonic() - started
+            consumer.join(5)
+        self.assertFalse(consumer.is_alive())
+        self.assertLess(elapsed, 4.0)
+        self.assertFalse(process.is_alive())
+        self.assertEqual(len(outcome), 1)
+        self.assertIsInstance(outcome[0], synthesis.VoiceError)
+        self.assertFalse(self.s._worker_lock.locked())
+
+    def test_shutdown_cancels_queued_requests_and_starts_no_worker(self):
+        accel_patch, deps_patch = self._green()
+        with accel_patch, deps_patch, \
+                mock.patch.object(synthesis, "_worker_main", self._busy_worker):
+            first = self.s.synthesize_chunks("one", threading.Event())
+            next(first)
+            queued = []
+
+            def queue_second():
+                try:
+                    list(self.s.synthesize_chunks("two", threading.Event()))
+                except Exception as exc:
+                    queued.append(exc)
+
+            waiter = threading.Thread(target=queue_second)
+            waiter.start()
+            time.sleep(0.5)
+            self.s.shutdown()
+            waiter.join(5)
+            with self.assertRaises(synthesis.SynthesisCancelled):
+                list(self.s.synthesize_chunks("three", threading.Event()))
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual([type(e) for e in queued],
+                         [synthesis.SynthesisCancelled])
+        self.assertIsNone(self.s._worker)
+        self.assertEqual(self.s._workers, {})
+
 
 def psutil_alive(pid):
     try:
