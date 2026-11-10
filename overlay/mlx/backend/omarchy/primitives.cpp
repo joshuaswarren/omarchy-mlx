@@ -16190,7 +16190,6 @@ void ScaledDotProductAttention::eval_gpu(
         array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
         scratch.set_data(allocate_omarchy(scratch.nbytes()));
         encoder.add_temporary(scratch);
-        std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
         // Value-phase variant (8-byte value loads, 32 keys per lane chain instead of 128): MLX_OMARCHY_SDPA_SPLIT_PV, any non-empty value other than "0" selects it,
         // unset or empty follows omarchy::sdpa_split_pv_default. Needs V element offset, head stride and key stride multiples of 4.
         const int pv_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV");
@@ -16216,6 +16215,7 @@ void ScaledDotProductAttention::eval_gpu(
               pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VRopeR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1RopeR4BF16Hd128,
               fold_bindings, split_params, split_params.matrix_n, split_blocks);
         } else {
+          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
           encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
         }
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
