@@ -1,0 +1,61 @@
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -113,6 +113,25 @@
+         return None
+ 
+ 
++# KV reserve (mlx-omarchy). KVCache grows by one block per prefill chunk, and each growth builds the larger buffer while the old
++# one is alive. On a 13-inch M1 (15.1 GiB), a 16384-token prompt on Qwen3-4B 4-bit failed twice at a growth step with a GPU
++# allocation error and completed when the cache was allocated once. generate_step now tells each KVCache how many tokens the
++# call needs: the prompt plus the first decode tokens, up to a bound so a short prompt with a huge max_tokens does not hold KV
++# it will not use. Quantized KV and the other cache classes are unchanged. MLX_OMARCHY_KV_PRESIZE=0 restores upstream growth.
++_OMARCHY_KV_DECODE_RESERVE = 1024
++
++
++def _omarchy_reserve_kv(prompt_cache, prompt_tokens, max_tokens, kv_bits):
++    if kv_bits is not None or os.environ.get("MLX_OMARCHY_KV_PRESIZE") == "0":
++        return
++    decode = _OMARCHY_KV_DECODE_RESERVE
++    if max_tokens >= 0:
++        decode = min(max_tokens, decode)
++    for c in prompt_cache:
++        if isinstance(c, KVCache):
++            c.reserve = c.offset + prompt_tokens + decode
++
++
+ def str2bool(string):
+     return string.lower() not in ["false", "f"]
+ 
+@@ -510,6 +529,13 @@
+         _omarchy_prefill_headroom_bytes(),
+     )
+ 
++    _omarchy_reserve_kv(
++        prompt_cache,
++        len(input_embeddings) if input_embeddings is not None else len(prompt),
++        max_tokens,
++        kv_bits,
++    )
++
+     quantize_cache_fn = functools.partial(
+         maybe_quantize_kv_cache,
+         quantized_kv_start=quantized_kv_start,
+--- a/mlx_lm/models/cache.py
++++ b/mlx_lm/models/cache.py
+@@ -325,6 +325,7 @@
+ 
+ class KVCache(_BaseCache):
+     step = 256
++    reserve = 0  # mlx-omarchy: total tokens the next growth must cover; generate_step sets it
+ 
+     def __init__(self):
+         self.keys = None
+@@ -336,7 +337,7 @@
+         if self.keys is None or (prev + keys.shape[2]) > self.keys.shape[2]:
+             B, n_kv_heads, _, k_head_dim = keys.shape
+             v_head_dim = values.shape[3]
+-            n_steps = (self.step + keys.shape[2] - 1) // self.step
++            n_steps = (max(self.reserve - prev, keys.shape[2]) + self.step - 1) // self.step
+             k_shape = (B, n_kv_heads, n_steps * self.step, k_head_dim)
+             v_shape = (B, n_kv_heads, n_steps * self.step, v_head_dim)
+             new_k = mx.zeros(k_shape, keys.dtype)

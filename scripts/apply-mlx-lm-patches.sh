@@ -83,6 +83,7 @@ SERIES_PATCHES=(
   mlx-lm-last-logits.patch
   mlx-lm-last-logits-qwen3.patch
   mlx-lm-prefill-step-memory.patch
+  mlx-lm-kv-presize.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -273,6 +274,12 @@ apply mlx-lm-last-logits-qwen3.patch
 # prompt at the 2048 default with VK_ERROR_OUT_OF_DEVICE_MEMORY; with a smaller chunk it completes.
 # An explicit chunk always wins and the result never exceeds 2048, so a host with room is unchanged.
 apply mlx-lm-prefill-step-memory.patch
+# KV reserve for direct mlx-lm use: generate_step tells each KVCache how many tokens the call needs (prompt
+# plus up to 1024 decode tokens), so the cache is allocated once instead of regrown, and copied, once per
+# prefill chunk. A 16384-token Qwen3-4B 4-bit prompt failed twice at a growth step on a 13-inch M1 and
+# completed with the cache allocated once. Quantized KV and other cache classes are unchanged.
+# Kill switch MLX_OMARCHY_KV_PRESIZE=0.
+apply mlx-lm-kv-presize.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the
