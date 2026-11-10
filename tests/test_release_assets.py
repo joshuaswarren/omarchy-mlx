@@ -99,6 +99,7 @@ class AliasMainTests(unittest.TestCase):
         import contextlib
         import io
         import shutil
+        import subprocess
         import sys
         from unittest import mock
 
@@ -119,6 +120,12 @@ class AliasMainTests(unittest.TestCase):
                 verified.append(wheel.name)
                 return [], [], []
 
+            def fake_run(cmd, **kw):
+                # `gh release download TAG --pattern NAME --dir DIR`, the only call main() makes for a non-wheel asset
+                name, dest = cmd[cmd.index("--pattern") + 1], Path(cmd[cmd.index("--dir") + 1])
+                (dest / name).write_bytes(files[name])
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
             patches = {
                 "release": lambda repo, t: {"tagName": t, "isPrerelease": False, "isDraft": True, "body": "",
                                             "assets": [{"name": n} for n in list(files) + ["SHA256SUMS"]]},
@@ -126,6 +133,7 @@ class AliasMainTests(unittest.TestCase):
                 "download_asset": fake_download_asset,
                 "tag_commit": lambda *a: "a" * 40,
                 "verify": fake_verify,
+                "run": fake_run,
             }
             live = MODULE["main"].__globals__
             saved = {key: live[key] for key in patches}
@@ -171,6 +179,20 @@ class AliasMainTests(unittest.TestCase):
         code, out, _ = self._run("v9.9.9-diag.1", {self.STAMPED: b"aarch64"})
         self.assertEqual(code, 0, out)
         self.assertNotIn("byte-identical", out)
+
+    def test_run_removes_every_directory_it_downloaded_into(self):
+        from unittest import mock
+
+        vendor = "omarchy-mlx-vendor-wheels-v9.9.9-cp314-aarch64.tar"
+        files = {self.STAMPED: b"aarch64", self.X86: b"x86", MODULE["ALIAS_WHEEL"]: b"aarch64", vendor: b"tar"}
+        with tempfile.TemporaryDirectory() as scratch, mock.patch.object(tempfile, "tempdir", scratch):
+            code, out, _ = self._run("v9.9.9", files)
+            self.assertEqual(code, 0, out)
+            self.assertIn(f"{vendor} (recorded in SHA256SUMS asset)", out)
+            self.assertEqual(list(Path(scratch).iterdir()), [])
+            code, out, _ = self._run("v9.9.9", {self.STAMPED: b"aarch64"})
+            self.assertEqual(code, 1, out)
+            self.assertEqual(list(Path(scratch).iterdir()), [])
 
 
 class ReleaseCommitTests(unittest.TestCase):
