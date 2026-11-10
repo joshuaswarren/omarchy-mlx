@@ -107,6 +107,39 @@ def terminal(runtime, prompt=None, once=False, maximum=None):
             return 0
 
 
+STOP_BUDGET = 4.0
+
+
+def stop_server(server, runtime_file):
+    """Stop the server within STOP_BUDGET seconds, whatever stage hangs.
+
+    Past the budget the voice workers are killed and the process leaves at
+    once: the stop never outlasts the caller's SIGKILL fallback.
+    """
+    failures = []
+
+    def run():
+        try:
+            server.shutdown()
+            server.server_close()
+        except BaseException as error:
+            failures.append(error)
+
+    stopper = threading.Thread(target=run, daemon=True)
+    stopper.start()
+    stopper.join(STOP_BUDGET)
+    runtime_file.unlink(missing_ok=True)
+    if stopper.is_alive():
+        from .synthesis import kill_workers
+
+        kill_workers()
+        print(f"MLX Chat: stop exceeded {STOP_BUDGET:g}s; workers killed", file=sys.stderr, flush=True)
+        sys.stdout.flush()
+        os._exit(0)
+    if failures:
+        raise failures[0]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="mlx-omarchy-assistant", description="Local MLX Chat and typed decisions")
     parser.add_argument("--home", type=Path, default=mlx_omarchy_paths.default_data_home())
@@ -169,8 +202,14 @@ def main(argv=None):
             thread.start()
             if args.wake_word:
                 server.start_wake_word(args.wake_word, args.wake_threshold)
+            stopping = threading.Event()
+
             def interrupt(_signal, _frame):
-                raise KeyboardInterrupt
+                # The first stop signal unwinds main() into the orderly stop;
+                # repeats arrive during that stop and must not abort it.
+                if not stopping.is_set():
+                    stopping.set()
+                    raise KeyboardInterrupt
 
             for signum in (signal.SIGTERM, signal.SIGINT):
                 signal.signal(signum, interrupt)
@@ -222,9 +261,7 @@ def main(argv=None):
         return 1
     finally:
         if server:
-            server.shutdown()
-            server.server_close()
-            runtime_file.unlink(missing_ok=True)
+            stop_server(server, runtime_file)
         lock.close()
 
 
