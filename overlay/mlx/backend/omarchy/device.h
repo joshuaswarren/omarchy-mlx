@@ -646,6 +646,20 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// 64-key block variant of the value-phase split-K pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK64 unset): the largest cache length, in keys, up to which the variant is the default on a part.
+// 0 means the 128-key blocks stay the default. Four query heads per key-value head only. Chain microseconds per call, 128-key blocks against 64-key blocks, ten chains each:
+//   G14C (Apple M2 Max): 512 keys 82.6 against 69.2; 1024 keys 81.5 against 75.7 (ranges overlap); 2048 keys 102.8 against 120.3; so the limit is 512.
+// An unmeasured part keeps the 128-key blocks. Pure.
+inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
+  if (device_name.find("G14C") != std::string::npos) return 512;
+  return 0;
+}
+
+inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_split_bk64_max_keys(device_name);
+  return max_keys != 0 && k_len <= max_keys;
+}
+
 // Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) with the variable unset: the parts where the route defaults off because
 // the per-node decode GEMV was measured faster than the fused groups:
 //   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-decode-defaults.
