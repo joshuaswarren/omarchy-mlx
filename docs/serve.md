@@ -555,6 +555,7 @@ It must never make fit depend on swap, silent model substitution, or CPU tensor 
 On the MLX-LM route, [the project shim](../serve/mlx_omarchy_serve/_mlxlm_server.py) enforces prompt plus output within admitted context.
 It pins MLX-LM 0.31.3, rejects invalid token arguments, and limits generation concurrency to one.
 Prompt-cache entries add to the admitted memory bound.
+Started by the assistant manager, the shim claims its reservation before any weight loads and exits when the manager's lifetime pipe closes, so a manager that dies leaves no chat worker holding weights.
 The oMLX route has no verified server-side context cap and prints a warning.
 Module routes use an in-repository allowlist for Laya and Bonsai; arbitrary catalog-named Python modules never execute.
 
