@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from queue import Queue
 import subprocess
-from threading import Thread
+from threading import Event, Thread
 from types import SimpleNamespace
 import weakref
 
@@ -144,9 +144,12 @@ def test_http_failure_ends_response(server_source, stream):
                  "SamplingArguments": SimpleNamespace, "LogitsProcessorArguments": SimpleNamespace,
                  "ToolCallFormatter": lambda *args: None}
     cls = extract(server_source, "APIHandler", {"handle_completion", "_send_generation_error"}, namespace)
-    stopped = []
+    stopped, done = [], Event()
+    def stop():
+        stopped.append(True)
+        done.set()
     ctx = SimpleNamespace(tool_parser=None, initial_state="normal",
-                          text_sm=SimpleNamespace(make_state=lambda state: None), stop=lambda: stopped.append(True))
+                          text_sm=SimpleNamespace(make_state=lambda state: None), stop=stop)
     def responses():
         raise RuntimeError("private prompt /private/model failed")
         yield
@@ -184,7 +187,7 @@ def test_http_failure_ends_response(server_source, stream):
             else:
                 assert json.loads(body)["error"] == "generation_failed"
             assert "private" not in body
-            assert stopped == [True]
+            assert done.wait(2) and stopped == [True]
         finally:
             connection.close()
             server.shutdown()
