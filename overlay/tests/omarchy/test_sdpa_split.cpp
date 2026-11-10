@@ -404,3 +404,48 @@ TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {
   }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
+
+// q RMSNorm + RoPE folded into split pass 1 (MLX_OMARCHY_ROPE_SDPA_FOLD, shaders/sdpa_q_rope_norm.h): the attention of rope_rms_norm(q) must store
+// the same words with the fold on and off, in both pass-1 variants, and the fold removes the rope dispatch (two launches instead of three).
+// The graph is evaluated as one tape because the planner claims the pair there. q is the reshaped, transposed projection view the Qwen3
+// attention layer builds, so the raw q is addressed through its strides.
+TEST_CASE("split attention with the q rope_rms_norm folded into pass 1 matches the unfolded pair") {
+  if (!compute_available() || !split_device_ready()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int heads = 16;
+  const int kv_heads = 4;
+  const int width = 128;
+  for (int keys : {330, 512, 1100}) {
+    Stored proj = make_bf16(pattern(static_cast<size_t>(heads) * width, 41, 3.0f), Shape{1, 1, heads * width}, stream);
+    Stored weight = make_bf16(pattern(width, 43, 1.0f), Shape{width}, stream);
+    Stored kfull = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * width, 47, 1.0f), Shape{1, kv_heads, keys, width}, stream);
+    Stored vfull = make_bf16(pattern(static_cast<size_t>(kv_heads) * keys * width, 53, 1.0f), Shape{1, kv_heads, keys, width}, stream);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(width));
+    for (const char* pv : {"0", "1"}) {
+      setenv("MLX_OMARCHY_SDPA_DECODE_SPLIT", "1", 1);
+      setenv("MLX_OMARCHY_SDPA_SPLIT_PV", pv, 1);
+      std::vector<float> results[2];
+      uint64_t launches[2];
+      for (int fold = 1; fold >= 0; --fold) {
+        setenv("MLX_OMARCHY_ROPE_SDPA_FOLD", fold ? "1" : "0", 1);
+        array q = transpose(reshape(proj.x, Shape{1, 1, heads, width}, stream), {0, 2, 1, 3}, stream);
+        array rotated = fast::rope_rms_norm(q, width, weight.x, 1e-6f, false, 1000000.0f, 1.0f, keys - 1, stream);
+        array r = fast::scaled_dot_product_attention(rotated, kfull.x, vfull.x, scale, "", {}, std::nullopt, false, stream);
+        uint64_t before = dispatches();
+        r.eval();
+        omarchy::get_command_encoder(stream).synchronize();
+        launches[fold] = dispatches() - before;
+        results[fold] = flat(r, stream);
+      }
+      INFO("keys " << keys << " pass-1 variant " << pv);
+      CHECK(launches[0] == 3);
+      CHECK(launches[1] == 2);
+      CHECK(results[1] == results[0]);
+    }
+  }
+  unsetenv("MLX_OMARCHY_ROPE_SDPA_FOLD");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}

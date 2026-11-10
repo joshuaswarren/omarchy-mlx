@@ -16118,30 +16118,69 @@ void ScaledDotProductAttention::eval_gpu(
         (decode_caps.subgroup_operations & kSplitSubgroupFeatures) == kSplitSubgroupFeatures;
     const bool split_wanted = split_env > 0 ||
         (split_env < 0 && omarchy::sdpa_split_default(decode_caps.device_name, static_cast<uint32_t>(k_len)));
-    if (split_wanted && split_device_ready &&
+    const bool split_ok = split_wanted && split_device_ready &&
         (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
         q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
         inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && q_len == 1 &&
         (head_dim == 128 || head_dim == 256) && v_dim == head_dim && k_len > 0 && 1048577 > k_len &&
         (split_group == 1u || split_group == 2u || split_group == 4u || split_group == 8u) &&
         q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
-        k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 && v.strides()[1] % 2 == 0 && v.strides()[2] % 2 == 0) {
+        k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 && v.strides()[1] % 2 == 0 && v.strides()[2] % 2 == 0;
+    const bool split_aligned = split_ok && checked_item_offset(k, k.size(), tag, out) % 8u == 0u &&
+        checked_item_offset(v, v.size(), tag, out) % 2u == 0u;
+    // Planned q RMSNorm + RoPE (MLX_OMARCHY_ROPE_SDPA_FOLD, fused_chain.cpp): the rope dispatch was deleted, so q holds no data yet. Pass 1
+    // of the group-4 split route computes it in its query load; every other route evaluates the rope node here first.
+    const omarchy::RopeSdpaPlan* rope_plan = omarchy::find_rope_sdpa_plan(out);
+    const bool fold_rope = rope_plan != nullptr && split_aligned && split_group == 4u && head_dim == 128 &&
+        omarchy::input_ready(rope_plan->rope.inputs()[0], s) && omarchy::input_ready(rope_plan->rope.inputs()[1], s) &&
+        omarchy::input_ready(rope_plan->rope.inputs()[2], s);
+    if (rope_plan != nullptr && !fold_rope) {
+      std::vector<array> rope_inputs = rope_plan->rope.inputs();
+      std::vector<array> rope_outputs{rope_plan->rope};
+      rope_plan->rope.primitive().eval_gpu(rope_inputs, rope_outputs);
+    }
+    if (fold_rope) {
+      const auto& fold_state = static_cast<const fast::RoPE&>(rope_plan->rope.primitive());
+      rope_trig_gate(
+          tag, rope_plan->rope.inputs()[0], rope_plan->rope.inputs()[1], nullptr, std::get<1>(fold_state.state()),
+          std::get<3>(fold_state.state()), std::get<4>(fold_state.state()), rope_plan->rope);
+    }
+    const array& rope_q = fold_rope ? rope_plan->rope.inputs()[0] : q;
+    const array& rope_offset = fold_rope ? rope_plan->rope.inputs()[1] : q;
+    const array& rope_weight = fold_rope ? rope_plan->rope.inputs()[2] : q;
+    if (split_aligned) {
       omarchy::ComputeParams split_params;
       split_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
       split_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
-      if (split_params.rhs_offset % 8u == 0u && split_params.aux_offset % 2u == 0u) {
+      {
         out.set_data(allocate_omarchy(out.nbytes()));
         split_params.count = checked_u32(out.size(), tag, out);
         split_params.matrix_m = checked_u32(heads, tag, out);
         split_params.matrix_n = checked_u32(kv_heads, tag, out);
         split_params.matrix_k = checked_u32(k_len, tag, out);
         split_params.alpha = scale_;
-        split_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
         split_params.output_offset = checked_item_offset(out, out.size(), tag, out);
-        split_params.shape[0] = checked_u32(q.strides()[1], tag, out);
         split_params.shape[1] = checked_u32(k.strides()[1], tag, out);
         split_params.shape[2] = checked_u32(k.strides()[2], tag, out);
-        split_params.shape[3] = checked_u32(q.strides()[3], tag, out);
+        if (fold_rope) {
+          // The pass-1 query load reads the raw q (before the norm): its address, the norm weight, the offset and the rope constants ride
+          // fields that pass 1 and pass 2 leave alone (shaders/sdpa_q_rope_norm.h).
+          const auto& fold_state = static_cast<const fast::RoPE&>(rope_plan->rope.primitive());
+          split_params.lhs_offset = checked_item_offset(rope_q, rope_q.size(), tag, out);
+          split_params.out_strides[0] = checked_u32(rope_q.strides()[1], tag, out);
+          split_params.out_strides[2] = checked_u32(rope_q.strides()[3], tag, out);
+          split_params.operation = std::bit_cast<uint32_t>(fold_state.norm_eps());
+          split_params.reduce_size = 128u;
+          split_params.dims = 64u;
+          split_params.beta = static_cast<float>(std::log(std::get<3>(fold_state.state())) / 64);
+          split_params.output_size = std::bit_cast<uint32_t>(std::get<4>(fold_state.state()));
+          split_params.lhs_size = checked_item_offset(rope_weight, rope_weight.size(), tag, out);
+          split_params.rhs_size = checked_item_offset(rope_offset, rope_offset.size(), tag, out);
+        } else {
+          split_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+          split_params.shape[0] = checked_u32(q.strides()[1], tag, out);
+          split_params.shape[3] = checked_u32(q.strides()[3], tag, out);
+        }
         split_params.in_strides[0] = checked_u32(k.strides()[3], tag, out);
         split_params.in_strides[1] = checked_u32(v.strides()[1], tag, out);
         split_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
@@ -16171,7 +16210,15 @@ void ScaledDotProductAttention::eval_gpu(
         } else if (split_group == 8u) {
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
         }
-        encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
+        if (fold_rope) {
+          std::array<omarchy::ComputeBinding, 6> fold_bindings{
+              binding(rope_q), binding(k), binding(v), binding(scratch), binding(rope_weight), binding(rope_offset)};
+          encoder.dispatch_compute(
+              pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VRopeR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1RopeR4BF16Hd128,
+              fold_bindings, split_params, split_params.matrix_n, split_blocks);
+        } else {
+          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
+        }
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
         encoder.dispatch_compute(
             split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128,

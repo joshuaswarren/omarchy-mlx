@@ -776,6 +776,9 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, size_t> reshape_redirect_roles;
   std::unordered_map<std::uintptr_t, size_t> rope_pair_roles;
   std::vector<RopePair> rope_pairs;
+  // q RoPE planned into the attention that reads it: attention output id -> plan; the deleted rope node ids.
+  std::unordered_map<std::uintptr_t, RopeSdpaPlan> rope_sdpa_plans;
+  std::unordered_set<std::uintptr_t> rope_sdpa_skip;
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
@@ -1869,6 +1872,52 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           joined_rope_neighbors(trace.rope_shapes).c_str());
     }
   }
+
+  // q RoPE into the split-K attention: R = RoPE(q, offset, norm weight) whose only reader is the decode attention S. Static conditions only
+  // (the route, device and cache length are known when S evaluates); S either folds R into split pass 1 or evaluates R's primitive itself.
+  if (rope_sdpa_fold_enabled()) {
+    for (const auto& sdpa : tape) {
+      if (!is_op(&sdpa, typeid(fast::ScaledDotProductAttention)) ||
+          sdpa.inputs().size() != 3 || sdpa.dtype() != bfloat16 ||
+          sdpa.shape().size() != 4 || sdpa.shape(0) != 1 ||
+          sdpa.shape(2) != 1 || sdpa.shape(3) != 128) {
+        continue;
+      }
+      const auto attention_state =
+          static_cast<const fast::ScaledDotProductAttention&>(sdpa.primitive())
+              .state();
+      const array* rope = lookup(sdpa.inputs()[0]);
+      if (std::get<3>(attention_state) || std::get<4>(attention_state) ||
+          !is_op(rope, typeid(fast::RoPE)) || rope->inputs().size() != 3 ||
+          uses[rope->id()] != 1 || claimed.count(rope->id()) ||
+          state->rope_redirect_roles.count(rope->id()) ||
+          rope->primitive().stream() != sdpa.primitive().stream()) {
+        continue;
+      }
+      const auto& rope_primitive =
+          static_cast<const fast::RoPE&>(rope->primitive());
+      const auto& rope_state = rope_primitive.state();
+      const array& q = rope->inputs()[0];
+      const array& offset = rope->inputs()[1];
+      const array& weight = rope->inputs()[2];
+      const int kv_heads = sdpa.inputs()[1].shape(1);
+      if (!rope_primitive.has_norm() || !std::get<5>(rope_state) ||
+          std::get<2>(rope_state) || std::get<1>(rope_state) != 128 ||
+          rope->dtype() != bfloat16 || q.dtype() != bfloat16 ||
+          weight.dtype() != bfloat16 || weight.size() != 128 ||
+          offset.size() != 1 || offset.dtype() != int32 ||
+          rope->shape() != sdpa.inputs()[0].shape() ||
+          q.shape() != rope->shape() || rope->shape(0) != 1 ||
+          rope->shape(2) != 1 || rope->shape(3) != 128 ||
+          q.strides()[3] != 1 || kv_heads <= 0 ||
+          rope->shape(1) != 4 * kv_heads) {
+        continue;
+      }
+      state->rope_sdpa_plans.emplace(sdpa.id(), RopeSdpaPlan{*rope});
+      state->rope_sdpa_skip.insert(rope->id());
+      claimed.insert(rope->id());
+    }
+  }
 }
 
 EagerFusionScope::~EagerFusionScope() {
@@ -1890,6 +1939,19 @@ bool outgate_fold_enabled() {
   bool legacy_g13 = name.find("G13") != std::string::npos &&
       name.find("G13C") == std::string::npos;
   return !legacy_g13;
+}
+
+bool rope_sdpa_fold_enabled() {
+  const char* v = std::getenv("MLX_OMARCHY_ROPE_SDPA_FOLD");
+  return !(v != nullptr && v[0] == '0' && v[1] == '\0');
+}
+
+const RopeSdpaPlan* find_rope_sdpa_plan(const array& sdpa_out) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->rope_sdpa_plans.find(sdpa_out.id());
+  return it == eager_state->rope_sdpa_plans.end() ? nullptr : &it->second;
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
@@ -2014,6 +2076,11 @@ void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
+  }
+  if (eager_state->rope_sdpa_skip.count(node.id())) {
+    // The q RoPE of a planned attention: its dispatch is deleted. The attention's eval either folds it into split pass 1 or evaluates this
+    // node's primitive itself before it reads q (find_rope_sdpa_plan).
+    return true;
   }
   if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
       rope_pair != eager_state->rope_pair_roles.end()) {

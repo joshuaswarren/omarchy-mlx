@@ -260,6 +260,18 @@ const char* qmm_geometry_name();
 
 bool outgate_fold_enabled();
 
+// MLX_OMARCHY_ROPE_SDPA_FOLD=0 keeps the q RMSNorm + RoPE dispatch ahead of the decode attention; unset or any other value folds it into the
+// split-K pass 1 query load when the attention takes that route (shaders/sdpa_q_rope_norm.h).
+bool rope_sdpa_fold_enabled();
+
+// The planned q RoPE of an attention node (keyed by the attention output array): the rope node, whose own dispatch is deleted while the
+// plan is attached. nullptr when the planner did not claim the attention's query. The attention must either consume the plan in its split
+// pass 1 or evaluate the rope node's primitive itself before it reads q.
+struct RopeSdpaPlan {
+  array rope;
+};
+const RopeSdpaPlan* find_rope_sdpa_plan(const array& sdpa_out);
+
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
