@@ -269,6 +269,9 @@ bool rope_sdpa_fold_enabled();
 // pass 1 or evaluate the rope node's primitive itself before it reads q.
 struct RopeSdpaPlan {
   array rope;
+  // The rope node's inputs, held here: the evaluator detaches a node it has evaluated, which empties rope.inputs() and drops rope.primitive() before the attention reads them.
+  std::vector<array> inputs;
+  std::shared_ptr<Primitive> primitive;
 };
 const RopeSdpaPlan* find_rope_sdpa_plan(const array& sdpa_out);
 

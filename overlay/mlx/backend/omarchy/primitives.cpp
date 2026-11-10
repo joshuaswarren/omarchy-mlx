@@ -16132,22 +16132,22 @@ void ScaledDotProductAttention::eval_gpu(
     // of the group-4 split route computes it in its query load; every other route evaluates the rope node here first.
     const omarchy::RopeSdpaPlan* rope_plan = omarchy::find_rope_sdpa_plan(out);
     const bool fold_rope = rope_plan != nullptr && split_aligned && split_group == 4u && head_dim == 128 &&
-        omarchy::input_ready(rope_plan->rope.inputs()[0], s) && omarchy::input_ready(rope_plan->rope.inputs()[1], s) &&
-        omarchy::input_ready(rope_plan->rope.inputs()[2], s);
+        omarchy::input_ready(rope_plan->inputs[0], s) && omarchy::input_ready(rope_plan->inputs[1], s) &&
+        omarchy::input_ready(rope_plan->inputs[2], s);
     if (rope_plan != nullptr && !fold_rope) {
-      std::vector<array> rope_inputs = rope_plan->rope.inputs();
+      std::vector<array> rope_inputs = rope_plan->inputs;
       std::vector<array> rope_outputs{rope_plan->rope};
-      rope_plan->rope.primitive().eval_gpu(rope_inputs, rope_outputs);
+      rope_plan->primitive->eval_gpu(rope_inputs, rope_outputs);
     }
     if (fold_rope) {
-      const auto& fold_state = static_cast<const fast::RoPE&>(rope_plan->rope.primitive());
+      const auto& fold_state = static_cast<const fast::RoPE&>(*rope_plan->primitive);
       rope_trig_gate(
-          tag, rope_plan->rope.inputs()[0], rope_plan->rope.inputs()[1], nullptr, std::get<1>(fold_state.state()),
+          tag, rope_plan->inputs[0], rope_plan->inputs[1], nullptr, std::get<1>(fold_state.state()),
           std::get<3>(fold_state.state()), std::get<4>(fold_state.state()), rope_plan->rope);
     }
-    const array& rope_q = fold_rope ? rope_plan->rope.inputs()[0] : q;
-    const array& rope_offset = fold_rope ? rope_plan->rope.inputs()[1] : q;
-    const array& rope_weight = fold_rope ? rope_plan->rope.inputs()[2] : q;
+    const array& rope_q = fold_rope ? rope_plan->inputs[0] : q;
+    const array& rope_offset = fold_rope ? rope_plan->inputs[1] : q;
+    const array& rope_weight = fold_rope ? rope_plan->inputs[2] : q;
     if (split_aligned) {
       omarchy::ComputeParams split_params;
       split_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
@@ -16165,7 +16165,7 @@ void ScaledDotProductAttention::eval_gpu(
         if (fold_rope) {
           // The pass-1 query load reads the raw q (before the norm): its address, the norm weight, the offset and the rope constants ride
           // fields that pass 1 and pass 2 leave alone (shaders/sdpa_q_rope_norm.h).
-          const auto& fold_state = static_cast<const fast::RoPE&>(rope_plan->rope.primitive());
+          const auto& fold_state = static_cast<const fast::RoPE&>(*rope_plan->primitive);
           split_params.lhs_offset = checked_item_offset(rope_q, rope_q.size(), tag, out);
           split_params.out_strides[0] = checked_u32(rope_q.strides()[1], tag, out);
           split_params.out_strides[2] = checked_u32(rope_q.strides()[3], tag, out);

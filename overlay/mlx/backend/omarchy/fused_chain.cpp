@@ -1913,7 +1913,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           rope->shape(1) != 4 * kv_heads) {
         continue;
       }
-      state->rope_sdpa_plans.emplace(sdpa.id(), RopeSdpaPlan{*rope});
+      state->rope_sdpa_plans.emplace(sdpa.id(), RopeSdpaPlan{*rope, rope->inputs(), rope->primitive_ptr()});
       state->rope_sdpa_skip.insert(rope->id());
       claimed.insert(rope->id());
     }
