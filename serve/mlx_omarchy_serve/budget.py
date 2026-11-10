@@ -56,7 +56,9 @@ import json
 import mlx_omarchy_paths
 import os
 import shutil
+import signal
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -710,3 +712,19 @@ def watch_parent_fd(fd: int, on_eof) -> None:
     except OSError:
         pass
     on_eof()
+
+
+def watch_parent_from_env() -> bool:
+    """Start the lifetime watchdog when the manager passed a lifetime fd.
+    When the pipe closes the worker SIGTERMs itself, so the manager's death
+    never leaves an orphan that still holds weights. Returns False for a
+    standalone launch (no fd), where nothing is watched."""
+    raw = os.environ.get(LIFETIME_FD_ENV, "")
+    if not raw.isdigit():
+        return False
+    threading.Thread(
+        target=watch_parent_fd,
+        args=(int(raw), lambda: os.kill(os.getpid(), signal.SIGTERM)),
+        daemon=True,
+    ).start()
+    return True

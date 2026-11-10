@@ -35,7 +35,6 @@ import json
 import os
 import signal
 import sys
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -537,16 +536,9 @@ def serve_main(argv):
     # Managed pair child: stop when the parent manager's lifetime pipe closes
     # (manager exited or died), so workers never outlive their owner.
     budget = _budget_or_none()
-    raw_lifetime = os.environ.get(budget.LIFETIME_FD_ENV, "") if budget is not None else ""
-    if raw_lifetime.isdigit():
-        def _parent_gone():
-            os.kill(os.getpid(), signal.SIGTERM)
-        threading.Thread(
-            target=budget.watch_parent_fd,
-            args=(int(raw_lifetime), _parent_gone),
-            daemon=True,
-        ).start()
-        print("laya: watching parent lifetime fd %s" % raw_lifetime, file=sys.stderr)
+    if budget is not None and budget.watch_parent_from_env():
+        print("laya: watching parent lifetime fd %s" % os.environ[budget.LIFETIME_FD_ENV],
+              file=sys.stderr)
     state = None
     try:
         # the admit -> construct -> bind -> serve span is wrapped so any
