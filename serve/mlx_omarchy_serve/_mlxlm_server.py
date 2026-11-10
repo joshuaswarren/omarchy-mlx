@@ -542,6 +542,22 @@ def install_ids_probe(server_module, emit=None) -> None:
         server_module.stream_generate = stream_probe
 
 
+def start_managed() -> None:
+    """Pair worker under the assistant manager: exit when its lifetime pipe
+    closes (manager died), and claim the reservation before any weight
+    loads. A standalone launch passes neither fd and this does nothing."""
+    try:
+        from . import budget
+    except ImportError:
+        import budget
+    budget.watch_parent_from_env()
+    try:
+        budget.claim_from_env()
+    except budget.BudgetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(3)
+
+
 def main() -> None:
     raw = os.environ.get(LIMIT_ENV, "")
     try:
@@ -552,6 +568,7 @@ def main() -> None:
     if limit <= 0:
         print(f"error: {LIMIT_ENV} must be positive", file=sys.stderr)
         raise SystemExit(3)
+    start_managed()
     try:
         import mlx_lm.server as server_module
     except ImportError as exc:
