@@ -78,6 +78,7 @@ function(omarchy_shader name source)
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
               "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdpa_q_rope_norm.h"
       VERBATIM)
   else()
     add_custom_command(
@@ -87,6 +88,7 @@ function(omarchy_shader name source)
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
               "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdpa_q_rope_norm.h"
       VERBATIM)
   endif()
   add_custom_command(
@@ -459,6 +461,8 @@ omarchy_shader(sdpa_decode_split_p1v_g2 shaders/sdpa_decode_split_p1v.comp -DSPL
 omarchy_shader(sdpa_decode_split_p1v_g4 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4)
 omarchy_shader(sdpa_decode_split_p1v_g8 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=8)
 omarchy_shader(sdpa_decode_split_p2 shaders/sdpa_decode_split_p2.comp)
+omarchy_shader(sdpa_decode_split_p1_rope_g4 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=4 -DQ_ROPE_NORM)
+omarchy_shader(sdpa_decode_split_p1v_rope_g4 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DQ_ROPE_NORM)
 omarchy_shader(sdpa_decode_split_p1_hd256_g1 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=1 -DHD=256)
 omarchy_shader(sdpa_decode_split_p1_hd256_g2 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=2 -DHD=256)
 omarchy_shader(sdpa_decode_split_p1_hd256_g4 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=4 -DHD=256)

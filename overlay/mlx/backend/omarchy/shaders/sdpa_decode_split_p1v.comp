@@ -24,6 +24,9 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#ifdef Q_ROPE_NORM
+#extension GL_GOOGLE_include_directive : require
+#endif
 
 #ifndef SPLIT_R
 #define SPLIT_R 4
@@ -82,6 +85,10 @@ float bf16_load(uint16_t bits) {
   return uintBitsToFloat(uint(bits) << 16u);
 }
 
+#ifdef Q_ROPE_NORM
+#include "sdpa_q_rope_norm.h"
+#endif
+
 void main() {
   uint t = gl_LocalInvocationID.x;
   uint kv_head = gl_WorkGroupID.x;
@@ -90,11 +97,18 @@ void main() {
   uint nblocks = (k_len + BK - 1u) / BK;
   uint sg = gl_SubgroupID;
 
+#ifdef Q_ROPE_NORM
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    s_q[r * D + t] = params.alpha * q_rope_norm_element(head, t);
+  }
+#else
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
     s_q[r * D + t] = params.alpha * bf16_load(
         query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
   }
+#endif
   barrier();
 
   uint key = block * BK + t;

@@ -1111,6 +1111,9 @@ enum class ComputeKernel : uint16_t {
   GatedDeltaDecodePfWideStateBF16,
   GatedDeltaDecodePfComposedStateBF16,
   GatedDeltaDecodePfComposedGqaStateBF16,
+  // Split-K pass 1 with the q RMSNorm + rotary embedding folded into the q load (-DQ_ROPE_NORM, shaders/sdpa_q_rope_norm.h): plain and value-phase variants, four query heads per key-value head, head width 128.
+  SdpaDecodeSplitP1RopeR4BF16Hd128,
+  SdpaDecodeSplitP1VRopeR4BF16Hd128,
   Count,
 };
 
