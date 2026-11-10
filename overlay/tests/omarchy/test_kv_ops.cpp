@@ -272,8 +272,30 @@ TEST_CASE("producer-direct KV write is bit-exact against the merged pair") {
         vadd});
   omarchy::get_command_encoder(stream).synchronize();
 
+  // What the caches' storage reveals about a run: whether each updated
+  // cache reused its input cache's buffer, and how many buffer copies
+  // ran.
+  struct RunFacts {
+    bool keys_in_place{false};
+    bool values_in_place{false};
+    uint64_t buffer_copies{0};
+  } run;
+  // Extra consumer of the pre-update keys cache: 0 none; 1 a non-view
+  // (AsType); 2 the same behind a Slice view that covers the append row.
+  int pre_probe_mode = 0;
+  std::optional<array> pre_probe;
   std::optional<array> extra_probe;
-  auto build_and_eval = [&](int chain) {
+  // Without cache arguments the graph updates the test's own caches, so
+  // it is never their last holder. A caller that passes fresh caches
+  // leaves the SliceUpdate edge as the only holder once the lambda drops
+  // its own handles.
+  auto build_and_eval = [&](int chain,
+                            std::optional<array> keys_arg = std::nullopt,
+                            std::optional<array> values_arg = std::nullopt) {
+    array keys_in = keys_arg ? std::move(*keys_arg) : keys_cache;
+    array values_in = values_arg ? std::move(*values_arg) : values_cache;
+    keys_arg.reset();
+    values_arg.reset();
     array kproj = quantized_matmul(
         x,
         kw,
@@ -304,20 +326,41 @@ TEST_CASE("producer-direct KV write is bit-exact against the merged pair") {
     array krot =
         fast::rope(krow, 4, false, 10000.0f, 1.0f, 3, std::nullopt, stream);
     array updated_keys = slice_update(
-        keys_cache, krot, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
+        keys_in, krot, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
     array updated_values = slice_update(
-        values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
+        values_in, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
+    pre_probe.reset();
+    if (pre_probe_mode == 1) {
+      pre_probe = astype(keys_in, float32, stream);
+    } else if (pre_probe_mode == 2) {
+      pre_probe = astype(
+          slice(keys_in, Shape{0, 0, 0, 0}, Shape{1, 2, 6, 4}, stream),
+          float32,
+          stream);
+    }
+    const void* keys_before = keys_in.data<void>();
+    const void* values_before = values_in.data<void>();
+    keys_in = array(0.0f);
+    values_in = array(0.0f);
     std::vector<array> outputs = {updated_keys, updated_values};
     extra_probe.reset();
     if (chain == 2) {
       extra_probe = astype(vrow, float32, stream);
       outputs.push_back(*extra_probe);
     }
+    if (pre_probe) {
+      outputs.push_back(*pre_probe);
+    }
     uint64_t before = omarchy::trace::counters().vk_compute_dispatches.load();
+    uint64_t copies_before = omarchy::trace::counters().vk_buffer_copies.load();
     eval(outputs);
     omarchy::get_command_encoder(stream).synchronize();
     uint64_t dispatches =
         omarchy::trace::counters().vk_compute_dispatches.load() - before;
+    run.buffer_copies =
+        omarchy::trace::counters().vk_buffer_copies.load() - copies_before;
+    run.keys_in_place = updated_keys.data<void>() == keys_before;
+    run.values_in_place = updated_values.data<void>() == values_before;
     return std::make_tuple(
         std::move(updated_keys), std::move(updated_values), dispatches);
   };
@@ -402,6 +445,63 @@ TEST_CASE("producer-direct KV write is bit-exact against the merged pair") {
   REQUIRE_EQ(probe_on, probe_off);
   CHECK_EQ(pdispatches_off, pdispatches_on);
   check_isolation(pkeys_on, pvalues_on);
+
+  // In place: a cache whose only holder is the SliceUpdate (the decode
+  // loop's shape, where the cache handle is replaced by the update's
+  // output) takes the new rows in its own buffer, so the full-cache copy
+  // disappears. Any other holder keeps the copy.
+  auto fresh_cache = [&] {
+    array cache =
+        astype(array(base.data(), {1, 2, 8, 4}, float32), float16, stream);
+    cache.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    return cache;
+  };
+  setenv("MLX_OMARCHY_KV_DIRECT", "1", 1);
+  auto [hkeys, hvalues, hdispatches] = build_and_eval(0);
+  CHECK_FALSE(run.keys_in_place);
+  CHECK_FALSE(run.values_in_place);
+  const uint64_t held_copies = run.buffer_copies;
+  auto [ikeys, ivalues, idispatches] =
+      build_and_eval(0, fresh_cache(), fresh_cache());
+  CHECK(run.keys_in_place);
+  CHECK(run.values_in_place);
+  CHECK_EQ(held_copies - run.buffer_copies, 2);
+  CHECK_EQ(hdispatches, idispatches);
+  REQUIRE_EQ(bit_pattern(ikeys), bit_pattern(hkeys));
+  REQUIRE_EQ(bit_pattern(ivalues), bit_pattern(hvalues));
+  check_isolation(ikeys, ivalues);
+
+  // A second reader of the pre-update keys cache (a non-view consumer,
+  // then a view over rows the update overwrites) must see the old rows:
+  // the keys update stays a copy, and the untouched values cache still
+  // goes in place.
+  for (int mode : {1, 2}) {
+    pre_probe_mode = mode;
+    auto [rkeys, rvalues, rdispatches] = build_and_eval(0);
+    auto reference_probe = bit_pattern32(*pre_probe);
+    auto [skeys, svalues, sdispatches] =
+        build_and_eval(0, fresh_cache(), fresh_cache());
+    CHECK_FALSE(run.keys_in_place);
+    CHECK(run.values_in_place);
+    CHECK_EQ(bit_pattern32(*pre_probe), reference_probe);
+    REQUIRE_EQ(bit_pattern(skeys), bit_pattern(rkeys));
+    REQUIRE_EQ(bit_pattern(svalues), bit_pattern(rvalues));
+    check_isolation(skeys, svalues);
+  }
+  pre_probe_mode = 0;
+
+  // MLX_OMARCHY_KV_INPLACE=0 forces the copy on an exclusive cache.
+  setenv("MLX_OMARCHY_KV_INPLACE", "0", 1);
+  auto [fkeys, fvalues, fdispatches] =
+      build_and_eval(0, fresh_cache(), fresh_cache());
+  CHECK_FALSE(run.keys_in_place);
+  CHECK_FALSE(run.values_in_place);
+  CHECK_EQ(run.buffer_copies, held_copies);
+  REQUIRE_EQ(bit_pattern(fkeys), bit_pattern(hkeys));
+  REQUIRE_EQ(bit_pattern(fvalues), bit_pattern(hvalues));
+  unsetenv("MLX_OMARCHY_KV_INPLACE");
+  unsetenv("MLX_OMARCHY_KV_DIRECT");
 }
 
 TEST_CASE("SliceUpdate row window keeps surrounding data") {
