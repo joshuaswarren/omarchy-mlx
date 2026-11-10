@@ -142,10 +142,10 @@ struct KvDirectWindow {
   // decode only.
   uint32_t row_gap{0};
   uint32_t head_dim{0};
-  // True when the planner proved |base| has no other consumer in the
-  // tape: the producer then writes the new rows straight into |base|'s
-  // buffer (|node| shares that storage) and the fresh cache copy
-  // disappears entirely.
+  // True when |base| was donatable at plan time (the SliceUpdate held the
+  // last handle to it and its storage): the producer then writes the new
+  // rows straight into |base|'s buffer (|node| shares that storage) and
+  // the fresh cache copy disappears entirely.
   bool in_place{false};
 };
 
@@ -224,6 +224,11 @@ void abort_kv_direct();
 // before it will fire, and the reshaped sum view aliases the window
 // once it is set.
 void commit_values_kv_write(const array& sum_node);
+// Gives the window's SliceUpdate output its storage before its
+// producer's row stores: |base|'s own buffer when the window is in place,
+// otherwise a fresh copy of |base| enqueued ahead of the stores. Pins
+// both buffers to the open batch.
+void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream);
 
 // MLX_OMARCHY_KV_DIRECT=0 keeps both cache writes on the merged pair
 // dispatch (the MLX_OMARCHY_FUSED_CHAIN gate also covers it).
