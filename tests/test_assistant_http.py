@@ -172,7 +172,7 @@ class HttpTests(unittest.TestCase):
             def synthesize_chunks(self, text, cancel):
                 yield SimpleNamespace(sample_rate=24000, data=b'\x01\x00\x02\x00')
 
-            def close(self):
+            def shutdown(self):
                 pass
 
         from unittest.mock import Mock

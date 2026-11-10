@@ -350,6 +350,8 @@ class AssistantServer(ThreadingHTTPServer):
     def server_close(self):
         self.audio_cancel.set()
         self._prewarm_cancel.set()
+        if self._synthesis:
+            self._synthesis.shutdown()
         if self.transfer_thread and self.transfer_thread.is_alive():
             self.transfer_thread.join(timeout=10)
             if self.transfer_thread.is_alive():
@@ -362,8 +364,6 @@ class AssistantServer(ThreadingHTTPServer):
                 raise RuntimeError("Model setup has not stopped; its process must remain owned")
         if self._recognition:
             self._recognition.close()
-        if self._synthesis:
-            self._synthesis.close()
         if self._coordinator:
             self._coordinator.close()
         elif self._manager:

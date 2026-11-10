@@ -36,6 +36,7 @@ import json
 import multiprocessing
 import os
 import re
+import signal
 import sys
 import tempfile
 import threading
@@ -59,6 +60,8 @@ _RECEIPT_NAME = "manifest.json"
 _QUALIFICATION_NAME = "qualification.json"
 _URL_TIMEOUT = 120
 _GRACEFUL_JOIN = 1.0
+SHUTDOWN_SEGMENT_GRACE = 2.0
+SHUTDOWN_TERM_TIMEOUT = 1.0
 
 VOICE_PACK = {
     "id": "qwen3-tts-0.6b-customvoice-4bit",
@@ -799,8 +802,21 @@ def _worker_main(conn, assets_dir: str) -> None:
     rate = 24000
     current_id = None
     cancelled = False
+    stopping = False
+    busy = False
+
+    def on_stop_signal(_signum, _frame):
+        # A stop script signals the whole process group. Finish the chunk in
+        # hand and leave; never die in the middle of a GPU job.
+        nonlocal cancelled, stopping
+        cancelled = stopping = True
+        if not busy:
+            raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, on_stop_signal)
+    signal.signal(signal.SIGINT, on_stop_signal)
     try:
-        while True:
+        while not stopping:
             try:
                 msg = conn.recv()
             except (EOFError, OSError):
@@ -820,7 +836,8 @@ def _worker_main(conn, assets_dir: str) -> None:
                 continue
             req_id = msg["id"]
             current_id = req_id
-            cancelled = False
+            cancelled = stopping
+            busy = True
             try:
                 if pack is None:
                     pack = VOICE_ENGINES[0]
@@ -901,6 +918,7 @@ def _worker_main(conn, assets_dir: str) -> None:
                     break
             finally:
                 current_id = None
+                busy = False
     finally:
         try:
             conn.close()
@@ -908,14 +926,22 @@ def _worker_main(conn, assets_dir: str) -> None:
             pass
 
 
-def _stop_process(child) -> bool:
+def _stop_process(child, timeout: float = WORKER_STOP_TIMEOUT) -> bool:
     if child.is_alive():
         child.terminate()
-        child.join(WORKER_STOP_TIMEOUT)
+        child.join(timeout)
     if child.is_alive():
         child.kill()
-        child.join(WORKER_STOP_TIMEOUT)
+        child.join(timeout)
     return not child.is_alive() and child.exitcode is not None
+
+
+def kill_workers() -> None:
+    """Last resort at process exit: SIGKILL every live worker, no waiting."""
+    with _workers_lock:
+        pending = list(_live_workers)
+    for worker in pending:
+        worker.process.kill()
 
 
 def _stop_all_workers() -> None:
@@ -945,14 +971,15 @@ class _WorkerHandle:
         with _workers_lock:
             _live_workers.add(self)
 
-    def stop(self) -> bool:
+    def stop(self, grace: float = _GRACEFUL_JOIN,
+             timeout: float = WORKER_STOP_TIMEOUT) -> bool:
         if self.process.is_alive():
             try:
                 self.conn.send({"type": "shutdown"})
             except Exception:
                 pass
-            self.process.join(_GRACEFUL_JOIN)
-        dead = (_stop_process(self.process) if self.process.is_alive()
+            self.process.join(grace)
+        dead = (_stop_process(self.process, timeout) if self.process.is_alive()
                 else self.process.exitcode is not None)
         try:
             self.conn.close()
@@ -984,6 +1011,7 @@ class Synthesis:
         self._sample_rate = None
         self._last_error: str | None = None
         self._prime_done = False
+        self._shutting_down = threading.Event()
 
     def assets_dir(self) -> Path:
         return self.home / "voice" / VOICE_ENGINES[0]["id"]
@@ -1431,7 +1459,7 @@ class Synthesis:
             raise ValueError("synthesis requires non-empty text")
         if len(text) > MAX_TEXT_CHARS:
             raise ValueError(f"text exceeds {MAX_TEXT_CHARS} characters")
-        if cancel.is_set():
+        if self._cancelled(cancel):
             raise SynthesisCancelled("cancelled before synthesis started")
         self._guard()
         self._acquire_slot()
@@ -1440,13 +1468,13 @@ class Synthesis:
         try:
             queue_deadline = time.monotonic() + GENERATION_DEADLINE_SECONDS
             while not self._worker_lock.acquire(timeout=0.2):
-                if cancel.is_set():
+                if self._cancelled(cancel):
                     raise SynthesisCancelled("cancelled while queued")
                 if time.monotonic() > queue_deadline:
                     raise VoiceBusyError(
                         "voice worker busy beyond the request deadline")
             locked = True
-            if cancel.is_set():
+            if self._cancelled(cancel):
                 raise SynthesisCancelled("cancelled while queued")
             worker = self._ensure_worker(self._current_engine()["id"])
             self._req_counter += 1
@@ -1466,8 +1494,11 @@ class Synthesis:
                 if cancel.is_set():
                     self._cancel_request(worker, req_id)
                     raise SynthesisCancelled("cancelled during synthesis")
-                msg = (None if not worker.conn.poll(timeout)
-                       else self._recv_or_exit(worker))
+                try:
+                    msg = (None if not worker.conn.poll(timeout)
+                           else self._recv_or_exit(worker))
+                except OSError:
+                    msg = {"type": "worker_exit"}
                 if msg is None:
                     self._reset_worker()
                     raise VoiceError(
@@ -1516,11 +1547,14 @@ class Synthesis:
                     self._worker_lock.release()
             self._release_slot()
 
+    def _cancelled(self, cancel: threading.Event) -> bool:
+        return cancel.is_set() or self._shutting_down.is_set()
+
     @staticmethod
     def _recv_or_exit(worker: _WorkerHandle):
         try:
             return worker.conn.recv()
-        except EOFError:
+        except (EOFError, OSError):
             return {"type": "worker_exit"}
 
     def _cancel_request(self, worker: _WorkerHandle, req_id: int) -> None:
@@ -1595,3 +1629,15 @@ class Synthesis:
             if not worker.stop():
                 raise VoiceError("voice worker could not be confirmed dead")
         self._last_error = None
+
+    def shutdown(self) -> None:
+        """Process exit. Refuse queued and new requests, let the segment in
+        flight finish for a short bounded time, then stop every worker.
+        Never waits on the worker lock, which the segment in flight holds."""
+        self._shutting_down.set()
+        active, self._worker = self._worker, None
+        residents = list(self._workers.values())
+        self._workers.clear()
+        for worker in dict.fromkeys(([active] if active else []) + residents):
+            if not worker.stop(SHUTDOWN_SEGMENT_GRACE, SHUTDOWN_TERM_TIMEOUT):
+                raise VoiceError("voice worker could not be confirmed dead")
