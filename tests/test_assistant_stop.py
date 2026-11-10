@@ -66,13 +66,26 @@ def process_gone(pid):
     return not state or state.startswith("Z")
 
 
+def kill_group(pid):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 class ServerSignalTests(unittest.TestCase):
     def run_stop(self, mode, signals):
         with tempfile.TemporaryDirectory() as home:
+            # The ready line is print() without flush, so a pipe holds it back
+            # unless output is unbuffered. A group kill also ends the forked
+            # stub worker, which holds the pipe open after the server dies.
             proc = subprocess.Popen(
                 [sys.executable, "-c", HARNESS, str(SERVE), mode, home],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            guard = threading.Timer(30, proc.kill)
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                start_new_session=True)
+            self.addCleanup(kill_group, proc.pid)
+            guard = threading.Timer(30, kill_group, (proc.pid,))
             guard.start()
             self.addCleanup(guard.cancel)
             worker_pid = None
