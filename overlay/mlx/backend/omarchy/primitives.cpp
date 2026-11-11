@@ -91,8 +91,10 @@ namespace {
 //   at <= 64 rows;
 // - width 2560 (Qwen3-4B hidden size, decode rms_norm 19.4 -> 10.3 us per op
 //   in a bf16 microbench) wins on G13C with the same 64-row cutoff copied from
-//   2048. It is on by default only on G13C; every other chip, G13G included,
-//   keeps the deployed kernel until its paired A/B lands;
+//   2048. It is on by default on G13C and on G14C (a 14-inch M2 Max: Qwen3-4B
+//   decode at 519 tokens, 14.37 -> 13.94 ms/token, 3 paired ABBA blocks, ids
+//   identical); every other chip, G13G included, keeps the deployed kernel
+//   until its paired A/B lands;
 //   MLX_OMARCHY_NORM_APPLE_2560=1 forces it on and =0 forces it off on any chip.
 // Every norm selection (direct, scaled, gated, fused rope+norm, GDN
 // epilogue) shares this one predicate, so the fused kernel and the
@@ -159,7 +161,9 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_2560");
   }
-  return device.capabilities().device_name.find("G13C") != std::string::npos;
+  const std::string& chip = device.capabilities().device_name;
+  return chip.find("G13C") != std::string::npos ||
+      chip.find("G14C") != std::string::npos;
 }
 
 bool apple_norm_enabled(
