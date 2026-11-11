@@ -30,6 +30,7 @@
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
+#include "mlx/memory.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 
@@ -928,6 +929,7 @@ TEST_CASE("chunked composed causal prefill is bit-identical to the whole pass") 
       {1, 8, 2, 200, 200}, // GQA with a ragged tail chunk
       {1, 8, 2, 128, 320}, // cached prefix: causal offset 192
       {2, 8, 2, 200, 200}, // GQA, batch 2, ragged tail chunk
+      {1, 8, 2, 512, 576}, // eight chunks: each score set is reused four times
   };
   for (const auto& c : cases) {
     array q = make_bf16({c.batch, c.heads, c.length_q, kHd}, 401 + c.heads, stream);
@@ -988,4 +990,70 @@ TEST_CASE("chunked composed causal prefill is bit-identical to the whole pass") 
         whole.size(),
         " elements differ");
   }
+}
+
+TEST_CASE("chunked causal prefill pins two score sets, not a pair per chunk") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& chunk_caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(chunk_caps.cooperative_matrix_f32_8 && chunk_caps.subgroup_size == 32u)) {
+    return;  // the chunked route lives in the bf16-direct coopmat composition
+  }
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  set_flash_enabled(false);
+  struct EnvRestore {
+    ~EnvRestore() {
+      unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+      set_flash_enabled(true);
+    }
+  } restore;
+
+  // The encoder keeps every array handed to add_temporary alive until its
+  // batch completes. When each chunk made its own score and prob matrices, a
+  // layer pinned all of them at once: at K = 61440 on 32 heads that was
+  // 30 GiB. 16 chunks of 64 rows pin 64 MiB that way and about 15 MiB with
+  // two reused sets (8 MiB of sets, 2 MiB output, 1 MiB each for the f32 K
+  // and V copies, 2 MiB of PV results).
+  const int batch = 1;
+  const int heads = 8;
+  const int length = 1024;
+  const int chunk_rows = 64;
+  array q = make_bf16({batch, heads, length, kHd}, 501, stream);
+  array k = make_bf16({batch, 2, length, kHd}, 502, stream);
+  array v = make_bf16({batch, 2, length, kHd}, 503, stream);
+  const uint64_t chunk_denom =
+      static_cast<uint64_t>(batch) * heads * length * sizeof(float);
+  setenv(
+      "MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES",
+      std::to_string(chunk_denom * chunk_rows).c_str(),
+      1);
+  {
+    // One-time allocations (pipelines, staging) stay out of the measure.
+    array warm = sdpa_causal(q, k, v, stream);
+    warm.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+  }
+  clear_cache();
+  const size_t before = get_active_memory();
+  reset_peak_memory();
+  array out = sdpa_causal(q, k, v, stream);
+  out.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  const size_t peak = get_peak_memory();
+  const uint64_t held = peak > before ? peak - before : 0;
+  const uint64_t pair_bytes = 2ull * batch * heads * chunk_rows * length *
+      sizeof(float);
+  const uint64_t every_pair = (length / chunk_rows) * pair_bytes;
+  std::cout << "[chunk-pin] held_bytes=" << held
+            << " every_pair_bytes=" << every_pair << std::endl;
+  CHECK_MESSAGE(held > 0, "the allocator reported no allocation for the call");
+  CHECK_MESSAGE(
+      held < every_pair / 2,
+      "the layer held ",
+      held,
+      " bytes; one score and prob pair per chunk would hold ",
+      every_pair);
 }
