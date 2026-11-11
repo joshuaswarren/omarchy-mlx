@@ -200,7 +200,9 @@ above and the kernel limit, rounded down to 1 MiB. A kernel that sets the
 limit above the formula leaves the formula unchanged. A kernel without the
 file, and a host whose limit is the stock 50% (16 GB machines), keep the
 stock heap byte-for-byte. An explicit `HK_SYSMEM` or a drirc value still wins
-even when it is above the kernel limit.
+even when it is above the kernel limit. In that case MLX prints one
+`[omarchy] warning:` line at device creation. It names the heap and the kernel
+limit, so the allocation failure that follows has a stated cause.
 
 Serving placement (`MLX_OMARCHY_UCLAMP_MIN`, default 1024). The serve
 raises `uclamp_min` on its startup thread. It uses an unprivileged

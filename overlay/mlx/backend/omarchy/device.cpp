@@ -223,6 +223,20 @@ void apply_default_hk_sysmem() {
   ::setenv("HK_SYSMEM", value, 0);
 }
 
+// A heap above the kernel client limit can only come from an explicit
+// HK_SYSMEM or drirc heap_memory_percent: both win over the default cap.
+// Say so once, so the allocation failure that follows has a stated cause.
+void note_heap_above_kernel_limit(size_t heap_bytes) {
+  static std::once_flag once;
+  std::call_once(once, [&] {
+    const std::string message =
+        kernel_limit_heap_warning(heap_bytes, kernel_client_limit_bytes());
+    if (!message.empty()) {
+      std::fprintf(stderr, "[omarchy] warning: %s\n", message.c_str());
+    }
+  });
+}
+
 HoneykrispIcdSelection configure_honeykrisp_icd() {
   // Runs before Vulkan loads: raise the Honeykrisp heap for this MLX
   // process (HK_SYSMEM) unless an explicit HK_SYSMEM or a drirc
@@ -801,6 +815,7 @@ bool Runtime::init_impl() {
     if (info.support.driver_id == kMesaHoneykrispDriverId) {
       require_expected_honeykrisp_sha(expected_sha, info.caps.driver_sha);
     }
+    note_heap_above_kernel_limit(info.caps.total_memory);
     note_stock_driver_identity(
         info.caps.icd_source,
         info.caps.driver_info,
@@ -993,6 +1008,21 @@ std::optional<uint64_t> kernel_client_limit_bytes() {
     }
   }
   return std::nullopt;
+}
+
+std::string kernel_limit_heap_warning(
+    uint64_t heap_bytes,
+    std::optional<uint64_t> kernel_client_limit) {
+  if (!kernel_client_limit || heap_bytes == 0 ||
+      heap_bytes <= *kernel_client_limit) {
+    return {};
+  }
+  return "the GPU heap is " + std::to_string(heap_bytes) +
+      " bytes, above the " + std::to_string(*kernel_client_limit) +
+      " bytes the kernel lets one process hold (client_limit in gpu_memory)."
+      " An allocation past that limit fails with"
+      " VK_ERROR_OUT_OF_DEVICE_MEMORY. Lower HK_SYSMEM or"
+      " heap_memory_percent to the limit, or raise the kernel limit.";
 }
 
 // Scoped compiled-tape diagnostic state (device.h). Plain atomics: the

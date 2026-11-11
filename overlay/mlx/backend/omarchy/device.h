@@ -525,6 +525,16 @@ std::optional<uint64_t> cap_hk_sysmem_to_kernel_limit(
     uint64_t mem_total_bytes,
     std::optional<uint64_t> kernel_client_limit);
 
+// One line, without prefix or newline, saying that |heap_bytes| is above
+// |kernel_client_limit| and naming both numbers. Empty when the heap fits,
+// when the kernel sets no limit or when the heap is unknown. An explicit
+// HK_SYSMEM or drirc heap_memory_percent wins over the cap above, so this
+// line is what explains the allocation failure that follows. Pure; the
+// runtime prints it once per process at device creation.
+std::string kernel_limit_heap_warning(
+    uint64_t heap_bytes,
+    std::optional<uint64_t> kernel_client_limit);
+
 // GatedDeltaUpdate decode on the f32 A_log raw route (Qwen3.5-9B) with Hk != Hv: the parts whose
 // default is the untiled prefetch kernel with native GQA (ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa),
 // because that route was measured bit-equal to the tiled one and faster on them (receipts/2026-10-18-gdn-pf-gqa).
