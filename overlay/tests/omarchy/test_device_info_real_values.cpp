@@ -317,6 +317,22 @@ TEST_CASE("kernel_client_limit_bytes is absent or a usable limit below RAM") {
   }
 }
 
+TEST_CASE("kernel_limit_heap_warning names both numbers when the heap is above the limit") {
+  namespace omarchy = mlx::core::omarchy;
+  // An explicit 60 GiB heap on the 14-inch M2 Max, whose kernel client_limit is 50601156608.
+  const std::string message =
+      omarchy::kernel_limit_heap_warning(64424509440ull, 50601156608ull);
+  CHECK(message.find("64424509440") != std::string::npos);
+  CHECK(message.find("50601156608") != std::string::npos);
+  CHECK(message.find('\n') == std::string::npos);
+
+  // A heap that fits, a heap equal to the limit, no kernel limit and an unknown heap stay silent.
+  CHECK(omarchy::kernel_limit_heap_warning(50601132032ull, 50601156608ull).empty());
+  CHECK(omarchy::kernel_limit_heap_warning(50601156608ull, 50601156608ull).empty());
+  CHECK(omarchy::kernel_limit_heap_warning(64424509440ull, std::nullopt).empty());
+  CHECK(omarchy::kernel_limit_heap_warning(0, 50601156608ull).empty());
+}
+
 TEST_CASE("default allocator limits never sit below what the heap can hold") {
   namespace omarchy = mlx::core::omarchy;
   constexpr size_t kGiB = size_t{1} << 30;
