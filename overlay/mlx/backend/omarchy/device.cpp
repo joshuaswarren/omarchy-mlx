@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -208,10 +209,11 @@ void apply_default_hk_sysmem() {
   if (drirc_names_heap_memory_percent()) {
     return; // drirc-configured heap_memory_percent wins
   }
-  const std::optional<uint64_t> heap =
-      default_hk_sysmem_bytes(mem_total_bytes());
+  const uint64_t total = mem_total_bytes();
+  const std::optional<uint64_t> heap = cap_hk_sysmem_to_kernel_limit(
+      default_hk_sysmem_bytes(total), total, kernel_client_limit_bytes());
   if (!heap) {
-    return; // small host: mesa's 50% default already covers the formula
+    return; // mesa's 50% default already covers the formula and the kernel
   }
   char value[32];
   std::snprintf(
@@ -914,6 +916,83 @@ std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes) {
     return std::nullopt;
   }
   return std::min(raised, kVaWindowClamp) & ~((1ull << 20) - 1);
+}
+
+// The gpu_memory file is one `<key> <decimal>` pair per line. Only the exact
+// key client_limit counts: the device-wide `limit` line is a different cap.
+std::optional<uint64_t> parse_kernel_client_limit(std::string_view text) {
+  constexpr std::string_view kKey = "client_limit ";
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find('\n', pos);
+    if (end == std::string_view::npos) {
+      end = text.size();
+    }
+    const std::string_view line = text.substr(pos, end - pos);
+    pos = end + 1;
+    if (line.substr(0, kKey.size()) != kKey) {
+      continue;
+    }
+    const std::string_view digits = line.substr(kKey.size());
+    uint64_t value = 0;
+    const char* last = digits.data() + digits.size();
+    const auto [stop, error] = std::from_chars(digits.data(), last, value);
+    if (error != std::errc{} || stop != last || value == 0) {
+      return std::nullopt; // malformed, or 0: the kernel sets no client limit
+    }
+    return value;
+  }
+  return std::nullopt;
+}
+
+// The kernel refuses a GPU buffer once a client holds its per-client limit
+// of memory (the lab kernel's client_mem_limit_pct, 50% of RAM by default),
+// so a heap above it promises memory that vkAllocateMemory cannot deliver.
+// The result is MiB aligned like mesa's heap sizes. When nobody chose a heap,
+// mesa takes MemTotal/2 rounded down to 1 MiB: a limit at or above that
+// leaves the stock heap alone, which keeps 16 GB-class hosts byte-for-byte
+// unchanged.
+std::optional<uint64_t> cap_hk_sysmem_to_kernel_limit(
+    std::optional<uint64_t> heap,
+    uint64_t mem_total_bytes,
+    std::optional<uint64_t> kernel_client_limit) {
+  constexpr uint64_t kMiBMask = ~((1ull << 20) - 1);
+  if (!kernel_client_limit) {
+    return heap;
+  }
+  const uint64_t cap = *kernel_client_limit & kMiBMask;
+  const uint64_t want = heap ? *heap : (mem_total_bytes / 2) & kMiBMask;
+  if (cap == 0 || want == 0 || cap >= want) {
+    return heap;
+  }
+  return cap;
+}
+
+// Kernels without the gpu_memory file (other drivers, other GPUs) report no
+// limit, so nothing changes there. The file sits next to agx_stats on the
+// GPU's platform device, which the render node's device link points to.
+std::optional<uint64_t> kernel_client_limit_bytes() {
+  std::vector<std::string> nodes;
+  std::error_code error;
+  for (std::filesystem::directory_iterator it("/sys/class/drm", error), end;
+       !error && it != end; it.increment(error)) {
+    if (it->path().filename().string().rfind("renderD", 0) == 0) {
+      nodes.push_back(it->path().string());
+    }
+  }
+  std::sort(nodes.begin(), nodes.end());
+  for (const std::string& node : nodes) {
+    std::ifstream in(node + "/device/gpu_memory");
+    if (!in) {
+      continue;
+    }
+    const std::string text((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    if (const auto limit = parse_kernel_client_limit(text)) {
+      return limit;
+    }
+  }
+  return std::nullopt;
 }
 
 // Scoped compiled-tape diagnostic state (device.h). Plain atomics: the
