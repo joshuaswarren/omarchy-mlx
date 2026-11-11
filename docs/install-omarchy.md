@@ -174,10 +174,12 @@ past it. On 32 GB+ hosts this strands half the RAM. On the 62 GB M1 Max,
 the stock heap (31.18 GiB) rejects Qwen3-32B-8bit's 34.8 GB of weights
 outright. MLX processes therefore set the heap themselves before Vulkan
 loads. The formula is `max(50% of MemTotal, MemTotal − 16 GiB)`. Round the
-result down to 1 MiB. Clamp it to 60 GiB. The clamp follows the per-process GPU
+result down to 1 MiB. Clamp it to 62 GiB. The clamp follows the per-process GPU
 virtual-address window (~64 GiB). The 2026-10-05 heap-budget probe
 committed 63 GiB before the 64th allocation failed to map, so a larger heap
-cannot be used. The default MLX memory limit and gc ceiling both equal
+cannot be used. On the 14-inch M2 Max (96 GB) the 62 GiB heap loads
+gpt-oss-120b-MXFP4-Q4 (58.05 GiB of weights) in 16.9 s and decodes 16 tokens
+in 7.22 s (2026-11-11). The default MLX memory limit and gc ceiling both equal
 the heap, whatever its source (the default above, `HK_SYSMEM` or a drirc
 value), so a model whose resident weights and working set stay under the
 heap does not have its buffer cache cleared or trimmed on every
@@ -194,7 +196,7 @@ holds its per-client limit. The `client_limit` line of the `gpu_memory` sysfs
 file reports it, and MLX reads it from `/sys/class/drm/renderD*/device/gpu_memory`
 before Vulkan loads. A heap above that limit promises memory the kernel does
 not give: on the 14-inch M2 Max (96 GiB) with the kernel default of 50% of
-RAM the limit is 47.1 GiB, and the 60 GiB heap above made the allocation
+RAM the limit is 47.1 GiB, and a heap above it made the allocation
 fail near 47 GiB. The default heap is therefore the smaller of the formula
 above and the kernel limit, rounded down to 1 MiB. A kernel that sets the
 limit above the formula leaves the formula unchanged. A kernel without the

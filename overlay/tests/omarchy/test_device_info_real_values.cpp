@@ -194,7 +194,7 @@ TEST_CASE("default_hk_sysmem_bytes keeps the stock heap on small hosts") {
   CHECK_FALSE(omarchy::default_hk_sysmem_bytes(gib(32)).has_value());
 }
 
-TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
+TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 62") {
   namespace omarchy = mlx::core::omarchy;
   constexpr uint64_t kGiB = 1ull << 30;
   const auto gib = [](double v) {
@@ -207,9 +207,11 @@ TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
   CHECK(omarchy::default_hk_sysmem_bytes(gib(64)) == gib(48));
   // Per-process user VA window is ~64 GiB (agx_device.c; HeapBudget's
   // probe committed 63 GiB, the 64th allocation failed to map), so the
-  // heap never promises more than the 60 GiB clamp: 94/96 GiB -> 60.
-  CHECK(omarchy::default_hk_sysmem_bytes(gib(94)) == gib(60));
-  CHECK(omarchy::default_hk_sysmem_bytes(gib(96)) == gib(60));
+  // heap never promises more than the 62 GiB clamp: 94/96 GiB -> 62. A
+  // 77 GiB host is still below it (77 - 16 = 61).
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(77)) == gib(61));
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(94)) == gib(62));
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(96)) == gib(62));
   const auto raised_62 = omarchy::default_hk_sysmem_bytes(gib(62));
   REQUIRE(raised_62.has_value());
   CHECK(raised_62.value() % (1ull << 20) == 0);
@@ -218,16 +220,16 @@ TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
   CHECK(clamped_96.value() % (1ull << 20) == 0);
 
   // Live host cross-check: whatever /proc/meminfo reports, the result
-  // honors the contract (absent <= 32 GiB; above 50% and at most 60 GiB up
-  // to 120 GiB; exactly the 60 GiB clamp beyond, where 50% is out of reach).
+  // honors the contract (absent <= 32 GiB; above 50% and at most 62 GiB up
+  // to 124 GiB; exactly the 62 GiB clamp beyond, where 50% is out of reach).
   const uint64_t total = read_mem_total_bytes();
   if (total > 0) {
     const auto live = omarchy::default_hk_sysmem_bytes(total);
     if (!live.has_value()) {
       CHECK(total <= gib(32));
     } else {
-      CHECK((live.value() > total / 2 || live.value() == gib(60)));
-      CHECK(live.value() <= gib(60));
+      CHECK((live.value() > total / 2 || live.value() == gib(62)));
+      CHECK(live.value() <= gib(62));
     }
   }
 }
@@ -271,22 +273,22 @@ TEST_CASE("cap_hk_sysmem_to_kernel_limit never promises more than the kernel all
   // 13-inch M1: MemTotal 15843696 kB, stock heap (no HK_SYSMEM).
   const uint64_t m1_total = 15843696ull * 1024;
 
-  // The raised 60 GiB heap drops to the kernel limit that is below it.
-  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, m2_client_50) ==
+  // The raised 62 GiB heap drops to the kernel limit that is below it.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(62 * kGiB, m2_total, m2_client_50) ==
         m2_heap_50);
   // A kernel limit at 75% of RAM is above the heap: nothing to cap.
-  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, m2_total / 100 * 75) ==
-        60 * kGiB);
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(62 * kGiB, m2_total, m2_total / 100 * 75) ==
+        62 * kGiB);
   // Kernel limit equal to the heap: unchanged.
-  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, 60 * kGiB) ==
-        60 * kGiB);
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(62 * kGiB, m2_total, 62 * kGiB) ==
+        62 * kGiB);
   // The result is 1 MiB aligned, like mesa's heap sizes.
   CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(
-            60 * kGiB, m2_total, m2_client_50 + 12345) == m2_heap_50);
+            62 * kGiB, m2_total, m2_client_50 + 12345) == m2_heap_50);
 
   // Kernels without the limit file (no value) leave both forms unchanged.
-  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, std::nullopt) ==
-        60 * kGiB);
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(62 * kGiB, m2_total, std::nullopt) ==
+        62 * kGiB);
   CHECK_FALSE(omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, m1_total, std::nullopt));
 
   // Stock heap (nullopt): mesa uses MemTotal/2 rounded down to 1 MiB. A
@@ -301,7 +303,7 @@ TEST_CASE("cap_hk_sysmem_to_kernel_limit never promises more than the kernel all
 
   // A limit under 1 MiB is not usable as a heap and is ignored. An unknown
   // MemTotal with a stock heap has nothing to compare against.
-  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, 4096) == 60 * kGiB);
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(62 * kGiB, m2_total, 4096) == 62 * kGiB);
   CHECK_FALSE(omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, 0, 4 * kGiB));
 }
 
