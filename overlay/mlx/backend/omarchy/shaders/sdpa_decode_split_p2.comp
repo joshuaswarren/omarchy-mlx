@@ -48,7 +48,10 @@ layout(push_constant) uniform Params {
 #endif
 const uint D = uint(HD);
 const uint DPT = D / 128u;
-const uint BK = 128u;
+#ifndef BK_KEYS
+#define BK_KEYS 128
+#endif
+const uint BK = uint(BK_KEYS);
 
 uint16_t bf16_store(float value) {
   uint bits = floatBitsToUint(value);
