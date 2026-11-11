@@ -208,6 +208,23 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   CHECK(e_pv.max <= e_fused.max + 2.0 * rounding + 1e-6);
   CHECK(e_pv.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
   CHECK(e_pv.max <= 3.0 * rounding + 1e-5);
+  // The 64-key block variant (MLX_OMARCHY_SDPA_SPLIT_BK64) covers group 4 at head width 128 with the value phase on; other shapes keep the 128-key route.
+  const bool bk64_shape = heads == 4 * kv_heads && width == 128;
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_BK64", "1", 1);
+  Run split_bk64 = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_BK64");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+  Errors e_bk64 = error_against(split_bk64.out, ref);
+  if (split_device_ready()) {
+    CHECK(split_bk64.launched == 2);
+  }
+  CHECK(e_bk64.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_bk64.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_bk64.max <= 3.0 * rounding + 1e-5);
+  if (!bk64_shape) {
+    CHECK(split_bk64.out == split_pv.out);
+  }
 }
 
 } // namespace
@@ -350,6 +367,18 @@ TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a ke
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 4096));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 (G13G B1)", 128));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("", 128));
+}
+
+TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512 keys on G14C and off elsewhere") {
+  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M2 Max (G14C B1)") == 512);
+  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 Max (G13C C0)") == 0);
+  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 (G13G B1)") == 0);
+  CHECK(omarchy::sdpa_split_bk64_max_keys("") == 0);
+  CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 320));
+  CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 512));
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 513));
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 512));
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
 }
 
 TEST_CASE("split-K decode SDPA: the value-phase variant falls back to the old pass 1 when V is not 4-aligned") {
