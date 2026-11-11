@@ -16,6 +16,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -24,12 +25,14 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
+#include "mlx/memory.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 
@@ -928,6 +931,7 @@ TEST_CASE("chunked composed causal prefill is bit-identical to the whole pass") 
       {1, 8, 2, 200, 200}, // GQA with a ragged tail chunk
       {1, 8, 2, 128, 320}, // cached prefix: causal offset 192
       {2, 8, 2, 200, 200}, // GQA, batch 2, ragged tail chunk
+      {1, 8, 2, 512, 576}, // eight chunks: each score set is reused four times
   };
   for (const auto& c : cases) {
     array q = make_bf16({c.batch, c.heads, c.length_q, kHd}, 401 + c.heads, stream);
@@ -988,4 +992,79 @@ TEST_CASE("chunked composed causal prefill is bit-identical to the whole pass") 
         whole.size(),
         " elements differ");
   }
+}
+
+TEST_CASE("chunked causal prefill pins two score sets, not a pair per chunk") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& chunk_caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(chunk_caps.cooperative_matrix_f32_8 && chunk_caps.subgroup_size == 32u)) {
+    return;  // the chunked route lives in the bf16-direct coopmat composition
+  }
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  set_flash_enabled(false);
+  struct EnvRestore {
+    ~EnvRestore() {
+      unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+      set_flash_enabled(true);
+    }
+  } restore;
+
+  // The encoder's temporaries hold no reference: a chunk's score, prob and
+  // result arrays are freed at the end of its pass, so the live-byte count
+  // never sees more than one chunk. The allocator parks each freed buffer
+  // in its quarantine until the open batch submits and completes, and then
+  // moves it to the reuse cache. After the layer drains, the cache holds
+  // every distinct buffer the layer allocated, which is what a long prefill
+  // pins in its batch. One pair per chunk makes 16 chunks of 64 rows hold
+  // 64 MiB of score and prob matrices; two reused sets hold 8 MiB.
+  const int batch = 1;
+  const int heads = 8;
+  const int length = 1024;
+  const int chunk_rows = 64;
+  array q = make_bf16({batch, heads, length, kHd}, 501, stream);
+  array k = make_bf16({batch, 2, length, kHd}, 502, stream);
+  array v = make_bf16({batch, 2, length, kHd}, 503, stream);
+  const uint64_t chunk_denom =
+      static_cast<uint64_t>(batch) * heads * length * sizeof(float);
+  setenv(
+      "MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES",
+      std::to_string(chunk_denom * chunk_rows).c_str(),
+      1);
+  {
+    // One-time allocations (pipelines, staging) stay out of the measure.
+    array warm = sdpa_causal(q, k, v, stream);
+    warm.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+  }
+  auto wait_quiet = [] {
+    for (int i = 0; i < 500 && omarchy::allocator().has_quarantined(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE_FALSE(omarchy::allocator().has_quarantined());
+  };
+  wait_quiet();
+  clear_cache();
+  {
+    array out = sdpa_causal(q, k, v, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+  }
+  wait_quiet();
+  const uint64_t distinct = get_cache_memory();
+  const uint64_t pair_bytes = 2ull * batch * heads * chunk_rows * length *
+      sizeof(float);
+  const uint64_t every_pair = (length / chunk_rows) * pair_bytes;
+  std::cout << "[chunk-pin] cached_bytes=" << distinct
+            << " every_pair_bytes=" << every_pair << std::endl;
+  CHECK_MESSAGE(distinct > 0, "the allocator cached no buffer for the call");
+  CHECK_MESSAGE(
+      distinct < every_pair * 3 / 4,
+      "the layer allocated ",
+      distinct,
+      " distinct bytes; one score and prob pair per chunk would allocate ",
+      every_pair);
 }
