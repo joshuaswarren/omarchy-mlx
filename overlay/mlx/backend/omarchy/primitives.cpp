@@ -16824,18 +16824,25 @@ void ScaledDotProductAttention::eval_gpu(
         array keys_t = swapaxes_in_eval(k32, -1, -2);
         encoder.add_temporary(keys_t);
         out.set_data(allocate_omarchy(out.nbytes()));
-        // Chunks alternate between kChunkSets score and prob buffer sets that
-        // live for the whole call. The encoder's hazard tracker barriers a
-        // write over an earlier read, so each reuse is ordered, and a layer
-        // holds two sets instead of every chunk's pair until the batch drains
-        // (K = 61440, 32 heads: 3.75 GiB against 30 GiB). A tail chunk
-        // shorter than a set takes its own buffers.
-        constexpr size_t kChunkSets = 2;
+        // Chunks rotate through score and prob buffer sets that live for the
+        // whole call. The encoder's hazard tracker barriers a write over an
+        // earlier read, so each reuse is ordered, and a layer holds at most
+        // two sets instead of every chunk's pair until the batch drains
+        // (K = 61440, 32 heads: 3.75 GiB against 30 GiB). Two sets are held
+        // only while they fit in a quarter of the heap; a smaller device
+        // takes one (a 16 GB M1's 7.55 GiB heap held 16 GiB of pinned pairs
+        // before). A tail chunk shorter than a set takes its own buffers.
+        const uint64_t set_bytes = chunk_denom * chunk_rows * 2u;
+        const size_t chunk_sets = set_bytes * 2u <=
+                static_cast<uint64_t>(
+                    omarchy::capability_report(0).total_memory) / 4u
+            ? 2u
+            : 1u;
         Shape set_shape = qs.shape();
         set_shape[qs.ndim() - 2] = chunk_rows;
         set_shape.back() = k_len;
         std::vector<std::pair<array, array>> sets;
-        sets.reserve(kChunkSets);
+        sets.reserve(chunk_sets);
         for (uint32_t row0 = 0; row0 < static_cast<uint32_t>(q_len);
              row0 += chunk_rows) {
           const uint32_t rows =
@@ -16848,7 +16855,7 @@ void ScaledDotProductAttention::eval_gpu(
           const uint32_t chunk_causal_offset =
               causal_fast ? causal_offset + row0 : 0u;
           const bool reuse = rows == chunk_rows;
-          const size_t slot = (row0 / chunk_rows) % kChunkSets;
+          const size_t slot = (row0 / chunk_rows) % chunk_sets;
           if (reuse && slot == sets.size()) {
             sets.emplace_back(
                 array(set_shape, float32, nullptr, {}),
