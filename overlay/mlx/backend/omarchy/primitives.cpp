@@ -88,16 +88,21 @@ namespace {
 // - width 2048 loses from 128 rows up (rms_norm 1.00x at 128, 1.34x at 256,
 //   gated 1.20x at 128, 1.91x at 256, 2.06x at 512) while winning below
 //   (0.58-0.87x through 64 rows), so 2048 keeps the Apple reduction only
-//   at <= 64 rows.
+//   at <= 64 rows;
+// - width 2560 (Qwen3-4B hidden size, decode rms_norm 19.4 -> 10.3 us per op
+//   in a bf16 microbench) wins on G13C with the same 64-row cutoff copied from
+//   2048. It is on by default only on G13C; every other chip, G13G included,
+//   keeps the deployed kernel until its paired A/B lands;
+//   MLX_OMARCHY_NORM_APPLE_2560=1 forces it on and =0 forces it off on any chip.
 // Every norm selection (direct, scaled, gated, fused rope+norm, GDN
 // epilogue) shares this one predicate, so the fused kernel and the
 // composed fallback chain always pick the same row-reduction order and
 // stay bit-identical at every shape.
 bool apple_norm_shape_selected(size_t row_length, size_t rows) {
-  if (row_length != 256u && row_length != 2048u) {
+  if (row_length != 256u && row_length != 2048u && row_length != 2560u) {
     return false;
   }
-  return row_length != 2048u || rows <= 64u;
+  return row_length < 2048u || rows <= 64u;
 }
 
 // Decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>, read
@@ -150,12 +155,22 @@ const QmmGeometry& qmm_geometry() {
   return geometry;
 }
 
+bool apple_norm_2560_allowed(const omarchy::Device& device) {
+  if (std::getenv("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
+    return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_2560");
+  }
+  return device.capabilities().device_name.find("G13C") != std::string::npos;
+}
+
 bool apple_norm_enabled(
     const omarchy::Device& device,
     size_t row_length,
     size_t rows) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE") != nullptr &&
       !omarchy::env_flag("MLX_OMARCHY_NORM_APPLE")) {
+    return false;
+  }
+  if (row_length == 2560u && !apple_norm_2560_allowed(device)) {
     return false;
   }
   const auto& caps = device.capabilities();
