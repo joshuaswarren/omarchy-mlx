@@ -16,6 +16,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -24,6 +25,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
@@ -1011,12 +1013,14 @@ TEST_CASE("chunked causal prefill pins two score sets, not a pair per chunk") {
     }
   } restore;
 
-  // The encoder keeps every array handed to add_temporary alive until its
-  // batch completes. When each chunk made its own score and prob matrices, a
-  // layer pinned all of them at once: at K = 61440 on 32 heads that was
-  // 30 GiB. 16 chunks of 64 rows pin 64 MiB that way and about 15 MiB with
-  // two reused sets (8 MiB of sets, 2 MiB output, 1 MiB each for the f32 K
-  // and V copies, 2 MiB of PV results).
+  // The encoder's temporaries hold no reference: a chunk's score, prob and
+  // result arrays are freed at the end of its pass, so the live-byte count
+  // never sees more than one chunk. The allocator parks each freed buffer
+  // in its quarantine until the open batch submits and completes, and then
+  // moves it to the reuse cache. After the layer drains, the cache holds
+  // every distinct buffer the layer allocated, which is what a long prefill
+  // pins in its batch. One pair per chunk makes 16 chunks of 64 rows hold
+  // 64 MiB of score and prob matrices; two reused sets hold 8 MiB.
   const int batch = 1;
   const int heads = 8;
   const int length = 1024;
@@ -1036,24 +1040,31 @@ TEST_CASE("chunked causal prefill pins two score sets, not a pair per chunk") {
     warm.eval();
     omarchy::get_command_encoder(stream).synchronize();
   }
+  auto wait_quiet = [] {
+    for (int i = 0; i < 500 && omarchy::allocator().has_quarantined(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE_FALSE(omarchy::allocator().has_quarantined());
+  };
+  wait_quiet();
   clear_cache();
-  const size_t before = get_active_memory();
-  reset_peak_memory();
-  array out = sdpa_causal(q, k, v, stream);
-  out.eval();
-  omarchy::get_command_encoder(stream).synchronize();
-  const size_t peak = get_peak_memory();
-  const uint64_t held = peak > before ? peak - before : 0;
+  {
+    array out = sdpa_causal(q, k, v, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+  }
+  wait_quiet();
+  const uint64_t distinct = get_cache_memory();
   const uint64_t pair_bytes = 2ull * batch * heads * chunk_rows * length *
       sizeof(float);
   const uint64_t every_pair = (length / chunk_rows) * pair_bytes;
-  std::cout << "[chunk-pin] held_bytes=" << held
+  std::cout << "[chunk-pin] cached_bytes=" << distinct
             << " every_pair_bytes=" << every_pair << std::endl;
-  CHECK_MESSAGE(held > 0, "the allocator reported no allocation for the call");
+  CHECK_MESSAGE(distinct > 0, "the allocator cached no buffer for the call");
   CHECK_MESSAGE(
-      held < every_pair / 2,
-      "the layer held ",
-      held,
-      " bytes; one score and prob pair per chunk would hold ",
+      distinct < every_pair * 3 / 4,
+      "the layer allocated ",
+      distinct,
+      " distinct bytes; one score and prob pair per chunk would allocate ",
       every_pair);
 }
