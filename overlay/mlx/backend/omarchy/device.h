@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -505,6 +506,24 @@ bool buffer_cache_disabled();
 // <= 32 GiB), which leaves 16 GB-class hosts byte-for-byte unchanged.
 // Pure; the runtime applies it in configure_honeykrisp_icd().
 std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes);
+
+// The per-client GPU memory limit of the kernel in bytes, from the
+// `client_limit` line of a gpu_memory sysfs file. |parse_kernel_client_limit|
+// reads the file text (pure); |kernel_client_limit_bytes| reads the first
+// render node that has the file. Nullopt when the file, the key or a nonzero
+// value is missing (0 means no limit), which is every kernel without the file.
+std::optional<uint64_t> parse_kernel_client_limit(std::string_view gpu_memory_text);
+std::optional<uint64_t> kernel_client_limit_bytes();
+
+// The heap (|heap|, or mesa's stock MemTotal/2 when nullopt) never above
+// |kernel_client_limit|, rounded down to 1 MiB; nullopt keeps the stock
+// heap. A limit at or above the heap, no limit, or a limit under 1 MiB
+// returns |heap| unchanged. Pure; the runtime applies it in
+// configure_honeykrisp_icd() after default_hk_sysmem_bytes().
+std::optional<uint64_t> cap_hk_sysmem_to_kernel_limit(
+    std::optional<uint64_t> heap,
+    uint64_t mem_total_bytes,
+    std::optional<uint64_t> kernel_client_limit);
 
 // GatedDeltaUpdate decode on the f32 A_log raw route (Qwen3.5-9B) with Hk != Hv: the parts whose
 // default is the untiled prefetch kernel with native GQA (ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa),
