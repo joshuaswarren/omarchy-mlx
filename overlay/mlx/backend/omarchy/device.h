@@ -500,7 +500,7 @@ bool buffer_cache_disabled();
 
 // Honeykrisp GPU-memory heap default for an MLX process (HK_SYSMEM):
 // max(50% of |mem_total_bytes|, |mem_total_bytes| - 16 GiB), rounded down
-// to 1 MiB like mesa, clamped to 60 GiB (the per-process user VA window
+// to 1 MiB like mesa, clamped to 62 GiB (the per-process user VA window
 // is ~64 GiB, so a larger heap cannot map). Nullopt when the formula
 // would not beat mesa's 50%-of-MemTotal DRIR default (MemTotal
 // <= 32 GiB), which leaves 16 GB-class hosts byte-for-byte unchanged.

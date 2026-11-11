@@ -8,7 +8,7 @@ Verified on 2026-10-09: a fresh clone that ran only the commands in this guide, 
 
 ## Hardware you need
 
-- 96 GB of unified memory. On a 96 GB M2 Max the render peaks at 33.9 GiB of omarchy-mlx allocations, with the 44 GB int8 DiT resident on the Honeykrisp heap (the default heap budget on 96 GB machines is about 47 to 60 GiB).
+- 96 GB of unified memory. On a 96 GB M2 Max the render peaks at 33.9 GiB of omarchy-mlx allocations, with the 44 GB int8 DiT resident on the Honeykrisp heap (the default heap budget on 96 GB machines is about 47 to 62 GiB).
 - 64 GB machines can't run it. On a 64 GB M1 Max, loading the 50.3 GB compact text-tower export fails with `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
 
 ## Software you need

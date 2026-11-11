@@ -912,16 +912,18 @@ bool env_flag(const char* name) {
 }
 
 // Heap formula (device.h). max(50%, MemTotal - 16 GiB), 1 MiB-rounded
-// like mesa's os_gpu_heap_size_calculate, clamped to 60 GiB: the
+// like mesa's os_gpu_heap_size_calculate, clamped to 62 GiB: the
 // per-process user VA window is ~64 GiB (agx_device.c), HeapBudget's
 // probe committed 63 GiB and the 64th allocation failed with "Failed to
-// allocate BO VMA", so a bigger heap cannot map. MemTotal <= 32 GiB
+// allocate BO VMA", so a bigger heap cannot map. 62 GiB keeps 2 GiB of
+// the window for mappings outside the heap and lets gpt-oss-120b (58.05
+// GiB of weights) load and decode on a 96 GB host. MemTotal <= 32 GiB
 // never beats the 50% default, so those hosts (16 GB M1 included) return
 // nullopt and keep mesa's byte-for-byte heap.
 std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes) {
   constexpr uint64_t kGiB = 1ull << 30;
   constexpr uint64_t kSystemReserve = 16 * kGiB;
-  constexpr uint64_t kVaWindowClamp = 60 * kGiB;
+  constexpr uint64_t kVaWindowClamp = 62 * kGiB;
   if (mem_total_bytes < kSystemReserve) {
     return std::nullopt;
   }
