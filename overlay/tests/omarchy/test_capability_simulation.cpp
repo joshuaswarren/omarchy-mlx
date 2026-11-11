@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -1028,10 +1029,21 @@ TEST_CASE("apple norm width 2560 selection and fused-vs-composed bits") {
   if (!compute_available()) {
     return;
   }
-  // A failing REQUIRE throws; the destructor still clears the switch for later cases.
+  // A failing REQUIRE throws; the destructor restores the caller's value for later cases.
   struct ResetSwitch {
+    const char* const kName = "MLX_OMARCHY_NORM_APPLE_2560";
+    std::optional<std::string> saved;
+    ResetSwitch() {
+      if (const char* v = std::getenv(kName)) {
+        saved = v;
+      }
+    }
     ~ResetSwitch() {
-      unsetenv("MLX_OMARCHY_NORM_APPLE_2560");
+      if (saved) {
+        setenv(kName, saved->c_str(), 1);
+      } else {
+        unsetenv(kName);
+      }
     }
   } reset_switch;
   Stream stream = gpu_stream();
