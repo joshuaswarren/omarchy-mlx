@@ -189,6 +189,19 @@ wins. So does a `heap_memory_percent` set in a drirc file (`$DRIRC_CONFIGDIR`,
 neither is present. It applies only inside MLX processes. Every other
 Vulkan application keeps the 50% heap.
 
+Kernel limit. The `aurora` kernel driver refuses a GPU buffer once one process
+holds its per-client limit. The `client_limit` line of the `gpu_memory` sysfs
+file reports it, and MLX reads it from `/sys/class/drm/renderD*/device/gpu_memory`
+before Vulkan loads. A heap above that limit promises memory the kernel does
+not give: on the 14-inch M2 Max (96 GiB) with the kernel default of 50% of
+RAM the limit is 47.1 GiB, and the 60 GiB heap above made the allocation
+fail near 47 GiB. The default heap is therefore the smaller of the formula
+above and the kernel limit, rounded down to 1 MiB. A kernel that sets the
+limit above the formula leaves the formula unchanged. A kernel without the
+file, and a host whose limit is the stock 50% (16 GB machines), keep the
+stock heap byte-for-byte. An explicit `HK_SYSMEM` or a drirc value still wins
+even when it is above the kernel limit.
+
 Serving placement (`MLX_OMARCHY_UCLAMP_MIN`, default 1024). The serve
 raises `uclamp_min` on its startup thread. It uses an unprivileged
 `sched_setattr` call. Every serving thread then inherits the scheduler's

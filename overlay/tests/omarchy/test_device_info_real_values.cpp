@@ -218,16 +218,102 @@ TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
   CHECK(clamped_96.value() % (1ull << 20) == 0);
 
   // Live host cross-check: whatever /proc/meminfo reports, the result
-  // honors the contract (absent <= 32 GiB, inside (50%, 60 GiB] above).
+  // honors the contract (absent <= 32 GiB; above 50% and at most 60 GiB up
+  // to 120 GiB; exactly the 60 GiB clamp beyond, where 50% is out of reach).
   const uint64_t total = read_mem_total_bytes();
   if (total > 0) {
     const auto live = omarchy::default_hk_sysmem_bytes(total);
     if (!live.has_value()) {
       CHECK(total <= gib(32));
     } else {
-      CHECK(live.value() > total / 2);
+      CHECK((live.value() > total / 2 || live.value() == gib(60)));
       CHECK(live.value() <= gib(60));
     }
+  }
+}
+
+TEST_CASE("parse_kernel_client_limit reads the client_limit line of gpu_memory") {
+  namespace omarchy = mlx::core::omarchy;
+  // The gpu_memory sysfs file of the 14-inch M2 Max on the lab kernel.
+  const std::string text =
+      "user_committed 28982853632\n"
+      "user_resident 28982853632\n"
+      "kernel_resident 1073741824\n"
+      "limit 67805549854\n"
+      "client_limit 50601156608\n"
+      "refused 34\n";
+  CHECK(omarchy::parse_kernel_client_limit(text) == 50601156608ull);
+  CHECK(omarchy::parse_kernel_client_limit("client_limit 4096") == 4096ull);
+  // The device-wide `limit` line is a different key and is never taken.
+  CHECK_FALSE(omarchy::parse_kernel_client_limit("limit 67805549854\n"));
+  // 0 means the kernel sets no per-client limit.
+  CHECK_FALSE(omarchy::parse_kernel_client_limit("client_limit 0\n"));
+  // Anything that is not a plain decimal number is no limit.
+  CHECK_FALSE(omarchy::parse_kernel_client_limit(""));
+  CHECK_FALSE(omarchy::parse_kernel_client_limit("client_limit\n"));
+  CHECK_FALSE(omarchy::parse_kernel_client_limit("client_limit abc\n"));
+  CHECK_FALSE(omarchy::parse_kernel_client_limit("client_limit -5\n"));
+  CHECK_FALSE(omarchy::parse_kernel_client_limit("client_limit 12x\n"));
+  CHECK_FALSE(
+      omarchy::parse_kernel_client_limit("client_limit 99999999999999999999\n"));
+}
+
+TEST_CASE("cap_hk_sysmem_to_kernel_limit never promises more than the kernel allows") {
+  namespace omarchy = mlx::core::omarchy;
+  constexpr uint64_t kGiB = 1ull << 30;
+  constexpr uint64_t kMiB = 1ull << 20;
+  // 14-inch M2 Max: MemTotal 98830384 kB, per-client limit 50601156608
+  // bytes (47.126 GiB) on the lab kernel at its default 50%.
+  const uint64_t m2_total = 98830384ull * 1024;
+  const uint64_t m2_client_50 = 50601156608ull;
+  // Not MiB aligned (24 KiB over 48257 MiB): the heap takes the rounded-down value.
+  const uint64_t m2_heap_50 = 48257ull * kMiB;
+  // 13-inch M1: MemTotal 15843696 kB, stock heap (no HK_SYSMEM).
+  const uint64_t m1_total = 15843696ull * 1024;
+
+  // The raised 60 GiB heap drops to the kernel limit that is below it.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, m2_client_50) ==
+        m2_heap_50);
+  // A kernel limit at 75% of RAM is above the heap: nothing to cap.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, m2_total / 100 * 75) ==
+        60 * kGiB);
+  // Kernel limit equal to the heap: unchanged.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, 60 * kGiB) ==
+        60 * kGiB);
+  // The result is 1 MiB aligned, like mesa's heap sizes.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(
+            60 * kGiB, m2_total, m2_client_50 + 12345) == m2_heap_50);
+
+  // Kernels without the limit file (no value) leave both forms unchanged.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, std::nullopt) ==
+        60 * kGiB);
+  CHECK_FALSE(omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, m1_total, std::nullopt));
+
+  // Stock heap (nullopt): mesa uses MemTotal/2 rounded down to 1 MiB. A
+  // kernel limit at the same 50% leaves the 13-inch M1 byte-for-byte
+  // unchanged, even with a limit that is not MiB aligned.
+  CHECK_FALSE(omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, m1_total, m1_total / 2));
+  CHECK_FALSE(
+      omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, m1_total, m1_total / 2 + 1234));
+  // A kernel limit below that stock heap becomes the heap.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, m1_total, m1_total / 4) ==
+        (m1_total / 4) / kMiB * kMiB);
+
+  // A limit under 1 MiB is not usable as a heap and is ignored. An unknown
+  // MemTotal with a stock heap has nothing to compare against.
+  CHECK(omarchy::cap_hk_sysmem_to_kernel_limit(60 * kGiB, m2_total, 4096) == 60 * kGiB);
+  CHECK_FALSE(omarchy::cap_hk_sysmem_to_kernel_limit(std::nullopt, 0, 4 * kGiB));
+}
+
+TEST_CASE("kernel_client_limit_bytes is absent or a usable limit below RAM") {
+  namespace omarchy = mlx::core::omarchy;
+  // Live host: kernels without the gpu_memory file report no limit; the
+  // lab kernel reports a limit that is at least 1 MiB and not above RAM.
+  const auto live = omarchy::kernel_client_limit_bytes();
+  const uint64_t total = read_mem_total_bytes();
+  if (live.has_value() && total > 0) {
+    CHECK(live.value() >= (1ull << 20));
+    CHECK(live.value() <= total);
   }
 }
 
