@@ -1019,6 +1019,138 @@ TEST_CASE("apple norm selection follows the subgroup gate") {
   }
 }
 
+// Width 2560 (Qwen3-4B hidden size): forced on, the Apple register path serves
+// decode row counts (<= 64) and the deployed kernel serves 65 rows; the
+// width-2560 kill switch restores the deployed kernel; and the fused scaled and
+// gated norms stay bit-identical to the composed chain at 2560, which holds
+// only while every norm kernel reads the row in the same order.
+TEST_CASE("apple norm width 2560 selection and fused-vs-composed bits") {
+  if (!compute_available()) {
+    return;
+  }
+  // A failing REQUIRE throws; the destructor still clears the switch for later cases.
+  struct ResetSwitch {
+    ~ResetSwitch() {
+      unsetenv("MLX_OMARCHY_NORM_APPLE_2560");
+    }
+  } reset_switch;
+  Stream stream = gpu_stream();
+  const auto& c = caps();
+  const auto& h = hw();
+  const auto gate_open = [](const auto& p) {
+    return p.subgroup_size == 32u &&
+        (p.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  };
+  if (!gate_open(c) || !gate_open(h)) {
+    return;
+  }
+  const int width = 2560;
+  const auto lattice = [](size_t count, uint32_t seed) {
+    std::vector<float> v(count);
+    uint32_t s = seed;
+    for (size_t i = 0; i < count; ++i) {
+      s = s * 1664525u + 1013904223u;
+      v[i] = static_cast<float>(static_cast<double>(s % 20000u) / 10000.0) -
+          1.0f;
+    }
+    return v;
+  };
+  const auto bf16_of = [&](const std::vector<float>& data, Shape shape) {
+    return astype(array(data.data(), shape, float32), bfloat16, stream);
+  };
+  const auto dispatched = [&](const array& y) {
+    eval(y);
+    omarchy::get_command_encoder(stream).synchronize();
+    return omarchy::trace::counters().last_dispatched_kernel.load();
+  };
+  const auto id = [](omarchy::ComputeKernel k) {
+    return static_cast<int64_t>(k);
+  };
+  const auto worst_diff = [&](const array& a, const array& b) {
+    array a32 = astype(a, float32, stream);
+    array b32 = astype(b, float32, stream);
+    eval(a32);
+    eval(b32);
+    REQUIRE(a32.shape() == b32.shape());
+    double worst = 0.0;
+    for (size_t i = 0; i < a32.size(); ++i) {
+      worst = std::max(
+          worst,
+          std::abs(
+              static_cast<double>(a32.data<float>()[i]) -
+              static_cast<double>(b32.data<float>()[i])));
+    }
+    return worst;
+  };
+  const auto w_data = lattice(width, 82);
+  array w = bf16_of(w_data, Shape{width});
+  eval(w);
+
+  setenv("MLX_OMARCHY_NORM_APPLE_2560", "1", 1);
+  for (int rows : {1, 9, 64, 65}) {
+    auto x_data = lattice(size_t(rows) * width, 81 + rows);
+    array x = bf16_of(x_data, Shape{rows, width});
+    array y = fast::rms_norm(x, w, 1e-6f, stream);
+    const bool apple = rows <= 64;
+    INFO("rows ", rows);
+    CHECK_EQ(
+        dispatched(y),
+        id(apple ? omarchy::ComputeKernel::FastRmsNormAppleBF16
+                 : omarchy::ComputeKernel::FastRmsNormBF16));
+    array y32 = astype(y, float32, stream);
+    eval(y32);
+    double worst_val = 0.0;
+    for (int r = 0; r < rows; ++r) {
+      double sum = 0.0;
+      for (int col = 0; col < width; ++col) {
+        double xv = x_data[size_t(r) * width + col];
+        sum += xv * xv;
+      }
+      double invrs = 1.0 / std::sqrt(sum / width + 1e-6);
+      for (int col = 0; col < width; ++col) {
+        size_t i = size_t(r) * width + col;
+        worst_val = std::max(
+            worst_val,
+            std::abs(
+                static_cast<double>(y32.data<float>()[i]) -
+                x_data[i] * invrs * w_data[col]));
+      }
+    }
+    CHECK_MESSAGE(
+        worst_val <= 5e-2, "rows ", rows, " worst vs host math ", worst_val);
+  }
+
+  // Fused gated and scaled norms against the composed chain at 64 rows.
+  const int rows = 64;
+  array x = bf16_of(lattice(size_t(rows) * width, 91), Shape{rows, width});
+  array z = bf16_of(lattice(size_t(rows) * width, 92), Shape{rows, width});
+  array normed = fast::rms_norm(x, w, 1e-6f, stream);
+  const float scale = 0.0883883f;
+  array scaled_ref = multiply(
+      normed, astype(array(scale), bfloat16, stream), stream);
+  array scaled = fast::rms_norm_scaled(x, w, scale, 1e-6f, stream);
+  CHECK_EQ(
+      dispatched(scaled), id(omarchy::ComputeKernel::FastNormGatedAppleBF16));
+  CHECK_EQ(worst_diff(scaled, scaled_ref), 0.0);
+  array zf = astype(z, float32, stream);
+  array gated_ref = astype(
+      multiply(
+          multiply(zf, sigmoid(zf, stream), stream),
+          astype(normed, float32, stream),
+          stream),
+      bfloat16,
+      stream);
+  array gated = fast::rms_norm_gated(x, z, w, 1e-6f, stream);
+  CHECK_EQ(
+      dispatched(gated), id(omarchy::ComputeKernel::FastNormGatedOnlyAppleBF16));
+  CHECK_EQ(worst_diff(gated, gated_ref), 0.0);
+
+  // The width-2560 kill switch restores the deployed kernel everywhere.
+  setenv("MLX_OMARCHY_NORM_APPLE_2560", "0", 1);
+  array off = fast::rms_norm(x, w, 1e-6f, stream);
+  CHECK_EQ(dispatched(off), id(omarchy::ComputeKernel::FastRmsNormBF16));
+}
+
 int main(int argc, char** argv) {
   // --- Unit checks that need no device, run before any backend init.
   {

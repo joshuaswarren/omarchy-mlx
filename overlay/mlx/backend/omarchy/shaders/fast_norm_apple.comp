@@ -6,7 +6,7 @@
 // Apple `rms_single_row` in
 // `mlx/backend/metal/kernels/rms_norm.metal` (commit 9c3d35571).
 //   - one threadgroup per row (256 threads),
-//   - per-thread CONTIGUOUS N_READS=8 loads in pass 1, held in a register
+//   - per-thread CONTIGUOUS loads in pass 1 (8 for width 2048, 10 for 2560), held in a register
 //     array, never reloaded in the output pass,
 //   - cross-lane reduction = hardware subgroupSum (32 lanes per subgroup, 8
 //     subgroups per WG) + 1 second-level shared stage of 8 partials +
@@ -72,7 +72,7 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint N_READS = 8u;          // 256 * 8 = 2048 (the deployed norm class row length)
+const uint MAX_READS = 10u;      // 256 * 8 = 2048 and 256 * 10 = 2560 take the register path
 shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
 
 void main() {
@@ -86,13 +86,21 @@ void main() {
        row += gl_NumWorkGroups.x) {
     uint start = params.lhs_offset + row * row_length;
 
-    float reg_x[N_READS];
+    float reg_x[MAX_READS];
     precise float reg_sq = 0.0;
-    if (row_length == N_READS * 256u) {
-      uint base = thread * N_READS;
-      for (uint i = 0u; i < N_READS; ++i) {
+    uint n_reads = row_length / 256u;
+    bool reg_path = (row_length == 2048u || row_length == 2560u);
+    if (reg_path) {
+      uint base = thread * n_reads;
+      for (uint i = 0u; i < 8u; ++i) {
         reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
         reg_sq += reg_x[i] * reg_x[i];
+      }
+      if (n_reads == 10u) {
+        for (uint i = 8u; i < MAX_READS; ++i) {
+          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
+          reg_sq += reg_x[i] * reg_x[i];
+        }
       }
     } else {
       for (uint index = thread; index < row_length; index += 256u) {
@@ -118,19 +126,31 @@ void main() {
     float mean_square = s_partial[0] / float(row_length);
     float norm = inversesqrt(mean_square + eps);
 
-    if (row_length == N_READS * 256u) {
-      uint base = thread * N_READS;
-      for (uint i = 0u; i < N_READS; ++i) {
+    if (reg_path) {
+      uint base = thread * n_reads;
+      for (uint i = 0u; i < 8u; ++i) {
         uint index = base + i;
-        float value = reg_x[i];
         float weight =
             (params.lhs_size == 1u)
                 ? LOAD_VALUE(weight_data.values[params.rhs_offset])
                 : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
         precise float norm_weight = norm * weight;
-        precise float result = value * norm_weight;
+        precise float result = reg_x[i] * norm_weight;
         output_data.values[params.output_offset + row * row_length + index] =
             STORE_VALUE(result);
+      }
+      if (n_reads == 10u) {
+        for (uint i = 8u; i < MAX_READS; ++i) {
+          uint index = base + i;
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+          precise float norm_weight = norm * weight;
+          precise float result = reg_x[i] * norm_weight;
+          output_data.values[params.output_offset + row * row_length + index] =
+              STORE_VALUE(result);
+        }
       }
     } else {
       for (uint index = thread; index < row_length; index += 256u) {

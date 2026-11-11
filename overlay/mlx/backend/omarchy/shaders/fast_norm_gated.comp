@@ -23,8 +23,9 @@
 // RMSNorm kernel the composed path selects: one 256-thread workgroup per
 // row, grid-stride row loop. The default build copies fast_norm.comp's
 // shared-memory tree. APPLE_REDUCTION copies fast_norm_apple.comp: 2048-wide
-// rows read eight contiguous values per thread, other rows stride by 256,
-// and both sum through 32-lane subgroups and eight shared partials. The
+// rows read eight contiguous values per thread and 2560-wide rows ten, other
+// rows stride by 256, and both sum through 32-lane subgroups and eight shared
+// partials. The
 // host dispatch guard (apple_norm_shape_selected, primitives.cpp) decides
 // which build serves a given (width, rows) shape so the fused kernel and
 // the composed chain always share one reduction order. eps
@@ -163,15 +164,24 @@ void main() {
     uint start = params.lhs_offset + row * row_length;
 
 #ifdef APPLE_REDUCTION
-    bool contiguous = row_length == 8u * threads;
-    float cached_x[8];
+    uint n_reads = row_length / threads;
+    bool contiguous = row_length == 8u * threads || row_length == 10u * threads;
+    float cached_x[10];
     float local_sq = 0.0;
     if (contiguous) {
       for (uint read = 0u; read < 8u; ++read) {
-        float value = LOAD_VALUE(input_data.values[start + thread * 8u + read]);
+        float value = LOAD_VALUE(input_data.values[start + thread * n_reads + read]);
         cached_x[read] = value;
         precise float square = value * value;
         local_sq += square;
+      }
+      if (n_reads == 10u) {
+        for (uint read = 8u; read < 10u; ++read) {
+          float value = LOAD_VALUE(input_data.values[start + thread * n_reads + read]);
+          cached_x[read] = value;
+          precise float square = value * value;
+          local_sq += square;
+        }
       }
     } else {
       for (uint index = thread; index < row_length; index += threads) {
@@ -197,8 +207,14 @@ void main() {
     barrier();
     if (contiguous) {
       for (uint read = 0u; read < 8u; ++read) {
-        store_normed(row, row_length, thread * 8u + read, cached_x[read],
+        store_normed(row, row_length, thread * n_reads + read, cached_x[read],
                      norm, scale);
+      }
+      if (n_reads == 10u) {
+        for (uint read = 8u; read < 10u; ++read) {
+          store_normed(row, row_length, thread * n_reads + read, cached_x[read],
+                       norm, scale);
+        }
       }
     } else {
       for (uint index = thread; index < row_length; index += threads) {
