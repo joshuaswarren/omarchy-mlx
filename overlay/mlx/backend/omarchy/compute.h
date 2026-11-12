@@ -1113,6 +1113,13 @@ enum class ComputeKernel : uint16_t {
   GatedDeltaDecodePfWideStateBF16,
   GatedDeltaDecodePfComposedStateBF16,
   GatedDeltaDecodePfComposedGqaStateBF16,
+  // RMSNorm prologue multi-weight decode GEMV (qmm_vec.comp
+  // -DQMM_VEC_NORM): the shared x is rebuilt per workgroup from the norm's
+  // input and weight, in the reduction order of FastRmsNormAppleBF16, so
+  // the standalone RMSNorm dispatch is deleted. 2x4 and 2x16 column
+  // geometries. bf16 + subgroup only. Append-only profile ids.
+  QmmVecQ4MultiNormBF16,
+  QmmVecQ4MultiNormBF16R2S16,
   Count,
 };
 

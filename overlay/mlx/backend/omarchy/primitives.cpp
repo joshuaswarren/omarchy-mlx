@@ -122,6 +122,7 @@ struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
   omarchy::ComputeKernel multi;
+  omarchy::ComputeKernel norm;
   const char* name;
 };
 const QmmGeometry& qmm_geometry() {
@@ -135,22 +136,25 @@ const QmmGeometry& qmm_geometry() {
           chip.find("G13C") != std::string::npos) {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
-            K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
+            K::QmmVecQ4MultiSubgroupBF16R2S16,
+            K::QmmVecQ4MultiNormBF16R2S16, "2x16"};
       }
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
-          "2x4"};
+          K::QmmVecQ4MultiNormBF16, "2x4"};
     }
     if (v == "2x16") {
       return QmmGeometry{
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
-          K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
+          K::QmmVecQ4MultiSubgroupBF16R2S16,
+          K::QmmVecQ4MultiNormBF16R2S16, "2x16"};
     }
     if (v == "2x4") {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
-          "2x4"};
+          K::QmmVecQ4MultiNormBF16, "2x4"};
     }
+
     throw std::invalid_argument(
         "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16");
   }();
@@ -9118,7 +9122,9 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    NormPlan* norm,
+    bool dry_run) {
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -9184,6 +9190,29 @@ bool dispatch_quantized_gemv_group(
     }
     if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
         x.ndim() < 2 || x.shape(-2) != 1) {
+      return false;
+    }
+  } else if (norm != nullptr) {
+    // The prologue deletes the RMSNorm that produced x (it was never
+    // evaluated), so x's usual readiness checks do not apply: its shape
+    // and dtype still describe the output. The width and chip gate are
+    // the standalone fast-norm kernel's, so the rebuilt bits are the ones
+    // that kernel would have written.
+    if (encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3 ||
+        dtype != bfloat16 || !subgroup_ready ||
+        !float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
+        x.ndim() < 2 || x.shape(-2) != 1 || norm->x.id() != x.id()) {
+      return false;
+    }
+    const array& h = norm->h;
+    const array& weight = norm->weight;
+    const size_t width = static_cast<size_t>(x.shape(-1));
+    if ((width != 2048u && width != 2560u) || x.size() != width ||
+        !whole_dense(h, width) || !whole_dense(weight, width) ||
+        h.dtype() != dtype || weight.dtype() != dtype ||
+        !input_ready(h, stream) || !input_ready(weight, stream) ||
+        !apple_norm_enabled(encoder.device(), width, 1)) {
       return false;
     }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
@@ -9319,6 +9348,11 @@ bool dispatch_quantized_gemv_group(
   }
   params.lhs_offset = static_cast<uint32_t>(x_offset);
   params.count = static_cast<uint32_t>(total_groups);
+  // Every refusal precedes this point: a dry run that reaches it means
+  // the same call without |dry_run| allocates, binds, and records.
+  if (dry_run) {
+    return true;
+  }
 
   // Producer-direct KV windows: a member's Add epilogue may store its
   // sum straight into an updated cache copy (see fused_chain.h), which
@@ -9358,6 +9392,12 @@ bool dispatch_quantized_gemv_group(
     // dispatch writes the product it recomputes, so retained
     // references stay valid.
     outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
+  }
+  if (norm != nullptr) {
+    // The deleted RMSNorm's output materializes: workgroup 0 of the
+    // dispatch writes the bf16 row it recomputes, so retained
+    // references stay valid.
+    norm->x.set_data(allocator().malloc(norm->x.nbytes()));
   }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
@@ -9416,7 +9456,8 @@ bool dispatch_quantized_gemv_group(
     }
   }
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
-  bindings[0] = binding(outgate != nullptr ? outgate->x : x);
+  bindings[0] = binding(
+      outgate != nullptr ? outgate->x : norm != nullptr ? norm->x : x);
   const ComputeBinding filler = binding(members[0].node);
   for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
     uint32_t base = 1 + i * kQmmVecMultiBindingsPerWeight;
@@ -9447,8 +9488,16 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
+  if (norm != nullptr) {
+    bindings[kQmmVecMultiBindings] = binding(norm->h);
+    bindings[kQmmVecMultiBindings + 1] = binding(norm->weight);
+    bindings[kQmmVecMultiBindings + 2] = binding(norm->x);
+    params.alpha = norm->eps;
+  }
   auto kernel = outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
+      : norm != nullptr
+      ? qmm_geometry().norm
       : token_route
       ? (rows > 4
             ? (subgroup_ready

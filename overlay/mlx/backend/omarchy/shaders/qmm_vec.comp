@@ -119,11 +119,20 @@ uint16_t bf16_store(float value) {
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
 #endif
+#if defined(QMM_VEC_NORM) && \
+    (!defined(QMM_VEC_MULTI) || !defined(USE_BF16) || \
+     !defined(USE_SUBGROUP) || !defined(QMM_VEC_Q4_WORD) || \
+     ROWS_PER_SLOT != 2 || defined(QMM_VEC_OUTGATE) || \
+     defined(QMM_VEC_TOKENS))
+#error "QMM_VEC_NORM builds on the bf16 subgroup multi column only"
+#endif
 // The x fetch inside Q4_WORD / Q4_ROWS: the out-gate prologue variant
 // (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors
 // instead of reading the product; every other variant reads input_x.
 #if defined(QMM_VEC_OUTGATE)
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#elif defined(QMM_VEC_NORM)
+#define OUTGATE_XWORDS(x_base) norm_quad((x_base) / 8u)
 #else
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
@@ -302,6 +311,86 @@ layout(push_constant) uniform Params {
   uint in_strides[4];
   uint out_strides[4];
 } params;
+#if defined(QMM_VEC_NORM)
+// RMSNorm prologue (QMM_VEC_NORM, multi-only): the shared x is the output
+// of the RMSNorm the group's planner deleted. Every workgroup rebuilds
+// each x quad from h, the norm weight and one scalar, so the norm
+// dispatch and its x round trip disappear. The scalar is computed in the
+// reduction order of fast_norm_apple.comp: 256 virtual threads, each
+// summing params.matrix_k / 256 consecutive elements with no fma, a
+// 32-lane subgroupAdd per virtual subgroup, the 8 partials through
+// shared memory and one more subgroupAdd. A workgroup with fewer than 256
+// threads walks the virtual threads in strides of its own size. The
+// result per element is bf16(h * (scale * w)), the same two float
+// multiplies and one round as the norm shader. Workgroup 0 slot 0
+// stores the product, so retained references to the deleted node's
+// output stay valid. h, w and x start at element 0 of their buffers
+// (the host refuses otherwise); params.alpha carries eps. Bindings 25-27.
+layout(set = 0, binding = 25, std430) readonly buffer NormH {
+  uvec4 values[];
+} norm_h;
+layout(set = 0, binding = 26, std430) readonly buffer NormW {
+  uvec4 values[];
+} norm_w;
+layout(set = 0, binding = 27, std430) writeonly buffer NormX {
+  uvec4 values[];
+} norm_x;
+shared float norm_partial[8];
+float norm_scale;
+uint norm_h_word(uint index) {
+  return norm_h.values[index >> 2u][index & 3u];
+}
+void norm_prologue() {
+  uint lane = gl_LocalInvocationID.x;
+  uint words = params.matrix_k / 512u;
+  for (uint t = lane; t < 256u; t += uint(SLOTS_PER_GROUP) * LANES) {
+    precise float sq = 0.0;
+    for (uint j = 0u; j < words; ++j) {
+      uint word = norm_h_word(t * words + j);
+      float lo = uintBitsToFloat((word & 0xFFFFu) << 16u);
+      float hi = uintBitsToFloat(word & 0xFFFF0000u);
+      sq += lo * lo;
+      sq += hi * hi;
+    }
+    float partial = subgroupAdd(sq);
+    if (lane % LANES == 0u) {
+      norm_partial[t / LANES] = partial;
+    }
+  }
+  barrier();
+  if (lane < LANES) {
+    float v = (lane < 8u) ? norm_partial[lane] : 0.0;
+    float total = subgroupAdd(v);
+    if (lane == 0u) {
+      norm_partial[0] = total;
+    }
+  }
+  barrier();
+  float mean_square = norm_partial[0] / float(params.matrix_k);
+  norm_scale = inversesqrt(mean_square + params.alpha);
+}
+uint norm_word(uint h, uint w) {
+  float h_lo = uintBitsToFloat((h & 0xFFFFu) << 16u);
+  float h_hi = uintBitsToFloat(h & 0xFFFF0000u);
+  float w_lo = uintBitsToFloat((w & 0xFFFFu) << 16u);
+  float w_hi = uintBitsToFloat(w & 0xFFFF0000u);
+  precise float nw_lo = norm_scale * w_lo;
+  precise float nw_hi = norm_scale * w_hi;
+  precise float r_lo = h_lo * nw_lo;
+  precise float r_hi = h_hi * nw_hi;
+  return uint(bf16_store(r_lo)) | (uint(bf16_store(r_hi)) << 16u);
+}
+uvec4 norm_quad(uint quad_index) {
+  uvec4 h = norm_h.values[quad_index];
+  uvec4 w = norm_w.values[quad_index];
+  uvec4 m = {norm_word(h.x, w.x), norm_word(h.y, w.y),
+             norm_word(h.z, w.z), norm_word(h.w, w.w)};
+  if (gl_WorkGroupID.x == 0u && gl_LocalInvocationID.x < LANES) {
+    norm_x.values[quad_index] = m;
+  }
+  return m;
+}
+#endif
 
 #ifndef USE_SUBGROUP
 shared float reduce_scratch[256];
@@ -1029,6 +1118,9 @@ void main() {
 }
 void main() {
   uint lane = gl_LocalInvocationID.x;
+#if defined(QMM_VEC_NORM)
+  norm_prologue();
+#endif
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
   uint n0 = params.shape[0];

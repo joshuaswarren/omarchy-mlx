@@ -702,7 +702,7 @@ void FusedChain::evaluate_tail(const Stream& stream) {
 
 namespace {
 
-enum class EagerStep : uint8_t { skip, sigmoid, gate_mul, output_mul };
+enum class EagerStep : uint8_t { skip, sigmoid, gate_mul, output_mul, norm_fold };
 
 struct EagerRole {
   std::uintptr_t group;
@@ -730,6 +730,12 @@ struct GemvGroup {
   // is the deleted Multiply(Sigmoid(gate), out) output. The one
   // dispatch reads gate and out directly and rebuilds x per workgroup.
   std::optional<OutgatePlan> outgate;
+  // RMSNorm prologue fold: set at plan time when the group's shared x is
+  // the output of an RMSNorm that only the members read. norm_adopted is
+  // set at the norm's turn when a dry run of the group passes; the norm
+  // node is then deleted and the one dispatch rebuilds x per workgroup.
+  std::optional<NormPlan> norm;
+  bool norm_adopted{false};
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1283,6 +1289,34 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     claimed.insert(sigmoid->id());
     claimed.insert(tail.id());
   }
+  // RMSNorm prologue plans: x = RMSNorm(h, weight, eps) in bf16 over one
+  // row. Attached below only when every reader of x is a member of one
+  // planned group; the kernel contract (width, subgroup support) is
+  // decided by the dispatch's dry run at the norm's turn.
+  std::unordered_map<std::uintptr_t, NormPlan> norm_plans;
+  if (norm_fold_enabled()) {
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RMSNorm)) || node.inputs().size() != 2 ||
+          node.dtype() != bfloat16 || node.ndim() < 2 ||
+          node.shape(-2) != 1 ||
+          node.size() != static_cast<size_t>(node.shape(-1)) ||
+          node.inputs()[0].dtype() != bfloat16 ||
+          node.inputs()[1].dtype() != bfloat16 ||
+          node.inputs()[0].size() != node.size() ||
+          node.inputs()[1].size() != node.size()) {
+        continue;
+      }
+      norm_plans.emplace(
+          node.id(),
+          NormPlan{
+              node.inputs()[0],
+              node.inputs()[1],
+              node,
+              static_cast<const fast::RMSNorm&>(node.primitive())
+                  .state()
+                  .second});
+    }
+  }
   for (size_t i = 1; i < tape.size(); ++i) {
     const array& first = tape[i - 1];
     const array& second = tape[i];
@@ -1443,6 +1477,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       if (worth && start == 0 && x_has_plan) {
         group.outgate = std::move(plan_it->second);
       }
+      // RMSNorm prologue: x is the output of an RMSNorm that only this
+      // group's members read, and no member carries an Add epilogue (a
+      // refused epilogue addend is the one contract the norm's turn
+      // cannot decide).
+      if (start == 0 && nodes.size() >= 2 &&
+          nodes.size() <= kQmmVecMultiWeights &&
+          group.members.size() == nodes.size() &&
+          uses[x_id] == nodes.size()) {
+        auto norm_it = norm_plans.find(x_id);
+        bool plain = norm_it != norm_plans.end();
+        for (const auto& member : group.members) {
+          plain = plain && !member.epilogue;
+        }
+        if (plain) {
+          group.norm = norm_it->second;
+        }
+      }
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
         state->gemv_roles.emplace(member.node.id(), index);
@@ -1510,6 +1561,29 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     state->roles.emplace(
         plan.sigmoid_id, EagerRole{gi, EagerStep::skip});
     state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
+  }
+  // RMSNorm attach validation. A group carrying a norm plan keeps it only
+  // when the norm node and the producers of h and the weight share the
+  // member stream. The norm node then maps to the group as a norm_fold
+  // role: at its turn the group is dry-run, and only a passing dry run
+  // deletes the norm.
+  for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+    auto& group = state->gemv_groups[gi];
+    if (!group.norm) {
+      continue;
+    }
+    const NormPlan& plan = *group.norm;
+    const Stream& member_stream = group.members[0].node.primitive().stream();
+    auto h_node = lookup(plan.h);
+    auto w_node = lookup(plan.weight);
+    if (plan.x.primitive().stream() != member_stream ||
+        (h_node && h_node->primitive().stream() != member_stream) ||
+        (w_node && w_node->primitive().stream() != member_stream) ||
+        state->roles.count(plan.x.id()) != 0) {
+      group.norm.reset();
+      continue;
+    }
+    state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::norm_fold});
   }
   // SwiGLU store epilogue fold. When a planned group is exactly the
   // gate and up projections of a planned swiglu chain — two members,
@@ -1892,6 +1966,14 @@ bool outgate_fold_enabled() {
   return !legacy_g13;
 }
 
+// RMSNorm prologue fold (the norm recomputed per workgroup of the qkv and
+// gate/up decode GEMV groups): off until a paired A/B on the part lands.
+// MLX_OMARCHY_NORM_FOLD=1 turns it on.
+bool norm_fold_enabled() {
+  const char* v = std::getenv("MLX_OMARCHY_NORM_FOLD");
+  return v != nullptr && *v != '\0' && !(v[0] == '0' && v[1] == '\0');
+}
+
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
@@ -2143,7 +2225,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
                         stream,
-                        group.outgate ? &*group.outgate : nullptr)
+                        group.outgate ? &*group.outgate : nullptr,
+                        group.norm_adopted ? &*group.norm : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {
@@ -2155,6 +2238,14 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
             "[mlx-omarchy] out-gate prologue group refused after fold "
             "adoption");
       }
+      if (group.state == GemvGroup::State::failed && group.norm_adopted) {
+        // The dry run at the norm's turn passed the same contract; a
+        // refusal now is a planner bug and the deleted norm cannot be
+        // replayed.
+        throw std::runtime_error(
+            "[mlx-omarchy] RMSNorm prologue group refused after fold "
+            "adoption");
+      }
     }
     return group.state == GemvGroup::State::done;
   }
@@ -2163,6 +2254,36 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return false;
   }
   const auto role = role_it->second;
+  if (role.step == EagerStep::norm_fold) {
+    // The RMSNorm a planned group would fold into its prologue. The
+    // group is dry-run here, at the norm's own turn: h and the weight are
+    // ready and the contract the real dispatch checks is decided, so a
+    // refusal lets this norm evaluate ordinarily and the group dispatch
+    // reads its materialized output.
+    auto& group = eager_state->gemv_groups[role.group];
+    if (group.state != GemvGroup::State::pending || !group.norm) {
+      return false;
+    }
+    group.norm_adopted = dispatch_quantized_gemv_group(
+        group.members,
+        group.swiglu_out ? &*group.swiglu_out : nullptr,
+        stream,
+        nullptr,
+        &*group.norm,
+        true);
+    if (!group.norm_adopted) {
+      group.norm.reset();
+    }
+    static const bool trace = std::getenv("MLX_OMARCHY_NORM_FOLD_TRACE") != nullptr;
+    if (group.norm_adopted && trace) {
+      std::fprintf(
+          stderr,
+          "[norm-fold] adopted: gemv group %zu, %zu members\n",
+          role.group,
+          group.members.size());
+    }
+    return group.norm_adopted;
+  }
   if (role.step == EagerStep::skip) {
     // A node deleted by an adopted out-gate plan: true while its group
     // is pending or done (the group's dispatch owns the work and

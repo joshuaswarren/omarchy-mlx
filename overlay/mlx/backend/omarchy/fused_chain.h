@@ -179,6 +179,15 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// RMSNorm prologue fold: the group's shared x is the output of
+// x = RMSNorm(h, weight, eps) whose only readers are the group's members.
+struct NormPlan {
+  array h;
+  array weight;
+  array x;
+  float eps;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -192,12 +201,21 @@ struct OutgatePlan {
 // workgroup with the elementwise arithmetic and rounding. Returns false
 // having allocated nothing when any member falls outside the contract;
 // the caller then lets every node take its ordinary eval_gpu path.
+// |norm| plans the RMSNorm prologue: the shared x is the output of an
+// RMSNorm of |norm->h| and |norm->weight|, and the one dispatch
+// recomputes it per workgroup with the fast-norm kernel's reduction
+// order and rounds, writing the bit-identical x once for retained
+// references. |dry_run| decides the contract without allocating or
+// recording anything: true means a real call with the same arguments
+// passes.
 // Defined in primitives.cpp beside QuantizedMatmul::eval_gpu.
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
+    OutgatePlan* outgate = nullptr,
+    NormPlan* norm = nullptr,
+    bool dry_run = false);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -259,6 +277,10 @@ bool fused_gemv_enabled(const Device& device);
 const char* qmm_geometry_name();
 
 bool outgate_fold_enabled();
+
+// MLX_OMARCHY_NORM_FOLD=1 folds the RMSNorm ahead of the qkv and gate/up
+// decode GEMV groups into their prologue. Default off.
+bool norm_fold_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
