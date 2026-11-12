@@ -313,8 +313,9 @@ layout(push_constant) uniform Params {
 } params;
 #if defined(QMM_VEC_NORM)
 // RMSNorm prologue (QMM_VEC_NORM, multi-only): the shared x is the output
-// of the RMSNorm the group's planner deleted. Every workgroup rebuilds
-// each x quad from h, the norm weight and one scalar, so the norm
+// of the RMSNorm the group's planner deleted. Every workgroup builds
+// each x quad once from h, the norm weight and one scalar into shared
+// memory (all slots read it there), so the norm
 // dispatch and its x round trip disappear. The scalar is computed in the
 // reduction order of fast_norm_apple.comp: 256 virtual threads, each
 // summing params.matrix_k / 256 consecutive elements with no fma, a
@@ -322,7 +323,7 @@ layout(push_constant) uniform Params {
 // shared memory and one more subgroupAdd. A workgroup with fewer than 256
 // threads walks the virtual threads in strides of its own size. The
 // result per element is bf16(h * (scale * w)), the same two float
-// multiplies and one round as the norm shader. Workgroup 0 slot 0
+// multiplies and one round as the norm shader. Workgroup 0
 // stores the product, so retained references to the deleted node's
 // output stay valid. h, w and x start at element 0 of their buffers
 // (the host refuses otherwise); params.alpha carries eps. Bindings 25-27.
@@ -380,15 +381,25 @@ uint norm_word(uint h, uint w) {
   precise float r_hi = h_hi * nw_hi;
   return uint(bf16_store(r_lo)) | (uint(bf16_store(r_hi)) << 16u);
 }
+// The normalized x lives in shared memory, built once per workgroup; every
+// slot reads it from there instead of rebuilding it from h and w.
+shared uvec4 norm_shared[320];
 uvec4 norm_quad(uint quad_index) {
-  uvec4 h = norm_h.values[quad_index];
-  uvec4 w = norm_w.values[quad_index];
-  uvec4 m = {norm_word(h.x, w.x), norm_word(h.y, w.y),
-             norm_word(h.z, w.z), norm_word(h.w, w.w)};
-  if (gl_WorkGroupID.x == 0u && gl_LocalInvocationID.x < LANES) {
-    norm_x.values[quad_index] = m;
+  return norm_shared[quad_index];
+}
+void norm_fill() {
+  uint quads = params.matrix_k / 8u;
+  for (uint q = gl_LocalInvocationID.x; q < quads; q += uint(SLOTS_PER_GROUP) * LANES) {
+    uvec4 h = norm_h.values[q];
+    uvec4 w = norm_w.values[q];
+    uvec4 m = {norm_word(h.x, w.x), norm_word(h.y, w.y),
+               norm_word(h.z, w.z), norm_word(h.w, w.w)};
+    norm_shared[q] = m;
+    if (gl_WorkGroupID.x == 0u) {
+      norm_x.values[q] = m;
+    }
   }
-  return m;
+  barrier();
 }
 #endif
 
@@ -1120,6 +1131,7 @@ void main() {
   uint lane = gl_LocalInvocationID.x;
 #if defined(QMM_VEC_NORM)
   norm_prologue();
+  norm_fill();
 #endif
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
