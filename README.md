@@ -70,7 +70,11 @@ approve each download first. The default pairs: Everyday is Qwen3.5-9B
 Qwen3-4B-Instruct-2507 4-bit plus Laya. Quality is Qwen3.8-27B 4-bit
 plus Laya, and it needs a 96 GB machine.
 
-## Supported hardware
+<a id="supported-hardware"></a>
+
+## MLX compute coverage
+
+Release tiers, required checks, and hardware ownership are defined in the [Apple Silicon support standard](docs/APPLE-SILICON-SUPPORT-STANDARD.md). The table below records MLX compute coverage, not platform release tiers.
 
 | Chip | GPU | ANE |
 |---|---|---|
