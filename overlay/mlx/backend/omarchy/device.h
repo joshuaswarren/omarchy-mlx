@@ -660,6 +660,13 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
+// key-value head only (the partial-sum tile for eight would not fit in shared memory), an explicit MLX_OMARCHY_SDPA_SPLIT_PV value only (pv_env > 0; there is no
+// per-chip default until one is measured), and V element offset, head stride and key stride multiples of 8 (16-byte loads).
+inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_t v_offset, int64_t v_head_stride, int64_t v_key_stride) {
+  return head_dim == 256 && group == 4u && pv_env > 0 && v_offset % 8u == 0u && v_head_stride % 8 == 0 && v_key_stride % 8 == 0;
+}
+
 // Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) with the variable unset: the parts where the route defaults off because
 // the per-node decode GEMV was measured faster than the fused groups:
 //   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-decode-defaults.

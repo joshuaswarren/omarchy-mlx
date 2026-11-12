@@ -381,6 +381,24 @@ TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
 }
 
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, an explicit flag value and 8-aligned V") {
+  // Selected: width 256, four query heads per key-value head, an explicit non-zero flag, V offset and strides multiples of 8.
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, 64, 8192, 256));
+  // The unset flag (-1) and "0" never select it: there is no per-chip default for width 256 yet.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, 0, 8192, 256));
+  // Other widths and groups keep their own routes (group 8 would not fit its partial-sum tile in shared memory).
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(128, 4, 1, 0, 8192, 256));
+  for (uint32_t group : {1u, 2u, 8u}) {
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, group, 1, 0, 8192, 256));
+  }
+  // V alignment: each of offset, head stride and key stride alone breaks it; multiples of 4 (enough for the width-128 variant) are not enough here.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 4, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 0, 8196, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 0, 8192, 252));
+}
+
 TEST_CASE("split-K decode SDPA: the value-phase variant falls back to the old pass 1 when V is not 4-aligned") {
   if (!compute_available()) {
     return;
