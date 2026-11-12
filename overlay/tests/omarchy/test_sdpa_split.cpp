@@ -399,6 +399,23 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 0, 8192, 252));
 }
 
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant meets the float64 gate at group 4, and the flag-off arm keeps the old pass 1") {
+  if (!compute_available()) {
+    return;
+  }
+  // check_shape runs three arms on every shape: the fused kernel, the split route with the flag off, and the split route with the flag on.
+  // At these head-width-256 group-4 shapes the flag-on arm is the wide value-phase kernel (omarchy::sdpa_split_pv_wide selects it:
+  // the selector test above pins that rule for exactly this width, group and alignment), the flag-off arm stays on the old pass 1,
+  // and both are gated against the float64 reference with the same bounds the width-128 value-phase case uses.
+  check_shape(8, 4, 500, 500, 0, 1.0f, false, 256);
+  check_shape(16, 4, 777, 777, 0, 1.0f, false, 256);
+  check_shape(16, 4, 129, 129, 0, 1.0f, false, 256);  // a single partial block
+  check_shape(16, 4, 500, 640, 0, 1.0f, false, 256);  // strided view
+  check_shape(16, 4, 500, 500, 0, 8.0f, false, 256);  // large magnitude
+  check_shape(16, 4, 333, 640, 24, 1.0f, false, 256); // offset strided view
+  check_shape(16, 4, 257, 257, 0, 1.0f, true, 256);   // one-hot values: a dropped or doubled key moves the output
+}
+
 TEST_CASE("split-K decode SDPA: the value-phase variant falls back to the old pass 1 when V is not 4-aligned") {
   if (!compute_available()) {
     return;

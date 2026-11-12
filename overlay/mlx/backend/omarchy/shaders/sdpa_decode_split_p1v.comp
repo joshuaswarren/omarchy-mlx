@@ -5,9 +5,9 @@
 // 32 lanes cover the 128 dimensions in groups of four and the four subgroups each walk 32 of the 128 keys, so the serial chain of dependent loads is 32 keys long instead of 128;
 // the four partial sums of a dimension are added in a fixed order through shared memory. Needs V element offset, head stride and key stride multiples of 4.
 //
-// Split-K pass 1 of the bf16 single-query decode SDPA, head width 128. One workgroup per (key-value head, block of 128 keys)
+// Split-K pass 1 of the bf16 single-query decode SDPA, head width 128 (default) or 256 (-DHD=256). One workgroup per (key-value head, block of 128 keys)
 // computes, for the SPLIT_R query heads that share the key-value head, the block's scores, the block softmax numerators and the
-// block-weighted value sum, and stores (block max, block exp sum, 128 weighted-value floats) per (query head, block) for pass 2
+// block-weighted value sum, and stores (block max, block exp sum, D weighted-value floats) per (query head, block) for pass 2
 // (sdpa_decode_split_p2.comp). The fused kernel (sdpa_decode_native.comp, BF16_IO arm) keeps one 1024-thread workgroup per query
 // head, so a 500-key decode step is a 32-workgroup serial chain: one thread per key with 2-byte loads along its row, then 128
 // threads each walking every key. This pair spreads the keys over blocks, loads each key row with sixteen 16-byte loads and
@@ -15,7 +15,7 @@
 //
 // Arithmetic is float32 throughout (scores, exp, sums, accumulation); only the final store rounds to bf16. The order differs from
 // the fused kernel's composition order, so the result is not bit-equal to it; test_sdpa_split.cpp gates the error against a float64
-// reference. Host guards (primitives.cpp): batch 1, q_len 1, bf16, head width 128, heads / kv heads == SPLIT_R, subgroup size 32,
+// reference. Host guards (primitives.cpp): batch 1, q_len 1, bf16, head width 128 or 256, heads / kv heads == SPLIT_R, subgroup size 32,
 // K element offset, head stride and key stride multiples of 8 (16-byte loads), V element offset and strides even.
 
 #version 460
