@@ -381,6 +381,49 @@ TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
 }
 
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip default when unset") {
+  const std::string m1 = "Apple M1 (G13G B1)";
+  const std::string m1max = "Apple M1 Max (G13C C0)";
+  // Explicit flag value: selected at any part, any length the split route covers.
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, 9000, m1, 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, "", 0, 8192, 256));
+  // Unset: the measured per-chip default only (G13G, up to 768 keys).
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, m1, 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, -1, 768, m1, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 769, m1, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, m1max, 0, 8192, 256));  // G13C has no width-256 default yet
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, "", 0, 8192, 256));
+  // "0" keeps the old pass 1 everywhere.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, 500, m1, 0, 8192, 256));
+  // Other widths and groups keep their own routes (group 8 would not fit its partial-sum tile in shared memory).
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(128, 4, 1, 500, m1, 0, 8192, 256));
+  for (uint32_t group : {1u, 2u, 8u}) {
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, group, 1, 500, m1, 0, 8192, 256));
+  }
+  // V alignment: each of offset, head stride and key stride alone breaks it; multiples of 4 (enough for the width-128 variant) are not enough here.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, m1, 4, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, m1, 0, 8196, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, m1, 0, 8192, 252));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, m1, 0, 8192, 252));
+}
+
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant meets the float64 gate at group 4, and the flag-off arm keeps the old pass 1") {
+  if (!compute_available()) {
+    return;
+  }
+  // check_shape runs three arms on every shape: the fused kernel, the split route with the flag off, and the split route with the flag on.
+  // At these head-width-256 group-4 shapes the flag-on arm is the wide value-phase kernel (omarchy::sdpa_split_pv_wide selects it:
+  // the selector test above pins that rule for exactly this width, group and alignment), the flag-off arm stays on the old pass 1,
+  // and both are gated against the float64 reference with the same bounds the width-128 value-phase case uses.
+  check_shape(8, 4, 500, 500, 0, 1.0f, false, 256);
+  check_shape(16, 4, 777, 777, 0, 1.0f, false, 256);
+  check_shape(16, 4, 129, 129, 0, 1.0f, false, 256);  // a single partial block
+  check_shape(16, 4, 500, 640, 0, 1.0f, false, 256);  // strided view
+  check_shape(16, 4, 500, 500, 0, 8.0f, false, 256);  // large magnitude
+  check_shape(16, 4, 333, 640, 24, 1.0f, false, 256); // offset strided view
+  check_shape(16, 4, 257, 257, 0, 1.0f, true, 256);   // one-hot values: a dropped or doubled key moves the output
+}
+
 TEST_CASE("split-K decode SDPA: the value-phase variant falls back to the old pass 1 when V is not 4-aligned") {
   if (!compute_available()) {
     return;

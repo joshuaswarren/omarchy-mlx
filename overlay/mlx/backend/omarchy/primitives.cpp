@@ -16182,12 +16182,17 @@ void ScaledDotProductAttention::eval_gpu(
         scratch.set_data(allocate_omarchy(scratch.nbytes()));
         encoder.add_temporary(scratch);
         std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+        // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
+        // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
+        const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, pv_env, static_cast<uint32_t>(k_len),
+                                                         decode_caps.device_name, split_params.aux_offset, v.strides()[1], v.strides()[2]);
         omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
         if (split_wide) {
           split_p1 = split_group == 1u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256
               : split_group == 2u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R2BF16Hd256
               : split_group == 8u ? omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd256
-                                  : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+                                  : pv_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256
+                                            : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
         } else if (split_group == 1u) {
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128;
         } else if (split_group == 2u) {
