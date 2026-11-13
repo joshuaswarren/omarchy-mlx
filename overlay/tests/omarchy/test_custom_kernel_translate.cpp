@@ -12,6 +12,8 @@
 #include "mlx/fast.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
@@ -1309,4 +1311,42 @@ TEST_CASE("a comma inside a comment in a bf16 initializer is not a declarator se
   auto glsl = translate(source, 1);
   const auto body = glsl.substr(glsl.find("void main()"));
   CHECK(body.find("float v = _mlx_bf16_round_trip(_mlx_arg0[c] );") != std::string::npos);
+}
+
+namespace {
+// Real compiler check: skipped (stated in the log) only where glslc is absent.
+bool glslc_present() {
+  return std::system("command -v glslc >/dev/null 2>&1") == 0;
+}
+int glslc_status(const std::string& glsl, const std::string& tag) {
+  const std::string base = "/tmp/omarchy-translate-test-" + tag;
+  {
+    std::ofstream out(base + ".comp");
+    out << glsl;
+  }
+  const std::string cmd =
+      "glslc -fshader-stage=compute --target-env=vulkan1.2 " + base +
+      ".comp -o /dev/null 2> " + base + ".err";
+  return std::system(cmd.c_str());
+}
+} // namespace
+
+TEST_CASE("literal bfloat16_t locals on float-only buffers compile with glslc") {
+  // Review finding: the body calls _mlx_bf16_round_trip but nothing declared
+  // the helper or the int16 extension because no buffer is bfloat16.
+  if (!glslc_present()) {
+    MESSAGE("glslc not found: skipping the compile check");
+    return;
+  }
+  const char* source =
+      "[[kernel]] void glue_glslc(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t v = in[c] * 2.0f;\n"
+      "  v = v + in[c + 1];\n"
+      "  y[c] = v;\n"
+      "}\n";
+  CHECK(glslc_status(translate(source, 1), "literal-locals") == 0);
 }
