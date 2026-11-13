@@ -2945,6 +2945,14 @@ Translation translate_msl(
   needs_int16 = needs_int16 || body.find("int16_t") != std::string::npos ||
       body.find("uint16_t") != std::string::npos ||
       body.find("float16_t") != std::string::npos;
+  // The bf16 helpers are written in uint16_t: any use of them in the body or
+  // header (literal bfloat16_t locals on float-only buffers produce
+  // _mlx_bf16_round_trip with no bfloat16 buffer) needs the helper block and
+  // the int16 extension.
+  needs_bfloat = needs_bfloat ||
+      body.find("_mlx_bf16_") != std::string::npos ||
+      header.find("_mlx_bf16_") != std::string::npos;
+  needs_int16 = needs_int16 || needs_bfloat;
   needs_int64 = needs_int64 || body.find("int64_t") != std::string::npos ||
       body.find("uint64_t") != std::string::npos;
   // mlx injects `NAME_strides` as `constant int64_t*`; GLSL array subscripts
