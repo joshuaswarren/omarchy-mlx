@@ -16019,13 +16019,14 @@ void ScaledDotProductAttention::eval_gpu(
   constexpr uint32_t kDecodeSharedBytes =
       (32u * 32u + 2u * 128u + 128u * 32u) * sizeof(float);
   // The f16 arm needs 32-wide subgroups with basic, arithmetic and shuffle
-  // operations, a 1024-lane workgroup and the shared stream above. It does
-  // not use the cooperative matrix: on a device without one (Borealis) the
-  // same blob measures 3.3x (1100 keys) to 6x (4096 keys) faster than the
-  // three-dispatch composition it replaces, and stores the composition's
-  // values within the f16 envelope.
+  // operations, a 1024-lane workgroup and the shared stream above. The
+  // kernel does not use the cooperative matrix, but the gate keeps
+  // requiring one except on the parts sdpa_decode_f16_without_coopmat_part
+  // names (G16S, where it was measured), so no other part changes route.
   auto decode_subgroup_gate = [&](const omarchy::CapabilityReport& c) {
-    return c.subgroup_size == 32u &&
+    return (c.cooperative_matrix_f32_8 ||
+            omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&
+        c.subgroup_size == 32u &&
         c.max_compute_work_group_invocations >= 1024u &&
         c.max_compute_work_group_size[0] >= 1024u &&
         c.max_compute_shared_memory_size >= kDecodeSharedBytes &&
@@ -16317,14 +16318,18 @@ void ScaledDotProductAttention::eval_gpu(
     params.in_strides[3] = checked_u32(v.strides()[3], tag, out);
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(q), binding(k), binding(v), binding(out)};
+    // The bf16 arm uses neither the cooperative matrix nor subgroup
+    // operations; only the f16 arm depends on the gate above.
+    if (!decode_bf16) {
       omarchy::capsim::require_backed(
           encoder.device(),
           decode_caps,
           decode_subgroup_ready,
           decode_kernel_name(),
-          "subgroup32_basic_arithmetic_shuffle+workgroup_limits+"
-          "shared_memory_limit_bytes",
+          "cooperative_matrix_fp32_8x8x8+subgroup32_basic_arithmetic_shuffle+"
+          "workgroup_limits+shared_memory_limit_bytes",
           decode_subgroup_gate(encoder.device().hardware_capabilities()));
+    }
     if (params.flags != 0u) {
       // Native-shape per-block two-pass (f16 only; bf16 always one-pass).
       // The fused kernel keeps one workgroup per head, so its walk runs

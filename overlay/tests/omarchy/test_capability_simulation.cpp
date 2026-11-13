@@ -97,7 +97,7 @@ struct GateExpectations {
   bool coopmat_claim;
   bool subgroup32_arithmetic; // qmm vec subgroup gate
   bool bf16_gemv_gate;        // subgroup32 + SHUFFLE_RELATIVE
-  bool sdpa_native_gate;      // 32+wg>=1024+smem>=21504+ops (no coopmat)
+  bool sdpa_native_gate;      // (coopmat or G16S)+32+wg>=1024+smem+ops
 };
 
 GateExpectations expectations() {
@@ -113,7 +113,10 @@ GateExpectations expectations() {
   e.bf16_gemv_gate =
       c.subgroup_size == 32u &&
       (c.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
-  e.sdpa_native_gate = c.subgroup_size == 32u &&
+  e.sdpa_native_gate = (c.cooperative_matrix_f32_8 ||
+                        omarchy::sdpa_decode_f16_without_coopmat_part(
+                            c.device_name)) &&
+      c.subgroup_size == 32u &&
       c.max_compute_work_group_invocations >= 1024u &&
       c.max_compute_work_group_size[0] >= 1024u &&
       c.max_compute_shared_memory_size >= (32u * 32u + 2u * 128u + 128u * 32u) *
@@ -270,13 +273,16 @@ bool coopmat_backed() {
 }
 
 // True when the runtime hardware itself meets the fused decode SDPA gate
-// (subgroup32, 1024-lane workgroup, shared stream, basic+arithmetic+shuffle).
+// (cooperative matrix or a G16S part, subgroup32, 1024-lane workgroup,
+// shared stream, basic+arithmetic+shuffle).
 bool sdpa_native_backed() {
   constexpr VkSubgroupFeatureFlags kDecodeOps =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
   const auto& c = hw();
-  return c.subgroup_size == 32u &&
+  return (c.cooperative_matrix_f32_8 ||
+          omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&
+      c.subgroup_size == 32u &&
       c.max_compute_work_group_invocations >= 1024u &&
       c.max_compute_work_group_size[0] >= 1024u &&
       c.max_compute_shared_memory_size >= (32u * 32u + 2u * 128u + 128u * 32u) *
