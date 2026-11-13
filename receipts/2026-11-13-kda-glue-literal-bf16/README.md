@@ -37,14 +37,28 @@ maxdiff 3.76e-07), `kda_glue_post` PASS exact. 17 PASS / 0 WRONG /
 before log apart from timing. Repeated 3 times: each run 17 PASS / 0 WRONG
 (summary lines compared only).
 
+## Final-code proof (head of this PR, libmlx sha 19e5d2b0)
+
+One shared translation-cache dir; old libmlx, then fixed libmlx, then fixed
+again (`final-warm-cache-16inch-m1-max.txt`):
+
+| run | 16-inch M1 Max (G13C) | 13-inch M1 (G13G) |
+|---|---|---|
+| old libmlx | 15 PASS / 2 WRONG (13/12288, 53/12288), 17 `.tr` entries | same counts, 17 entries |
+| fixed libmlx | 17 PASS / 0 WRONG / 9 REFUSED, RC=0, 34 entries | 17 PASS / 0 WRONG / 9 REFUSED, RC=0, 34 entries |
+| fixed, warm | 17 PASS, 34 entries | 17 PASS, 34 entries |
+
+`kda_glue_pre` maxdiff 3.76e-07 and `kda_glue_post` exact on both chips. The
+fixed library added 17 new cache entries instead of reusing the old ones, so a
+warm cache from the old build does not serve the old translation. The
+13-inch M1 logs are `recheck-before-fix-13inch-m1.log` and
+`recheck-after-fix-13inch-m1.log`. The 13-inch run used the fixed libmlx
+copied from the 16-inch build tree with a separate wheel for the rest of the
+package, not the wheel of the 2026-11-11 baseline.
+
 ## Caveats
 
-- The runs above used libmlx before two review fixes (declarator spacing;
-  same-name float local). A final-code rerun is queued; this file is updated
-  when it finishes.
-- Not run: a 13-inch M1 (G13G) run of the fixed build; kernels outside the
-  26 in the harness.
+- Not run: kernels outside the 26 in the harness.
 - Known gap (follow-up, not this change): `x = e` reassignments of a bf16 local are rounded only when the name is not also declared with another scalar type; `x += e` and other compound assignments are never rounded.
 - The translation cache key includes the SHA-256 of the loaded libmlx, so a
-  rebuilt library never reuses an old `.tr` entry (read from
-  `translator_runtime_identity()`; inference, not tested with a warm cache).
+  rebuilt library never reuses an old `.tr` entry (measured above).
