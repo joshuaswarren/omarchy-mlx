@@ -648,13 +648,24 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
         wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
       } \
+      float scale_r[ROWS_PER_SLOT]; \
+      float bias_r[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        scale_r[r] = LOAD_VALUE(S.values[s_base + \
+            row_base[r] * groups_per_row + Q4_ROWS_GROUP(w)]); \
+        bias_r[r] = LOAD_VALUE(B.values[b_base + \
+            row_base[r] * groups_per_row + Q4_ROWS_GROUP(w)]); \
+      } \
       uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
       uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
       Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
       Q4_QUAD_ROWS(wb[r], xb.x, xb.y) \
       Q4_QUAD_ROWS(wb[r] >> 16u, xb.z, xb.w) \
-      Q4_ROWS_FINISH(w, S, B) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        precise float bias_term = input_sum * bias_r[r]; \
+        acc[r] += fma(scale_r[r], dot[r], bias_term); \
+      } \
     } \
   } else { \
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
