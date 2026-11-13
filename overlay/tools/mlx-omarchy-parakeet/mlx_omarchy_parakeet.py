@@ -403,7 +403,7 @@ def _explain_seal_mismatch(message: str) -> str | None:
     return _seal_advice(name, actual, expected, disk_sha, _wheel_record_sha(name))
 
 
-def _check_ane_capability() -> None:
+def _check_ane_capability(module_dir: Path | None = None) -> None:
     """Refuse unless the host can run the ANE island encoder."""
     value = platform.system().lower()
     if value != "linux":
@@ -435,9 +435,12 @@ def _check_ane_capability() -> None:
             f"(mode {oct(os.stat(accel).st_mode)}); the ANE driver is "
             f"not bound"
         )
-    if not Path("/sys/module/ane").is_dir():
+    modules = module_dir or Path("/sys/module")
+    if not (modules / "ane").is_dir() and not any(
+        module.is_dir() for module in modules.glob("ane_*")
+    ):
         raise TranscribeRefusal(
-            "the ane kernel module is not loaded (/sys/module/ane missing)"
+            f"no ANE kernel module is loaded under {modules}"
         )
 
 
