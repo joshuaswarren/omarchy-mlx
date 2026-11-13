@@ -7,10 +7,15 @@ M4 machine has results here, and it is not the machine most readers have.
 | Machine | GPU id | Driver | Status |
 |---|---|---|---|
 | M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). |
-| M4 Pro (J616s, t6040) | G16S | Mesa Borealis | **Not measured.** The steps below come from reading the source. |
+| M4 Pro (J616s, t6040) | G16S | Mesa Borealis 26.3.0-devel, Linux 7.3 | Measured with the v0.7.41 release wheel. See the [M4 Pro receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md). |
 
-Nothing on this page has run on an M4 Pro. If it fails on your machine,
-the failure is the useful result: send it with the table row.
+On the M4 Pro (MacBook Pro 16-inch, 24 GB, Fedora 45) the release wheel
+runs on the system Borealis driver with no override and no symlink: the
+system ICD file is `asahi_icd.aarch64.json`, which passes the ICD check,
+and driver ID 35 is admitted. The 6 collector probe ops pass. Qwen3.8-2B
+4-bit decodes at 105.6 tokens per second (prefill 512: 512.6) and
+Qwen3-4B-Instruct-2507 4-bit at 49.3 (239.6). If a step below fails on
+your machine, send the failure with the table row.
 
 ## Before you start
 
@@ -119,9 +124,8 @@ choose the venv python and the driver setting.
   `MLX_OMARCHY_NO_COOPMAT=1`. If your driver does not expose the
   cooperative matrix, you get #321 and not the default pick. The
   collector's capability report shows which case you are in.
-- **Op checks may fail.** It is not known whether the wheel's kernels pass
-  on Apple9 under Borealis. A failed op reference in the first run is a
-  valid table fact.
+- Op checks: on the M4 Pro under Borealis the 6 collector probe ops pass
+  (v0.7.41).
 - **The ANE is not supported on M4 under Linux.** The M4 ANE row is
   data-only (h16 bring-up module).
 - **Decode and prefill numbers are not in the collector.** They come from

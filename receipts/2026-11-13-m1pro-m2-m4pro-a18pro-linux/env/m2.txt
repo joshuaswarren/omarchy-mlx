@@ -1,0 +1,10 @@
+label=m2 date=2026-11-13T05:27:15Z kernel=7.3.0-aurora-fleet69
+governor=schedutil load=0.46 0.44 0.34
+	apiVersion         = 1.4.363
+	deviceName         = Apple M2 (G14G B0)
+	driverInfo         = Mesa 26.3.0-devel (git-be147e3625), Borealis, derived from Honeykrisp
+apple,j413 apple,t8112 apple,arm-platform 
+Mem:            7433        1620          52         296        6155        5813
+  "mx_version": "0.32.4.dev202611111431+8380f002",
+  "version_match": true
+}

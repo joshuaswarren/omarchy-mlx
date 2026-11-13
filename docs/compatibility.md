@@ -47,7 +47,16 @@ nothing about Linux execution.
   and one clip length. The timing was taken while another test ran GPU
   work, so there is no speed claim. Running audio-to-text on this
   machine is not shown yet.
-- M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra. Untested
+- M1 Pro (MacBook Pro 16-inch, G13S), M2 (MacBook Air 13-inch, G14G),
+  M4 Pro (MacBook Pro 16-inch, G16S) and A18 Pro (MacBook Neo, G17P).
+  GPU: Tested on Linux with the v0.7.41 release wheel. Fedora 44/45,
+  Linux 7.3, Mesa 26.3.0-devel Borealis (driver ID 35) through the system
+  ICD. All four pass the 6 collector probe ops. Decode / prefill 512,
+  tokens per second, Qwen3.8-2B 4-bit and Qwen3-4B-Instruct-2507 4-bit:
+  M1 Pro 61.6 / 280.0 and 31.6 / 133.9; M2 38.7 / 168.4 and 19.4 / 78.8;
+  M4 Pro 105.6 / 512.6 and 49.3 / 239.6; A18 Pro 33.3 / 108.8 and
+  13.5 / 44.1 ([receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md)). ANE: Untested.
+- M1 Ultra, M2 Pro, M2 Ultra. Untested
   ([README table](../README.md#supported-hardware)).
 - M3. Experimental: aurora mesa-m3 graphics; compute not certified
   (README row since 2026-10-07;
