@@ -24,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace mlx::core::omarchy::ane {
@@ -124,8 +125,11 @@ class SystemKernel : public AneH16Kernel {
 
 class H16Device : public AneDevice {
  public:
-  H16Device(const std::string& node, std::shared_ptr<AneH16Kernel> kernel)
-      : kernel_(std::move(kernel)) {
+  H16Device(
+      const std::string& node,
+      std::shared_ptr<AneH16Kernel> kernel,
+      AneH16Residency residency)
+      : kernel_(std::move(kernel)), residency_(residency) {
     if (!kernel_) {
       throw AneDeviceError("ABI 3 device requires a kernel interface");
     }
@@ -141,6 +145,20 @@ class H16Device : public AneDevice {
 
   std::string describe() const override {
     return identity_.describe();
+  }
+
+  std::string status() const override {
+    size_t resident = 0;
+    for (const auto& entry : programs_) {
+      resident += entry.second.fd >= 0 ? 1 : 0;
+    }
+    std::ostringstream line;
+    line << "h16 residency=" << h16_residency_name(residency_)
+         << " programs=" << programs_.size() << " resident=" << resident
+         << " kernel_loads=" << kernel_loads_ << " evictions=" << evictions_
+         << " limit="
+         << (limit_ ? std::to_string(limit_) : std::string("unbounded"));
+    return line.str();
   }
 
   void load(const AneValidatedProgram& program) override {
@@ -165,85 +183,44 @@ class H16Device : public AneDevice {
 
     // The sealed HWX image the validator approved; the sections are built
     // again from exactly these bytes, so the pair handed to H16_LOAD always
-    // describes one file.
-    AneMappedFile hwx(program.hwx.string());
-    AneH16Sections sections;
+    // describes one file. The mapping stays with the program: a program the
+    // device unloads to make room (swap) is loaded again from these same
+    // bytes, never from a path that could have changed.
+    Program loaded;
+    loaded.subject = subject;
+    loaded.hwx = std::make_shared<AneMappedFile>(program.hwx.string());
     try {
-      sections = h16_build_sections(hwx.data(), hwx.size());
+      loaded.sections =
+          h16_build_sections(loaded.hwx->data(), loaded.hwx->size());
     } catch (const AneH16HwxError& error) {
       throw AneDeviceError(subject + " HWX refused: " + error.reason);
     }
-    if (sections.tasks != program.h16_tasks ||
-        sections.surfaces.size() != contract.size()) {
+    if (loaded.sections.tasks != program.h16_tasks ||
+        loaded.sections.surfaces.size() != contract.size()) {
       throw AneDeviceError(subject + " HWX differs from the validated bundle");
     }
     for (size_t i = 0; i < contract.size(); ++i) {
-      if (sections.surfaces[i].allocation != contract[i].bytes ||
-          sections.surfaces[i].direction != contract[i].direction) {
+      if (loaded.sections.surfaces[i].allocation != contract[i].bytes ||
+          loaded.sections.surfaces[i].direction != contract[i].direction) {
         throw AneDeviceError(subject + " HWX differs from the validated bundle");
       }
-    }
-
-    // One program per open file: a fresh file for every program.
-    const int fd = kernel_->open_node(identity_.node);
-    if (fd < 0) {
-      throw AneDeviceError(
-          "open(" + identity_.node + ") failed for " + subject + ": " +
-          errno_name(-fd) + " (" + std::strerror(-fd) + ")");
-    }
-    std::array<drm_ane_h16_section, DRM_ANE_H16_SECTIONS> table{};
-    for (size_t kind = 0; kind < table.size(); ++kind) {
-      table[kind].kind = static_cast<uint32_t>(DRM_ANE_H16_SECTION_GENERIC + kind);
-      table[kind].size = static_cast<uint32_t>(sections.sections[kind].size());
-      table[kind].data_ptr =
-          reinterpret_cast<uintptr_t>(sections.sections[kind].data());
-    }
-    drm_ane_h16_load request{};
-    request.hwx_ptr = reinterpret_cast<uintptr_t>(hwx.data());
-    request.hwx_size = hwx.size();
-    request.sections_ptr = reinterpret_cast<uintptr_t>(table.data());
-    request.section_count = DRM_ANE_H16_SECTIONS;
-    const int result =
-        kernel_->ioctl_node(fd, DRM_IOCTL_ANE_H16_LOAD, &request);
-    if (result != 0) {
-      kernel_->close_node(fd);
-      throw AneDeviceError(h16_ioctl_error(
-          "DRM_IOCTL_ANE_H16_LOAD", subject + " on " + identity_.node, -result));
-    }
-
-    // The kernel's view of the program must equal the manifest's bindings.
-    // Closing the file unloads the program again.
-    auto refuse = [&](const std::string& reason) {
-      kernel_->close_node(fd);
-      throw AneDeviceError(
-          "DRM_IOCTL_ANE_H16_LOAD for " + subject + " reported " + reason);
-    };
-    if (request.surface_count != contract.size()) {
-      refuse(
-          std::to_string(request.surface_count) +
-          " surfaces; the manifest binds " + std::to_string(contract.size()));
-    }
-    Program loaded;
-    loaded.fd = fd;
-    loaded.subject = subject;
-    // H16_LOAD reports each surface's tensor span, which EXEC buffers carry;
-    // the manifest binds the surface allocation, the span's upper bound.
-    for (size_t i = 0; i < contract.size(); ++i) {
-      const uint64_t span = sections.surfaces[i].span;
-      if (request.surface_size[i] != span ||
-          request.surface_direction[i] != contract[i].direction) {
-        refuse(
-            "surface " + std::to_string(i) + " with " +
-            std::to_string(request.surface_size[i]) + " bytes, direction " +
-            std::to_string(request.surface_direction[i]) +
-            "; the HWX spans " + std::to_string(span) +
-            " bytes, direction " + std::to_string(contract[i].direction));
-      }
       loaded.directions.push_back(contract[i].direction);
-      loaded.spans.push_back(span);
+      // H16_LOAD reports each surface's tensor span, which EXEC buffers
+      // carry; the manifest binds the allocation, the span's upper bound.
+      loaded.sizes.push_back(loaded.sections.surfaces[i].span);
       loaded.buffers.emplace_back(static_cast<size_t>(contract[i].bytes), 0);
     }
-    programs_.emplace(program.manifest_index, std::move(loaded));
+
+    // Load on the kernel now, even when the program may be unloaded again
+    // before it runs: the driver's own validation (ENOEXEC and the like)
+    // then fails the session open, not a submit inside its deadline.
+    auto entry = programs_.emplace(program.manifest_index, std::move(loaded));
+    try {
+      make_resident(entry.first->second);
+    } catch (...) {
+      programs_.erase(entry.first);
+      throw;
+    }
   }
 
   void send(
@@ -267,12 +244,15 @@ class H16Device : public AneDevice {
 
   void exec(size_t manifest_index) override {
     Program& program = find(manifest_index, "exec");
+    // The surfaces live in host buffers, so a program the device had to
+    // unload comes back with its staged inputs intact.
+    make_resident(program);
     std::array<drm_ane_h16_buffer, DRM_ANE_H16_SURFACES> buffers{};
     for (size_t i = 0; i < program.buffers.size(); ++i) {
       buffers[i].ptr = reinterpret_cast<uintptr_t>(program.buffers[i].data());
       // The staging buffer covers the allocation; the tensor lies in its
       // first span bytes, which is what the driver copies.
-      buffers[i].size = program.spans[i];
+      buffers[i].size = program.sizes[i];
     }
     drm_ane_h16_exec request{};
     request.buffers_ptr = reinterpret_cast<uintptr_t>(buffers.data());
@@ -307,19 +287,174 @@ class H16Device : public AneDevice {
   // Closing a program's file makes the driver send TERMINATE and UNLOAD.
   void release() override {
     for (auto& entry : programs_) {
-      kernel_->close_node(entry.second.fd);
+      unload(entry.second);
     }
     programs_.clear();
   }
 
  private:
   struct Program {
-    int fd{-1};
+    int fd{-1}; // -1: not on the kernel right now (never loaded or evicted)
     std::string subject;
+    std::shared_ptr<AneMappedFile> hwx;
+    AneH16Sections sections;
     std::vector<uint32_t> directions;
+    std::vector<uint64_t> sizes; // tensor spans, what H16_EXEC copies
     std::vector<std::vector<uint8_t>> buffers; // H16_LOAD surface order
-    std::vector<uint64_t> spans;                // what EXEC copies of each
+    uint64_t last_used{0};
   };
+
+  size_t resident_count() const {
+    size_t count = 0;
+    for (const auto& entry : programs_) {
+      count += entry.second.fd >= 0 ? 1 : 0;
+    }
+    return count;
+  }
+
+  void unload(Program& program) {
+    if (program.fd >= 0) {
+      kernel_->close_node(program.fd);
+      program.fd = -1;
+    }
+  }
+
+  // Unloads the least recently used resident program other than `keep`.
+  bool evict_one(const Program* keep) {
+    Program* victim = nullptr;
+    for (auto& entry : programs_) {
+      Program& candidate = entry.second;
+      if (&candidate == keep || candidate.fd < 0) {
+        continue;
+      }
+      if (!victim || candidate.last_used < victim->last_used) {
+        victim = &candidate;
+      }
+    }
+    if (!victim) {
+      return false;
+    }
+    unload(*victim);
+    ++evictions_;
+    return true;
+  }
+
+  // One open + H16_LOAD for `program`. Returns 0 (program resident), or the
+  // negative errno of the ioctl, with the file closed again. Anything that
+  // is not a driver refusal (open failure, a report that differs from the
+  // manifest) throws and leaves no file behind.
+  int load_once(Program& program) {
+    // One program per open file: a fresh file for every load.
+    const int fd = kernel_->open_node(identity_.node);
+    if (fd < 0) {
+      throw AneDeviceError(
+          "open(" + identity_.node + ") failed for " + program.subject + ": " +
+          errno_name(-fd) + " (" + std::strerror(-fd) + ")");
+    }
+    std::array<drm_ane_h16_section, DRM_ANE_H16_SECTIONS> table{};
+    for (size_t kind = 0; kind < table.size(); ++kind) {
+      table[kind].kind = static_cast<uint32_t>(DRM_ANE_H16_SECTION_GENERIC + kind);
+      table[kind].size =
+          static_cast<uint32_t>(program.sections.sections[kind].size());
+      table[kind].data_ptr =
+          reinterpret_cast<uintptr_t>(program.sections.sections[kind].data());
+    }
+    drm_ane_h16_load request{};
+    request.hwx_ptr = reinterpret_cast<uintptr_t>(program.hwx->data());
+    request.hwx_size = program.hwx->size();
+    request.sections_ptr = reinterpret_cast<uintptr_t>(table.data());
+    request.section_count = DRM_ANE_H16_SECTIONS;
+    const int result =
+        kernel_->ioctl_node(fd, DRM_IOCTL_ANE_H16_LOAD, &request);
+    if (result != 0) {
+      kernel_->close_node(fd);
+      return result;
+    }
+    ++kernel_loads_;
+
+    // The kernel's view of the program must equal the manifest's bindings.
+    // Closing the file unloads the program again.
+    auto refuse = [&](const std::string& reason) {
+      kernel_->close_node(fd);
+      throw AneDeviceError(
+          "DRM_IOCTL_ANE_H16_LOAD for " + program.subject + " reported " +
+          reason);
+    };
+    if (request.surface_count != program.sizes.size()) {
+      refuse(
+          std::to_string(request.surface_count) +
+          " surfaces; the manifest binds " +
+          std::to_string(program.sizes.size()));
+    }
+    for (size_t i = 0; i < program.sizes.size(); ++i) {
+      if (request.surface_size[i] != program.sizes[i] ||
+          request.surface_direction[i] != program.directions[i]) {
+        refuse(
+            "surface " + std::to_string(i) + " with " +
+            std::to_string(request.surface_size[i]) + " bytes, direction " +
+            std::to_string(request.surface_direction[i]) +
+            "; the HWX spans " + std::to_string(program.sizes[i]) +
+            " bytes, direction " + std::to_string(program.directions[i]));
+      }
+    }
+    program.fd = fd;
+    return 0;
+  }
+
+  // Residency policy (see AneH16Residency). Brings `program` onto the
+  // kernel, unloading other programs where the policy and the driver need
+  // it. On a throw the program has no file and nothing else changed except
+  // programs already unloaded to make room (they reload on their next use).
+  void make_resident(Program& program) {
+    if (program.fd >= 0) {
+      program.last_used = ++clock_;
+      return;
+    }
+    if (residency_ == AneH16Residency::Swap) {
+      while (evict_one(&program)) {
+      }
+    } else if (limit_ != 0) {
+      while (resident_count() >= limit_ && evict_one(&program)) {
+      }
+    }
+    for (;;) {
+      const int result = load_once(program);
+      if (result == 0) {
+        break;
+      }
+      if (result != -EBUSY) {
+        throw AneDeviceError(h16_ioctl_error(
+            "DRM_IOCTL_ANE_H16_LOAD",
+            program.subject + " on " + identity_.node, -result));
+      }
+      const size_t others = resident_count();
+      if (residency_ == AneH16Residency::Concurrent) {
+        throw AneDeviceError(
+            h16_ioctl_error(
+                "DRM_IOCTL_ANE_H16_LOAD",
+                program.subject + " on " + identity_.node, EBUSY) +
+            "; " + std::to_string(others) +
+            " program(s) of this device are loaded and the kernel does not "
+            "keep another one resident (concurrent residency needs the "
+            "switch-safe driver patch); run with --h16-residency swap or "
+            "auto to load programs on demand");
+      }
+      if (others == 0) {
+        throw AneDeviceError(
+            h16_ioctl_error(
+                "DRM_IOCTL_ANE_H16_LOAD",
+                program.subject + " on " + identity_.node, EBUSY) +
+            "; this device holds no program, so another client or an earlier "
+            "worker still owns the node's program slot");
+      }
+      // The driver's capacity is the number of programs that were resident
+      // when it said no. Remember it so later loads unload first instead of
+      // asking the kernel again, and unload the least recently used.
+      limit_ = limit_ == 0 ? others : std::min(limit_, others);
+      evict_one(&program);
+    }
+    program.last_used = ++clock_;
+  }
 
   Program& find(size_t manifest_index, const char* what) {
     auto found = programs_.find(manifest_index);
@@ -348,9 +483,14 @@ class H16Device : public AneDevice {
   }
 
   std::shared_ptr<AneH16Kernel> kernel_;
+  AneH16Residency residency_;
   AneH16Identity identity_;
   int probe_fd_{-1};
   std::unordered_map<size_t, Program> programs_;
+  uint64_t clock_{0};
+  size_t limit_{0}; // 0 = no refusal seen yet
+  uint64_t kernel_loads_{0};
+  uint64_t evictions_{0};
 };
 
 } // namespace
@@ -457,14 +597,43 @@ AneH16Identity probe_h16_node(
       "no ABI 3 H16 accel node (the H16 program stage was not reached)");
 }
 
-std::unique_ptr<AneDevice> make_h16_device(
-    const std::string& node,
-    std::shared_ptr<AneH16Kernel> kernel) {
-  return std::make_unique<H16Device>(node, std::move(kernel));
+const char* h16_residency_name(AneH16Residency residency) {
+  switch (residency) {
+    case AneH16Residency::Concurrent:
+      return "concurrent";
+    case AneH16Residency::Swap:
+      return "swap";
+    case AneH16Residency::Auto:
+      break;
+  }
+  return "auto";
 }
 
-std::unique_ptr<AneDevice> make_h16_device(const std::string& node) {
-  return make_h16_device(node, make_h16_system_kernel());
+AneH16Residency parse_h16_residency(const std::string& text) {
+  if (text == "auto") {
+    return AneH16Residency::Auto;
+  }
+  if (text == "concurrent") {
+    return AneH16Residency::Concurrent;
+  }
+  if (text == "swap") {
+    return AneH16Residency::Swap;
+  }
+  throw std::invalid_argument(
+      "--h16-residency expects auto, concurrent or swap, got '" + text + "'");
+}
+
+std::unique_ptr<AneDevice> make_h16_device(
+    const std::string& node,
+    std::shared_ptr<AneH16Kernel> kernel,
+    AneH16Residency residency) {
+  return std::make_unique<H16Device>(node, std::move(kernel), residency);
+}
+
+std::unique_ptr<AneDevice> make_h16_device(
+    const std::string& node,
+    AneH16Residency residency) {
+  return make_h16_device(node, make_h16_system_kernel(), residency);
 }
 
 } // namespace mlx::core::omarchy::ane

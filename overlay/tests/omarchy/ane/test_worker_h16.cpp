@@ -61,6 +61,19 @@ struct FakeKernel : AneH16Kernel {
   // Overrides of what H16_LOAD reports, per surface index.
   std::map<size_t, uint64_t> report_size;
   std::vector<std::vector<uint8_t>> last_inputs;
+  // Today's driver: at most this many programs resident at once (0 = no
+  // limit, the switch-safe driver); a load beyond it answers -EBUSY.
+  size_t max_resident{0};
+  // Programs that another client of the node holds (counted against the
+  // limit, invisible to the device under test).
+  size_t foreign_programs{0};
+  // Fail the Nth successful-looking H16_LOAD (1-based) with this errno.
+  int fail_load_number{0};
+  int fail_load_errno{0};
+  int busy_answers{0};
+  int loads_ok{0};
+  int load_attempts{0};
+  int execs_total{0};
 
   int open_node(const std::string& path) override {
     auto found = nodes.find(path);
@@ -112,6 +125,15 @@ struct FakeKernel : AneH16Kernel {
         return -EINVAL;
       if (programs.count(fd)) return -EBUSY;
       if (load_error) return load_error;
+      ++load_attempts;
+      if (max_resident && programs.size() + foreign_programs >= max_resident) {
+        ++busy_answers;
+        return -EBUSY;
+      }
+      if (fail_load_number && load_attempts == fail_load_number) {
+        return fail_load_errno;
+      }
+      ++loads_ok;
       FakeProgram program;
       const auto* hwx = reinterpret_cast<const uint8_t*>(load->hwx_ptr);
       program.hwx.assign(hwx, hwx + load->hwx_size);
@@ -168,6 +190,7 @@ struct FakeKernel : AneH16Kernel {
         out[k] = static_cast<uint8_t>(a + 2 * b);
       }
       found->second.execs++;
+      ++execs_total;
       return 0;
     }
     return -ENOTTY;
@@ -481,4 +504,368 @@ TEST_CASE("a supervised worker run reaches the fake driver end to end") {
     exact = outputs["y"][k] == static_cast<uint8_t>(a[k] + 2 * b[k]);
   }
   CHECK(exact);
+}
+
+// ---------------------------------------------------------------------------
+// Residency: one program per file, and a driver that may keep only one.
+
+namespace {
+
+// Runs program `index` with inputs derived from `seed`, returns its output.
+std::vector<uint8_t> run_program(
+    AneDevice& device, size_t index, uint8_t seed) {
+  const auto a = pattern(seed);
+  const auto b = pattern(static_cast<uint8_t>(seed + 40));
+  device.send(index, 0, raw_binding("a", 0), a.data(), a.size());
+  device.send(index, 1, raw_binding("b", 2), b.data(), b.size());
+  device.exec(index);
+  std::vector<uint8_t> y(32768);
+  device.read(index, 0, raw_binding("y", 1), y.data(), y.size());
+  return y;
+}
+
+std::vector<uint8_t> expected_output(uint8_t seed) {
+  const auto a = pattern(seed);
+  const auto b = pattern(static_cast<uint8_t>(seed + 40));
+  std::vector<uint8_t> y(32768);
+  for (size_t k = 0; k < y.size(); ++k) {
+    y[k] = static_cast<uint8_t>(a[k] + 2 * b[k]);
+  }
+  return y;
+}
+
+} // namespace
+
+TEST_CASE("auto residency swaps programs when the driver keeps only one") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  auto device = make_h16_device("", kernel, AneH16Residency::Auto);
+  // Three programs load although the driver says no to a second resident
+  // one; the device learns the capacity from the -EBUSY.
+  device->load(add128_program(0));
+  device->load(add128_program(1));
+  device->load(add128_program(2));
+  CHECK(kernel->busy_answers == 1); // asked once, then it knew
+  CHECK(kernel->programs.size() == 1);
+  CHECK(kernel->open_files.size() == 2); // probe + the resident program
+  CHECK(contains(device->status(), "residency=auto programs=3 resident=1"));
+  CHECK(contains(device->status(), "kernel_loads=3 evictions=2 limit=1"));
+
+  // Every program runs, in any order, with its own staged inputs.
+  const int order[] = {0, 1, 2, 2, 0, 0, 1};
+  for (int index : order) {
+    const uint8_t seed = static_cast<uint8_t>(10 + index);
+    CHECK(run_program(*device, index, seed) == expected_output(seed));
+    CHECK(kernel->programs.size() == 1);
+  }
+  CHECK(kernel->busy_answers == 1); // never asked again
+  // Program 2 is resident after the loads; each change of program along
+  // 2 | 0 1 2 2 0 0 1 unloads one (the repeats cost nothing): 5 more.
+  CHECK(contains(device->status(), "evictions=7"));
+  device->release();
+  CHECK(kernel->programs.empty());
+  CHECK(kernel->open_files.size() == 1);
+  device.reset();
+  CHECK(kernel->open_files.empty());
+}
+
+TEST_CASE("a swapped-out program keeps the inputs that were staged for it") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  auto device = make_h16_device("", kernel);
+  device->load(add128_program(0));
+  device->load(add128_program(1));
+  // Stage both programs' inputs first (the worker's plan stages a program
+  // right before it runs, but a device must not depend on that), then run
+  // them against a driver that holds one program at a time.
+  const auto a0 = pattern(1), b0 = pattern(2), a1 = pattern(3), b1 = pattern(4);
+  device->send(0, 0, raw_binding("a", 0), a0.data(), a0.size());
+  device->send(0, 1, raw_binding("b", 2), b0.data(), b0.size());
+  device->send(1, 0, raw_binding("a", 0), a1.data(), a1.size());
+  device->send(1, 1, raw_binding("b", 2), b1.data(), b1.size());
+  device->exec(1);
+  device->exec(0);
+  std::vector<uint8_t> y0(32768), y1(32768);
+  device->read(0, 0, raw_binding("y", 1), y0.data(), y0.size());
+  device->read(1, 0, raw_binding("y", 1), y1.data(), y1.size()); // evicted
+  bool exact = true;
+  for (size_t k = 0; k < y0.size(); ++k) {
+    exact = exact && y0[k] == static_cast<uint8_t>(a0[k] + 2 * b0[k]) &&
+        y1[k] == static_cast<uint8_t>(a1[k] + 2 * b1[k]);
+  }
+  CHECK(exact);
+}
+
+TEST_CASE("a driver that keeps two programs evicts the least recently used") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 2;
+  auto device = make_h16_device("", kernel);
+  device->load(add128_program(0));
+  device->load(add128_program(1));
+  device->load(add128_program(2)); // refused once, program 0 goes
+  CHECK(kernel->programs.size() == 2);
+  CHECK(contains(device->status(), "limit=2"));
+  CHECK(contains(device->status(), "evictions=1"));
+  // 1 and 2 are resident: using them costs nothing; using 0 evicts 1.
+  CHECK(run_program(*device, 2, 5) == expected_output(5));
+  CHECK(run_program(*device, 1, 6) == expected_output(6));
+  CHECK(contains(device->status(), "evictions=1"));
+  CHECK(run_program(*device, 0, 7) == expected_output(7)); // 2 is the LRU
+  CHECK(contains(device->status(), "evictions=2"));
+  CHECK(run_program(*device, 1, 8) == expected_output(8)); // still resident
+  CHECK(contains(device->status(), "evictions=2"));
+  CHECK(kernel->programs.size() == 2);
+  CHECK(kernel->busy_answers == 1);
+}
+
+TEST_CASE("a switch-safe driver keeps every program resident and unloads none") {
+  auto kernel = std::make_shared<FakeKernel>(); // no limit
+  auto device = make_h16_device("", kernel);
+  for (size_t i = 0; i < 5; ++i) device->load(add128_program(i));
+  CHECK(kernel->programs.size() == 5);
+  for (size_t i = 0; i < 5; ++i) {
+    CHECK(run_program(*device, i, static_cast<uint8_t>(i)) ==
+          expected_output(static_cast<uint8_t>(i)));
+  }
+  CHECK(kernel->busy_answers == 0);
+  CHECK(kernel->loads_ok == 5);
+  CHECK(contains(device->status(), "evictions=0 limit=unbounded"));
+}
+
+TEST_CASE("concurrent residency fails the load with the driver's reason") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  auto device = make_h16_device("", kernel, AneH16Residency::Concurrent);
+  device->load(add128_program(0));
+  const std::string refusal = message_of([&] { device->load(add128_program(1)); });
+  CHECK(contains(refusal, "DRM_IOCTL_ANE_H16_LOAD failed for program 1 (model.hwx)"));
+  CHECK(contains(refusal, "EBUSY"));
+  CHECK(contains(refusal, "1 program(s) of this device are loaded"));
+  CHECK(contains(refusal, "switch-safe driver patch"));
+  CHECK(contains(refusal, "--h16-residency swap or auto"));
+  // No leak: the refused program has no file, the first one still runs.
+  CHECK(kernel->open_files.size() == 2);
+  CHECK(kernel->programs.size() == 1);
+  CHECK(run_program(*device, 0, 3) == expected_output(3));
+  CHECK(contains(
+      message_of([&] { device->exec(1); }), "exec: program 1 is not loaded"));
+  device->release();
+  CHECK(kernel->open_files.size() == 1);
+}
+
+TEST_CASE("swap residency never asks the driver for a second program") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  auto device = make_h16_device("", kernel, AneH16Residency::Swap);
+  for (size_t i = 0; i < 4; ++i) {
+    device->load(add128_program(i));
+    CHECK(kernel->programs.size() == 1);
+  }
+  for (size_t i : {3, 0, 2, 1, 1, 3}) {
+    CHECK(run_program(*device, i, static_cast<uint8_t>(20 + i)) ==
+          expected_output(static_cast<uint8_t>(20 + i)));
+    CHECK(kernel->programs.size() == 1);
+  }
+  CHECK(kernel->busy_answers == 0);
+  CHECK(contains(device->status(), "residency=swap programs=4 resident=1"));
+  device->release();
+  CHECK(kernel->open_files.size() == 1);
+}
+
+TEST_CASE("an EBUSY with nothing of ours loaded names the other client") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  kernel->foreign_programs = 1; // another process owns the slot
+  auto device = make_h16_device("", kernel);
+  const std::string refusal = message_of([&] { device->load(add128_program(0)); });
+  CHECK(contains(refusal, "EBUSY"));
+  CHECK(contains(refusal, "holds no program"));
+  CHECK(contains(refusal, "another client or an earlier worker"));
+  CHECK(kernel->open_files.size() == 1); // only the probe file
+  // The refused program is not registered either: it can be loaded again
+  // once the other client is gone.
+  kernel->foreign_programs = 0;
+  device->load(add128_program(0));
+  CHECK(kernel->programs.size() == 1);
+}
+
+TEST_CASE("a load that fails part-way leaves no file and no program behind") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  kernel->fail_load_number = 3; // the third H16_LOAD the driver sees
+  kernel->fail_load_errno = -ENOEXEC;
+  auto device = make_h16_device("", kernel);
+  device->load(add128_program(0));
+  // Second load: -EBUSY (attempt 2), program 0 unloaded, retried (3) -> ENOEXEC.
+  const std::string refusal = message_of([&] { device->load(add128_program(1)); });
+  CHECK(contains(refusal, "ENOEXEC"));
+  CHECK(contains(refusal, "the driver refused the HWX"));
+  CHECK(kernel->open_files.size() == 1); // probe only: nothing leaked
+  CHECK(kernel->programs.empty());
+  // Program 0 was unloaded to make room and comes back on demand.
+  CHECK(run_program(*device, 0, 9) == expected_output(9));
+  CHECK(kernel->programs.size() == 1);
+  CHECK(contains(
+      message_of([&] { device->exec(1); }), "exec: program 1 is not loaded"));
+  device.reset();
+  CHECK(kernel->open_files.empty());
+}
+
+TEST_CASE("a failing swap-in or exec closes every file on release") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  auto device = make_h16_device("", kernel);
+  device->load(add128_program(0));
+  device->load(add128_program(1)); // resident: 1
+  // The driver now refuses to load program 0 again: the exec reports the
+  // load error, program 1 (unloaded to make room) stays unloaded, nothing
+  // is open besides the probe.
+  kernel->load_error = -EIO;
+  const std::string swap = message_of([&] { device->exec(0); });
+  CHECK(contains(swap, "DRM_IOCTL_ANE_H16_LOAD failed for program 0"));
+  CHECK(contains(swap, "EIO"));
+  CHECK(kernel->open_files.size() == 1);
+  kernel->load_error = 0;
+  // After the driver recovers the same device carries on.
+  CHECK(run_program(*device, 1, 4) == expected_output(4));
+  // An exec failure on a resident program is reported and leaves the
+  // bookkeeping intact for release.
+  kernel->exec_error = -ETIMEDOUT;
+  CHECK(contains(message_of([&] { device->exec(1); }), "ETIMEDOUT"));
+  device->release();
+  CHECK(kernel->open_files.size() == 1);
+  device.reset();
+  CHECK(kernel->open_files.empty());
+}
+
+TEST_CASE("a kernel report that disagrees on a reload is refused without a leak") {
+  auto kernel = std::make_shared<FakeKernel>();
+  kernel->max_resident = 1;
+  auto device = make_h16_device("", kernel);
+  device->load(add128_program(0));
+  device->load(add128_program(1));
+  kernel->report_size[2] = 16384; // surface 2 now reported smaller
+  CHECK(contains(
+      message_of([&] { device->exec(0); }),
+      "DRM_IOCTL_ANE_H16_LOAD for program 0 (model.hwx) reported surface 2"));
+  CHECK(kernel->programs.empty()); // the file of the refused load is closed
+  CHECK(kernel->open_files.size() == 1);
+}
+
+TEST_CASE("residency names parse and print") {
+  CHECK(parse_h16_residency("auto") == AneH16Residency::Auto);
+  CHECK(parse_h16_residency("concurrent") == AneH16Residency::Concurrent);
+  CHECK(parse_h16_residency("swap") == AneH16Residency::Swap);
+  CHECK(std::string(h16_residency_name(AneH16Residency::Swap)) == "swap");
+  CHECK_THROWS_AS(parse_h16_residency("lru"), std::invalid_argument);
+}
+
+TEST_CASE("a resident session over a one-program driver steps through bundles") {
+  // Two bundles of two programs each (four programs) over a driver that
+  // keeps one: the resident worker loads all four at open, runs a step
+  // through both bundles, and every intermediate crosses host memory.
+  auto bundle_of = [&](const std::string& in_a, const std::string& in_b,
+                       const std::string& out, size_t first_program) {
+    AneBundle bundle;
+    bundle.manifest.manifest_version = kAneManifestVersionHwx;
+    bundle.manifest.driver_abi_major = 3;
+    AneTensor tensor;
+    tensor.dtype = "float16";
+    tensor.shape = {16384};
+    tensor.byte_size = 32768;
+    for (const auto& name : {in_a, in_b}) {
+      tensor.name = name;
+      bundle.manifest.inputs.push_back(tensor);
+    }
+    tensor.name = out;
+    bundle.manifest.outputs.push_back(tensor);
+    AneProgram program;
+    program.payload = "model.hwx";
+    program.inputs = {raw_binding(in_a, 0), raw_binding(in_b, 2)};
+    program.outputs = {raw_binding(out, 1)};
+    bundle.manifest.programs = {program};
+    bundle.manifest.dispatch_plan = {0};
+    bundle.programs = {add128_program(first_program)};
+    return bundle;
+  };
+  // X: y = a + 2b.   Y: z = y + 2b  (= a + 4b, y supplied by the step).
+  AneBundle x = bundle_of("a", "b", "y", 0);
+  AneBundle y = bundle_of("y", "b", "z", 0);
+
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(4000);
+  auto make_device = [] {
+    auto kernel = std::make_shared<FakeKernel>();
+    kernel->max_resident = 1;
+    return make_h16_device("", kernel, AneH16Residency::Auto);
+  };
+  AneWorker worker(make_device, options);
+  REQUIRE(worker.open({x, y}, {"x", "y"}).status == AneWorkerStatus::Completed);
+
+  const auto a = pattern(5);
+  const auto b = pattern(9);
+  std::map<std::string, AneWorker::Buffer> outputs;
+  const auto stepped =
+      worker.step({0, 1}, {{"a", a}, {"b", b}}, &outputs, {"y", "z"});
+  REQUIRE(stepped.status == AneWorkerStatus::Completed);
+  REQUIRE(outputs.count("y") == 1);
+  REQUIRE(outputs.count("z") == 1);
+  bool exact = true;
+  for (size_t k = 0; k < 32768; ++k) {
+    const uint8_t mid = static_cast<uint8_t>(a[k] + 2 * b[k]);
+    exact = exact && outputs["y"][k] == mid &&
+        outputs["z"][k] == static_cast<uint8_t>(mid + 2 * b[k]);
+  }
+  CHECK(exact);
+  // Plain submits on either bundle still work in any order (programs swap).
+  for (size_t round = 0; round < 3; ++round) {
+    const size_t which = round % 2;
+    std::map<std::string, AneWorker::Buffer> in =
+        which == 0 ? std::map<std::string, AneWorker::Buffer>{{"a", a}, {"b", b}}
+                   : std::map<std::string, AneWorker::Buffer>{{"y", a}, {"b", b}};
+    REQUIRE(worker.submit(which, in, &outputs).status ==
+            AneWorkerStatus::Completed);
+    CHECK(outputs.count(which == 0 ? "y" : "z") == 1);
+  }
+  const auto closed = worker.close();
+  CHECK(closed.status == AneWorkerStatus::Completed);
+  CHECK(closed.released_programs == 2);
+}
+
+TEST_CASE("the same session fails at open under concurrent residency") {
+  AneBundle bundle;
+  bundle.manifest.manifest_version = kAneManifestVersionHwx;
+  bundle.manifest.driver_abi_major = 3;
+  AneTensor tensor;
+  tensor.dtype = "float16";
+  tensor.shape = {16384};
+  tensor.byte_size = 32768;
+  tensor.name = "a";
+  bundle.manifest.inputs = {tensor};
+  tensor.name = "y";
+  bundle.manifest.outputs = {tensor};
+  AneProgram program;
+  program.payload = "model.hwx";
+  program.inputs = {raw_binding("a", 0)};
+  program.outputs = {raw_binding("y", 1)};
+  bundle.manifest.programs = {program};
+  bundle.manifest.dispatch_plan = {0};
+  bundle.programs = {add128_program(0)};
+
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(4000);
+  AneWorker worker(
+      [] {
+        auto kernel = std::make_shared<FakeKernel>();
+        kernel->max_resident = 1;
+        return make_h16_device("", kernel, AneH16Residency::Concurrent);
+      },
+      options);
+  // Two bundles -> two programs -> the second load is refused with the
+  // driver's reason; the open fails cleanly and nothing is quarantined.
+  const auto opened = worker.open({bundle, bundle}, {"one", "two"});
+  CHECK(opened.status == AneWorkerStatus::DeviceFailed);
+  CHECK(contains(opened.detail, "switch-safe driver patch"));
+  CHECK(!worker.quarantined());
+  CHECK(!worker.resident());
 }
