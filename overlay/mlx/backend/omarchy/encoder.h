@@ -134,9 +134,9 @@ inline int batch_node_budget() {
 // receipts/2026-10-02-submission-cap-19 (G14C) and
 // receipts/2026-10-12-submission-cap-calibration (G13C, G13G) and
 // receipts/2026-11-13-g18g-batch-work (G18G) and
-// receipts/2026-11-13-g14c-batch-work (G14C 120000: about 12 ms
-// submissions, above the band; 0 frames over 33.3 ms beside decode, not
-// tested on a real compositor). Board
+// receipts/2026-11-13-g14c-batch-work (G14C 120000: GPU time per
+// submission p50 4.5 ms, p99 5.9 ms, max 10.1 ms; 0 frames over 33.3 ms
+// beside decode, not tested on a real compositor). Board
 // codes key the rows like the direct-matmul routes above
 // (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
 // G14C M2 Max, G18G M6. A single dispatch whose group count alone exceeds the

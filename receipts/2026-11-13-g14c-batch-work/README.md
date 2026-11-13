@@ -29,9 +29,23 @@ Probe: `scripts/submit-latency.c`, 60 Hz, 256-byte fill.
 | 2B rerun, both arms | 0 of 2872 | up to 0.83 ms | up to 1.26 ms |
 | 9B rerun, both arms | 0 of 2154 | up to 1.19 ms | up to 1.98 ms |
 
+## Per-submission time (the omarchy-mlx #407 rule: p50 <= 6 ms, p99 <= about 40 ms, no sample at 78 ms)
+
+`scripts/subcap_calibrate.py` on a diagnostics wheel of this PR (GPU profiling harness on, so decode runs slower than normal), Qwen3-4B, 64 decode tokens after a 512-token prefill, one process per budget. Each sample is the summed GPU dispatch time of one submission (`runs/subcap/`):
+
+| Budget | n | p50 ms | p95 ms | p99 ms | max ms |
+|---|---|---|---|---|---|
+| 40000 | 287 | 1.52 | 1.71 | 3.12 | 3.39 |
+| 50000 | 285 | 1.83 | 2.07 | 3.37 | 4.10 |
+| 60000 | 215 | 2.33 | 2.53 | 4.53 | 5.14 |
+| 80000 | 144 | 2.88 | 3.34 | 5.29 | 6.68 |
+| 120000 | 142 | 4.54 | 4.86 | 5.93 | 10.06 |
+
+120000 passes all three legs. I had predicted it would fail p50 from decode step divided by submits per step (13.5 ms on 4B). That figure counts everything that is not GPU dispatch time (CPU encode, gaps between submissions); this method counts only GPU dispatch time, as the rule's own tool does. The samples cover prefill and decode submissions together (not split).
+
 ## Limits
 
-- Submissions at 120000 take about 9 ms (2B), 12.4 ms (9B) and 13.5 ms (4B), computed as one decode step divided by submits per step. That is above the 2 to 6 ms band the doc comment describes.
+- Wall time per submission at 120000 is longer than the GPU time above: one decode step divided by submits per step is about 9 ms (2B), 12.4 ms (9B) and 13.5 ms (4B).
 - The probe cannot rank budgets on the M2. A 98 ms eval (cap off) left the probe p99 at about 1 ms (`runs/probe-control`). It shows no frame cost; it does not show that none exists.
 - NOT tested on a real compositor.
 - Only G14C changes. Other rows keep their values; the test ceiling is per row (G14C 120000, others 40000).
