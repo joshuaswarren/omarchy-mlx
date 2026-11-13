@@ -1,0 +1,43 @@
+WORK=40000
+PREFLIGHT host=m6 boot=c8ea6c57-5d61-408b-8722-81e179f21a4d ko=3f192f53 2026-11-13T16:50:13Z
+-- icd icd sha=ee5fbac9
+== 2b p1 16:50:13
+{"gpu_primitive_dispatches": 642.0, "vk_submissions": 2.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 235.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 2.0, "commit_calls_noop": 1.0, "barriers_emitted": 223.0, "barriers_skipped": 14.0}
+rc=0
+== 2b p2 16:51:11
+{"gpu_primitive_dispatches": 642.0, "vk_submissions": 2.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 235.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 2.0, "commit_calls_noop": 1.0, "barriers_emitted": 223.0, "barriers_skipped": 14.0}
+rc=0
+== 2b p3 16:52:08
+{"gpu_primitive_dispatches": 642.0, "vk_submissions": 2.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 235.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 2.0, "commit_calls_noop": 1.0, "barriers_emitted": 223.0, "barriers_skipped": 14.0}
+rc=0
+== 2b p4 16:53:04
+{"gpu_primitive_dispatches": 642.0, "vk_submissions": 2.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 235.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 2.0, "commit_calls_noop": 1.0, "barriers_emitted": 223.0, "barriers_skipped": 14.0}
+rc=0
+== 2b p5 16:54:01
+{"gpu_primitive_dispatches": 642.0, "vk_submissions": 2.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 235.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 2.0, "commit_calls_noop": 1.0, "barriers_emitted": 223.0, "barriers_skipped": 14.0}
+rc=0
+== 2b p6 16:55:00
+{"gpu_primitive_dispatches": 642.0, "vk_submissions": 2.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 235.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 2.0, "commit_calls_noop": 1.0, "barriers_emitted": 223.0, "barriers_skipped": 14.0}
+rc=0
+-- icd icd sha=ee5fbac9
+== 4b p1 16:55:58
+{"gpu_primitive_dispatches": 1062.0, "vk_submissions": 3.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 333.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 3.0, "commit_calls_noop": 1.0, "barriers_emitted": 298.0, "barriers_skipped": 38.0}
+rc=0
+== 4b p2 16:57:08
+{"gpu_primitive_dispatches": 1062.0, "vk_submissions": 3.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 333.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 3.0, "commit_calls_noop": 1.0, "barriers_emitted": 298.0, "barriers_skipped": 38.0}
+rc=0
+== 4b p3 16:58:16
+{"gpu_primitive_dispatches": 1062.0, "vk_submissions": 3.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 333.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 3.0, "commit_calls_noop": 1.0, "barriers_emitted": 298.0, "barriers_skipped": 38.0}
+rc=0
+== 4b p4 16:59:24
+{"gpu_primitive_dispatches": 1062.0, "vk_submissions": 3.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 333.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 3.0, "commit_calls_noop": 1.0, "barriers_emitted": 298.0, "barriers_skipped": 38.0}
+rc=0
+== 4b p5 17:00:33
+{"gpu_primitive_dispatches": 1062.0, "vk_submissions": 3.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 333.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 3.0, "commit_calls_noop": 1.0, "barriers_emitted": 298.0, "barriers_skipped": 38.0}
+rc=0
+== 4b p6 17:01:41
+{"gpu_primitive_dispatches": 1062.0, "vk_submissions": 3.0, "vk_buffer_copies": 0.0, "vk_buffer_fills": 0.0, "vk_compute_dispatches": 333.0, "omarchy_finalize_calls": 1.0, "commit_calls_with_work": 3.0, "commit_calls_noop": 1.0, "barriers_emitted": 298.0, "barriers_skipped": 38.0}
+rc=0
+fail_lines_new=0
+end 17:02:50
+rc=0

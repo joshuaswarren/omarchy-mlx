@@ -1,0 +1,56 @@
+PREFLIGHT host=m6 boot=c8ea6c57-5d61-408b-8722-81e179f21a4d ko=3f192f53 icd=ee5fbac9 2026-11-13T17:40:02Z
+== 2b r1 work=default 17:40:02
+GPU-TIMEOUTS after=0 delta=0
+11541b917f1a8
+rep 2 3.935 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 2, "mean": 3.945, "sd": 0.01, "min": 3.935, "max": 3.955, "first5": 3.945, "last5": 3.945}
+rc=0
+== 2b r1 work=20000 17:42:00
+rep 1 5.024 tok/s tokhash 59811541b917f1a8
+rep 2 4.975 tok/s tokhash 59811541b917f1a8
+rep 3 4.987 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 3, "mean": 4.995, "sd": 0.021, "min": 4.975, "max": 5.024, "first5": 4.995, "last5": 4.995}
+rc=0
+== 2b r1 work=40000 17:44:05
+rep 1 5.074 tok/s tokhash 59811541b917f1a8
+rep 2 5.114 tok/s tokhash 59811541b917f1a8
+rep 3 5.102 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 3, "mean": 5.097, "sd": 0.017, "min": 5.074, "max": 5.114, "first5": 5.097, "last5": 5.097}
+rc=0
+== 2b r2 work=default 17:46:04
+rep 1 3.933 tok/s tokhash 59811541b917f1a8
+rep 2 3.940 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 2, "mean": 3.937, "sd": 0.003, "min": 3.933, "max": 3.94, "first5": 3.937, "last5": 3.937}
+rc=0
+== 2b r2 work=20000 17:48:02
+rep 1 5.005 tok/s tokhash 59811541b917f1a8
+rep 2 5.038 tok/s tokhash 59811541b917f1a8
+rep 3 5.028 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 3, "mean": 5.024, "sd": 0.014, "min": 5.005, "max": 5.038, "first5": 5.024, "last5": 5.024}
+rc=0
+== 2b r2 work=40000 17:50:04
+rep 1 5.064 tok/s tokhash 59811541b917f1a8
+rep 2 5.036 tok/s tokhash 59811541b917f1a8
+rep 3 5.083 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 3, "mean": 5.061, "sd": 0.02, "min": 5.036, "max": 5.083, "first5": 5.061, "last5": 5.061}
+rc=0
+== 2b r3 work=default 17:52:03
+rep 1 3.917 tok/s tokhash 59811541b917f1a8
+rep 2 3.924 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 2, "mean": 3.92, "sd": 0.004, "min": 3.917, "max": 3.924, "first5": 3.92, "last5": 3.92}
+rc=0
+== 2b r3 work=20000 17:54:00
+rep 1 5.021 tok/s tokhash 59811541b917f1a8
+rep 2 5.006 tok/s tokhash 59811541b917f1a8
+rep 3 5.018 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 3, "mean": 5.015, "sd": 0.007, "min": 5.006, "max": 5.021, "first5": 5.015, "last5": 5.015}
+rc=0
+== 2b r3 work=40000 17:56:03
+rep 1 5.094 tok/s tokhash 59811541b917f1a8
+rep 2 5.078 tok/s tokhash 59811541b917f1a8
+rep 3 5.100 tok/s tokhash 59811541b917f1a8
+SUMMARY {"n": 3, "mean": 5.091, "sd": 0.009, "min": 5.078, "max": 5.1, "first5": 5.091, "last5": 5.091}
+rc=0
+fail_lines_new=0
+end 17:58:02
+rc=0
