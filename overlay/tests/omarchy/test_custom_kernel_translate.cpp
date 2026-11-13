@@ -1182,3 +1182,49 @@ TEST_CASE("literal bfloat16_t locals and casts round like Metal") {
   CHECK(body.find("sq_ = _mlx_bf16_round_trip(yq + 1.0") != std::string::npos);
   CHECK(body.find("bfloat16_t") == std::string::npos);
 }
+
+TEST_CASE("literal bfloat16_t comma declarators without a space stay valid") {
+  // Review finding: `bfloat16_t a = x,b = y;` must not become `bfloat16_tb`.
+  const char* source =
+      "[[kernel]] void glue_nospace(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  float x = in[c];\n"
+      "  bfloat16_t a = x,b = x * 2.0f;\n"
+      "  y[c] = a + b;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("bfloat16_tb") == std::string::npos);
+  CHECK(body.find("float a = _mlx_bf16_round_trip(x)") != std::string::npos);
+  CHECK(body.find("float b = _mlx_bf16_round_trip(x * 2.0f)") != std::string::npos);
+}
+
+TEST_CASE("literal bfloat16_t rounding does not leak into a float local of the same name") {
+  // Review finding: `{ bfloat16_t v ... } { float v ... }` must not round the
+  // float block. A name that is also declared with another type keeps only the
+  // declaration-site rounding (shortcut: its reassignments stay unrounded).
+  const char* source =
+      "[[kernel]] void glue_scope(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "  {\n"
+      "    float v = in[c + 1];\n"
+      "    v = v * 3.0f;\n"
+      "    y[c + 1] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("float v = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("v = v * 3.0f;") != std::string::npos);
+  CHECK(body.find("_mlx_bf16_round_trip(v * 3.0f)") == std::string::npos);
+}
