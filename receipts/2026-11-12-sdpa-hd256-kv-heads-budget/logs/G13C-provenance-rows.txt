@@ -1,0 +1,468 @@
+### o2049h12p
+prediction G13C-3KV-2049-keys-is-51-workgroups-win-gain-between-plus-10-and-plus-40pct-provenance-rerun
+falsifier gain-below-plus-5pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 2049, 'reps_per_arm': 2000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 168.82, 'variant_us_per_call': 122.22, 'gain_pct': 27.6, 'gain_ci95': (27.57, 27.63)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:12:23Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31100
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40503
+  temp macsmc_hwmon temp2_input 31099
+  temp macsmc_hwmon temp3_input 43282
+  temp macsmc_hwmon temp4_input 43586
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.14 0.17 0.56
+thermal-post.txt
+  time_utc 2026-11-13T03:12:45Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31100
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40535
+  temp macsmc_hwmon temp2_input 31099
+  temp macsmc_hwmon temp3_input 44456
+  temp macsmc_hwmon temp4_input 43673
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.15 0.17 0.55
+receipt PEROP-PASS
+### o2561h12p
+prediction G13C-3KV-2561-keys-is-63-workgroups-win-gain-between-plus-10-and-plus-40pct-provenance-rerun
+falsifier gain-below-plus-5pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 2561, 'reps_per_arm': 2000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 176.35, 'variant_us_per_call': 130.09, 'gain_pct': 26.23, 'gain_ci95': (26.08, 26.4)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:13:43Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31100
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40535
+  temp macsmc_hwmon temp2_input 31099
+  temp macsmc_hwmon temp3_input 43152
+  temp macsmc_hwmon temp4_input 44201
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.13 0.16 0.52
+thermal-post.txt
+  time_utc 2026-11-13T03:14:07Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31200
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40484
+  temp macsmc_hwmon temp2_input 31199
+  temp macsmc_hwmon temp3_input 44478
+  temp macsmc_hwmon temp4_input 44467
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.26 0.19 0.52
+receipt PEROP-PASS
+### o2689h12p
+prediction G13C-3KV-2689-keys-is-66-workgroups-above-64-loss-gain-between-minus-50-and-minus-3pct-provenance-rerun
+falsifier gain-above-plus-0pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 2689, 'reps_per_arm': 2000, 'engaged_op_maxabs_diff': 7.450580596923828e-09, 'stock_us_per_call': 177.72, 'variant_us_per_call': 195.69, 'gain_pct': -10.11, 'gain_ci95': (-10.22, -10.01)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:15:02Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31200
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40562
+  temp macsmc_hwmon temp2_input 31199
+  temp macsmc_hwmon temp3_input 43407
+  temp macsmc_hwmon temp4_input 44239
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.14 0.17 0.50
+thermal-post.txt
+  time_utc 2026-11-13T03:15:31Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31200
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40542
+  temp macsmc_hwmon temp2_input 31199
+  temp macsmc_hwmon temp3_input 43929
+  temp macsmc_hwmon temp4_input 45193
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.08 0.15 0.48
+receipt PEROP-PASS
+### o1025h32p
+prediction G13C-8KV-1025-keys-is-72-workgroups-above-64-loss-gain-between-minus-50-and-minus-3pct-provenance-rerun
+falsifier gain-above-plus-0pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 1025, 'reps_per_arm': 2000, 'engaged_op_maxabs_diff': 5.960464477539063e-08, 'stock_us_per_call': 163.54, 'variant_us_per_call': 178.23, 'gain_pct': -8.99, 'gain_ci95': (-9.02, -8.95)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:16:24Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31300
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40675
+  temp macsmc_hwmon temp2_input 31299
+  temp macsmc_hwmon temp3_input 44244
+  temp macsmc_hwmon temp4_input 44858
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.07 0.14 0.45
+thermal-post.txt
+  time_utc 2026-11-13T03:16:50Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31300
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 42000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40675
+  temp macsmc_hwmon temp2_input 31299
+  temp macsmc_hwmon temp3_input 45146
+  temp macsmc_hwmon temp4_input 44788
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.18 0.16 0.45
+receipt PEROP-PASS
+### f64h8c4096p
+prediction G13C-op-float64-gate-passes-at-8Q-2KV-4096-keys-64-workgroups-provenance-rerun
+falsifier f64_gate_pass-false
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 4096, 'qh': 8, 'kvh': 2, 'hd': 256, 'half_step': 0.0003499734421993647, 'err_max': {'fused': 0.00024090660470844905, 'stock': 0.00024090660470844905, 'variant': 0.00024090660470844905}, 'err_mean': {'fused': 2.9453181241972633e-05, 'stock': 2.9453185903632465e-05, 'variant': 2.945318250208069e-05}, 'arms_maxabs_diff': 1.1920928955078125e-07, 'f64_gate_pass': True}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:17:45Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31400
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 42000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 45000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40765
+  temp macsmc_hwmon temp2_input 31299
+  temp macsmc_hwmon temp3_input 43913
+  temp macsmc_hwmon temp4_input 44760
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.15 0.16 0.44
+thermal-post.txt
+  time_utc 2026-11-13T03:17:45Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 31400
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 42000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 42000
+  temp xe temp16_input 40000
+  temp xe temp17_input 42000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 45000
+  temp xe temp5_input 0
+  temp xe temp6_input 42000
+  temp xe temp7_input 42000
+  temp xe temp8_input 42000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 40765
+  temp macsmc_hwmon temp2_input 31299
+  temp macsmc_hwmon temp3_input 43913
+  temp macsmc_hwmon temp4_input 44760
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 0.15 0.16 0.44
+receipt PEROP-PASS
+### trp2049h12c
+prediction G13C-dispatch-trace-cpu-control-on-cpu-3KV-2049-keys-51-workgroups-arm1-distinct-dispatch-set-differs-from-arm0-gpu-add-control-dispatches-cpu-add-control-zero
+falsifier arm1-and-arm0-dispatch-sets-identical-or-cpu-control-dispatches
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+TRACE-JSON {"arm0-old-pass1": {"dispatches": 2, "distinct": ["[rtmod] DISPATCH kernel=652  gx=3 gy=17 gz=1", "[rtmod] DISPATCH kernel=654  gx=12 gy=1 gz=1"], "rc": 0}, "arm1-variant": {"dispatches": 2, "distinct": ["[rtmod] DISPATCH kernel=654  gx=12 gy=1 gz=1", "[rtmod] DISPATCH kernel=676  gx=3 gy=17 gz=1"], "rc": 0}, "control-cpu-add": {"dispatches": 0, "distinct": [], "rc": 0}, "control-gpu-add": {"dispatches": 1, "distinct": ["[rtmod] DISPATCH kernel=469  gx=1 gy=1 gz=1"], "rc": 0}}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T04:23:24Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 32600
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 40000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 38000
+  temp xe temp17_input 40000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 40000
+  temp xe temp7_input 42000
+  temp xe temp8_input 40000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 35644
+  temp macsmc_hwmon temp2_input 32500
+  temp macsmc_hwmon temp3_input 55567
+  temp macsmc_hwmon temp4_input 56269
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 1.19 1.20 1.18
+thermal-post.txt
+  time_utc 2026-11-13T04:23:24Z
+  kernel 7.1.12-2-20261103.2-lab-ARCH
+  boot_id f24b4a73-febb-4799-b42e-6ef25371d4b5
+  dt_model Apple MacBook Pro (16-inch, M1 Max, 2021)
+  temp macsmc_battery temp1_input 32600
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 34000
+  temp tas2764 temp1_input 36000
+  temp xe temp10_input 42000
+  temp xe temp11_input 40000
+  temp xe temp12_input 40000
+  temp xe temp13_input 42000
+  temp xe temp14_input 40000
+  temp xe temp15_input 40000
+  temp xe temp16_input 38000
+  temp xe temp17_input 40000
+  temp xe temp2_input 44000
+  temp xe temp3_input 42000
+  temp xe temp4_input 44000
+  temp xe temp5_input 0
+  temp xe temp6_input 40000
+  temp xe temp7_input 42000
+  temp xe temp8_input 40000
+  temp xe temp9_input 42000
+  temp macsmc_hwmon temp1_input 35644
+  temp macsmc_hwmon temp2_input 32599
+  temp macsmc_hwmon temp3_input 55951
+  temp macsmc_hwmon temp4_input 56807
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  temp tas2764 temp1_input 32000
+  governor performance
+  load 1.19 1.20 1.18
+receipt PEROP-PASS
