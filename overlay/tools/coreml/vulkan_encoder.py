@@ -1851,6 +1851,14 @@ class EncoderRunner:
         cond = tensor(kwargs["cond"])
         a = tensor(kwargs["a"]).astype(mx.float32)
         b = tensor(kwargs["b"]).astype(mx.float32)
+        if RE_MASK_SELECT.match(stmt.names[0]):
+            # The attention-mask fill is -inf. A padded query row then holds
+            # only -inf, and its softmax is 0/0 = NaN; the residual carries
+            # that NaN into the padded value rows, and softmax @ V spreads it
+            # to every row. The ANE output stays finite there; with the fill
+            # at the fp16 minimum the row stays finite here too and the
+            # all-masked-rows select zeroes it later.
+            a = mx.maximum(a, float(np.finfo(np.float16).min))
         return mx.where(cond, a, b).astype(mx.float16)
 
     def _apply_pad(self, stmt: Statement) -> mx.array:
