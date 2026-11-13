@@ -1,0 +1,24 @@
+elementwise_f16 | MESA: error: AGX backend cannot encode compute shader for G17P: AGX3 binary pack
+elementwise_lite_f16 | MESA: error: AGX backend cannot encode compute shader for G17P: AGX3 binary pack
+gated_delta_decode_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_gqa_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_composed_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_composed_state_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_pf_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_pf_composed_gqa_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_pf_conv_norm_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_pf_state_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_pfw_conv_norm_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_decode_perrow_state_bf16 | Unhandled ALU op pack_64_4x16
+gated_delta_prefill_bf16 | Unhandled ALU op pack_64_4x16
+gdn_vjp_bf16 | Unhandled ALU op pack_64_4x16
+qmm_vec_greedy_bf16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_bf16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_f16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_f32 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_subgroup_bf16_r2s16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_subgroup_f16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_token16_subgroup_bf16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_token4_subgroup_bf16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_token8_bf16 | Unhandled ALU op pack_64_4x16
+qmm_vec_q4_multi_token8_subgroup_bf16 | Unhandled ALU op pack_64_4x16
