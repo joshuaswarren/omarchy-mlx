@@ -8,8 +8,11 @@
 // MLX_OMARCHY_ANE_DEVICE, like the libane device.
 //
 // Kernel model this device follows (include/uapi/drm/ane_accel.h, ABI 3):
-// one program per open file, any number of files with a loaded program at
-// the same time, the program unloaded when its file closes. Every surface is
+// one program per open file, the program unloaded when its file closes.
+// Whether a second file may hold a program while the first one does is the
+// driver's transport property (switch-safe): today's driver answers -EBUSY,
+// the patched one accepts any number. The device's residency policy
+// (AneH16Residency) covers both. Every surface is
 // copied by the kernel on each EXEC (inputs in, the one output out), so the
 // device keeps one host buffer per surface and passes all of them, in the
 // order H16_LOAD reported, to every EXEC.
@@ -70,9 +73,33 @@ std::string h16_ioctl_error(
     const std::string& subject,
     int error);
 
-std::unique_ptr<AneDevice> make_h16_device(const std::string& node);
+// How the device keeps programs on the kernel.
+//   concurrent  every program stays loaded; a driver that refuses the next
+//               load (-EBUSY: one resident program, the transport is not
+//               switch-safe) fails the load with that explanation.
+//   swap        one program is on the kernel at a time. Programs are loaded
+//               once at open to let the driver validate them, then unloaded
+//               on demand: the program an EXEC needs is loaded and the
+//               previous one unloaded first. Correct on a driver that keeps
+//               a single program resident; every switch costs an unload
+//               and a load.
+//   auto        concurrent until the driver answers -EBUSY, then swap with
+//               the capacity the driver showed (the number of programs that
+//               were resident when it refused): on a switch-safe driver
+//               nothing is ever unloaded, on today's driver it degrades to
+//               swap without a flag.
+enum class AneH16Residency { Auto, Concurrent, Swap };
+
+const char* h16_residency_name(AneH16Residency residency);
+// Throws std::invalid_argument on any other spelling.
+AneH16Residency parse_h16_residency(const std::string& text);
+
 std::unique_ptr<AneDevice> make_h16_device(
     const std::string& node,
-    std::shared_ptr<AneH16Kernel> kernel);
+    AneH16Residency residency = AneH16Residency::Auto);
+std::unique_ptr<AneDevice> make_h16_device(
+    const std::string& node,
+    std::shared_ptr<AneH16Kernel> kernel,
+    AneH16Residency residency = AneH16Residency::Auto);
 
 } // namespace mlx::core::omarchy::ane

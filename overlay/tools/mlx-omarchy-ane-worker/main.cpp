@@ -58,6 +58,9 @@ struct DeviceSelection {
   bool h16{false};
   std::string libane; // --libane PATH
   std::string node;   // --device h16:NODE; empty = first ABI 3 H16 node
+  // --h16-residency auto|concurrent|swap: how lane 3 keeps the programs of
+  // all resident bundles on the kernel (see worker_h16.h).
+  std::string residency{"auto"};
 };
 
 // A bundle runs only on its own lane: schema 5 (HWX, ABI 3) on --device h16,
@@ -132,7 +135,18 @@ int usage() {
       "  --device h16[:NODE] lane 3: the in-kernel ABI 3 accel node (first\n"
       "                      /dev/accel/accel* reporting ABI 3 / H16, or\n"
       "                      NODE); schema-5 HWX bundles, no library, no\n"
-      "                      --seal-expect-libane\n");
+      "                      --seal-expect-libane\n"
+      "  --h16-residency auto|concurrent|swap\n"
+      "                      lane 3 only: how the programs of every resident\n"
+      "                      bundle share the kernel. auto (default): all\n"
+      "                      stay loaded until the driver answers -EBUSY\n"
+      "                      (one resident program), then programs are\n"
+      "                      swapped in on demand; concurrent: refuse -EBUSY\n"
+      "                      at open; swap: always one program at a time\n"
+      "  stdin (--serve): reset NAME|* zeroes a bundle's state tensors;\n"
+      "         step NAME[,NAME...] [--inline NAME=BYTES]... [--emit NAME]...\n"
+      "         runs the bundles in order in one deadline-bounded step,\n"
+      "         outputs feeding same-named inputs of the next bundle\n");
   return 64;
 }
 
@@ -311,6 +325,9 @@ std::string sealed_device_library(
 }
 
 struct ResidentJob {
+  // "submit", "step" (bundle is a comma-separated list, run in order) or
+  // "reset" (bundle is a name or *).
+  std::string kind{"submit"};
   std::string bundle;
   std::map<std::string, std::string> inputs;
   std::map<std::string, std::string> saves;
@@ -330,13 +347,24 @@ struct ResidentJob {
 bool parse_job(const std::string& line, ResidentJob& job, std::string& error) {
   std::istringstream stream(line);
   std::string token;
-  if (!(stream >> token) || token != "submit") {
-    error = "expected 'submit BUNDLE' or 'quit'";
+  if (!(stream >> token) ||
+      (token != "submit" && token != "step" && token != "reset")) {
+    error = "expected 'submit BUNDLE', 'step BUNDLE[,BUNDLE...]', "
+            "'reset BUNDLE|*' or 'quit'";
     return false;
   }
+  job.kind = token;
   if (!(stream >> job.bundle)) {
-    error = "submit is missing its bundle name";
+    error = token + " is missing its bundle name";
     return false;
+  }
+  if (token == "reset") {
+    std::string extra;
+    if (stream >> extra) {
+      error = "reset takes only a bundle name or *";
+      return false;
+    }
+    return true;
   }
   while (stream >> token) {
     std::string argument;
@@ -462,8 +490,10 @@ ResidentSession open_resident_session(
     std::printf("device %s\n", identity.describe().c_str());
     std::fflush(stdout);
     const std::string node = identity.node;
+    const AneH16Residency residency = parse_h16_residency(device.residency);
     session.worker = std::make_unique<AneWorker>(
-        [node] { return make_h16_device(node); }, options);
+        [node, residency] { return make_h16_device(node, residency); },
+        options);
     return session;
   }
 
@@ -598,14 +628,44 @@ int serve_resident(
       std::fprintf(stderr, "malformed job: %s\n", error.c_str());
       return 64;
     }
-    auto found = index_of.find(job.bundle);
-    if (found == index_of.end()) {
-      std::fprintf(
-          stderr, "job names unknown resident bundle '%s'\n",
-          job.bundle.c_str());
+    // The bundles this job runs, in order; reset names one or all.
+    std::vector<size_t> sequence;
+    {
+      std::istringstream names(job.bundle);
+      std::string name;
+      const char separator = job.kind == "step" ? ',' : '\n';
+      while (std::getline(names, name, separator)) {
+        if (name == "*" && job.kind == "reset") continue;
+        auto found = index_of.find(name);
+        if (found == index_of.end()) {
+          std::fprintf(
+              stderr, "job names unknown resident bundle '%s'\n",
+              name.c_str());
+          return 64;
+        }
+        sequence.push_back(found->second);
+      }
+    }
+    if (job.kind == "reset") {
+      AneWorkerReport cleared = job.bundle == "*"
+          ? worker.reset_all_state()
+          : worker.reset_state(sequence.front());
+      std::printf(
+          "reset status=%d bundle=%s detail=%s\n",
+          cleared.status == AneWorkerStatus::Completed ? 0 : 1,
+          job.bundle.c_str(), cleared.detail.c_str());
+      std::fflush(stdout);
+      if (cleared.status != AneWorkerStatus::Completed) {
+        return 1;
+      }
+      continue;
+    }
+    if (sequence.empty()) {
+      std::fprintf(stderr, "step names no bundle\n");
       return 64;
     }
-    const AneBundle& bundle = session.bundles[found->second];
+    const bool is_step = job.kind == "step";
+    const AneBundle& bundle = session.bundles[sequence.front()];
 
     // Three phases, reported per job: an operator who sees a slow
     // submit needs to know whether the time went to host staging or to
@@ -632,17 +692,23 @@ int serve_resident(
       inputs[entry.first] = std::move(payload);
     }
     const auto stage_ended = std::chrono::steady_clock::now();
-    for (const auto& tensor : bundle.manifest.inputs) {
-      if (!inputs.count(tensor.name)) {
-        std::fprintf(
-            stderr, "missing --input for manifest input '%s'\n",
-            tensor.name.c_str());
-        return 65;
+    // A step's later bundles may take their inputs from earlier ones, so
+    // only a plain submit can check the manifest inputs up front.
+    if (!is_step) {
+      for (const auto& tensor : bundle.manifest.inputs) {
+        if (!inputs.count(tensor.name)) {
+          std::fprintf(
+              stderr, "missing --input for manifest input '%s'\n",
+              tensor.name.c_str());
+          return 65;
+        }
       }
     }
 
     std::map<std::string, AneWorker::Buffer> outputs;
-    AneWorkerReport report = worker.submit(found->second, inputs, &outputs);
+    AneWorkerReport report = is_step
+        ? worker.step(sequence, inputs, &outputs, job.emits)
+        : worker.submit(sequence.front(), inputs, &outputs);
     if (report.status != AneWorkerStatus::Completed) {
       std::printf(
           "job status=1 bundle=%s elapsed_ms=%lld detail=%s\n",
@@ -1418,6 +1484,7 @@ int main(int argc, char** argv) {
   std::string bundle_dir;
   std::string libane_path;
   std::string device_spec;
+  std::string residency_spec;
   long deadline_ms = 2000;
   long iterations = 1;
   bool serve = false;
@@ -1467,6 +1534,8 @@ int main(int argc, char** argv) {
       libane_path = value();
     } else if (flag == "--device") {
       device_spec = value();
+    } else if (flag == "--h16-residency") {
+      residency_spec = value();
     } else if (flag == "--deadline-ms") {
       deadline_ms = std::stol(value());
     } else if (flag == "--iterations") {
@@ -1556,6 +1625,21 @@ int main(int argc, char** argv) {
     }
   } else if (libane_path.empty()) {
     return usage();
+  }
+  if (!residency_spec.empty()) {
+    if (!device.h16) {
+      std::fprintf(stderr, "--h16-residency applies to --device h16 only\n");
+      return usage();
+    }
+    device.residency = residency_spec;
+#ifdef MLX_OMARCHY_ANE_DEVICE
+    try {
+      (void)parse_h16_residency(device.residency);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "%s\n", error.what());
+      return usage();
+    }
+#endif
   }
   device.libane = libane_path;
   if (serve || relay_bypass || daemon_mode) {
@@ -1679,7 +1763,8 @@ int main(int argc, char** argv) {
           probe_h16_node(device.node, *make_h16_system_kernel());
       std::printf("device %s\n", identity.describe().c_str());
       const std::string node = identity.node;
-      factory = [node] { return make_h16_device(node); };
+      const AneH16Residency residency = parse_h16_residency(device.residency);
+      factory = [node, residency] { return make_h16_device(node, residency); };
     } else {
       factory = [libane_path] { return make_libane_device(libane_path); };
     }

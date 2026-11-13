@@ -291,6 +291,61 @@ Measured on an M4 Pro (Mac16,7, ABI 3 node):
   NaN and spreads through the padded value rows. Lane 3 keeps the ANE's
   behaviour.
 
+## Resident steps and state tensors
+
+These belong to the resident worker (`--serve`, `--daemon`,
+`--relay-bypass`, `AneWorker::open`), not to a lane: they hold for schema-4
+and schema-5 bundles alike and are exercised by `omarchy_ane_worker_state_tests`
+behind a fake device.
+
+**State tensors.** A manifest's `state` list names tensors that persist
+between submits. A state tensor a program reads before any program of the
+plan wrote it takes the value the previous submit or step left; the value
+the plan leaves behind is stored once the whole plan succeeded. State is
+zero before the first submit of a session and after a reset. It lives in
+the resident child, per bundle, as dense tensor bytes (the same form as an
+input); it never reaches the device between submits except through the
+programs that read it. A caller input with a state tensor's name seeds the
+tensor for that submit instead of the stored value. Several iterations in
+one submit (`--iterations N`) advance the state once per iteration. A
+one-shot `run()` starts from zero state and carries it across its own
+iterations only. Before this, a plan that read a state tensor failed with
+"has no staged value".
+
+Reset: `AneWorker::reset_state(bundle)` / `reset_all_state()`, stdin
+`reset NAME` or `reset *` (`--serve`), `reset NAME` followed by `run` on the
+resident's wire protocol (`--daemon`, `--relay-bypass`),
+`ResidentAneWorker.reset_state(bundle=None)`. A reset zeroes state only: the
+child, the device and the loaded programs stay.
+
+**Steps.** A submit already runs the bundle's whole `dispatch_plan` (several
+programs, intermediates routed through the worker's memory). A step does the
+same for several bundles in order, as one bounded unit:
+
+- `AneWorker::step(bundles, inputs, outputs, emit, deadline)`; stdin
+  `step NAME[,NAME...] [--inline NAME=BYTES]... [--emit NAME]...`;
+  wire `step NAME NAME...`, `emit NAME` lines, input frames, `run`;
+  `ResidentAneWorker.step(bundles, tag, inputs, outputs)`.
+- Every tensor a bundle produces is offered by name to the bundles after
+  it; `inputs` supply the rest. Names are the only routing (a bundle that
+  reads `t` gets the `t` an earlier bundle wrote). A bundle may appear more
+  than once.
+- The result is the `emit` tensors (any produced tensor, intermediates
+  included) or, with no `emit`, the last bundle's manifest outputs. A
+  missing input is named with its bundle and position
+  (`step bundle 'b' (2 of 3): ...`); an emit nothing produced is refused.
+- The whole step is one deadline: the explicit step deadline when given,
+  else the worker's per-submit deadline; inside a batch scope
+  (`batch N` ... `batch-end`) the earlier of that and the batch's own. A
+  miss kills the child and quarantines the worker exactly like a missed
+  submit; a failed program ends the session, so a step never leaves a
+  session with half-advanced state. State of every bundle in the step
+  advances by one step. `--serve` has no per-step deadline word: it uses the
+  per-submit deadline or the open batch.
+
+On lane 3 every program of every bundle of a session is loaded at open; how
+they share the kernel (`--h16-residency`) is described in `docs/ANE-LINUX.md`.
+
 ## External reference: maderix (Inside the M4 ANE)
 
 This section reconciles the maderix bundle/runtime findings against
