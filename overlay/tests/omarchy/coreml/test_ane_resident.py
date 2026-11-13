@@ -52,6 +52,7 @@ _FAKE_WORKER = textwrap.dedent(
     ledger = Path(os.environ["MLX_FAKE_LEDGER"])
     bundles = {}
     deadline_ms = 2000
+    residency = None
     arguments = sys.argv[1:]
     index = 0
     while index < len(arguments):
@@ -65,12 +66,17 @@ _FAKE_WORKER = textwrap.dedent(
         elif flag == "--deadline-ms":
             deadline_ms = int(arguments[index + 1])
             index += 2
+        elif flag == "--h16-residency":
+            residency = arguments[index + 1]
+            index += 2
         elif flag == "--serve":
             index += 1
         else:
             index += 2
     with ledger.open("a") as log:
         log.write("start\\n")
+        if residency:
+            log.write("residency %s\\n" % residency)
     for position, (name, directory) in enumerate(bundles.items()):
         with ledger.open("a") as log:
             log.write("load %s\\n" % name)
@@ -146,8 +152,16 @@ _FAKE_WORKER = textwrap.dedent(
             print("batch closed rounds=%d" % submits, flush=True)
             continue
         tokens = line.split()
-        assert tokens[0] == "submit", line
+        if tokens[0] == "reset":
+            with ledger.open("a") as log:
+                log.write("reset %s\\n" % tokens[1])
+            print("reset status=0 bundle=%s detail=fake" % tokens[1], flush=True)
+            continue
+        assert tokens[0] in ("submit", "step"), line
         bundle = tokens[1]
+        if tokens[0] == "step":
+            with ledger.open("a") as log:
+                log.write("step %s\\n" % bundle)
         inline = []
         emits = []
         position = 2
@@ -498,6 +512,52 @@ class ResidentAneWorkerTest(unittest.TestCase):
         session.close()
         with self.assertRaises(ResidentWorkerError):
             session.close()
+
+    def test_a_step_runs_several_bundles_and_reset_clears_state(self):
+        session = self._session()
+        with session:
+            payload = b"\x07" * 8
+            results = session.step(
+                ["A", "C"], "S00", {"q": payload}, ("y",)
+            )
+            self.assertEqual(results["y"], payload)
+            session.reset_state("A")
+            session.reset_state()
+            with self.assertRaises(ResidentWorkerError):
+                session.reset_state("nope")
+            with self.assertRaises(ResidentWorkerError):
+                session.step([], "S01", {}, ())
+            with self.assertRaises(ResidentWorkerError):
+                session.step(["A", "nope"], "S01", {}, ())
+        ledger = self._ledger()
+        self.assertEqual(ledger.count("step"), 1)
+        self.assertIn("A,C", ledger)
+        self.assertEqual(ledger.count("reset"), 2)
+        self.assertEqual(session.counters()["worker_starts"], 1)
+
+    def test_h16_residency_reaches_the_worker_and_is_validated(self):
+        import os
+
+        os.environ["MLX_FAKE_MODE"] = "ok"
+        os.environ["MLX_FAKE_LEDGER"] = str(self.ledger)
+
+        def make(**extra):
+            return ResidentAneWorker(
+                worker=self.worker,
+                libane=self.root / "libane.so",
+                bundles=self.bundles,
+                scratch=self.root / "scratch",
+                **extra,
+            )
+
+        with make(device="h16", h16_residency="swap"):
+            pass
+        self.assertIn("residency", self._ledger())
+        self.assertIn("swap", self._ledger())
+        with self.assertRaises(ResidentWorkerError):
+            make(h16_residency="swap")  # libane lane has no residency
+        with self.assertRaises(ResidentWorkerError):
+            make(device="h16", h16_residency="lru")
 
     def test_a_session_needs_a_bundle_and_a_positive_deadline(self):
         with self.assertRaises(ResidentWorkerError):
