@@ -615,11 +615,18 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 //   G13C (Apple M1 Max): 320 keys (chain 107.3 against 82.5, independent 84.0 against 78.2);
 //   G14C (Apple M2 Max): 320 keys with the value-phase pass 1 (chain 89.7 against 64.3; in the independent shape the fused kernel is 2.6 microseconds faster, 55.6 against 58.2, receipts/2026-10-24-sdpa-split-pv); the plain pass 1 first won at 448 keys (chain 127.2 against 86.8, independent 79.4 against 78.6), and at 320 keys it still wins the chain (89.7 against 85.5).
 // Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated: +21.9 percent (G13G), +19.5 percent (G13C), +12.8 percent (G14C). An unmeasured part keeps the
-// fused kernel. Pure.
+// fused kernel.
+// The same sweep (receipts/2026-11-13-sdpa-split-g13s-g14g, chain and independent microseconds per call, fused against split):
+//   G13S (Apple M1 Pro): 192 keys (128: chain 55.6 against 96.4; 192: chain 114.4 against 91.2, independent 117.2 against 90.6);
+//   G14G (Apple M2): 192 keys (128: chain 86.7 against 88.1; 192: chain 154.8 against 89.2, independent 153.7 against 88.3).
+// Qwen3-4B 4-bit decode at a 443-token prompt, 128 generated: +28.2 percent (G13S, 32.4 to 41.5 tokens per second), +20.0 percent (G14G, 17.6 to 21.1),
+// tokens identical. Pure.
 inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G13G") != std::string::npos) return 128;
   if (device_name.find("G13C") != std::string::npos) return 320;
   if (device_name.find("G14C") != std::string::npos) return 320;
+  if (device_name.find("G13S") != std::string::npos) return 192;
+  if (device_name.find("G14G") != std::string::npos) return 192;
   return 0;
 }
 
