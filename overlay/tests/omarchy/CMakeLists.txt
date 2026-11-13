@@ -65,6 +65,22 @@ doctest_discover_tests(omarchy_m2v_route_tests)
 add_test(NAME omarchy_m2v_route_tests
          COMMAND omarchy_m2v_route_tests)
 
+# Dependency tracker: header-only, pure C++, no GPU and no mlx linkage.
+add_executable(omarchy_dep_tracker_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_dep_tracker.cpp)
+target_link_libraries(omarchy_dep_tracker_tests PRIVATE doctest)
+target_include_directories(
+    omarchy_dep_tracker_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+target_compile_options(omarchy_dep_tracker_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_dep_tracker_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_dep_tracker_tests)
+add_test(NAME omarchy_dep_tracker_tests
+         COMMAND omarchy_dep_tracker_tests)
+
 # KernelRecheck debug entry: translate one generated-MSL file from argv.
 add_executable(omarchy_custom_kernel_translate_dump
                ${CMAKE_CURRENT_SOURCE_DIR}/translate_dump_main.cpp

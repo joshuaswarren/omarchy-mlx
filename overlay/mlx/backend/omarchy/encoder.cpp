@@ -169,38 +169,6 @@ bool CommandEncoder::gated_barriers() {
   return on;
 }
 
-bool CommandEncoder::batch_needs_barrier(
-    std::span<const TrackedRange> reads,
-    std::span<const TrackedRange> writes) const {
-  auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
-    return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
-  };
-  // Read after write and write after write.
-  for (const auto& r : reads) {
-    for (const auto& w : tracked_writes_) {
-      if (overlaps(r, w)) {
-        return true;
-      }
-    }
-  }
-  // Write after write and write after read: compute-to-compute in one
-  // queue has no execution dependency without a barrier, so a node
-  // writing a range any earlier node read must also wait.
-  for (const auto& w : writes) {
-    for (const auto& tw : tracked_writes_) {
-      if (overlaps(w, tw)) {
-        return true;
-      }
-    }
-    for (const auto& tr : tracked_reads_) {
-      if (overlaps(w, tr)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 void CommandEncoder::record_dependency_barrier() {
   // The heaviest correct dependency: all commands, all memory access,
   // both directions. The tracker restarts after it because the barrier
@@ -221,14 +189,12 @@ void CommandEncoder::record_dependency_barrier() {
       nullptr,
       0,
       nullptr);
-  tracked_reads_.clear();
-  tracked_writes_.clear();
+  tracker_.clear();
   head_synced_ = true;
 }
 
 void CommandEncoder::reset_dependency_tracking() {
-  tracked_reads_.clear();
-  tracked_writes_.clear();
+  tracker_.clear();
   head_synced_ = false;
 }
 
@@ -379,7 +345,7 @@ void CommandEncoder::copy_buffer(
   if (gated_barriers()) {
     TrackedRange read{src, src_offset, tracked_range_end(src_offset, size)};
     TrackedRange write{dst, dst_offset, tracked_range_end(dst_offset, size)};
-    if (!head_synced_ || batch_needs_barrier({&read, 1}, {&write, 1})) {
+    if (!head_synced_ || tracker_.needs_barrier({&read, 1}, {&write, 1})) {
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -387,8 +353,8 @@ void CommandEncoder::copy_buffer(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
-    tracked_reads_.push_back(read);
-    tracked_writes_.push_back(write);
+    tracker_.add_read(read);
+    tracker_.add_write(write);
   }
   VkBufferCopy region{};
   region.srcOffset = src_offset;
@@ -426,7 +392,7 @@ void CommandEncoder::fill_buffer(
   }
   if (gated_barriers()) {
     TrackedRange write{dst, offset, tracked_range_end(offset, size)};
-    if (!head_synced_ || batch_needs_barrier({}, {&write, 1})) {
+    if (!head_synced_ || tracker_.needs_barrier({}, {&write, 1})) {
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -434,7 +400,7 @@ void CommandEncoder::fill_buffer(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
-    tracked_writes_.push_back(write);
+    tracker_.add_write(write);
   }
   vk::device_table().CmdFillBuffer(cmd_, dst, offset, size, value);
   node_count_++;
@@ -764,7 +730,7 @@ void CommandEncoder::dispatch_compute_pipeline(
       }
     }
     if (!head_synced_ ||
-        batch_needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
+        tracker_.needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -774,16 +740,16 @@ void CommandEncoder::dispatch_compute_pipeline(
       prof::get().on_barrier(false);
     }
     for (size_t i = 0; i < nr; ++i) {
-      tracked_reads_.push_back(rd[i]);
+      tracker_.add_read(rd[i]);
     }
     for (size_t i = 0; i < nw; ++i) {
-      tracked_writes_.push_back(wr[i]);
+      tracker_.add_write(wr[i]);
     }
     if (export_dep_masks()) {
       // Compute the two exported signals (design 22b395d): (a) whether
       // this dispatch's ranges are provably disjoint from everything
       // since the last explicit dependency (same proof
-      // batch_needs_barrier just ran, inverted); (b) whether the launch
+      // tracker_.needs_barrier just ran, inverted); (b) whether the launch
       // reuses the previous dispatch's binding-layout signature (the
       // mlx-level analogue of the driver's USC register configuration).
       uint32_t usc_signature = 0;
@@ -1069,10 +1035,10 @@ void CommandEncoder::emit_pending() {
             cmd_, node.dst, node.write_offset, node.size, node.value);
       }
       for (uint32_t r = 0; r < node.nr; ++r) {
-        tracked_reads_.push_back(node.rd[r]);
+        tracker_.add_read(node.rd[r]);
       }
       for (uint32_t r = 0; r < node.nw; ++r) {
-        tracked_writes_.push_back(node.wr[r]);
+        tracker_.add_write(node.wr[r]);
       }
     }
   }

@@ -21,6 +21,7 @@
 #include "mlx/array.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/dep_tracker.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/stream.h"
 
@@ -251,14 +252,6 @@ inline bool batch_over_budget(
 // limit. A 2,048-token Qwen2.5-0.5B forward held 8.11 GB in one 257-node
 // batch against Honeykrisp's 7.56 GiB heap without this (2026-09-08).
 inline constexpr size_t kBatchByteBudgetDivisor = 16;
-
-// One tracked buffer byte-range of the dependency tracker (start
-// saturates at the address space; see tracked_range_end).
-struct TrackedRange {
-  VkBuffer buffer;
-  VkDeviceSize offset;
-  VkDeviceSize end;
-};
 
 // One buffered node's access sets for wave scheduling: the byte ranges a
 // node reads and writes (SPIR-V reflected readonly/writeonly split).
@@ -593,13 +586,9 @@ class MLX_API CommandEncoder {
   uint32_t dep_prev_signature_{0};
   uint32_t dep_have_prev_{0};
   uint64_t dep_seq_{0};
-  bool batch_needs_barrier(
-      std::span<const TrackedRange> reads,
-      std::span<const TrackedRange> writes) const;
   void record_dependency_barrier();
   void reset_dependency_tracking();
-  std::vector<TrackedRange> tracked_reads_;
-  std::vector<TrackedRange> tracked_writes_;
+  DependencyTracker tracker_;
   bool head_synced_{false};
 
   Device& device_;
