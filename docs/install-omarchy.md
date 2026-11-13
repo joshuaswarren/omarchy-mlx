@@ -138,7 +138,8 @@ bounds each submission to an estimated GPU cost. The open batch is submitted
 once its summed dispatch work-group counts reach the budget. The default is
 a per-board table (`receipts/2026-10-02-submission-cap-19`,
 `receipts/2026-10-12-submission-cap-calibration`,
-`receipts/2026-10-20-g13g-batch-work-8000`): per-group GPU cost
+`receipts/2026-10-20-g13g-batch-work-8000`,
+`receipts/2026-11-13-g18g-batch-work`): per-group GPU cost
 differs by an order of magnitude across the M1 family, so one global count
 cannot land every chip in the 2-6 ms band. A 4B decode step then splits
 into ~2-6 ms submissions. A single dispatch larger than the budget still
