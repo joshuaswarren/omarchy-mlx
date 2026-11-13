@@ -165,7 +165,7 @@ TEST_CASE("malformed programs get the reference client's refusals") {
     h16_test::Spec spec;
     spec.slots.push_back({10, 0x99990000});
     CHECK(refusal(h16_test::build(spec)) ==
-          "BAR slot 10 base 0x99990000 names no surface, scratch or kernel");
+          "BAR slot 10 base 0x99990000 names no surface, scratch, kernel or constants");
   }
   SUBCASE("no BAR reference at all") {
     h16_test::Spec spec;
