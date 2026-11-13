@@ -1349,6 +1349,7 @@ TEST_CASE("literal bfloat16_t locals on float-only buffers compile with glslc") 
       "  y[c] = v;\n"
       "}\n";
   CHECK(glslc_status(translate(source, 1), "literal-locals") == 0);
+}
 
 TEST_CASE("the bf16 conversion helper keeps NaN a NaN") {
   // The bias-add rounding carries into the exponent for NaN payloads:
