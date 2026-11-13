@@ -50,6 +50,11 @@ struct AneDevice {
       uint8_t* out,
       size_t size) = 0;
   virtual void release() = 0;
+  // One line of device-side bookkeeping (residency, loads, unloads) for
+  // logs and tests. Empty when a device has nothing to report.
+  virtual std::string status() const {
+    return std::string();
+  }
 };
 
 struct AneDeviceError : std::runtime_error {
@@ -145,6 +150,34 @@ class MLX_API AneWorker {
       const std::map<std::string, Buffer>& inputs,
       std::map<std::string, Buffer>* outputs = nullptr);
 
+  // One decode step over several resident bundles, in order. Each bundle's
+  // dispatch plan runs as in submit(); every tensor a bundle produces is
+  // offered by name to the bundles after it (intermediates stay in the
+  // child's memory, never on the wire), and `inputs` supply whatever no
+  // earlier bundle produced. `outputs` receives the `emit` tensors, or the
+  // last bundle's manifest outputs when `emit` is empty. The whole step is
+  // one bounded unit: `deadline` when positive (else the worker's per-submit
+  // deadline), and inside a batch scope the earlier of the two and the
+  // batch's own. A deadline miss or a failed program ends the session and
+  // quarantines like a failed submit(). State tensors of every bundle in the
+  // step advance by one step; a failed step ends the session, so no partial
+  // state is ever served afterwards.
+  AneWorkerReport step(
+      const std::vector<size_t>& bundles,
+      const std::map<std::string, Buffer>& inputs,
+      std::map<std::string, Buffer>* outputs = nullptr,
+      const std::vector<std::string>& emit = {},
+      std::chrono::milliseconds deadline = std::chrono::milliseconds(0));
+
+  // State tensors (the manifest's "state" list) live in the resident child
+  // for the session: each submit or step starts from the values the
+  // previous one left (zeros at open) and stores the new ones. Reset
+  // zeroes one bundle's state, or every bundle's, without touching the
+  // device or the loaded programs: the start of a new utterance or
+  // sequence. A one-shot run() carries state across its iterations only.
+  AneWorkerReport reset_state(size_t bundle);
+  AneWorkerReport reset_all_state();
+
   // Opens a batch scope: one absolute deadline, named here, bounds every
   // submit() until close_batch(). The safety model is unchanged -- one
   // private child, one bounded unit, failure ends the session, no retry
@@ -196,6 +229,14 @@ class MLX_API AneWorker {
 
 private:
   AneWorkerReport supervise(pid_t child, int report_fd);
+  AneWorkerReport exchange(
+      const std::string& request,
+      const std::vector<std::string>& emits,
+      const std::map<std::string, Buffer>& inputs,
+      std::map<std::string, Buffer>* outputs,
+      std::chrono::milliseconds deadline,
+      const std::string& done_prefix,
+      const std::string& done_suffix);
 
   struct Wait {
     bool ok{false};
@@ -238,6 +279,9 @@ private:
   // Batch scope: absolute deadline (0 = no scope open) and the number
   // of submits served inside it.
   std::chrono::milliseconds batch_until_{0};
+  // Deadline of the step in flight, for the failure text (0 = the
+  // worker's per-submit deadline).
+  long long step_deadline_ms_{0};
   int batch_rounds_{0};
 };
 

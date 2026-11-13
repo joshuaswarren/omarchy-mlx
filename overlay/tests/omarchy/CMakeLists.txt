@@ -125,6 +125,19 @@ target_link_options(omarchy_ane_worker_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_ane_worker_tests)
 add_test(NAME omarchy_ane_worker_tests COMMAND omarchy_ane_worker_tests)
 
+# Resident decode-step features of the generic worker: persistent state
+# tensors, reset, and multi-program / multi-bundle steps under one deadline.
+add_executable(omarchy_ane_worker_state_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_worker_state.cpp)
+target_link_libraries(omarchy_ane_worker_state_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_ane_worker_state_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_worker_state_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_worker_state_tests)
+add_test(NAME omarchy_ane_worker_state_tests
+         COMMAND omarchy_ane_worker_state_tests)
+
 # Host-only ABI profile gate tests (E3.1). No /proc, /sys, libane, or
 # ANE device touched; runs on any architecture so the gate's decision
 # logic is covered even when the binary cannot link the worker.

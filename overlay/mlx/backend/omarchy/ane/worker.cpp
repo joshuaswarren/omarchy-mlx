@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -94,12 +95,49 @@ std::map<std::string, AneWorker::Buffer> parse_outputs(
 
 // Executes the dispatch plan once. Intermediates route through child
 // memory; the worker owns every byte between programs.
+//
+// State tensors (the manifest's "state" list) persist between calls in
+// `state`, the caller's per-bundle store: a state tensor a program reads
+// before any program wrote it takes its value from the store (zeros before
+// the first call or after a reset), and the value the plan leaves behind is
+// stored again once the whole plan succeeded. A caller input of the same
+// name seeds the tensor for this call instead of the stored value. With no
+// store, state tensors start at zero on every call.
+size_t state_tensor_bytes(const AneBundle& bundle, const AneTensor& tensor) {
+  size_t bytes = tensor.byte_size;
+  for (const auto& program : bundle.manifest.programs) {
+    for (const auto* list : {&program.inputs, &program.outputs}) {
+      for (const auto& binding : *list) {
+        if (binding.tensor == tensor.name) {
+          bytes = std::max<size_t>(bytes, binding.logical_bytes);
+        }
+      }
+    }
+  }
+  return bytes;
+}
+
 void execute_plan(
     AneDevice& device,
     const AneBundle& bundle,
     const std::map<std::string, AneWorker::Buffer>& inputs,
-    std::map<std::string, AneWorker::Buffer>& outputs) {
+    std::map<std::string, AneWorker::Buffer>& outputs,
+    std::map<std::string, AneWorker::Buffer>* state = nullptr) {
   std::map<std::string, AneWorker::Buffer> values(inputs);
+  for (const auto& tensor : bundle.manifest.state) {
+    if (values.count(tensor.name)) {
+      continue; // seeded by the caller for this call
+    }
+    if (state != nullptr) {
+      auto stored = state->find(tensor.name);
+      if (stored != state->end()) {
+        values[tensor.name] = stored->second;
+        continue;
+      }
+    }
+    values[tensor.name] =
+        AneWorker::Buffer(state_tensor_bytes(bundle, tensor), 0);
+  }
   for (auto index : bundle.manifest.dispatch_plan) {
     if (index >= bundle.programs.size() ||
         index >= bundle.manifest.programs.size()) {
@@ -140,6 +178,11 @@ void execute_plan(
           "manifest output '" + tensor.name + "' was never produced");
     }
     outputs[tensor.name] = found->second;
+  }
+  if (state != nullptr) {
+    for (const auto& tensor : bundle.manifest.state) {
+      (*state)[tensor.name] = values.at(tensor.name);
+    }
   }
 }
 
@@ -276,6 +319,9 @@ int resident_child_loop(
   for (size_t i = 0; i < bundles.size(); ++i) {
     name_to_index[session_names[i]] = i;
   }
+  // Per-bundle state tensors, alive for the whole session. Empty means
+  // zeros; "reset" drops them.
+  std::vector<std::map<std::string, AneWorker::Buffer>> states(bundles.size());
   std::string carry;
   for (;;) {
     std::string line;
@@ -284,17 +330,54 @@ int resident_child_loop(
     }
     if (line == kRequestClose) {
       device.release();
+      const std::string status = device.status();
+      if (!status.empty()) {
+        std::fprintf(stderr, "[omarchy-ane] device %s\n", status.c_str());
+      }
       send_frame(fd, kTokenReleased, std::strlen(kTokenReleased));
       return 0;
     }
-    size_t index = bundles.size();
+    // "submit NAME" (one bundle), "step NAME NAME..." (several bundles in
+    // order, one bounded unit) or "reset NAME" / "reset *" (zero state).
+    std::vector<size_t> sequence;
+    bool reset = false;
+    bool step = false;
+    bool known = false;
     if (line.compare(0, 7, "submit ") == 0) {
       auto found = name_to_index.find(line.substr(7));
       if (found != name_to_index.end()) {
-        index = found->second;
+        sequence.push_back(found->second);
+        known = true;
+      }
+    } else if (line.compare(0, 5, "step ") == 0) {
+      step = true;
+      known = true;
+      std::istringstream names(line.substr(5));
+      std::string name;
+      while (names >> name) {
+        auto found = name_to_index.find(name);
+        if (found == name_to_index.end()) {
+          known = false;
+          break;
+        }
+        sequence.push_back(found->second);
+      }
+      known = known && !sequence.empty();
+    } else if (line.compare(0, 6, "reset ") == 0) {
+      reset = true;
+      const std::string target = line.substr(6);
+      if (target == "*") {
+        known = true;
+        for (size_t i = 0; i < bundles.size(); ++i) sequence.push_back(i);
+      } else {
+        auto found = name_to_index.find(target);
+        if (found != name_to_index.end()) {
+          sequence.push_back(found->second);
+          known = true;
+        }
       }
     }
-    if (index >= bundles.size()) {
+    if (!known) {
       send_frame(
           fd,
           std::string(kTokenFailed) + "unknown request '" + one_line(line) +
@@ -303,11 +386,16 @@ int resident_child_loop(
     }
 
     std::map<std::string, AneWorker::Buffer> inputs;
+    std::vector<std::string> emits;
     bool request_complete = false;
     while (child_read_line(fd, carry, line)) {
       if (line == kRequestRun) {
         request_complete = true;
         break;
+      }
+      if (line.compare(0, 5, "emit ") == 0 && line.size() > 5) {
+        emits.push_back(line.substr(5));
+        continue;
       }
       std::string name;
       size_t length = 0;
@@ -328,15 +416,57 @@ int resident_child_loop(
       return 0;
     }
 
+    if (reset) {
+      for (size_t index : sequence) states[index].clear();
+      if (!send_frame(fd, kTokenDone, std::strlen(kTokenDone))) {
+        return 0;
+      }
+      continue;
+    }
+
     try {
       for (int iteration = 0; iteration < iterations; ++iteration) {
-        std::map<std::string, AneWorker::Buffer> produced;
-        execute_plan(device, bundles[index], inputs, produced);
+        // One step: the bundles run in order and every produced tensor is
+        // offered to the bundles after it by name; intermediates live in
+        // child memory only.
+        std::map<std::string, AneWorker::Buffer> available(inputs);
+        std::map<std::string, AneWorker::Buffer> last;
+        for (size_t position = 0; position < sequence.size(); ++position) {
+          const size_t index = sequence[position];
+          std::map<std::string, AneWorker::Buffer> produced;
+          try {
+            execute_plan(
+                device, bundles[index], available, produced, &states[index]);
+          } catch (const std::exception& error) {
+            if (!step) throw;
+            throw AneDeviceError(
+                "step bundle '" + session_names[index] + "' (" +
+                std::to_string(position + 1) + " of " +
+                std::to_string(sequence.size()) + "): " + error.what());
+          }
+          for (const auto& entry : produced) {
+            available[entry.first] = entry.second;
+          }
+          last = std::move(produced);
+        }
+        std::map<std::string, AneWorker::Buffer> selected;
+        if (emits.empty()) {
+          selected = std::move(last);
+        } else {
+          for (const auto& name : emits) {
+            auto found = available.find(name);
+            if (found == available.end()) {
+              throw AneDeviceError(
+                  "step emit '" + name + "' was never produced");
+            }
+            selected[name] = found->second;
+          }
+        }
         if (!send_frame(fd, kTokenIteration, std::strlen(kTokenIteration))) {
           return 0;
         }
         if (iteration + 1 == iterations) {
-          for (const auto& entry : produced) {
+          for (const auto& entry : selected) {
             std::string header = std::string(kTokenOut) + entry.first + " " +
                                  std::to_string(entry.second.size()) + "\n";
             if (!send_frame(fd, header) ||
@@ -423,9 +553,10 @@ AneWorkerReport AneWorker::run(
         device->load(program);
       }
       write_all(fds[1], kTokenLoaded, std::strlen(kTokenLoaded));
+      std::map<std::string, Buffer> state; // carried across iterations
       for (int iteration = 0; iteration < options_.iterations; ++iteration) {
         std::map<std::string, Buffer> produced;
-        execute_plan(*device, bundle, inputs, produced);
+        execute_plan(*device, bundle, inputs, produced, &state);
         write_all(fds[1], kTokenIteration, std::strlen(kTokenIteration));
         if (iteration + 1 == options_.iterations) {
           for (const auto& entry : produced) {
@@ -640,7 +771,10 @@ AneWorker::Wait AneWorker::await_channel(
   }
   return Wait{
       false, AneWorkerStatus::DeadlineExceeded,
-      "deadline of " + std::to_string(options_.deadline.count()) +
+      "deadline of " +
+          std::to_string(
+              step_deadline_ms_ > 0 ? step_deadline_ms_
+                                    : options_.deadline.count()) +
           " ms exceeded " + what + "; worker killed; device completion "
           "state uncertain"};
 }
@@ -987,16 +1121,109 @@ AneWorkerReport AneWorker::submit(
   if (bundle >= resident_bundle_names_.size()) {
     throw std::invalid_argument("submit index out of range");
   }
+  return exchange(
+      "submit " + resident_bundle_names_[bundle], {}, inputs, outputs,
+      std::chrono::milliseconds(0), "resident worker completed ", " on "
+      "resident programs");
+}
 
+AneWorkerReport AneWorker::step(
+    const std::vector<size_t>& bundles,
+    const std::map<std::string, Buffer>& inputs,
+    std::map<std::string, Buffer>* outputs,
+    const std::vector<std::string>& emit,
+    std::chrono::milliseconds deadline) {
+  if (quarantined()) {
+    return AneWorkerReport{
+        AneWorkerStatus::QuarantinedRefused, 0, 0,
+        std::chrono::milliseconds(0), "quarantined: " + quarantine_reason_,
+        std::string()};
+  }
+  if (!resident()) {
+    throw std::invalid_argument("no resident ANE session is open");
+  }
+  if (bundles.empty()) {
+    throw std::invalid_argument("a step needs at least one bundle");
+  }
+  if (deadline.count() < 0) {
+    throw std::invalid_argument("ANE worker step deadline must not be negative");
+  }
+  std::string header = "step";
+  for (size_t bundle : bundles) {
+    if (bundle >= resident_bundle_names_.size()) {
+      throw std::invalid_argument("step index out of range");
+    }
+    header += " " + resident_bundle_names_[bundle];
+  }
+  return exchange(
+      header, emit, inputs, outputs, deadline, "resident worker completed a "
+      + std::to_string(bundles.size()) + "-bundle step in ",
+      " iteration(s)");
+}
+
+AneWorkerReport AneWorker::reset_state(size_t bundle) {
+  if (quarantined()) {
+    return AneWorkerReport{
+        AneWorkerStatus::QuarantinedRefused, 0, 0,
+        std::chrono::milliseconds(0), "quarantined: " + quarantine_reason_,
+        std::string()};
+  }
+  if (!resident()) {
+    throw std::invalid_argument("no resident ANE session is open");
+  }
+  if (bundle >= resident_bundle_names_.size()) {
+    throw std::invalid_argument("reset index out of range");
+  }
+  return exchange(
+      "reset " + resident_bundle_names_[bundle], {}, {}, nullptr,
+      std::chrono::milliseconds(0), "resident worker reset state of bundle '" +
+      resident_bundle_names_[bundle] + "'", "");
+}
+
+AneWorkerReport AneWorker::reset_all_state() {
+  if (quarantined()) {
+    return AneWorkerReport{
+        AneWorkerStatus::QuarantinedRefused, 0, 0,
+        std::chrono::milliseconds(0), "quarantined: " + quarantine_reason_,
+        std::string()};
+  }
+  if (!resident()) {
+    throw std::invalid_argument("no resident ANE session is open");
+  }
+  return exchange(
+      "reset *", {}, {}, nullptr, std::chrono::milliseconds(0),
+      "resident worker reset the state of every bundle", "");
+}
+
+// One request/response pair against the resident child: header line,
+// emit and input frames, "run", then frames until "done". The bounded
+// unit is the open batch scope when there is one, else `deadline` when the
+// caller gave a per-step one, else the worker's per-submit deadline; with
+// both a batch and a step deadline the earlier one wins. A miss kills the
+// child and quarantines the worker, exactly as for a plain submit.
+AneWorkerReport AneWorker::exchange(
+    const std::string& request,
+    const std::vector<std::string>& emits,
+    const std::map<std::string, Buffer>& inputs,
+    std::map<std::string, Buffer>* outputs,
+    std::chrono::milliseconds deadline,
+    const std::string& done_prefix,
+    const std::string& done_suffix) {
   const auto started = now_ms();
-  const auto until =
-      batch_until_.count() != 0 ? batch_until_ : started + options_.deadline;
+  auto until = started + (deadline.count() > 0 ? deadline : options_.deadline);
   if (batch_until_.count() != 0) {
+    until = deadline.count() > 0 ? std::min(batch_until_, until)
+                                 : batch_until_;
     ++batch_rounds_;
   }
+  step_deadline_ms_ = deadline.count();
 
-  std::string header = "submit " + resident_bundle_names_[bundle] + "\n";
+  std::string header = request + "\n";
   auto wait = send_request(header.data(), header.size(), until);
+  for (auto name = emits.begin(); wait.ok && name != emits.end(); ++name) {
+    std::string frame = "emit " + *name + "\n";
+    wait = send_request(frame.data(), frame.size(), until);
+  }
   for (auto entry = inputs.begin(); wait.ok && entry != inputs.end();
        ++entry) {
     std::string frame = "in " + entry->first + " " +
@@ -1069,10 +1296,17 @@ AneWorkerReport AneWorker::submit(
     return failed;
   }
 
+  step_deadline_ms_ = 0;
   out.status = AneWorkerStatus::Completed;
   out.elapsed = now_ms() - started;
-  out.detail = "resident worker completed " + std::to_string(out.iterations) +
-               " iteration(s) on resident programs";
+  if (request.compare(0, 6, "submit") == 0) {
+    out.detail = done_prefix + std::to_string(out.iterations) +
+                 " iteration(s)" + done_suffix;
+  } else if (request.compare(0, 4, "step") == 0) {
+    out.detail = done_prefix + std::to_string(out.iterations) + done_suffix;
+  } else {
+    out.detail = done_prefix;
+  }
   if (outputs != nullptr) {
     *outputs = std::move(produced);
   }

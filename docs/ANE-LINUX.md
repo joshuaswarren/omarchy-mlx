@@ -75,9 +75,31 @@ opens the accel node itself.
   `--libane PATH`. It prints `device lane=3 node=... driver=ane
   drm_version=... abi=3 chip=h16 ...` before any load.
 - Each loaded program gets its own open file (the driver keeps one program
-  per file, any number of files at once); closing the file unloads it.
-  Each EXEC passes every surface in the order H16_LOAD reported; the
-  driver copies inputs in and the output out.
+  per file); closing the file unloads it. Each EXEC passes every surface in
+  the order H16_LOAD reported; the driver copies inputs in and the output
+  out. Every surface lives in a host buffer of the device, so a program that
+  is not on the kernel at the moment keeps its staged inputs and outputs.
+- Residency: whether a second file may hold a program while the first one
+  does is a property of the driver. A driver without the switch-safe
+  transport answers the second `H16_LOAD` with `-EBUSY` (one program
+  resident); a switch-safe driver accepts any number. `--h16-residency
+  auto|concurrent|swap` (default `auto`; `h16_residency=` on
+  `ResidentAneWorker`) decides what the worker does about it:
+  `concurrent` keeps every program loaded and fails the load, at session
+  open, with the driver's reason on `-EBUSY`; `swap` keeps one program on the
+  kernel, loads each program once at open so the driver validates it, and
+  afterwards unloads the previous program and loads the next one on demand
+  (one unload and one load per switch, from the same sealed mapping);
+  `auto` is `concurrent` until the driver says `-EBUSY`, then `swap` with
+  the capacity the driver showed (a driver that holds two programs gets
+  least-recently-used eviction at two). On a switch-safe driver `auto` never
+  unloads anything. An `-EBUSY` while this worker holds no program means
+  another client owns the node's program slot and is reported as such. Every
+  refused or failed load closes its file again; the worker's release (or its
+  death) closes the rest.
+- Steps and state: a resident session on any lane serves `step` (several
+  bundles, in order, one deadline) and per-bundle state tensors with reset;
+  see `docs/ane-bundles.md`, "Resident steps and state tensors".
 - Parakeet: on an H16 machine the encoder runs as the one-program bundle
   `parakeet-encoder-whole-h16` when it is in the compiled cache or named by
   `MLX_OMARCHY_WHOLE_ENCODER_BUNDLE`, and on the GPU otherwise. The program
@@ -87,8 +109,11 @@ opens the accel node itself.
 
 What is measured: host tests only (section bytes against the kernel's
 add-128 fixture, a 6710-file differential against `h16-sections.py`, the
-schema-5 loader, the device behind a fake driver, the bundle builder on a
-synthetic stand-in). Nothing in lane 3 has run on H16 hardware. The
+schema-5 loader, the device behind a fake driver including a driver that
+keeps one program resident, the resident step and state suite, the bundle
+builder on a synthetic stand-in). Swap mode and concurrent residency are
+untested on hardware: the cost of an unload plus a load per switch, and
+whether the switch-safe driver patch keeps every output correct, are open. Nothing in lane 3 has run on H16 hardware. The
 h16g Parakeet HWX does not exist until the macOS harvest has run. The driver
 keeps every loaded program's firmware mappings until reboot, so each worker
 process that loads the 450 MB encoder uses program-window space that only a
