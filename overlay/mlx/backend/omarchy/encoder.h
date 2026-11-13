@@ -133,7 +133,10 @@ inline int batch_node_budget() {
 // to land typical decode submissions at p50 in the 2-6 ms band:
 // receipts/2026-10-02-submission-cap-19 (G14C) and
 // receipts/2026-10-12-submission-cap-calibration (G13C, G13G) and
-// receipts/2026-11-13-g18g-batch-work (G18G). Board
+// receipts/2026-11-13-g18g-batch-work (G18G) and
+// receipts/2026-11-13-g14c-batch-work (G14C 100000: GPU time per
+// submission p50 3.9 ms, p99 6.3 ms, max 8.6 ms, queue interval p50 4.2 ms; 0 frames over 33.3 ms
+// beside decode, not tested on a real compositor). Board
 // codes key the rows like the direct-matmul routes above
 // (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
 // G14C M2 Max, G18G M6. A single dispatch whose group count alone exceeds the
@@ -156,7 +159,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13S", 0},  // M1 Pro: uncalibrated, the reporter's chip, not in the fleet
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
-    {"G14C", 40000},  // receipts/2026-10-02-submission-cap-19
+    {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.3% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
     {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;

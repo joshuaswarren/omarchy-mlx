@@ -1,0 +1,14 @@
+PREFLIGHT host=jwm2-linux boot=7ff1f87d-cca0-4de6-9e24-197c32b9416d load=0.38
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p1 19:14:11
+default {"decode_tps": 38.08, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.17ms p99=1.10ms max=1.26ms mean=0.25ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 120000 p1 19:14:52
+120000 {"decode_tps": 38.69, "submits_per_step": 2.09, "probe": "submit-latency: n=359 p50=0.19ms p99=1.19ms max=1.67ms mean=0.27ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p2 19:15:33
+default {"decode_tps": 38.05, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.19ms p99=0.94ms max=1.98ms mean=0.26ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 120000 p2 19:16:14
+120000 {"decode_tps": 38.33, "submits_per_step": 2.09, "probe": "submit-latency: n=359 p50=0.20ms p99=1.08ms max=1.62ms mean=0.29ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p3 19:16:54
+default {"decode_tps": 37.69, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.18ms p99=1.09ms max=1.46ms mean=0.26ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 120000 p3 19:17:36
+120000 {"decode_tps": 38.25, "submits_per_step": 2.09, "probe": "submit-latency: n=359 p50=0.18ms p99=0.86ms max=1.47ms mean=0.26ms over2x(>33.3ms)=0/359"}
+BATCHWORK9B_DONE

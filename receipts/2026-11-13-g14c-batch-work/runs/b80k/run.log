@@ -1,0 +1,38 @@
+PREFLIGHT host=jwm2-linux boot=7ff1f87d-cca0-4de6-9e24-197c32b9416d load=1.26
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p1 19:40:53
+default {"decode_tps": 68.99, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.15ms p99=0.68ms max=0.95ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p1 19:41:25
+80000 {"decode_tps": 69.34, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.17ms p99=0.73ms max=0.78ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p2 19:41:57
+default {"decode_tps": 69.07, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.13ms p99=0.70ms max=1.15ms mean=0.20ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p2 19:42:29
+80000 {"decode_tps": 68.43, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.18ms p99=0.72ms max=0.81ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p3 19:43:01
+default {"decode_tps": 67.9, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.18ms p99=0.76ms max=1.19ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p3 19:43:33
+80000 {"decode_tps": 68.37, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.17ms p99=0.95ms max=2.15ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p1 19:44:04
+default {"decode_tps": 105.56, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.94ms max=1.06ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 80000 p1 19:44:33
+80000 {"decode_tps": 106.49, "submits_per_step": 1.06, "probe": "submit-latency: n=359 p50=0.16ms p99=0.71ms max=0.84ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p2 19:45:03
+default {"decode_tps": 108.03, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.68ms max=0.68ms mean=0.21ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 80000 p2 19:45:31
+80000 {"decode_tps": 109.6, "submits_per_step": 1.06, "probe": "submit-latency: n=359 p50=0.18ms p99=0.70ms max=1.01ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p3 19:46:00
+default {"decode_tps": 107.77, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.66ms max=0.72ms mean=0.21ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 80000 p3 19:46:29
+80000 {"decode_tps": 109.96, "submits_per_step": 1.06, "probe": "submit-latency: n=359 p50=0.16ms p99=0.76ms max=0.80ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p1 19:46:58
+default {"decode_tps": 37.71, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.19ms p99=1.17ms max=1.43ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 80000 p1 19:47:39
+80000 {"decode_tps": 38.12, "submits_per_step": 3.13, "probe": "submit-latency: n=359 p50=0.19ms p99=0.87ms max=1.79ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p2 19:48:20
+default {"decode_tps": 37.69, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.18ms p99=1.09ms max=1.38ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 80000 p2 19:49:01
+80000 {"decode_tps": 38.26, "submits_per_step": 3.13, "probe": "submit-latency: n=359 p50=0.20ms p99=0.91ms max=1.91ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p3 19:49:42
+default {"decode_tps": 37.96, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.19ms p99=1.18ms max=1.39ms mean=0.27ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 80000 p3 19:50:23
+80000 {"decode_tps": 38.38, "submits_per_step": 3.13, "probe": "submit-latency: n=359 p50=0.20ms p99=0.97ms max=2.02ms mean=0.28ms over2x(>33.3ms)=0/359"}
+BATCHWORK80K_DONE
