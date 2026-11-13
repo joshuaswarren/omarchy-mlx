@@ -148,39 +148,60 @@ TEST_CASE("clear forgets every range") {
   CHECK_FALSE(needs(t, {range(1, 0, 64)}, {range(2, 0, 64)}));
 }
 
-TEST_CASE("indexed answers match the linear scan on random ranges") {
+TEST_CASE("clear after more than 64 buffers releases the bucket table and the tracker still answers") {
+  DependencyTracker t;
+  for (uintptr_t b = 1; b <= 5000; ++b) {
+    t.add_write(range(b, 0, 64));
+  }
+  REQUIRE(t.bucket_count() > 64);
+  t.clear();
+  CHECK(t.bucket_count() <= 64);
+  CHECK_FALSE(needs(t, {range(1, 0, 64)}, {range(2, 0, 64)}));
+  t.add_write(range(7, 8, 16));
+  CHECK(needs(t, {range(7, 0, 64)}, {}));
+  CHECK_FALSE(needs(t, {range(8, 0, 64)}, {}));
+}
+
+TEST_CASE("indexed answers match the linear scan across 200 buffers and saturated ranges") {
   std::mt19937_64 rng(20261113);
-  for (int round = 0; round < 300; ++round) {
-    DependencyTracker t;
-    LinearTracker oracle;
-    auto pick = [&]() {
-      auto b = static_cast<uintptr_t>(1 + rng() % 3);
-      VkDeviceSize off = rng() % 200;
-      VkDeviceSize len = (rng() % 5 == 0) ? 0 : 1 + rng() % 40;
-      return range(b, off, off + len);
-    };
-    int steps = 1 + static_cast<int>(rng() % 60);
-    for (int s = 0; s < steps; ++s) {
-      std::vector<TrackedRange> rd, wr;
-      for (uint64_t i = rng() % 3; i > 0; --i) {
-        rd.push_back(pick());
-      }
-      for (uint64_t i = rng() % 3; i > 0; --i) {
-        wr.push_back(pick());
-      }
-      REQUIRE(t.needs_barrier(rd, wr) == oracle.needs_barrier(rd, wr));
-      for (const auto& r : rd) {
-        t.add_read(r);
-        oracle.reads.push_back(r);
-      }
-      for (const auto& w : wr) {
-        t.add_write(w);
-        oracle.writes.push_back(w);
-      }
-      if (rng() % 20 == 0) {
-        t.clear();
-        oracle.reads.clear();
-        oracle.writes.clear();
+  constexpr VkDeviceSize kMax = UINT64_MAX;
+  for (uint64_t nbuf : {3u, 200u}) {
+    for (int round = 0; round < 300; ++round) {
+      DependencyTracker t;
+      LinearTracker oracle;
+      auto pick = [&]() {
+        auto b = static_cast<uintptr_t>(1 + rng() % nbuf);
+        if (rng() % 16 == 0) {
+          VkDeviceSize off = (rng() % 4 == 0) ? kMax : rng() % 200;
+          return range(b, off, kMax);
+        }
+        VkDeviceSize off = rng() % 200;
+        VkDeviceSize len = (rng() % 5 == 0) ? 0 : 1 + rng() % 40;
+        return range(b, off, off + len);
+      };
+      int steps = 1 + static_cast<int>(rng() % 60);
+      for (int s = 0; s < steps; ++s) {
+        std::vector<TrackedRange> rd, wr;
+        for (uint64_t i = rng() % 3; i > 0; --i) {
+          rd.push_back(pick());
+        }
+        for (uint64_t i = rng() % 3; i > 0; --i) {
+          wr.push_back(pick());
+        }
+        REQUIRE(t.needs_barrier(rd, wr) == oracle.needs_barrier(rd, wr));
+        for (const auto& r : rd) {
+          t.add_read(r);
+          oracle.reads.push_back(r);
+        }
+        for (const auto& w : wr) {
+          t.add_write(w);
+          oracle.writes.push_back(w);
+        }
+        if (rng() % 20 == 0) {
+          t.clear();
+          oracle.reads.clear();
+          oracle.writes.clear();
+        }
       }
     }
   }

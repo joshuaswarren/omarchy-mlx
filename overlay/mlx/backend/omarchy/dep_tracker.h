@@ -111,10 +111,15 @@ class DependencyTracker {
   // reset its buckets.
   void clear() {
     if (sets_.bucket_count() > kKeepBuckets) {
-      sets_ = {};
+      sets_ = decltype(sets_){};
     } else {
       sets_.clear();
     }
+  }
+
+  // Bucket count of the buffer table, for tests of the release rule.
+  size_t bucket_count() const {
+    return sets_.bucket_count();
   }
 
  private:
