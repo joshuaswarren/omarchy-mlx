@@ -435,9 +435,12 @@ def _check_ane_capability() -> None:
             f"(mode {oct(os.stat(accel).st_mode)}); the ANE driver is "
             f"not bound"
         )
-    if not Path("/sys/module/ane").is_dir():
+    modules = Path("/sys/module")
+    if not (modules / "ane").is_dir() and not any(
+        module.is_dir() for module in modules.glob("ane_*")
+    ):
         raise TranscribeRefusal(
-            "the ane kernel module is not loaded (/sys/module/ane missing)"
+            "no ANE kernel module is loaded under /sys/module"
         )
 
 

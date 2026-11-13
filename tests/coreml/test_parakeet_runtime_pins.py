@@ -11,9 +11,11 @@ tests cover the explicit-refusal contract on hosts without the runtime.
 
 import hashlib
 import json
+import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -151,6 +153,31 @@ def _load_cli_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+def test_capability_check_accepts_t6021_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_cli_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(module.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(module.Path, "exists", lambda _self: True)
+    monkeypatch.setattr(
+        module.Path, "glob",
+        lambda self, _pattern: (
+            [Path("/sys/module/ane_t6021")]
+            if self == Path("/sys/module") else []
+        ),
+    )
+    monkeypatch.setattr(
+        module.Path, "is_dir",
+        lambda self: self == Path("/sys/module/ane_t6021"),
+    )
+    monkeypatch.setattr(
+        module.os, "stat",
+        lambda _path: SimpleNamespace(st_mode=stat.S_IFCHR),
+    )
+    monkeypatch.delenv("MLX_OMARCHY_ANE_DEVICE", raising=False)
+
+    module._check_ane_capability()
+
 
 
 def _write_share(tmp_path: Path, libane: bytes) -> Path:
