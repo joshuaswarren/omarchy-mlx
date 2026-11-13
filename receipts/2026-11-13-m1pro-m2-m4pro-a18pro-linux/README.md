@@ -40,6 +40,8 @@ Source build of `aurora-silicon/omarchy-mlx` `ec849019` (#407: main `f3ec9599` p
 | M2 | 60/60 cases, 27086/27086 assertions | 29/29, 131707/131707 | exit 0, buffer round trip OK |
 | M4 Pro | 59/60 cases, 27085/27086 assertions | 29/29, 131711/131711 | exit 0, buffer round trip OK |
 
+The M4 Pro failure is `independent streams measure against the serialized sum`: a rerun of the same build (`suite/m4pro-rerun.txt`) measured ratio 0.876 (serialized 0.0498 s, interleaved 0.0568 s, 400 iterations) against the 0.95 floor, and both copies verified byte-for-byte. See [KNOWN-ISSUES](../../docs/KNOWN-ISSUES.md#m4-pro-g16s-on-borealis-the-independent-streams-timing-floor-fails). The `SUBMIT-RECOVER` and `failed to advance` lines in the logs come from the child processes that test the stall paths.
+
 ## LLM decode and prefill
 
 `receipts/2026-10-09-linux-vs-macos/score_bench.py` with that receipt's `prompts.jsonl`: 2 warmup generations, then 10 greedy generations of 64 tokens (decode median, time to first token excluded) and 5 prefills of 512 tokens (median). Each model ran in one process, the 2B model first. Governor `schedutil`, release defaults (submission budget 5000 on all four boards). `bench/` has the JSON per run and the load and SoC temperature at its start.
