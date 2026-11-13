@@ -9118,7 +9118,8 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    NormPlan* norm) {
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -9186,6 +9187,31 @@ bool dispatch_quantized_gemv_group(
         x.ndim() < 2 || x.shape(-2) != 1) {
       return false;
     }
+  } else if (norm != nullptr) {
+    // The prologue deletes the RMSNorm that produced x (it was never
+    // evaluated), so x's usual readiness checks do not apply: its
+    // shape and dtype still describe the normalized row. The kernel
+    // reproduces fast_norm_apple.comp bit for bit, so the plan fires
+    // only on the shapes that kernel serves on the stock path (bf16,
+    // subgroup, single row, widths 2048/2560, per-row weight) and the
+    // norm's own inputs must be ready.
+    if (encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3 ||
+        dtype != bfloat16 || !subgroup_ready) {
+      return false;
+    }
+    const array& in = norm->in;
+    const array& weight = norm->weight;
+    if (!whole_dense(in, in.size()) || !whole_dense(weight, weight.size()) ||
+        in.dtype() != dtype || weight.dtype() != dtype ||
+        norm->x.id() != x.id() || !input_ready(in, stream) ||
+        !input_ready(weight, stream)) {
+      return false;
+    }
+    if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
+        x.ndim() < 2 || x.shape(-2) != 1) {
+      return false;
+    }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
       x.ndim() < 2 || (!token_route && x.shape(-2) != 1) ||
       !input_ready(x, stream) ||
@@ -9193,13 +9219,23 @@ bool dispatch_quantized_gemv_group(
       x.offset() % x.itemsize() != 0) {
     return false;
   }
-  if (token_route && outgate != nullptr) {
+  if (token_route && (outgate != nullptr || norm != nullptr)) {
     return false;
   }
   const int k = x.shape(-1);
   if (k <= 0 || k % 64 != 0 ||
       x.size() != static_cast<size_t>(rows) * static_cast<size_t>(k)) {
     return false;
+  }
+  if (norm != nullptr) {
+    // The apple reduction this kernel reproduces is the register-path
+    // one (per-thread contiguous blocks of k/256 reads): widths 2048
+    // and 2560, and the weight is the whole per-row vector, not the
+    // scalar broadcast form.
+    if ((k != 2048 && k != 2560) ||
+        norm->weight.size() != static_cast<size_t>(k)) {
+      return false;
+    }
   }
   // The multi-token kernel has no producer-direct KV window contract.
   if (token_route) {
@@ -9214,8 +9250,8 @@ bool dispatch_quantized_gemv_group(
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi kernel only.
   const uint32_t group_columns =
-      (!token_route && outgate == nullptr && dtype == bfloat16 &&
-       subgroup_ready)
+      (!token_route && outgate == nullptr && norm == nullptr &&
+       dtype == bfloat16 && subgroup_ready)
       ? qmm_geometry().columns
       : 8u;
   for (size_t i = 0; i < members.size(); ++i) {
@@ -9359,6 +9395,12 @@ bool dispatch_quantized_gemv_group(
     // references stay valid.
     outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
   }
+  if (norm != nullptr) {
+    // The deleted RMSNorm's output materializes the same way: the
+    // prologue workgroups recompute the normalized row, and the first
+    // workgroup stores it so retained references stay valid.
+    norm->x.set_data(allocator().malloc(norm->x.nbytes()));
+  }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
     // so their retained references stay valid (their only readers
@@ -9416,7 +9458,9 @@ bool dispatch_quantized_gemv_group(
     }
   }
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
-  bindings[0] = binding(outgate != nullptr ? outgate->x : x);
+  bindings[0] = binding(outgate != nullptr ? outgate->x
+                        : norm != nullptr  ? norm->x
+                                           : x);
   const ComputeBinding filler = binding(members[0].node);
   for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
     uint32_t base = 1 + i * kQmmVecMultiBindingsPerWeight;
@@ -9447,7 +9491,18 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
-  auto kernel = outgate != nullptr
+  if (norm != nullptr) {
+    // flags bit 19, the pre-norm prologue; alpha carries the norm's
+    // eps for the reduction's rsqrt(mean + eps).
+    params.flags |= 524288u;
+    params.alpha = norm->eps;
+    bindings[kQmmVecMultiBindings] = binding(norm->in);
+    bindings[kQmmVecMultiBindings + 1] = binding(norm->weight);
+    bindings[kQmmVecMultiBindings + 2] = binding(norm->x);
+  }
+  auto kernel = norm != nullptr
+      ? ComputeKernel::QmmVecQ4MultiNormBF16
+      : outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
       : token_route
       ? (rows > 4

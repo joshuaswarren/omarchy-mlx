@@ -90,6 +90,12 @@ uint16_t bf16_store(float value) {
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
 #error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
 #endif
+#if defined(QMM_VEC_NORM) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI) || \
+     !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_OUTGATE) || \
+     defined(QMM_VEC_TOKENS))
+#error "QMM_VEC_NORM builds on the bf16 subgroup multi column"
+#endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
 // owning ROWS_PER_SLOT consecutive output rows (native qmv_fast keeps four
@@ -119,11 +125,18 @@ uint16_t bf16_store(float value) {
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
 #endif
+#if defined(QMM_VEC_NORM) && SLOTS_PER_GROUP != 4
+#error "QMM_VEC_NORM assumes the 4-slot 128-thread workgroup"
+#endif
 // The x fetch inside Q4_WORD / Q4_ROWS: the out-gate prologue variant
-// (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors
-// instead of reading the product; every other variant reads input_x.
+// (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors,
+// the pre-norm prologue variant (QMM_VEC_NORM, multi-only) normalizes
+// the raw row instead of reading the product, and every other variant
+// reads input_x.
 #if defined(QMM_VEC_OUTGATE)
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#elif defined(QMM_VEC_NORM)
+#define OUTGATE_XWORDS(x_base) norm_quad((x_base) / 8u)
 #else
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
@@ -227,6 +240,36 @@ uvec4 outgate_quad(uint quad_index) {
 }
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
 #endif
+#if defined(QMM_VEC_NORM)
+// Pre-norm prologue (flags bit 19): x = rms_norm(in, weight, eps), the
+// exact arithmetic and reduction of fast_norm_apple.comp — the kernel the
+// stock path dispatches for bf16 decode rows at widths 2048/2560 on this
+// hardware (apple_norm_enabled). The host refuses anything else, so the
+// fused values are the stock RMSNorm output bits: per-thread contiguous
+// n_reads = k/256 block sums (precise, no FMA), the hardware 32-lane
+// subgroupAdd stages, the 8-partial second stage, and per element
+// r = bf16(x * (norm * weight)) with the same rounding — then the dot
+// consumes exactly those rounded bits. eps rides params.alpha; the raw
+// row and the weight start at element 0 (the host refuses otherwise),
+// and workgroup 0 stores the materialized normalized row so retained
+// references to the deleted RMSNorm's output stay valid (bindings
+// 25-27). Stock runs 256 threads (8 subgroups); this workgroup's four
+// 32-lane subgroups hold stock threads 64*sub + lane and 64*sub + 32 +
+// lane, so each hardware subgroupAdd sees the same 32 operand values in
+// the same lane order and returns the same bits.
+layout(set = 0, binding = 25, std430) readonly buffer NormIn {
+  STORAGE_TYPE values[];
+} norm_in;
+layout(set = 0, binding = 26, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 27, std430) writeonly buffer NormOut {
+  uvec4 values[];
+} norm_out;
+shared float norm_partials[8u];
+float norm_factor = 1.0;
+#define OUTGATE_XWORDS(x_base) norm_quad((x_base) / 8u)
+#endif
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
@@ -302,6 +345,62 @@ layout(push_constant) uniform Params {
   uint in_strides[4];
   uint out_strides[4];
 } params;
+
+#if defined(QMM_VEC_NORM)
+// The reduction and normalization bodies (they read the push
+// constants, so they sit after the Params block).
+void norm_reduce() {
+  uint thread = gl_LocalInvocationID.x;
+  uint sub_id = thread / 32u;
+  uint lane = thread % 32u;
+  uint n_reads = params.matrix_k / 256u;
+  uint v0 = 64u * sub_id + lane;
+  uint v1 = v0 + 32u;
+  precise float sq0 = 0.0;
+  precise float sq1 = 0.0;
+  for (uint i = 0u; i < n_reads; ++i) {
+    float a = LOAD_VALUE(norm_in.values[params.lhs_offset + v0 * n_reads + i]);
+    sq0 += a * a;
+    float b = LOAD_VALUE(norm_in.values[params.lhs_offset + v1 * n_reads + i]);
+    sq1 += b * b;
+  }
+  if (lane == 0u) {
+    norm_partials[2u * sub_id] = subgroupAdd(sq0);
+    norm_partials[2u * sub_id + 1u] = subgroupAdd(sq1);
+  }
+  barrier();
+  if (sub_id == 0u) {
+    float v = (lane < 8u) ? norm_partials[lane] : 0.0;
+    float total = subgroupAdd(v);
+    if (lane == 0u) {
+      norm_partials[0] = total;
+    }
+  }
+  barrier();
+  float mean_square = norm_partials[0] / float(params.matrix_k);
+  norm_factor = inversesqrt(mean_square + params.alpha);
+}
+
+uint16_t norm_half(uint index) {
+  precise float nw = norm_factor * LOAD_VALUE(norm_weight.values[index]);
+  precise float result =
+      LOAD_VALUE(norm_in.values[params.lhs_offset + index]) * nw;
+  return STORE_VALUE(result);
+}
+
+uvec4 norm_quad(uint quad_index) {
+  uint base = params.lhs_offset + quad_index * 8u;
+  uvec4 packed = uvec4(
+      uint(norm_half(base)) | (uint(norm_half(base + 1u)) << 16u),
+      uint(norm_half(base + 2u)) | (uint(norm_half(base + 3u)) << 16u),
+      uint(norm_half(base + 4u)) | (uint(norm_half(base + 5u)) << 16u),
+      uint(norm_half(base + 6u)) | (uint(norm_half(base + 7u)) << 16u));
+  if (gl_WorkGroupID.x == 0u) {
+    norm_out.values[quad_index] = packed;
+  }
+  return packed;
+}
+#endif
 
 #ifndef USE_SUBGROUP
 shared float reduce_scratch[256];
@@ -1028,6 +1127,12 @@ void main() {
   } \
 }
 void main() {
+#if defined(QMM_VEC_NORM)
+  // The pre-norm prologue's row reduction runs once per workgroup,
+  // before any x fetch, with every thread of the workgroup (uniform
+  // barriers).
+  norm_reduce();
+#endif
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;

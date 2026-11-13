@@ -179,6 +179,23 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// Pre-norm prologue fold: the group's shared x is the output of
+// x = RMSNorm(in, weight, eps) whose every tape reader is a member of
+// the group (q, k, v or gate, up). |in| and |weight| are the norm's
+// inputs, |x| the deleted RMSNorm's output — the kernel recomputes the
+// row's RMS reduction and normalized values per workgroup with the
+// apple-reduction arithmetic the stock path dispatches at these shapes
+// (fast_norm_apple.comp; bf16, widths 2048/2560, single row) and rounds
+// the normalized x to the storage dtype before the dot, so the fused
+// values are the stock RMSNorm output bits, and materializes x so
+// retained references stay valid.
+struct NormPlan {
+  array in;
+  array weight;
+  array x;
+  float eps;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -189,7 +206,9 @@ struct OutgatePlan {
 // deleted swiglu dispatch). |outgate| plans the out-gate prologue:
 // the shared x is the deleted Multiply(Sigmoid(gate), out) output, and
 // the one dispatch reads gate and out directly, reconstructing x per
-// workgroup with the elementwise arithmetic and rounding. Returns false
+// workgroup with the elementwise arithmetic and rounding. |norm| plans
+// the pre-norm prologue the same way for a deleted RMSNorm; the two
+// prologues are mutually exclusive. Returns false
 // having allocated nothing when any member falls outside the contract;
 // the caller then lets every node take its ordinary eval_gpu path.
 // Defined in primitives.cpp beside QuantizedMatmul::eval_gpu.
@@ -197,7 +216,8 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
+    OutgatePlan* outgate = nullptr,
+    NormPlan* norm = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -259,6 +279,14 @@ bool fused_gemv_enabled(const Device& device);
 const char* qmm_geometry_name();
 
 bool outgate_fold_enabled();
+
+// MLX_OMARCHY_FUSED_NORM_QMV: the pre-norm prologue fold (a decode
+// RMSNorm whose only readers are one GEMV group's members rides the
+// group dispatch, which recomputes the row bit-exactly and deletes the
+// norm dispatch). Unset or "0" keeps every RMSNorm on its own dispatch
+// (the prototype default; unset is bit-identical stock). Read live so
+// tests can flip it between phases.
+bool norm_qmv_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off

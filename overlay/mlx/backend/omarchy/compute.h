@@ -778,6 +778,13 @@ enum class ComputeKernel : uint16_t {
   // dispatches are deleted. bf16 + subgroup only. Append-only profile
   // id.
   QmmVecQ4MultiOutgateBF16,
+  // Pre-norm prologue multi-weight decode GEMV
+  // (qmm_vec.comp -DQMM_VEC_NORM): x = rms_norm(in, weight, eps) is
+  // recomputed per workgroup inside the kernel with fast_norm_apple.comp's
+  // exact reduction and rounding, so the standalone RMSNorm dispatch is
+  // deleted. bf16 + subgroup only, row widths 2048/2560. Append-only
+  // profile id.
+  QmmVecQ4MultiNormBF16,
   // Attn128 decode SDPA widths: the composition-exact bf16 arm at every
   // multiple of 32 up to 256 (same shader source, -DSDPA_DIM=N; every f32
   // op and its order matches the composed path, so each width is
