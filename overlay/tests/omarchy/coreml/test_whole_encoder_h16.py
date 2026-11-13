@@ -37,13 +37,16 @@ from coreml.compiled_cache import CompiledCache
 LOCK = Path(_TOOLS) / "coreml" / "parakeet-reference.lock"
 FEATURES_ALLOC = 0xbc000  # 768000 rounded up to 16 KiB
 HIDDEN_ALLOC = 0x78000    # 480000 rounded up to 16 KiB
+MASK_ALLOC = 0x4000       # 6000 in one 64-byte aligned row
+MASK = ("attention_mask", 1, 0x32000000, MASK_ALLOC, 6016)
+FEATURES = ("input_features", 1, 0x30000000, FEATURES_ALLOC, 768000)
+HIDDEN = ("encoder_hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000)
 
 
 def synthetic_hwx(surfaces=None, subtype=7, scratch=None, tasks=2):
     """Python twin of tests/omarchy/ane/h16_test_hwx.h."""
     if surfaces is None:
-        surfaces = [("features", 1, 0x30000000, FEATURES_ALLOC, 768000),
-                    ("hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000)]
+        surfaces = [MASK, FEATURES, HIDDEN]
     slots = [(6 + i, vm) for i, (_, _, vm, _, _) in enumerate(surfaces)]
     if scratch:
         slots.append((3, scratch[0]))
@@ -124,13 +127,16 @@ def synthetic_hwx(surfaces=None, subtype=7, scratch=None, tasks=2):
 
 
 def make_harvest(root: Path, hwx: bytes, target="h16g", lock=LOCK):
-    program = root / "hwx-compiled" / "encoder-single-output"
+    program = root / "hwx-compiled" / "encoder-ane"
     (program / target).mkdir(parents=True)
     (program / target / "model.hwx").write_bytes(hwx)
     (program / "target").write_text(target + "\n")
     capture = root / "capture" / "ane"
     capture.mkdir(parents=True)
     rng = np.random.default_rng(7)
+    mask = np.zeros((1, 3000), np.int32)
+    mask[0, :1801] = 1
+    np.save(capture / "encoder_input_mask.npy", mask)
     np.save(capture / "encoder_input_features.npy",
             rng.standard_normal((1, 3000, 128)).astype(np.float32))
     np.save(capture / "encoder_hidden.npy",
@@ -214,9 +220,14 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(program["operation"], "whole-encoder")
         self.assertEqual(program["task_descriptors"], 2)
         self.assertEqual(program["scratch_bytes"], 0x200000)
+        self.assertEqual([b["tensor"] for b in program["inputs"]],
+                         ["attention_mask", "input_features"])
         self.assertEqual(program["inputs"][0]["surface"], 0)
-        self.assertEqual(program["inputs"][0]["allocation_bytes"], FEATURES_ALLOC)
-        self.assertEqual(program["outputs"][0]["surface"], 1)
+        self.assertEqual(program["inputs"][0]["allocation_bytes"], MASK_ALLOC)
+        self.assertEqual(program["inputs"][0]["logical_bytes"], 6000)
+        self.assertEqual(program["inputs"][1]["surface"], 1)
+        self.assertEqual(program["inputs"][1]["allocation_bytes"], FEATURES_ALLOC)
+        self.assertEqual(program["outputs"][0]["surface"], 2)
         self.assertEqual(program["outputs"][0]["logical_bytes"], 480000)
         self.assertEqual((bundle / "program-0.hwx").read_bytes(), hwx)
         self.assertEqual(record["hwx_sha256"], sha)
@@ -231,32 +242,30 @@ class BuilderTest(unittest.TestCase):
         self.assertTrue(again[1])
 
     def test_surface_order_follows_the_hwx(self):
-        surfaces = [("hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000),
-                    ("features", 1, 0x30000000, FEATURES_ALLOC, 768000)]
-        (bundle, _, _), _ = self.build(synthetic_hwx(surfaces))
+        (bundle, _, _), _ = self.build(synthetic_hwx([HIDDEN, FEATURES, MASK]))
         program = json.loads((bundle / "manifest.json").read_text())["programs"][0]
-        self.assertEqual(program["inputs"][0]["surface"], 1)
+        self.assertEqual(program["inputs"][0]["surface"], 2)   # attention_mask
+        self.assertEqual(program["inputs"][1]["surface"], 1)   # input_features
         self.assertEqual(program["outputs"][0]["surface"], 0)
 
     def test_refusals(self):
         cases = {
             # The section builder's own rule fires first.
             "section builder: an H16 program has exactly one output": synthetic_hwx([
-                ("features", 1, 0x30000000, FEATURES_ALLOC, 768000),
-                ("hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000),
-                ("mask", 2, 0x32000000, 0x4000, 750)]),
-            "2 inputs and 1 outputs": synthetic_hwx([
-                ("mask", 1, 0x32000000, 0x4000, 6000),
-                ("features", 1, 0x30000000, FEATURES_ALLOC, 768000),
-                ("hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000)]),
+                MASK, FEATURES, HIDDEN,
+                ("encoder_mask", 2, 0x33000000, 0x4000, 750)]),
+            "the lane-3 whole encoder is the inputs attention_mask and "
+            "input_features": synthetic_hwx([FEATURES, HIDDEN]),
+            "input_features (in), encoder_hidden (out), features (in)": synthetic_hwx([
+                FEATURES, HIDDEN, ("features", 1, 0x32000000, MASK_ALLOC, 6016)]),
+            "attention_mask spans 6400 bytes": synthetic_hwx([
+                ("attention_mask", 1, 0x32000000, MASK_ALLOC, 6400), FEATURES, HIDDEN]),
             "spans 760000 bytes": synthetic_hwx([
-                ("features", 1, 0x30000000, FEATURES_ALLOC, 760000),
-                ("hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000)]),
+                MASK, ("input_features", 1, 0x30000000, FEATURES_ALLOC, 760000), HIDDEN]),
             "CPU subtype 9": synthetic_hwx(subtype=9),
             "section builder: not an H16G or H17 HWX": b"\0" * 64,
-            "section builder: surface features has no matching tensor": synthetic_hwx([
-                ("features", 1, 0x30000000, 0x4000, 768000),
-                ("hidden", 2, 0x31000000, HIDDEN_ALLOC, 480000)]),
+            "section builder: surface input_features has no matching tensor": synthetic_hwx([
+                MASK, ("input_features", 1, 0x30000000, 0x4000, 768000), HIDDEN]),
         }
         for expected, hwx in cases.items():
             with self.subTest(expected):
@@ -304,6 +313,18 @@ class CheckTest(unittest.TestCase):
         nan[0, 1, 1] = np.nan
         self.assertIn("nan_count", h16.compare(nan, golden, self.CONTRACT)["failures"])
 
+    def test_mask_is_dense_3000_fp16_of_zeros_and_ones(self):
+        mask = np.zeros((1, 3000), np.int32)
+        mask[0, :504] = 1
+        dense = h16.dense_mask(mask)
+        self.assertEqual(dense.shape, (3000,))
+        self.assertEqual(dense.dtype, np.dtype("<f2"))
+        self.assertEqual(float(dense.sum()), 504.0)
+        with self.assertRaises(h16.BuildError):
+            h16.dense_mask(mask * 2)
+        with self.assertRaises(h16.BuildError):
+            h16.dense_mask(np.ones(2999, np.int32))
+
     def test_features_are_dense_3000x128_fp16(self):
         values = np.arange(3000 * 128, dtype=np.float32).reshape(1, 3000, 128) % 100
         dense = h16.dense_features(values)
@@ -326,8 +347,11 @@ class CheckTest(unittest.TestCase):
             "import sys, shutil\n"
             "args = sys.argv[1:]\n"
             "assert args[args.index('--device') + 1] == 'fake-h16-for-test'\n"
-            "feats = [a for a in args if a.startswith('input_features=')]\n"
-            "assert len(open(feats[0].split('=', 1)[1], 'rb').read()) == 768000\n"
+            "inputs = [a.split('=', 1) for a, f in zip(args[1:], args) if f == '--input']\n"
+            "assert [n for n, _ in inputs] == ['attention_mask', 'input_features']\n"
+            "mask = open(inputs[0][1], 'rb').read()\n"
+            "assert len(mask) == 6000 and mask[:2] == b'\\x00\\x3c' and mask[-2:] == bytes(2)\n"
+            "assert len(open(inputs[1][1], 'rb').read()) == 768000\n"
             "save = args[args.index('--save') + 1].split('=', 1)[1]\n"
             f"shutil.copy({str(answer)!r}, save)\n"
             "print('device lane=3 node=/dev/accel/accel0 fake')\n")

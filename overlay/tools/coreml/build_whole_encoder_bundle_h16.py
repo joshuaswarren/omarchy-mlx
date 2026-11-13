@@ -5,12 +5,15 @@
 The H16 counterpart of build_whole_encoder_bundle.py. Its input is the output
 of the one-time macOS harvest (ane-harvest.sh):
 
-  hwx-compiled/encoder-single-output/<target>/model.hwx
-      Apple ANECCompile of the CoreML encoder MIL for the M4 generation with
-      output_mask removed from the return tuple, so the program has exactly
-      one output (the ABI 3 driver accepts one output per program).
-  hwx-compiled/encoder-single-output/target       the target that compiled
-  capture/ane/encoder_input_features.npy          golden input
+  hwx-compiled/encoder-ane/<target>/model.hwx
+      Apple ANECCompile for the M4 generation of the CoreML encoder MIL
+      rewritten by h16_encoder_mil.py: the int32/bool mask arithmetic
+      ANECCompile refuses becomes fp16 arithmetic on an fp16 attention_mask
+      input, and encoder_hidden is the only output (the ABI 3 driver
+      accepts one output per program).
+  hwx-compiled/encoder-ane/target                 the target that compiled
+  capture/ane/encoder_input_mask.npy              golden mask input
+  capture/ane/encoder_input_features.npy          golden features input
   capture/ane/encoder_hidden.npy                  golden output
   meta/parakeet-reference.lock                    lock the capture used
 
@@ -45,11 +48,12 @@ for entry in (str(_TOOLS), str(_TOOLS / "coreml")):
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
-# Reference section builder: aurora-silicon/linux 3aa52f4f
+# Reference section builder: aurora-silicon/linux (Apple-compiled HWX:
+# split __KERN_n kernel data and __TEXT,__const constants)
 # tools/testing/selftests/drivers/ane/h16-sections.py (GPL-2.0-only; loaded
 # at build time, never copied into this repository).
 H16_SECTIONS_PATH = "tools/testing/selftests/drivers/ane/h16-sections.py"
-H16_SECTIONS_SHA256 = "479806b8c534e08ab02a96d1bdf4312f771480c5d92840a807fe07b77e078a0c"
+H16_SECTIONS_SHA256 = "bd45fc0fc5ced98dac177d51d805c9ef01343e9703fc37c3a2cc20e60d6e5836"
 # ane-linux-experiments commit of tools/ane-compile-hwx.mm, the ANECCompile
 # wrapper the harvest builds (ane-harvest.sh ALE_COMMIT).
 COMPILER_WRAPPER_COMMIT = "0a769e44f282ccb9101efc01be7edf51cf849687"
@@ -59,9 +63,14 @@ MANIFEST_VERSION = 5
 DRIVER_ABI_MAJOR = 3
 BUNDLE_NAME = "parakeet-encoder-whole-h16"
 PAYLOAD = "program-0.hwx"
-HARVEST_PROGRAM = "encoder-single-output"
-# The same program as the M1/M2 whole-encoder container: dense fp16
-# input_features [3000, 128] -> encoder_hidden [375, 640].
+# The encoder MIL rewritten by h16_encoder_mil.py (fp16 mask arithmetic,
+# encoder_hidden only), compiled by ANECCompile for h16g.
+HARVEST_PROGRAM = "encoder-ane"
+# The inputs of the M1/M2 whole-encoder container: fp16 attention_mask [3000]
+# (1 valid frame, 0 padding) and dense fp16 input_features [3000, 128] ->
+# encoder_hidden [375, 640].
+MASK_SHAPE = (3000,)
+MASK_BYTES = MASK_SHAPE[0] * 2
 FEATURES_SHAPE = (3000, 128)
 HIDDEN_SHAPE = (375, 640)
 FEATURES_BYTES = FEATURES_SHAPE[0] * FEATURES_SHAPE[1] * 2
@@ -113,18 +122,19 @@ def harvest_layout(harvest: Path) -> dict[str, Path | str]:
         if len(found) != 1:
             raise BuildError(
                 f"{program} has no target file and {len(found)} compiled "
-                "targets; the harvest did not compile the single-output encoder"
+                "targets; the harvest did not compile the rewritten encoder"
             )
         target = found[0]
     layout = {
         "target": target,
         "hwx": program / target / "model.hwx",
         "features": harvest / "capture" / "ane" / "encoder_input_features.npy",
+        "mask": harvest / "capture" / "ane" / "encoder_input_mask.npy",
         "hidden": harvest / "capture" / "ane" / "encoder_hidden.npy",
         "lock": harvest / "meta" / "parakeet-reference.lock",
         "run_log": harvest / "meta" / "run.log",
     }
-    for name in ("hwx", "features", "hidden", "lock"):
+    for name in ("hwx", "features", "mask", "hidden", "lock"):
         if not Path(layout[name]).is_file():
             raise BuildError(f"harvest file missing: {layout[name]}")
     return layout
@@ -134,7 +144,8 @@ def validate_hwx(reference, hwx: bytes) -> dict:
     """The section builder's rules plus the whole-encoder surface contract."""
     try:
         sections, ids, refs, tasks = reference.build(hwx)
-        surfaces, _text, _kernel, scratch, _descriptor = reference.parse(hwx)
+        surfaces, _text, _constants, _kernels, scratch, _descriptor = \
+            reference.parse(hwx)
     except reference.HwxError as error:
         raise BuildError(f"HWX refused by the section builder: {error}") from error
     subtype = struct.unpack_from("<I", hwx, 8)[0]
@@ -142,17 +153,25 @@ def validate_hwx(reference, hwx: bytes) -> dict:
         raise BuildError(
             f"HWX CPU subtype {subtype} is not H16G ({HWX_SUBTYPE_H16G})"
         )
-    inputs = [(i, s) for i, s in enumerate(surfaces) if s["direction"] == 1]
-    outputs = [(i, s) for i, s in enumerate(surfaces) if s["direction"] == 2]
-    if len(inputs) != 1 or len(outputs) != 1:
+    named = {(s.get("name"), s["direction"]): (i, s) for i, s in enumerate(surfaces)}
+    wanted = (("attention_mask", 1), ("input_features", 1), ("encoder_hidden", 2))
+    if len(surfaces) != len(wanted) or any(key not in named for key in wanted):
         raise BuildError(
-            f"HWX has {len(inputs)} inputs and {len(outputs)} outputs; the "
-            "lane-3 whole encoder is one input (input_features) and one "
-            "output (encoder_hidden)"
+            "HWX surfaces are " + ", ".join(
+                f"{s.get('name')} ({'in' if s['direction'] == 1 else 'out'})"
+                for s in surfaces) + "; the lane-3 whole encoder is the inputs "
+            "attention_mask and input_features and the output encoder_hidden"
         )
-    (in_index, feature), (out_index, hidden) = inputs[0], outputs[0]
+    (mask_index, mask), (in_index, feature), (out_index, hidden) = (
+        named[key] for key in wanted)
     # Raw staging copies dense row-major bytes verbatim, so the surface's
-    # tensor span must be exactly the dense tensor.
+    # tensor span must be exactly the dense tensor; a single row (the mask)
+    # may end in the 64-byte row padding, which stays zero.
+    if mask["span"] not in (MASK_BYTES, (MASK_BYTES + 63) // 64 * 64):
+        raise BuildError(
+            f"HWX input attention_mask spans {mask['span']} bytes; fp16 "
+            f"{MASK_SHAPE[0]} is {MASK_BYTES} (one 64-byte aligned row)"
+        )
     if feature["span"] != FEATURES_BYTES:
         raise BuildError(
             f"HWX input {feature.get('name')} spans {feature['span']} bytes; "
@@ -168,6 +187,8 @@ def validate_hwx(reference, hwx: bytes) -> dict:
     return {
         "tasks": tasks,
         "scratch_bytes": scratch[1] if scratch else 0,
+        "mask": {"surface": mask_index, "allocation": mask["allocation"],
+                 "name": mask.get("name")},
         "input": {"surface": in_index, "allocation": feature["allocation"],
                   "name": feature.get("name")},
         "output": {"surface": out_index, "allocation": hidden["allocation"],
@@ -208,7 +229,10 @@ def build_manifest(info: dict, hwx_sha: str, hwx_size: int, target: str,
         "name": BUNDLE_NAME,
         "graph_hash": hwx_sha,
         "task_descriptors": info["tasks"],
-        "inputs": [{"name": "input_features", "index": 0, "dtype": "float16",
+        "inputs": [{"name": "attention_mask", "index": 0, "dtype": "float16",
+                    "shape": [*MASK_SHAPE], "byte_size": MASK_BYTES,
+                    "stride": info["mask"]["allocation"]},
+                   {"name": "input_features", "index": 1, "dtype": "float16",
                     "shape": [*FEATURES_SHAPE], "byte_size": FEATURES_BYTES,
                     "stride": info["input"]["allocation"]}],
         "outputs": [{"name": "encoder_hidden", "index": 0, "dtype": "float16",
@@ -227,7 +251,8 @@ def build_manifest(info: dict, hwx_sha: str, hwx_size: int, target: str,
             "encoder": "apple-whole-encoder-h16g",
             "task_descriptors": info["tasks"],
             "scratch_bytes": info["scratch_bytes"],
-            "inputs": [raw("input_features", info["input"], FEATURES_BYTES)],
+            "inputs": [raw("attention_mask", info["mask"], MASK_BYTES),
+                       raw("input_features", info["input"], FEATURES_BYTES)],
             "outputs": [raw("encoder_hidden", info["output"], HIDDEN_BYTES)],
         }],
         "dispatch_plan": [0],
@@ -255,7 +280,8 @@ def cache_key(hwx_sha: str, hwx_size: int, target: str):
         model_artifacts=(ArtifactDigest(path="encoder.hwx", sha256=hwx_sha,
                                         size=hwx_size),),
         selected_function="encoder",
-        static_input_shapes={"input_features": FEATURES_SHAPE},
+        static_input_shapes={"attention_mask": MASK_SHAPE,
+                             "input_features": FEATURES_SHAPE},
         compiler=CompilerIdentity(
             name="ANECCompile",
             version=target,
@@ -267,7 +293,7 @@ def cache_key(hwx_sha: str, hwx_size: int, target: str):
         bundle_schema=MANIFEST_VERSION,
         driver_abi_major=DRIVER_ABI_MAJOR,
         firmware_identity="T6041-H16",
-        frontend_version="mlx-omarchy-whole-encoder-h16-1",
+        frontend_version="mlx-omarchy-whole-encoder-h16-2",
     )
 
 
@@ -299,9 +325,11 @@ def build(harvest: Path, reference, cache, source_commit: str,
         "hwx": str(hwx_path), "hwx_sha256": hwx_sha, "hwx_bytes": len(hwx),
         "target": layout["target"], "tasks": info["tasks"],
         "scratch_bytes": info["scratch_bytes"],
-        "input_surface": info["input"], "output_surface": info["output"],
+        "mask_surface": info["mask"], "input_surface": info["input"],
+        "output_surface": info["output"],
         "golden_sha256": {
             "encoder_input_features.npy": _sha256_file(Path(layout["features"])),
+            "encoder_input_mask.npy": _sha256_file(Path(layout["mask"])),
             "encoder_hidden.npy": _sha256_file(Path(layout["hidden"])),
         },
         "lock_sha256": lock_sha,
@@ -320,6 +348,18 @@ def dense_features(array) -> "np.ndarray":
     if values.shape == (FEATURES_SHAPE[1], FEATURES_SHAPE[0]):
         values = values.T
     return np.ascontiguousarray(values.reshape(FEATURES_SHAPE)).astype("<f2")
+
+
+def dense_mask(array) -> "np.ndarray":
+    import numpy as np
+
+    values = np.asarray(array).reshape(-1)
+    if values.size != MASK_SHAPE[0]:
+        raise BuildError(f"input mask has {values.size} elements, want "
+                         f"{MASK_SHAPE[0]}")
+    if not np.isin(values, (0, 1)).all():
+        raise BuildError("input mask holds values other than 0 and 1")
+    return np.ascontiguousarray(values).astype("<f2")
 
 
 def compare(hidden, golden, contract: dict) -> dict:
@@ -360,13 +400,17 @@ def check(bundle: Path, harvest: Path, worker: Path, device: str,
     layout = harvest_layout(harvest)
     contract = json.loads(lock.read_text())["numerical_contract"]
     features = dense_features(np.load(layout["features"]))
+    mask = dense_mask(np.load(layout["mask"]))
     golden = np.load(layout["hidden"])
     with tempfile.TemporaryDirectory(prefix="h16-check-") as scratch:
+        mask_file = Path(scratch) / "attention_mask.bin"
+        mask_file.write_bytes(mask.tobytes())
         source = Path(scratch) / "input_features.bin"
         target = Path(scratch) / "encoder_hidden.bin"
         source.write_bytes(features.tobytes())
         argv = [str(worker), "--bundle", str(bundle), "--device", device,
                 "--deadline-ms", str(deadline_ms), "--iterations", "1",
+                "--input", f"attention_mask={mask_file}",
                 "--input", f"input_features={source}",
                 "--save", f"encoder_hidden={target}"]
         run = subprocess.run(argv, capture_output=True, text=True, check=False)
