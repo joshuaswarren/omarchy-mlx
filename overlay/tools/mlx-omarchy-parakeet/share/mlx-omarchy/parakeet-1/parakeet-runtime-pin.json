@@ -357,7 +357,7 @@
     "encoder_hidden_sha256_whole": "51830b6ffe992568c9fd19a3636373fd36939e14ff998c558fb85038acbd13b8",
     "encoder_hidden_sha256_whole_basis": "sha256 of the float32 tensor bytes (C order) produced by the whole-program ANE encoder (all 13701 ops in the ANE, fp16); differs from encoder_hidden_sha256 (island hybrid, 1230 GPU ops) in f32 low bits only; bit-exact with the certified staged runs (868fa7f1e r1-r4, gates-20260922-r4/out-4 body sha); transcript/tokens/durations/frame_indices identical to the island pin",
     "encoder_hidden_sha256_h16": "18f0810014afb9897480ce413813d11758e03fec8cdf6a290d1f4ebaeb860213",
-    "encoder_hidden_sha256_h16_basis": "sha256 of the float32 tensor bytes (C order) produced by the lane-3 whole encoder: the h16g HWX of the rewritten encoder MIL (h16_encoder_mil.py) on an M4 Pro ANE through the ABI 3 node, fp16 out; deterministic across processes and resident passes; for the harvest capture and a 504-frame duration-aware input its encoder_hidden equals the original model under CoreML on an Apple ANE bit for bit; transcript/tokens/durations/frame_indices identical to the island pin"
+    "encoder_hidden_sha256_h16_basis": "sha256 of the float32 tensor bytes (C order) produced by the lane-3 whole encoder: the h16g HWX of the rewritten encoder MIL (h16_encoder_mil.py) on an M4 Pro ANE through the ABI 3 node, fp16 out; deterministic across processes and resident passes; for the captured fixture and a 504-frame duration-aware input its encoder_hidden equals the original model under CoreML on macOS bit for bit; transcript/tokens/durations/frame_indices identical to the island pin"
   },
   "encoder_source": {
     "mil_sha256": "ac8e9526154ac8b8d4c08b83e44dbc1a2208d7ec33e42a7838d57b698b14f133"

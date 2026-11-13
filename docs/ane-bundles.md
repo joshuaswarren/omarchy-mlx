@@ -258,9 +258,10 @@ bound exactly once with its direction and size. The sealed loader
 (`load_bundle_sealed`) treats an HWX like any other payload.
 
 The lane-3 Parakeet encoder bundle `parakeet-encoder-whole-h16` is built by
-`overlay/tools/coreml/build_whole_encoder_bundle_h16.py` from the macOS
-harvest. ANECCompile refuses the encoder as exported (its sequence-length
-arithmetic runs on int32 and bool tensors), so the harvest compiles the MIL
+`overlay/tools/coreml/build_whole_encoder_bundle_h16.py` from the files of a
+macOS capture run. ANECCompile refuses the encoder as exported (its
+sequence-length arithmetic runs on int32 and bool tensors), so the capture run
+compiles the MIL
 that `overlay/tools/coreml/h16_encoder_mil.py` writes: the same graph with
 the mask arithmetic in fp16 on an fp16 `attention_mask` input, and
 `encoder_hidden` as the only output (the ABI 3 driver takes one output per
@@ -285,7 +286,7 @@ Measured on an M4 Pro (Mac16,7, ABI 3 node):
   frame indices, durations, transcript). The first pass takes 1.6 s
   including the 0.9 s program load; a resident second pass 0.28 s.
 - A duration-aware input (504 valid frames): `encoder_hidden` is bit-identical
-  to the original model under CoreML on an Apple ANE, padded rows included.
+  to the original model under CoreML on macOS, padded rows included.
   The same original model under CoreML on the CPU, and the encoder on the
   GPU, return NaN for such inputs: a fully masked query row's softmax is
   NaN and spreads through the padded value rows. Lane 3 keeps the ANE's
