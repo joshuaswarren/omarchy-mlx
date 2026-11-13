@@ -134,6 +134,22 @@ void replace_word(
       value, std::regex("\\b" + regex_escape(needle) + "\\b"), replacement);
 }
 
+// Comments are stripped only late in translate_msl, so every brace scan before
+// that must step over them. Returns the index of the last character of a
+// comment that starts at `index`, value.size() if it never ends, or `index`
+// itself when no comment starts there.
+size_t skip_msl_comment(const std::string& value, size_t index) {
+  if (value.compare(index, 2, "//") == 0) {
+    const auto end = value.find('\n', index);
+    return end == std::string::npos ? value.size() : end;
+  }
+  if (value.compare(index, 2, "/*") == 0) {
+    const auto end = value.find("*/", index + 2);
+    return end == std::string::npos ? value.size() : end + 1;
+  }
+  return index;
+}
+
 size_t matching_delimiter(
     const std::string& value,
     size_t opening,
@@ -141,6 +157,10 @@ size_t matching_delimiter(
     char close) {
   int depth = 0;
   for (size_t index = opening; index < value.size(); ++index) {
+    index = skip_msl_comment(value, index);
+    if (index >= value.size()) {
+      break;
+    }
     if (value[index] == open) {
       ++depth;
     } else if (value[index] == close && --depth == 0) {
@@ -1332,16 +1352,11 @@ void round_bf16_type(
     size_t end = body.size();
     int depth = 0;
     for (size_t i = begin; i < body.size(); ++i) {
-      // Comments are still in the text at this pass: a brace inside one must
-      // not open or close a block.
-      if (body.compare(i, 2, "//") == 0) {
-        i = body.find('\n', i);
-        if (i == std::string::npos) break;
-      } else if (body.compare(i, 2, "/*") == 0) {
-        i = body.find("*/", i + 2);
-        if (i == std::string::npos) break;
-        ++i;
-      } else if (body[i] == '{') {
+      i = skip_msl_comment(body, i);
+      if (i >= body.size()) {
+        break;
+      }
+      if (body[i] == '{') {
         ++depth;
       } else if (body[i] == '}') {
         if (depth == 0) {
