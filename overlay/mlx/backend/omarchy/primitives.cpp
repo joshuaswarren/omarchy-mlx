@@ -16441,8 +16441,16 @@ void ScaledDotProductAttention::eval_gpu(
       static_cast<uint64_t>(batch) * heads * q_len * k_len;
   const bool score_exceeds_heap_budget = flash_caps.total_memory > 0 &&
       flash_score_elements > flash_caps.total_memory / (4u * sizeof(float));
+  // The composed route binds its whole score matrix: f32 words, or bf16
+  // words under MLX_OMARCHY_SDPA_BF16_FAST. Past the device's storage
+  // binding range (2 GiB - 1 on Borealis) the dispatch is refused, so such
+  // a shape belongs to the flash kernel, which never materializes scores.
+  const uint64_t score_item_bytes = bf16_fast ? 2u : 4u;
+  const bool score_binding_too_large = flash_caps.max_storage_buffer_range > 0 &&
+      flash_score_elements * score_item_bytes > flash_caps.max_storage_buffer_range;
   const bool flash_wants =
-      flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
+      flash_score_elements > (1ull << 30) || score_binding_too_large ||
+      score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
   // Route precedence: the pin and MIN_L are explicit flash overrides
@@ -16528,6 +16536,20 @@ void ScaledDotProductAttention::eval_gpu(
     const int q_tiles = (q_len + kFlashRowsPerTile - 1) / kFlashRowsPerTile;
     // One q tile per dispatch: all heads ride the same dispatch, the
     // firmware timer stays ~5-12 ms per dispatch at full shape.
+    //
+    // The dispatches of one primitive would otherwise share a single
+    // submission, and the work-group budget of the evaluator cannot see
+    // them: a tile dispatch is only `heads` groups but each group walks the
+    // whole key range. A device without a cooperative-matrix flash arm runs
+    // this kernel at about 50 GMAC/s, so a 16384-token prefill of 8 heads
+    // (550 GMAC) is one ~11 s submission, past the kernel's per-job GPU
+    // timeout. Close the submission whenever the tiles recorded since the
+    // last commit reach kFlashSubmitMacs multiply-accumulates (about 80 ms
+    // at that rate). Scheduling only: results are unchanged.
+    constexpr double kFlashSubmitMacs = 4.0e9;
+    const double tile_macs = 2.0 * kFlashRowsPerTile * static_cast<double>(k_len) *
+        128.0 * static_cast<double>(heads) * static_cast<double>(batch);
+    double open_macs = 0.0;
     for (int tile = 0; tile < q_tiles; ++tile) {
       params.dims = checked_u32(tile, tag, out);
       encoder.dispatch_compute(
@@ -16537,6 +16559,11 @@ void ScaledDotProductAttention::eval_gpu(
           1u,
           static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
+      open_macs += tile_macs;
+      if (open_macs >= kFlashSubmitMacs && tile + 1 < q_tiles) {
+        encoder.commit();
+        open_macs = 0.0;
+      }
     }
     return;
   }
