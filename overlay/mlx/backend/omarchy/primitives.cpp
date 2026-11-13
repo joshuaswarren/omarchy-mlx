@@ -16545,6 +16545,21 @@ void ScaledDotProductAttention::eval_gpu(
     params.v_batchstride = checked_u32(v.strides()[0], tag, out);
     std::array<omarchy::ComputeBinding, 4> flash_bindings{
         binding(q), binding(k), binding(v), binding(out)};
+    // A capability simulation can route a shape here (the score-binding
+    // and heap checks read the simulated limits); the kernel itself needs
+    // the hardware's workgroup and shared memory.
+    {
+      const auto& hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          flash_caps,
+          flash_route_ready,
+          "SdpaPrefillFlashBF16Hd128",
+          "workgroup_limits+shared_memory_limit_bytes",
+          hw.max_compute_work_group_size[0] >= 256u &&
+              hw.max_compute_work_group_invocations >= 256u &&
+              hw.max_compute_shared_memory_size >= 28928u);
+    }
     constexpr int kFlashRowsPerTile = 32;
     const int q_tiles = (q_len + kFlashRowsPerTile - 1) / kFlashRowsPerTile;
     // One q tile per dispatch: all heads ride the same dispatch, the
@@ -16573,7 +16588,10 @@ void ScaledDotProductAttention::eval_gpu(
           static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
       open_macs += tile_macs;
-      if (open_macs >= kFlashSubmitMacs && tile + 1 < q_tiles) {
+      // commit() is not valid while a compiled tape records (see
+      // dispatch_qmm_tile): the tiles then stay in one submission.
+      if (!encoder.in_tape_recording && open_macs >= kFlashSubmitMacs &&
+          tile + 1 < q_tiles) {
         encoder.commit();
         open_macs = 0.0;
       }
