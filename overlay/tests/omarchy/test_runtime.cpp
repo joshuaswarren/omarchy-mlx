@@ -2350,8 +2350,15 @@ TEST_CASE("independent streams measure against the serialized sum") {
   // proprietary; the test still prints its ratio for every run so a
   // per-driver floor can be set from collected numbers. See
   // docs/KNOWN-ISSUES.md.
+  // Borealis on the M4 Pro (G16S) measures 0.83-0.93 over repeated runs of
+  // this case (the same binary on the M1/Honeykrisp device measures 1.0 and
+  // above), with every copy byte-for-byte correct; its floor is 0.80, which a
+  // global serialization lock would still fall well below.
+  const double floor =
+      dev.capabilities().driver_id == omarchy::kAuroraBorealisDriverId ? 0.80
+                                                                       : 0.95;
   if (dev.capabilities().driver_id != VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-    CHECK(ratio > 0.95);
+    CHECK(ratio > floor);
   }
   CHECK(std::memcmp(y1->data, x1->data, kBytes) == 0);
   CHECK(std::memcmp(y2->data, x2->data, kBytes) == 0);
