@@ -1,16 +1,36 @@
 # MLX on an M4 under Omarchy
 
 Status: beta. This is a path for M4 owners who run Linux with the
-aurora M4 integration, and it needs the M4 GPU patches below. Only one
-M4 machine has results here, and it is not the machine most readers have.
+aurora M4 integration. Two M4 machines have results here.
 
 | Machine | GPU id | Driver | Status |
 |---|---|---|---|
 | M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). |
-| M4 Pro (J616s, t6040) | G16S | Mesa Borealis | **Not measured.** The steps below come from reading the source. |
+| M4 Pro MacBook Pro (J616s, T6040) | G16S | aurora kernel driver, Mesa Borealis (`26.3.0-devel`, `git-05ddb00f5c`) | Measured. See the [M4 Pro receipt](../receipts/2026-11-13-m4-pro-g16s-gpu/README.md). |
 
-Nothing on this page has run on an M4 Pro. If it fails on your machine,
-the failure is the useful result: send it with the table row.
+On the M4 Pro the standing battery passes: 53 suites, 8 capability
+simulation profiles and 15 flash cases, one process per suite. Decode, 64
+greedy tokens, mlx-lm 0.31.3: Qwen2.5-1.5B-Instruct-4bit 124.6 tok/s,
+granite-4.0-1b-4bit 117.7, Qwen3.5-4B-MLX-4bit 35.3. Decode varies about
+10 percent between runs.
+
+## Mesa requirement
+
+Mesa Borealis `git-05ddb00f5c` does not compile 22 of the shaders in this
+repository: they stop with `Unhandled ALU op pack_64_4x16`
+(`qmm_vec_q4_multi_*` including the multi-token routes,
+`qmm_vec_greedy_bf16`, `gated_delta_*_bf16`, `gdn_vjp_bf16`). Running them
+needs two compiler fixes in `aurora-silicon/mesa`:
+
+- `.lower_pack_64_4x16 = true` in `agx_nir_options`, so `nir_opt_algebraic`
+  does not fuse two 16-bit pairs into a `pack_64_4x16` that has no register
+  form;
+- keep the f16 to f32 widening in front of an f32 `rsqrt` on AGX3B and C.
+
+Without them those 22 routes cannot run on G16S. They are opt-in routes
+and no default-route suite dispatches them, so the battery and the model
+numbers above do not need the fixes. The overlay carries its own f16 `rsqrt`
+workaround, so the f16 elementwise kernels compile on stock Borealis.
 
 ## Before you start
 
@@ -31,7 +51,9 @@ ls /usr/share/vulkan/icd.d
 ```
 
 Keep `deviceName`, `vendorID`, `driverID`, `driverName` and
-`apiVersion`. Steps 3 and 4 depend on them.
+`apiVersion`. Steps 3 and 4 depend on them. On the M4 Pro with aurora the
+summary reads `Apple M4 Pro (G16S B1)`, vendor `0x10005`, driver
+`Borealis`, API 1.4.363.
 
 ## 2. Install the release wheel
 
@@ -46,6 +68,10 @@ Then run the `mlx-lm`, `transformers` and patch lines from
 [From a release wheel](INSTALL.md#from-a-release-wheel).
 
 ## 3. Make the driver file name pass the ICD check
+
+On the M4 Pro with aurora the file is `asahi_icd.aarch64.json`, which
+already matches, and the run needed no change in this step or the next.
+Do the rest of this step only if your file name does not match.
 
 The backend accepts an ICD JSON only if its path contains `honeykrisp`,
 `asahi_icd` or `libvulkan_asahi`
@@ -72,7 +98,8 @@ needs Vulkan 1.3 or newer (1.4 is fine). Otherwise it refuses with
 `not an Apple GPU running Omarchy Honeykrisp`
 (`overlay/mlx/backend/omarchy/device.cpp`).
 
-If it refuses, you have two options:
+The M4 Pro device above was admitted without an override. If yours
+refuses, you have two options:
 
 - `MLX_OMARCHY_ALLOW_NON_APPLE=1` lets the run proceed. It marks the
   device as a development device, so use it for bring-up and not for a
@@ -110,8 +137,12 @@ choose the venv python and the driver setting.
 - Two of the G16G routes do not apply to G16S. The M4 changes #316
   (fused GEMV off by default) and #317 (bf16 linear layers on the
   scalar-FMA kernel) test the device name for `G16G`. A G16S device gets
-  fused GEMV on and the default cooperative-matrix pick. Nothing is
-  measured on G16S, so those two are not extended to it.
+  fused GEMV on and the default cooperative-matrix pick. An interleaved
+  comparison on G16S (default, fused GEMV off, fused trio off; three
+  rounds, three models) showed a spread inside each arm larger than the
+  difference between arms and no consistent winner, so those two are not
+  extended to it
+  ([`decode-ab.txt`](../receipts/2026-11-13-m4-pro-g16s-gpu/decode-ab.txt)).
 - #321 follows the driver, not the name. The bf16 4-bit prefill route
   on the scalar-FMA kernel applies to any device whose cooperative-matrix
   route is unreachable. That means no fp32 cooperative matrix, a subgroup
@@ -119,9 +150,13 @@ choose the venv python and the driver setting.
   `MLX_OMARCHY_NO_COOPMAT=1`. If your driver does not expose the
   cooperative matrix, you get #321 and not the default pick. The
   collector's capability report shows which case you are in.
-- **Op checks may fail.** It is not known whether the wheel's kernels pass
-  on Apple9 under Borealis. A failed op reference in the first run is a
-  valid table fact.
+- **G16S exposes no cooperative matrix**, so #321 applies there.
+- **The f16 elementwise kernels need this series.** A release wheel built
+  before the series fails the f16 `sqrt`, `exp`, `rsqrt`, `normal` and
+  `erfinv` pipelines on G16S. The M4 Pro receipt was measured on a source
+  build that includes the series.
+- **Op checks may fail** on other Apple9 machines. A failed op reference in
+  the first run is a valid table fact.
 - **The ANE is not supported on M4 under Linux.** The M4 ANE row is
   data-only (h16 bring-up module).
 - **Decode and prefill numbers are not in the collector.** They come from
