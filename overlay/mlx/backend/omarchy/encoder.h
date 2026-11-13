@@ -130,11 +130,12 @@ inline int batch_node_budget() {
 // groups on the M2 Max, 2 ms per 1000 groups on the 13-inch M1), so the
 // default is a per-board table calibrated from device-timestamp profiles
 // to land typical decode submissions at p50 in the 2-6 ms band:
-// receipts/2026-10-02-submission-cap-19 (G14C) and
-// receipts/2026-10-12-submission-cap-calibration (G13C, G13G). Board
-// codes key the rows like the direct-matmul routes above
+// receipts/2026-10-02-submission-cap-19 (G14C),
+// receipts/2026-10-12-submission-cap-calibration (G13C, G13G) and
+// receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (G13S, G14G, G16S,
+// G17P). Board codes key the rows like the direct-matmul routes above
 // (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
-// G14C M2 Max. A single dispatch whose group count alone exceeds the
+// G14C M2 Max, G14G M2, G16S M4 Pro, G17P A18 Pro. A single dispatch whose group count alone exceeds the
 // budget still runs whole: splitting happens between dispatches. Copies
 // and fills are not counted; the node and byte budgets keep those
 // batches bounded. MLX_OMARCHY_BATCH_WORK=<groups> overrides the table;
@@ -151,17 +152,20 @@ struct BatchWorkCalibration {
   uint64_t budget;
 };
 inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
-    {"G13S", 0},  // M1 Pro: uncalibrated, the reporter's chip, not in the fleet
+    {"G13S", 20000},  // M1 Pro (16-inch, 16 GB), Borealis Mesa be147e3625: Qwen3-4B p50 4.70 ms, Qwen3.8-2B 1.56 ms; 40000 puts the 4B at 9.31 ms (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p)
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
     {"G14C", 40000},  // receipts/2026-10-02-submission-cap-19
+    {"G14G", 10000},  // M2 (13-inch, 8 GB), Borealis Mesa be147e3625: Qwen3-4B p50 4.80 ms, Qwen3.8-2B 3.94 ms; 15000 puts the 4B at 7.18 ms (same receipt)
+    {"G16S", 10000},  // M4 Pro (16-inch, 24 GB), Borealis Mesa c208afc352: Qwen3-4B p50 5.40 ms, Qwen3.8-2B 1.60 ms; 15000 puts the 4B at 8.14 ms (same receipt)
+    {"G17P", 5000},  // A18 Pro (MacBook Neo, 8 GB), Borealis Mesa c208afc352: Qwen3-4B p50 4.35 ms, Qwen3.8-2B 4.06 ms; 8000 puts the 4B at 6.56 ms (same receipt)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
 
 // The budget for a board with no calibrated row: the shortest submissions
 // measured to stay in the 2-6 ms band. It is a constant, not the minimum of
 // the table, so recalibrating one board cannot change the default of boards
-// nobody has measured (the M1 Pro, the reporter's chip, is one).
+// nobody has measured.
 inline constexpr uint64_t kBatchWorkFallback = 5000;
 
 // Pure table lookup for the runtime doctest: the calibrated budget for a

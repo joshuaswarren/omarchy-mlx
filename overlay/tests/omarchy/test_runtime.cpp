@@ -748,9 +748,16 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 8000);
 
-  // The uncalibrated M1 Pro row stays at 0: no guessed number for the
-  // reporter's board (G13S, t6000).
-  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 0);
+  // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p: the largest swept
+  // budget that keeps both models at or under 6 ms p50 on each board. The
+  // names are the deviceName strings the Borealis driver reports.
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S C0)") == 20000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 (G14G B0)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple A18 Pro (G17P B1)") == 5000);
+
+  // The M2 base row does not shadow the M2 Max row, nor the reverse.
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 40000);
 
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
