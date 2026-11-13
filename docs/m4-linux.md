@@ -7,13 +7,13 @@ M4 machine has results here, and it is not the machine most readers have.
 | Machine | GPU id | Driver | Status |
 |---|---|---|---|
 | M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). |
-| M4 Pro (J616s, t6040) | G16S | Mesa Borealis 26.3.0-devel, Linux 7.3 | Measured with the v0.7.41 release wheel. See the [M4 Pro receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md). |
+| M4 Pro (J616s, t6040), 20-core GPU | G16S | Mesa Borealis 26.3.0-devel, Linux 7.3 | Measured with the v0.7.41 release wheel. See the [M4 Pro receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md). |
 
-On the M4 Pro (MacBook Pro 16-inch, 24 GB, Fedora 45) the release wheel
+On the M4 Pro (MacBook Pro 16-inch, 20-core GPU, 24 GB, Fedora 45) the release wheel
 runs on the system Borealis driver with no override and no symlink: the
 system ICD file is `asahi_icd.aarch64.json`, which passes the ICD check,
 and driver ID 35 is admitted. The 6 collector probe ops pass. Qwen3.8-2B
-4-bit decodes at 105.6 tokens per second (prefill 512: 512.6) and
+4-bit decodes at 105.5 tokens per second (prefill 512: 512.6) and
 Qwen3-4B-Instruct-2507 4-bit at 49.3 (239.6). If a step below fails on
 your machine, send the failure with the table row.
 

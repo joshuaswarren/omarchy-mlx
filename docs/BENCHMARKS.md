@@ -117,12 +117,12 @@ Linux only, measured 2026-11-13 with the v0.7.41 release wheel on Fedora 44/45, 
 
 | Machine | Qwen3.8-2B decode | Qwen3.8-2B prefill 512 | Qwen3-4B-Instruct-2507 decode | Qwen3-4B-Instruct-2507 prefill 512 |
 |---|---:|---:|---:|---:|
-| MacBook Pro 16-inch, M1 Pro, 16 GB | 61.63 | 279.96 | 31.55 | 133.89 |
-| MacBook Air 13-inch, M2, 8 GB | 38.69 | 168.38 | 19.44 | 78.75 |
-| MacBook Pro 16-inch, M4 Pro, 24 GB | 105.55 | 512.57 | 49.27 | 239.57 |
-| MacBook Neo, A18 Pro, 8 GB | 33.29 | 108.78 | 13.50 | 44.14 |
+| MacBook Pro 16-inch, M1 Pro, 16-core GPU, 16 GB | 61.63 | 279.96 | 31.55 | 133.89 |
+| MacBook Air 13-inch, M2, 8-core GPU, 8 GB | 38.69 | 168.38 | 19.44 | 78.75 |
+| MacBook Pro 16-inch, M4 Pro, 20-core GPU, 24 GB | 105.55 | 512.57 | 49.27 | 239.57 |
+| MacBook Neo, A18 Pro, 5-core GPU, 8 GB | 33.29 | 108.78 | 13.50 | 44.14 |
 
-The MacBook Neo is passively cooled. Its SoC read 96 C before the Qwen3-4B run, and its Qwen3.8-2B decode samples range from 30.8 to 37.8. Raw JSON and the stack of each machine: `receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/`. The per-board submission budgets in `receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p/` raise decode with the same tokens: on the M1 Pro, Qwen3.8-2B goes to 77.92 and Qwen3-4B to 44.20.
+The MacBook Neo is passively cooled. Its SoC read 96 C before the Qwen3-4B run, and its Qwen3.8-2B decode samples range from 30.8 to 37.8. Raw JSON and the stack of each machine: `receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/`.
 
 ## Rows on the newer driver
 

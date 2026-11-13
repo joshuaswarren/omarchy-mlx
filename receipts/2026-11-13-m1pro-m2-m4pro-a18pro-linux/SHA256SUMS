@@ -1,4 +1,4 @@
-292a3afcbfe770b3918da9f2eaeb0a5df63df364a205f892357937057bb999ae  ./README.md
+9f50bbb3a34bf4ff22e35fe4028d294e9b695a254f6633702e0e88d88790df5d  ./README.md
 621af0264372457116eb25b7642290db87c5944667005f25f8ea68e29cee3570  ./bench/a18pro-Qwen3-4B-Instruct-2507-4bit.json
 b5351545f0f388112ea101a8c2996bde4d7d02fad7aba4285bad9e629b1d7db1  ./bench/a18pro-Qwen3-4B-Instruct-2507-4bit.load.txt
 f7bf50f0f6faa4345338da37c34a85fda049933c54b038234da0bc0893ef3e6b  ./bench/a18pro-Qwen3.8-2B-mlx-4Bit.json
