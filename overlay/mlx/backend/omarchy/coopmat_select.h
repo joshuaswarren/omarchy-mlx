@@ -75,13 +75,12 @@ bool cooperative_matrix_advertises(
 // The exact 8x8x8 subgroup shape the quantized-matmul prefill coopmat shader
 // (shaders/qmm_coopmat.comp) emits for a given output dtype. The weight matrix
 // B is always dequantized to fp32 and the accumulator and result are fp32. The
-// activation matrix A is read directly as fp16 for an fp16 output — the default
-// shader build, a MIXED fp16-A/fp32-B multiply — and is widened to fp32 for a
-// bf16 output (the X_F32 / X_BF16 builds cast activations before the matmad, so
-// A is fp32). Non-saturating. A device that lists only same-operand 8x8x8
-// shapes (fp32xfp32 and fp16xfp16, as Apple AGX3B does) advertises the bf16
-// route's shape but not the fp16 route's mixed shape, so the fp16 route falls
-// back there while the bf16 route keeps the cooperative matrix.
+// activation matrix A is fp32 for both output dtypes: the fp16 build loads x as
+// an fp16 matrix and converts it to fp32, the X_F32 / X_BF16 builds cast the
+// activations before the matmad. Non-saturating. A device that lists only
+// same-operand 8x8x8 shapes (fp32xfp32 and fp16xfp16, as Apple AGX3B does)
+// therefore keeps the cooperative matrix for both routes; a device without the
+// fp32xfp32 shape falls back for both.
 CoopmatShape qmm_prefill_coopmat_shape(bool out_is_f16);
 
 } // namespace mlx::core::omarchy
