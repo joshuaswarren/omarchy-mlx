@@ -381,7 +381,7 @@ TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
 }
 
-TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip table of measured key-value head counts when unset") {
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip workgroup limit when unset") {
   const std::string m1 = "Apple M1 (G13G B1)";
   const std::string m1max = "Apple M1 Max (G13C C0)";
   const std::string m2max = "Apple M2 Max (G14C B1)";
@@ -389,42 +389,34 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 9000, m1, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, "", 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 8, 1, 9000, m1max, 0, 8192, 256));
-  // Unset, G13G: 2 key-value heads (the Qwen3.8-2B) up to 768 keys; every other head count is unmeasured and stays off.
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m1, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 768, m1, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 769, m1, 0, 8192, 256));
-  for (uint32_t kv : {1u, 3u, 4u, 8u}) {
-    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, kv, -1, 384, m1, 0, 8192, 256));
+  // Unset: pass 1 launches one workgroup per key-value head and 128-key block; the variant is on while that count is at most 16 on G13G and 64 on G13C.
+  // The limit is one block wide: 128 keys are one block, 129 are two.
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1) == 16);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1max) == 64);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m2max) == 0);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups("") == 0);
+  struct Edge { uint32_t kv_heads; uint32_t last_on; };
+  // G13G (16 workgroups): 1 head 2048 keys, 2 heads 1024 (the Qwen3.8-2B), 3 heads 640, 4 heads 512 (the Qwen3.8-9B), 8 heads 256.
+  for (Edge e : {Edge{1, 2048}, Edge{2, 1024}, Edge{3, 640}, Edge{4, 512}, Edge{8, 256}}) {
+    CHECK(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1, 0, 8192, 256));
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1, 0, 8192, 256));
   }
-  // Unset, G13C: 2 key-value heads up to 3072 keys, 4 up to 1536; 1, 3 and 8 are unmeasured and stay off.
+  // G13C (64 workgroups): 1 head 8192 keys, 2 heads 4096 (the 2B), 3 heads 2688, 4 heads 2048 (the 9B), 8 heads 1024.
+  for (Edge e : {Edge{1, 8192}, Edge{2, 4096}, Edge{3, 2688}, Edge{4, 2048}, Edge{8, 1024}}) {
+    CHECK(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256));
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256));
+  }
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 320, m1max, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 3072, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 3073, m1max, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1536, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1537, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 2048, m1max, 0, 8192, 256));
-  // Head counts and lengths outside the table are off, not extrapolated: 6144 and 6145 keys at 1 key-value head, 3 and 8 heads at lengths the op rows win.
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, -1, 6145, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, -1, 6144, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 3, -1, 2048, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 8, -1, 768, m1max, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 4096, m1max, 0, 8192, 256));  // the explicit flag still selects it
-  // G14C and unknown parts have no width-256 default yet; a zero key count or zero heads must not pass on a zero limit.
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 4097, m1max, 0, 8192, 256));  // the explicit flag still selects it past the limit
+  // G14C and unknown parts have no width-256 default yet; no heads or no keys must not pass on a count of zero.
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m2max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "", 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m2max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, "", 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 0, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256));
-  // Table entries are read through their own function.
-  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1, 2) == 768);
-  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1max, 2) == 3072);
-  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1max, 4) == 1536);
-  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1max, 0) == 0);
-  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m2max, 2) == 0);
-  // The table has no head-count-times-length product to wrap; these pin that a 32-bit wrap to 0 (0x10000 heads times 0x10000 keys) still gives the old pass 1.
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x10000u, -1, 0x10000u, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x10000u, -1, 0x10001u, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 0, m1, 0, 8192, 256));
+  // A 32-bit product of key-value heads and blocks would wrap to 4 here (0x40000001 heads times 4 blocks is 2^32 + 4); the count is 64-bit.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1, 0, 8192, 256));
   // "0" keeps the old pass 1 everywhere.
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, 0, 500, m1, 0, 8192, 256));
   // Other widths and groups keep their own routes (group 8 would not fit its partial-sum tile in shared memory).
