@@ -135,11 +135,24 @@ Verify that the two A/B arms are different builds and each matches its claimed c
 
 A scheduler-issued measurement window must identify the physical M2 Max, allowed work, start/end times and recovery owner. A queued request, a plan or a previous window is not admission. The baseline owner maintains the native reference and coordinates the comparison record.
 
-Before accelerator work, acquire the device admission lock and confirm competing GPU work is quiescent. Record the ANE/filler state and keep it identical across arms. Keep model servers off the measured device. Do not change the driver, governor, compilation policy, services, network or boot state between arms.
+Before accelerator work, acquire the device admission lock and confirm competing GPU work is quiescent. Record the ANE/filler state and keep it identical across arms. Keep model servers off the measured device. Do not change the driver, governor, compilation policy, services or network between arms.
 
-Use AC power and a fixed power policy. After warmup, settle for at least five minutes; begin paired arms within 2 degrees Celsius of the declared settled reference. Record sensor names and values. Declare any further load/thermal invalidation thresholds before execution. A thermal-policy violation invalidates the complete affected pair, with both raw runs retained.
+A schedule group is one OS visit; run its listed cells in displayed order. Each OS/model/length cell is a separate capture block. Keep every cell in a visit in the same boot session; do not reboot between them. A reboot predeclared for an OS switch between completed visits ends the old blocks but preserves their comparison run IDs. An unplanned reboot or interrupted block ends the comparison run. Any later capture starts a new run with a new manifest and new IDs, and recaptures both OS blocks. Each comparison run ID pairs Linux and native blocks for one cell; give each capture block a unique ID. Freeze comparison and block IDs, OS groups, cell order and required boot changes in the manifest. Keep both Linux arms for one cell in the same block and boot session.
 
-Every process receives a finite deadline within the grant. Stop launching work when the remaining window cannot cover the full process deadline. On a hang/reset, stop the comparison, preserve logs and return recovery to the scheduler. Do not reboot or change hardware as an automatic benchmark recovery step. A later boot starts a new block.
+| Order | OS | Cells |
+| --- | --- | --- |
+| 1 | Linux | Qwen 512; Nemotron 2,048 |
+| 2 | Native macOS | Qwen 2,048; Nemotron 512 |
+| 3 | Linux | Qwen 2,048; Nemotron 512 |
+| 4 | Native macOS | Qwen 512; Nemotron 2,048 |
+
+This schedule makes Linux first for two cells and native macOS first for two. Get scheduler approval for every OS switch. Do not change the schedule after capture starts.
+
+Use AC power and a fixed power policy. Run the unscored settling process for each OS/model/length block. Then wait at least five minutes and record the settled temperature reference for that OS and cell.
+
+At the start of every warm or cold process on either OS or arm, require each declared sensor to be within 2 degrees Celsius of that reference. If not, wait within the predeclared limit. If the sensor remains out of band, mark the attempt technically invalid without inspecting throughput. For Linux, exclude both arms of the pair and use the next predeclared pair in its frozen A/B order. For native, use the next predeclared process of the same sample type. If no warm replacement remains, mark the warm block incomplete under section 6.4. If no cold replacement remains, mark only the cold set incomplete under section 6.3. Retain all raw runs.
+
+Every process receives a finite deadline within the grant. Stop launching work when the remaining window cannot cover the full process deadline. On a hang/reset, stop the comparison, preserve logs and return recovery to the scheduler. Do not reboot or change hardware as an automatic benchmark recovery step. A reboot not predeclared for an OS switch ends the comparison run; later capture uses a new manifest and run IDs for both OS blocks.
 
 ### 6.2 Fixed cells and token inputs
 
@@ -161,7 +174,7 @@ Measure the following with monotonic host time and the same synchronization boun
 
 One timed forward and one timed generation per warm process supply that outer repetition's metrics. Optional internal repeats must be declared beforehand and retained individually; five internal forwards in one process are not five independent runs. Do not count warmups as repetitions.
 
-For each arm and model/length cell, collect five additional fresh-process cold samples, separate from the five warm process pairs. Run no warmup in a cold process. Record monotonic timestamps before importing MLX (`t_start`), after runtime/device initialization (`t_load`), after model loading and full parameter materialization plus synchronization (`t_ready`), and after the first generated token materializes on a fresh cache (`t_first`).
+For each arm and model/length cell, collect five additional fresh-process cold samples after that cell's warm samples in the same OS/model/length block and boot session. These are separate attempts, not five warm process pairs. Run no warmup in a cold process. Record monotonic timestamps before importing MLX (`t_start`), after runtime/device initialization (`t_load`), after model loading and full parameter materialization plus synchronization (`t_ready`), and after the first generated token materializes on a fresh cache (`t_first`).
 
 Report initialization as `t_load - t_start`, cold model load as `t_ready - t_load`, cold time-to-first-token as `t_first - t_ready`, and total cold MLX start as `t_first - t_start`. Include file reads, dequantization/materialization and load-time compilation in model load. Include lazy forward compilation and pipeline creation in cold time-to-first-token. Record a fresh in-process pipeline/JIT cache and the declared driver disk-cache policy for every cold sample; keep that disk-cache policy identical across arms. Cold processes supply no warm throughput samples.
 
@@ -169,11 +182,29 @@ Keep dispatch tracing/profiling in separate correctness captures. Use the CPU-di
 
 ### 6.4 Paired schedule and native comparison
 
-For each model/length, predeclare five Linux pairs: `A1 B1`, `B2 A2`, `A3 B3`, `B4 A4`, `A5 B5`, where A is base and B is candidate. This supplies five independent processes per arm. Apply the same warmup/settle policy for each process. Never run both arms concurrently on the device.
+For each model/length, predeclare five Linux pairs: `A1 B1`, `B2 A2`, `A3 B3`, `B4 A4`, `A5 B5`, where A is base and B is candidate. This supplies five independent processes per arm. Never run both arms concurrently on the device.
 
-A predeclared schedule may use more than five pairs. Do not extend a failing block until it crosses a threshold. If a new block is needed, record its purpose before capture and retain the failed block. Preserve every raw attempt and exclusion reason; replace a technically invalid pair as a whole.
+In each OS/model/length block, run one unscored settling process before measured samples. Use the block's first scheduled arm: A on Linux and the pinned native build on macOS. Run the same model, prompt and timed phases as a measured process; retain its output and timing, but exclude it from statistics. Perform two fresh-cache prompt-plus-eight-token warmups and synchronize completion. Each measured process still performs its own two untimed warmups.
 
-Collect at least five independent native macOS processes per model/length on the same physical machine, with the identical manifest-controlled workload. The native capture can occur in a separate authorized window. Record per-OS conditions and elapsed time between captures. Historical results from another chip, quantization, prompt, output length or harness cannot fill an empty native cell.
+Assign every settling, warm, excluded, replacement and cold attempt a global block position in execution order, starting at 1. Record each attempt's arm, replicate number, sample type and phase rates. Keep separate warm and cold ordinal sequences; never reuse an ordinal.
+
+Within each OS/model/length block, run cold samples after that cell's warm samples without rebooting or starting another settling process. Predeclare cold Linux pairs and replacement pairs in the manifest, using the same alternating A/B order as warm pairs. Keep the four-group OS schedule and frozen pair orders.
+
+If a cold Linux pair has a replaceable failure, exclude both arms from cold counts and ratios. Replace the pair with the next predeclared pair in its frozen A/B order. Replace a native cold process only for a replaceable failure, using the next predeclared cold sample. If fewer than five valid cold samples remain for any arm, report that cold set as incomplete. Environment, provenance or harness failures in cold samples do not invalidate warm results; a cold correctness or safety failure still fails the comparison. Cold samples do not enter warm counts, spread, slopes or ratios.
+
+For each arm and phase, compute the ordinary least-squares throughput slope against global block position, as percent of that arm/phase median per process. Use valid warm samples at their original global positions. Report slopes as diagnostics only; do not exclude samples or change the 5% threshold.
+
+A sample is replaceable only for a provenance, environment or harness failure listed in the frozen manifest. Assess that failure without inspecting throughput. Any correctness or safety failure under sections 6.1–6.3 fails the comparison and cannot be replaced. Use every valid sample in the block; do not select a subset. A slow value, an outlier, a failed spread or a failed ratio does not make a sample invalid.
+
+A completed warm block that fails a threshold is final for its comparison run and cannot be retried to obtain a passing result. Start a new comparison run only for a different candidate or a documented non-performance measurement cause approved before capture. Freeze a new run ID and recapture both OS blocks. Never pair blocks across run IDs or pool samples. Report every run separately.
+
+If a technical abort leaves fewer than five valid warm samples per arm, retain the warm block as incomplete. Record the abort reason before starting a new run. Start that run with new blocks, IDs and settling processes.
+
+If the manifest predeclares more than five samples, use all valid Linux pairs and native samples in the block. If either Linux arm in a pair has a replaceable provenance, environment or harness failure, exclude both arms from counts, spread and paired ratios; retain the valid partner as paired-out. Replace the whole pair with the next predeclared pair in its frozen A/B order. Replace a native process only for the same listed failures, using the next predeclared sample of that type. Preserve every raw attempt and exclusion reason.
+
+Collect at least five valid independent native macOS processes per model/length on the same physical machine, with the identical manifest-controlled workload. The native capture may occur in a separate authorized window only when that window and the full OS order are frozen in the manifest. Record per-OS conditions and elapsed time between captures. Historical results from another chip, quantization, prompt, output length or harness cannot fill an empty native cell.
+
+These changes to sections 6.1–6.5 and P1/P8 apply only to manifests frozen after this amendment merges. Do not re-score earlier captures. P1 same-head A/A controls use the same settling and ordinal rules.
 
 Require matching raw free-run IDs before reporting a Linux/macOS free-run speed ratio. If numerical qualification permits a different stream, use a separate, explicitly labeled teacher-forced timing protocol on fixed native IDs. Never mix that rate with a free-run denominator.
 
@@ -183,10 +214,10 @@ Apply these engineering decision thresholds to each required cell:
 
 | Decision | Threshold |
 | --- | --- |
-| Valid cell | All correctness/provenance/safety gates pass; at least five valid independent processes per arm; within-arm spread `(max-min)/median` at most 5%. A noisier block is inconclusive. |
+| Valid cell | All correctness/provenance/safety gates pass; at least five valid independent processes per arm; within-arm spread `(max-min)/median` at most 5%, computed from all valid samples in its OS/model/length block. Each block passes separately. A noisier block is inconclusive. |
 | Prefill candidate primary cells | Both 2B prefill lengths for #257, or both Nemotron prefill lengths for #256: median of paired `B_i/A_i` rates at least 1.03, with every valid pair above 1.00. |
 | Regression controls | Median paired ratio at least 0.98 for every required non-primary model/phase/length cell; no correctness or safety regression. Declare the primary cells before execution. |
-| Native throughput parity | Candidate Linux median / native macOS median at least 1.00 separately for decode and prefill in every required model/length cell. All workload and output-identity rules apply. |
+| Native throughput parity | The native block passes the valid-cell count and spread rule. Compare the Linux and native medians from the same run ID. Candidate Linux median / native macOS median is at least 1.00 separately for decode and prefill in every required model/length cell. All workload and output-identity rules apply. |
 | Compatibility release performance | Retain the separate pinned `llama.cpp` Vulkan comparison: `pp512` and `tg128` each at least 0.80, with its original workload and release repetition policy. This is not the macOS-parity criterion. |
 
 Publish all rates, paired ratios, medians, spread and sample counts. Use the median of paired ratios for a candidate decision and the ratio of platform medians for a native comparison; label them distinctly. A geometric mean may summarize the complete matrix only after every mandatory cell passes. Never use it to waive a failed cell.
@@ -195,14 +226,14 @@ Publish all rates, paired ratios, medians, spread and sample counts. Use the med
 
 | ID | Required scenario | Observable pass condition |
 | --- | --- | --- |
-| P1 | Source/build identity and same-head A/A control | Correct wheel/RECORD/source hashes; expected stamps. Five same-head pairs have median paired ratio in [0.98, 1.02] and each arm meets the 5% spread bound. No timer/control mismatch. |
+| P1 | Source/build identity and same-head A/A control | Correct wheel/RECORD/source hashes; expected stamps. Five same-head pairs have median paired ratio in [0.98, 1.02] and each arm meets the 5% spread bound. Apply the settling, ordinal and invalidity rules in section 6. No timer/control mismatch. |
 | P2 | Independent oracle and detector negative controls | Captured operands and states resolve to the manifest; injected token/value/state mismatch is detected before an acceptance record is emitted. |
 | P3 | Dense prefill drain matrix | All declared shader variants compile; CPU layout checks preserve one write per element; actual Apple cooperative-matrix output matches the parent bitwise across boundary/offset cases and repeated scratch reuse. Record actual kernel IDs. |
 | P4 | Dense decode and recurrent transitions | Per-step logits, token IDs and recurrent/cache state meet the applicable exact/oracle contract across prefill, chunking, first decode, step 32 and step 128. Native-matching fixtures retain their IDs. |
 | P5 | Sparse routing and expert boundaries | Top-six IDs/scores remain associated; Q4 packing/dequantization, sorted/shuffled routing, tails and both full expert dimensions pass captured-input checks. |
 | P6 | MoE host dispatch, direct buffers and fallbacks | The section 3 matrix selects the expected kernel at every 8/128-expert boundary. MLX API dispatch preserves aligned parameter-offset/lifetime semantics and avoids parameter staging in direct cells. Misaligned scale/bias cases return the named error. Capability/flag fallbacks preserve reference accuracy. |
 | P7 | Full hybrid model and no-CPU controls | Both models load pinned weights and produce validated outputs using the section 2.1 CPU-disabled wheel. Its GPU positive control and explicit CPU negative control pass in separate processes. Preserve the build-source and loaded-library records establishing CPU exclusion. |
-| P8 | Five-run engineering matrix | All four model/length cells include five base and five candidate warm processes, separate phase metrics, separate cold samples, native records, raw IDs and valid admission/environment data. Apply section 6.5 per cell. |
+| P8 | Five-run engineering matrix | All four model/length cells include one settling process in each OS/model/length block, at least five valid warm base, candidate and native macOS processes, and at least five valid cold samples for each base, candidate and native build. If any cold build has fewer than five valid samples, mark its cold set incomplete. Freeze the four-group OS schedule and run IDs before capture. Record warm and cold ordinals and warm arm/phase drift slopes. Keep phase metrics, cold samples, raw IDs and admission/environment data. Apply section 6.5 to each block. |
 | P9 | Integration and release regression | Recheck a clean integration commit against the same base. Run the standing chip regression gates before release. One hundred repeated requests cause no resets/timeouts/device loss and pass the retained-memory checks below. |
 
 ### 7.1 Stability memory measurements
