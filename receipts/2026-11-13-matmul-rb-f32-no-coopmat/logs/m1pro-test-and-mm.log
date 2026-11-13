@@ -1,0 +1,41 @@
+== 19:56:33 m1pro test load 0.39 temp 71904
+===============================================================================
+[doctest] test cases:  2 |  2 passed | 0 failed | 45 skipped
+[doctest] assertions: 16 | 16 passed | 0 failed |
+[doctest] Status: SUCCESS!
+== 19:56:33 m1pro mm tile load 0.39 temp 71904
+m1pro-tile mlx.core.float32 n=256 aT=0 bT=0 0.566 ms 0.0592 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m1pro-tile mlx.core.float32 n=512 aT=0 bT=0 1.167 ms 0.23 TFLOP/s err 7.08e-05 fceb1f691fc4
+m1pro-tile mlx.core.float32 n=1024 aT=0 bT=0 5.619 ms 0.3822 TFLOP/s err 1.75e-04 bb53c6ef5242
+m1pro-tile mlx.core.float32 n=2048 aT=0 bT=0 42.913 ms 0.4003 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m1pro-tile mlx.core.float32 n=4096 aT=0 bT=0 340.935 ms 0.4031 TFLOP/s err 4.86e-04 64fb76d69523
+m1pro-tile mlx.core.float32 n=1024 aT=0 bT=1 5.667 ms 0.3789 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m1pro-tile mlx.core.float32 n=1024 aT=1 bT=0 5.661 ms 0.3794 TFLOP/s err 1.29e-04 d1e66e6976e5
+m1pro-tile mlx.core.float32 n=2048 aT=0 bT=1 43.483 ms 0.3951 TFLOP/s err 2.43e-04 0457c011a167
+== 19:56:38 m1pro mm rb load 0.44 temp 75247
+m1pro-rb mlx.core.float32 n=256 aT=0 bT=0 0.459 ms 0.0731 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m1pro-rb mlx.core.float32 n=512 aT=0 bT=0 0.695 ms 0.3861 TFLOP/s err 7.08e-05 fceb1f691fc4
+m1pro-rb mlx.core.float32 n=1024 aT=0 bT=0 2.392 ms 0.8978 TFLOP/s err 1.75e-04 bb53c6ef5242
+m1pro-rb mlx.core.float32 n=2048 aT=0 bT=0 15.901 ms 1.0804 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m1pro-rb mlx.core.float32 n=4096 aT=0 bT=0 126.281 ms 1.0884 TFLOP/s err 4.86e-04 64fb76d69523
+m1pro-rb mlx.core.float32 n=1024 aT=0 bT=1 2.372 ms 0.9052 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m1pro-rb mlx.core.float32 n=1024 aT=1 bT=0 2.407 ms 0.892 TFLOP/s err 1.29e-04 d1e66e6976e5
+m1pro-rb mlx.core.float32 n=2048 aT=0 bT=1 15.88 ms 1.0819 TFLOP/s err 2.43e-04 0457c011a167
+== 19:56:40 m1pro mm tile load 0.44 temp 76591
+m1pro-tile mlx.core.float32 n=256 aT=0 bT=0 0.32 ms 0.1049 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m1pro-tile mlx.core.float32 n=512 aT=0 bT=0 2.99 ms 0.0898 TFLOP/s err 7.08e-05 fceb1f691fc4
+m1pro-tile mlx.core.float32 n=1024 aT=0 bT=0 5.61 ms 0.3828 TFLOP/s err 1.75e-04 bb53c6ef5242
+m1pro-tile mlx.core.float32 n=2048 aT=0 bT=0 42.918 ms 0.4003 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m1pro-tile mlx.core.float32 n=4096 aT=0 bT=0 341.036 ms 0.403 TFLOP/s err 4.86e-04 64fb76d69523
+m1pro-tile mlx.core.float32 n=1024 aT=0 bT=1 5.787 ms 0.3711 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m1pro-tile mlx.core.float32 n=1024 aT=1 bT=0 5.961 ms 0.3602 TFLOP/s err 1.29e-04 d1e66e6976e5
+m1pro-tile mlx.core.float32 n=2048 aT=0 bT=1 43.465 ms 0.3953 TFLOP/s err 2.43e-04 0457c011a167
+== 19:56:45 m1pro mm rb load 0.49 temp 78185
+m1pro-rb mlx.core.float32 n=256 aT=0 bT=0 0.275 ms 0.1221 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m1pro-rb mlx.core.float32 n=512 aT=0 bT=0 1.002 ms 0.2679 TFLOP/s err 7.08e-05 fceb1f691fc4
+m1pro-rb mlx.core.float32 n=1024 aT=0 bT=0 2.589 ms 0.8295 TFLOP/s err 1.75e-04 bb53c6ef5242
+m1pro-rb mlx.core.float32 n=2048 aT=0 bT=0 16.08 ms 1.0684 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m1pro-rb mlx.core.float32 n=4096 aT=0 bT=0 126.367 ms 1.0876 TFLOP/s err 4.86e-04 64fb76d69523
+m1pro-rb mlx.core.float32 n=1024 aT=0 bT=1 2.496 ms 0.8603 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m1pro-rb mlx.core.float32 n=1024 aT=1 bT=0 2.458 ms 0.8735 TFLOP/s err 1.29e-04 d1e66e6976e5
+m1pro-rb mlx.core.float32 n=2048 aT=0 bT=1 15.855 ms 1.0836 TFLOP/s err 2.43e-04 0457c011a167

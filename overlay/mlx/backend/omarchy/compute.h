@@ -1116,6 +1116,11 @@ enum class ComputeKernel : uint16_t {
   // Value-phase variant of the width-256 split-K pass 1, four query heads per key-value head (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4
   // -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Appended to keep profile kernel ids stable.
   SdpaDecodeSplitP1VR4BF16Hd256,
+  // Register-blocked f32 matmul (shaders/matmul_rb.comp -DUSE_F32=1): the MatmulRbF16 tile with f32 storage, same
+  // arithmetic as MatmulF32 (one float accumulator, ascending k, zero padding to a multiple of 16), so the stored bits
+  // equal it. dispatch_matmul takes it for f32 at matrix_m >= 32 without bias when the f32 direct and cooperative-matrix
+  // routes are unavailable. Appended to keep profile kernel ids stable.
+  MatmulRbF32,
   Count,
 };
 

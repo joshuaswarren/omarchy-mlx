@@ -840,8 +840,19 @@ void dispatch_matmul(
   // attention scores and probs matmuls): same per-output arithmetic as
   // matmul.comp, 64x64 tile. Decode (matrix_m == 1) keeps the 16x16
   // tile and the GEMV paths untouched.
-  const bool rb = dtype_kernel == omarchy::ComputeKernel::MatmulF16 &&
+  // The f32 build of the same tile (MatmulRbF32) serves the f32 matmuls
+  // that neither cooperative-matrix route takes: on a driver without
+  // VK_KHR_cooperative_matrix every f32 product used to run the 16x16
+  // one-output-per-thread tile. Same arithmetic as MatmulF32, so the
+  // stored bits are unchanged; MLX_OMARCHY_NO_MATMUL_RB_F32=1 keeps the
+  // 16x16 tile for A/B runs.
+  static const bool rb_f32_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_RB_F32");
+  const bool rb_f32 = !rb_f32_disabled && !sdpa && !coopmat &&
+      dtype_kernel == omarchy::ComputeKernel::MatmulF32 &&
       params.matrix_m >= 32u && !use_c;
+  const bool rb = (dtype_kernel == omarchy::ComputeKernel::MatmulF16 &&
+      params.matrix_m >= 32u && !use_c) || rb_f32;
   // Direct cooperative-matrix route (shaders/matmul_coopmat_direct.comp):
   // 8x8x8 operand tiles loaded straight from the buffers, no shared
   // staging; f16 on the fp16-operand shape, f32 on the fp32 shape, bf16
@@ -928,7 +939,8 @@ void dispatch_matmul(
             (direct_dtype != float16 || hw.cooperative_matrix_f16_8) &&
             (direct_dtype != bfloat16 || hw.cooperative_matrix_bf16_8));
   } else if (rb) {
-    kernel = omarchy::ComputeKernel::MatmulRbF16;
+    kernel = rb_f32 ? omarchy::ComputeKernel::MatmulRbF32
+                    : omarchy::ComputeKernel::MatmulRbF16;
   }
   if (sdpa) {
     kernel = sdpa_kernel;
