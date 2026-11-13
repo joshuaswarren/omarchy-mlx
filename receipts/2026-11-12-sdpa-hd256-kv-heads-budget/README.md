@@ -200,6 +200,36 @@ Op rows have no logit difference (the column reads 0.0 there); it is measured at
 | G13C | f64h8c1536 | 8/2 | 1536 | 0.0004762 | 0.0004762 | 0.0004762 | 4.632e-05 | 0 | pass |
 | G13C | f64h8c3072 | 8/2 | 3072 | 0.0002415 | 0.0002415 | 0.0002415 | 3.31e-05 | 0 | pass |
 
+## Provenance reruns, dispatch trace, thermal and device reopen
+
+Ten rows were rerun after the probes gained the provenance gate (`scripts/mlx_provenance.py`): the first line of each row log names the `libmlx.so` and `mlx.core` extension actually loaded and compares their sha256 against the wheel RECORD of `mlx_omarchy-0.32.4.dev202611120448+8937c93e` (wheel sha256 `7fde49d1ba4c7c72532ac69b60a42db0f4918b8552b644308cbbfb1850daf316`, source commit `8937c93e`). A mismatch refuses to emit a number. All twelve rows below report `verified=match`. Rerun rows carry a `p` suffix; the original rows above are unchanged and the numbers below are the ones to cite for provenance.
+
+Each row records an identity and thermal snapshot (kernel, boot id, device-tree model, hwmon temperatures, governor, load) before and after (`scripts/sdpa-thermal.sh`; values are recorded, not gated) and, after the measured process exits, a device reopen (`scripts/sdpa-reopen.py`: a fresh process opens the GPU device and runs one add; `REOPEN-OK` on success). All twelve rows end `REOPEN-OK Device(gpu, 0)` and `PEROP-PASS`. Per-row logs: `logs/G13G-provenance-rows.txt`, `logs/G13C-provenance-rows.txt`.
+
+Each row's sign was predicted before it ran from the workgroup rule (wins at 16 workgroups or fewer on G13G and 64 or fewer on G13C, loses above).
+
+| Chip | Row | Keys | Key-value heads | Workgroups | Predicted | Gain (percent) | CI95 |
+|---|---|---|---|---|---|---|---|
+| G13G | o1025h4p | 1025 | 1 | 9 | win | +31.49 | 31.43 to 31.55 |
+| G13G | o1920h4p | 1920 | 1 | 15 | win | +27.06 | 27.02 to 27.10 |
+| G13G | o513h16p | 513 | 4 | 20 | loss | -8.42 | -8.45 to -8.38 |
+| G13G | o641h12p | 641 | 3 | 18 | loss | -7.65 | -7.69 to -7.62 |
+| G13C | o2049h12p | 2049 | 3 | 51 | win | +27.60 | 27.57 to 27.63 |
+| G13C | o2561h12p | 2561 | 3 | 63 | win | +26.23 | 26.08 to 26.40 |
+| G13C | o2689h12p | 2689 | 3 | 66 | loss | -10.11 | -10.22 to -10.01 |
+| G13C | o1025h32p | 1025 | 8 | 72 | loss | -8.99 | -9.02 to -8.95 |
+
+The float64 gate reran at the last admitted workgroup count on each chip (16 on G13G, 64 on G13C) (`f64h8c1024p` on G13G, `f64h8c4096p` on G13C): variant error equals stock error in both arms, `PEROP-PASS`.
+
+Dispatch trace (`scripts/sdpa-dispatch-trace.py`, `MLX_OMARCHY_TRACE_DISPATCH=1`): one engaged call per arm, each in its own child process. The old pass 1 and the variant dispatch different kernels at the same grid, so the flag changes the executed kernel and not only the timing.
+
+| Chip | Row | Old pass 1 | Variant | CPU add (negative control) | GPU add (positive control) |
+|---|---|---|---|---|---|
+| G13G | trp1025h4c, 1025 keys, 1 key-value head | kernel 652, grid 1x9x1; kernel 654, grid 4x1x1 | kernel 676, grid 1x9x1; kernel 654, grid 4x1x1 | 0 dispatches | 1 dispatch (kernel 469) |
+| G13C | trp2049h12c, 2049 keys, 3 key-value heads | kernel 652, grid 3x17x1; kernel 654, grid 12x1x1 | kernel 676, grid 3x17x1; kernel 654, grid 12x1x1 | 0 dispatches | 1 dispatch (kernel 469) |
+
+Limits of these rows: each is a single run; the thermal snapshot is recorded before and after but the row did not wait for a settled temperature; the rows ran in the lab queue beside an ANE job on the same machine, so absolute microseconds are not quiet-machine numbers, while the sign and the workgroup-count boundary are the claim; the dispatch trace rows are short, so their before and after snapshots carry the same timestamp.
+
 ## Rows dropped from the claims
 
 - `k256` (G13C, 2B, +0.66 percent): the model's call there attends 257 keys, below the 320-key minimum of the split route. The engagement row `e2b256` shows the arms equal (+0.07, CI -0.23 to 0.31) and bit-identical outputs, so the variant did not run in `k256`.
@@ -232,8 +262,8 @@ Gate unit test: `scripts/gate-harness.sh` compiles the real `device.h` against t
 ## Not in this receipt
 
 - The gate as built into a library and run on the two chips: the timing rows force the flag per arm (`0` and `1`), so they measure the two arms the gate chooses between, not the gate itself.
-- A backend dispatch trace. The engagement rows show which arm ran by timing and by the output of the model's own call; they do not read the dispatch.
-- Thermal logs, Vulkan device reopen after a run, and Vulkan firmware identity.
+- A dispatch trace of the model's own attention call. The trace rows above cover the op-level call at two shapes; the model-level engagement rows show which arm ran by timing and by output.
+- A thermal gate (a settle to a fixed temperature before each row) and Vulkan firmware identity. Thermal snapshots and a GPU device reopen are recorded for the rerun rows only, not for the earlier rows above.
 - Decode rows at 3585 to 4096 keys for the 2B on G13C and at 1025 to 2048 keys for the 9B on G13C: the limit there rests on the op and real-call rows.
 - Rows from earlier sessions in the same scratch directories (names a*, d1, m*) are left out: their protocol is not recorded.
 - G14C: the width-256 variant has no default there; the same probes on that chip have not produced an engaged run yet.

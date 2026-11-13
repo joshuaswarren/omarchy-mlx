@@ -1,3 +1,4 @@
+import os
 # engagement variant: adds a REAL-CALL line (the model's own attention call under both flag values, float64 error, per-call time); SDPA_ENGAGE_ONLY=1 skips the model A/B.
 # chunked-prefill variant of sdpa-hd256-probe.py (128-token prefill chunks, same decode A/B)
 # SDPA hd256 value-phase pass 1 (MLX_OMARCHY_SDPA_SPLIT_PV) A/B on Qwen3.8-2B (head width 256), arms interleaved step by step in ONE process.
@@ -5,6 +6,16 @@
 # Engagement proof: logits after the same prefill and one step differ between the arms (the variant adds partial sums in another order).
 import glob, json, os, random, statistics as st, sys, time
 import mlx.core as mx
+
+# Provenance gate (scripts/mlx_provenance.py, shipped beside this probe): the first line of every row log names the
+# libmlx.so actually loaded; a mismatch against the wheel RECORD refuses to emit a number.
+import json as _json, sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mlx_provenance import installed_provenance as _installed_provenance
+_PROV = _installed_provenance()
+print("PROVENANCE " + _json.dumps(_PROV, sort_keys=True), flush=True)
+if _PROV["verified"] == "mismatch":
+    raise SystemExit("provenance refusal: " + str(_PROV["mismatch"]))
 from mlx_lm import load
 from mlx_lm.models.cache import make_prompt_cache
 

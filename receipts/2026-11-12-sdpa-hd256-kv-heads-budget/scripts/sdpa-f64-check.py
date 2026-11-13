@@ -5,6 +5,16 @@ import os
 import numpy as np
 import mlx.core as mx
 
+# Provenance gate (scripts/mlx_provenance.py, shipped beside this probe): the first line of every row log names the
+# libmlx.so actually loaded; a mismatch against the wheel RECORD refuses to emit a number.
+import json as _json, sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mlx_provenance import installed_provenance as _installed_provenance
+_PROV = _installed_provenance()
+print("PROVENANCE " + _json.dumps(_PROV, sort_keys=True), flush=True)
+if _PROV["verified"] == "mismatch":
+    raise SystemExit("provenance refusal: " + str(_PROV["mismatch"]))
+
 N = int(os.environ.get("SDPA_CTX", "1024"))
 QH = int(os.environ.get("SDPA_QH", "8"))
 KVH = int(os.environ.get("SDPA_KVH", "2"))
