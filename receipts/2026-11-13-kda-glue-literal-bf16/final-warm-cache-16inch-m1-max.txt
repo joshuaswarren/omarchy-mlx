@@ -1,0 +1,15 @@
+old tr_entries=17
+new tr_entries=34
+new-warm tr_entries=34
+out-final/old.log:KERNEL kda_glue_pre wrong out[0] bad 13/12288 at (np.int64(0), np.int64(0), np.int64(28), np.int64(51)): got np.float32(2.71875) want np.float64(2.6875) maxdiff 0.0164835 [1.0s] predict=crash
+out-final/old.log:KERNEL kda_glue_post wrong out[0] bad 53/12288 at (np.int64(0), np.int64(0), np.int64(5162)): got np.float32(-0.7734375) want np.float64(-0.78515625) maxdiff 0.0155039 [0.5s] predict=crash
+out-final/old.log:SUMMARY pass=15 wrong=2 refused=9 fail=0 total=26 prediction_hits=20
+out-final/old.log:RC=3
+out-final/new.log:KERNEL kda_glue_pre pass  maxdiff 3.75977e-07 [1.0s] predict=crash
+out-final/new.log:KERNEL kda_glue_post pass  maxdiff 0 [0.6s] predict=crash
+out-final/new.log:SUMMARY pass=17 wrong=0 refused=9 fail=0 total=26 prediction_hits=20
+out-final/new.log:RC=0
+out-final/new-warm.log:KERNEL kda_glue_pre pass  maxdiff 3.75977e-07 [0.9s] predict=crash
+out-final/new-warm.log:KERNEL kda_glue_post pass  maxdiff 0 [0.4s] predict=crash
+out-final/new-warm.log:SUMMARY pass=17 wrong=0 refused=9 fail=0 total=26 prediction_hits=20
+out-final/new-warm.log:RC=0

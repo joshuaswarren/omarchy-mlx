@@ -12,6 +12,8 @@
 #include "mlx/fast.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
@@ -1150,4 +1152,201 @@ TEST_CASE("C-style cast to the bf16 template parameter rounds like Metal") {
   const auto body = glsl.substr(glsl.find("void main()"));
   CHECK(body.find("_mlx_bf16_round_trip(") != std::string::npos);
   CHECK(body.find("_mlx_float_to_bf16(") != std::string::npos);
+}
+
+TEST_CASE("literal bfloat16_t locals and casts round like Metal") {
+  // kda_glue_pre/post (2026-11-13 device dump): the literal bfloat16_t type
+  // was a plain float, so every cast, local initializer and reassignment
+  // skipped the bf16 rounding Metal applies, and only the output store
+  // rounded (6755 of 12288 q elements differed from the Metal-faithful
+  // reference). Mirrors the typename path: cast, declaration, reassignment
+  // and a comma declarator list all round.
+  const char* source =
+      "[[kernel]] void glue_literal(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  float a = in[c];\n"
+      "  bfloat16_t cq = (bfloat16_t)a, ck = (bfloat16_t)(a * 2.0f);\n"
+      "  bfloat16_t sq_ = cq * ck;\n"
+      "  float yq = (float)(bfloat16_t)((float)cq * (float)sq_);\n"
+      "  sq_ = yq + 1.0f;\n"
+      "  y[c] = yq + sq_;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(paren_balance(glsl) == 0);
+  CHECK(body.find("float cq = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("float ck = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("float sq_ = _mlx_bf16_round_trip(cq * ck)") != std::string::npos);
+  CHECK(body.find("float yq = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("sq_ = _mlx_bf16_round_trip(yq + 1.0") != std::string::npos);
+  CHECK(body.find("bfloat16_t") == std::string::npos);
+}
+
+TEST_CASE("literal bfloat16_t comma declarators without a space stay valid") {
+  // Review finding: `bfloat16_t a = x,b = y;` must not become `bfloat16_tb`.
+  const char* source =
+      "[[kernel]] void glue_nospace(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  float x = in[c];\n"
+      "  bfloat16_t a = x,b = x * 2.0f;\n"
+      "  y[c] = a + b;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("bfloat16_tb") == std::string::npos);
+  CHECK(body.find("float a = _mlx_bf16_round_trip(x)") != std::string::npos);
+  CHECK(body.find("float b = _mlx_bf16_round_trip(x * 2.0f)") != std::string::npos);
+}
+
+TEST_CASE("literal bfloat16_t rounding does not leak into a float local of the same name") {
+  // Review finding: `{ bfloat16_t v ... } { float v ... }` must not round the
+  // float block (rounding is scoped to the bf16 declaration's block).
+  const char* source =
+      "[[kernel]] void glue_scope(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "  {\n"
+      "    float v = in[c + 1];\n"
+      "    v = v * 3.0f;\n"
+      "    y[c + 1] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("float v = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("v = v * 3.0f;") != std::string::npos);
+  CHECK(body.find("_mlx_bf16_round_trip(v * 3.0f)") == std::string::npos);
+}
+
+TEST_CASE("bf16 local reassignment rounds in its own scope only") {
+  // Review finding: with a same-name float elsewhere, `v = e;` in the bf16
+  // scope must still round, and the float scope must stay untouched.
+  const char* source =
+      "[[kernel]] void glue_scope2(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    v = v * 2.0f;\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "  {\n"
+      "    float v = in[c + 1];\n"
+      "    v = v * 3.0f;\n"
+      "    y[c + 1] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
+  CHECK(body.find("v = v * 3.0f;") != std::string::npos);
+  CHECK(body.find("_mlx_bf16_round_trip(v * 3.0f)") == std::string::npos);
+}
+
+TEST_CASE("bf16 scope end ignores braces inside comments") {
+  const char* source =
+      "[[kernel]] void glue_scope3(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    // closing brace in a line comment }\n"
+      "    v = v * 2.0f;\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
+}
+
+TEST_CASE("a brace inside a block comment does not truncate the kernel body") {
+  const char* source =
+      "[[kernel]] void glue_block_comment(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    // a closing brace } in a line comment\n"
+      "    /* and one } in a block comment */\n"
+      "    v = v * 2.0f;\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
+  CHECK(body.find("_mlx_arg1[c] = float(v);") != std::string::npos);
+}
+
+TEST_CASE("a comma inside a comment in a bf16 initializer is not a declarator separator") {
+  // Review finding: `bfloat16_t v = in[c] /* comma, here */;` lost its ')'.
+  const char* source =
+      "[[kernel]] void glue_comment_comma(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t v = in[c] /* comma, here */;\n"
+      "  y[c] = v;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("float v = _mlx_bf16_round_trip(_mlx_arg0[c] );") != std::string::npos);
+}
+
+namespace {
+// Real compiler check: skipped (stated in the log) only where glslc is absent.
+bool glslc_present() {
+  return std::system("command -v glslc >/dev/null 2>&1") == 0;
+}
+int glslc_status(const std::string& glsl, const std::string& tag) {
+  const std::string base = "/tmp/omarchy-translate-test-" + tag;
+  {
+    std::ofstream out(base + ".comp");
+    out << glsl;
+  }
+  const std::string cmd =
+      "glslc -fshader-stage=compute --target-env=vulkan1.2 " + base +
+      ".comp -o /dev/null 2> " + base + ".err";
+  return std::system(cmd.c_str());
+}
+} // namespace
+
+TEST_CASE("literal bfloat16_t locals on float-only buffers compile with glslc") {
+  // Review finding: the body calls _mlx_bf16_round_trip but nothing declared
+  // the helper or the int16 extension because no buffer is bfloat16.
+  if (!glslc_present()) {
+    MESSAGE("glslc not found: skipping the compile check");
+    return;
+  }
+  const char* source =
+      "[[kernel]] void glue_glslc(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t v = in[c] * 2.0f;\n"
+      "  v = v + in[c + 1];\n"
+      "  y[c] = v;\n"
+      "}\n";
+  CHECK(glslc_status(translate(source, 1), "literal-locals") == 0);
 }
