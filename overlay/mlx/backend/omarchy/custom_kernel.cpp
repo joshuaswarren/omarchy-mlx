@@ -1314,6 +1314,8 @@ void round_bf16_type(
       size_t item = head;
       int depth = 0;
       for (size_t i = head; i < text.size(); ++i) {
+        i = skip_msl_comment(text, i);
+        if (i >= text.size()) break;
         const char ch = text[i];
         if (ch == '(' || ch == '[' || ch == '{') ++depth;
         if (ch == ')' || ch == ']' || ch == '}') --depth;
