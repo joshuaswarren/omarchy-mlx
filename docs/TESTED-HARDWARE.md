@@ -21,6 +21,15 @@ a compatibility list.
 
 AMD: no result yet.
 
+## Apple silicon GPU (author runs)
+
+Source build of #407 head `ec849019` (main `f3ec9599` plus the submission-budget rows), built on each machine with `MLX_BUILD_TESTS=ON`, against the system Borealis driver with no override.
+
+| GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
+|---|---|---|---|---|---|---|
+| Apple M1 Pro (G13S C0), MacBook Pro 16-inch 2021, `apple,t6000`, 10 cores, 16 GB | Mesa 26.3.0-devel Borealis (git-be147e3625), driver ID 35, Vulkan API 1.4.363, system ICD | Fedora 45, Linux 7.3.0 | source build `ec849019`; release wheel v0.7.41 for the collector and LLM runs | 60/60 `omarchy_runtime_tests` (27086 assertions); 29/29 `omarchy_copy_offset_tests` (131707 assertions); `mlx-omarchy-info` and `--trace-smoke` exit 0; 6/6 collector probe ops | none | author run, [receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md) |
+| Apple M2 (G14G B0), MacBook Air 13-inch 2022, `apple,t8112`, 8 cores, 8 GB | Mesa 26.3.0-devel Borealis (git-be147e3625), driver ID 35, Vulkan API 1.4.363, system ICD | Fedora 44, Linux 7.3.0 | source build `ec849019`; release wheel v0.7.41 for the collector and LLM runs | 60/60 `omarchy_runtime_tests` (27086 assertions); 29/29 `omarchy_copy_offset_tests` (131707 assertions); `mlx-omarchy-info` and `--trace-smoke` exit 0; 6/6 collector probe ops | none | author run, [receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md) |
+
 ## Apple silicon GPU (reporter runs)
 
 These rows are reporter runs. The README supported-hardware table

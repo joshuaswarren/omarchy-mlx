@@ -1,0 +1,18 @@
+== m2 source ec849019 2026-11-13T06:38:17Z load 4.86 1.83 0.68
+== omarchy_runtime_tests
+===============================================================================
+[doctest] test cases:    60 |    60 passed | 0 failed | 0 skipped
+[doctest] assertions: 27086 | 27086 passed | 0 failed |
+[doctest] Status: SUCCESS!
+== omarchy_copy_offset_tests
+===============================================================================
+[doctest] test cases:     29 |     29 passed | 0 failed | 0 skipped
+[doctest] assertions: 131707 | 131707 passed | 0 failed |
+[doctest] Status: SUCCESS!
+== mlx-omarchy-info
+info rc=0
+== trace-smoke
+buffer round trip: OK (65536 bytes, device Apple M2 (G14G B0))
+trace: vk_submissions=1 vk_buffer_copies=1 vk_buffer_fills=0 vk_compute_dispatches=0 gpu_primitive_dispatches=0
+trace rc=0
+json rc=0

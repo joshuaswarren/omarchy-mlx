@@ -30,6 +30,16 @@ Release v0.7.41, wheel `mlx_omarchy-0.32.4.dev202611111431+8380f002-cp314-cp314-
 | M4 Pro | 6/6 pass | 5.696 (0.377) |
 | A18 Pro | 6/6 pass | 16.46 (0.131) |
 
+## Runtime suite
+
+Source build of `aurora-silicon/omarchy-mlx` `ec849019` (#407: main `f3ec9599` plus the submission-budget rows), configured as in `tools/ci/run-omarchy-runtime.sh` with `MLX_BUILD_TESTS=ON` and built on each machine. Logs are in `suite/`.
+
+| Chip | `omarchy_runtime_tests` | `omarchy_copy_offset_tests` | `mlx-omarchy-info`, `--trace-smoke` |
+|---|---|---|---|
+| M1 Pro | 60/60 cases, 27086/27086 assertions | 29/29, 131707/131707 | exit 0, buffer round trip OK |
+| M2 | 60/60 cases, 27086/27086 assertions | 29/29, 131707/131707 | exit 0, buffer round trip OK |
+| M4 Pro | 59/60 cases, 27085/27086 assertions | 29/29, 131711/131711 | exit 0, buffer round trip OK |
+
 ## LLM decode and prefill
 
 `receipts/2026-10-09-linux-vs-macos/score_bench.py` with that receipt's `prompts.jsonl`: 2 warmup generations, then 10 greedy generations of 64 tokens (decode median, time to first token excluded) and 5 prefills of 512 tokens (median). Each model ran in one process, the 2B model first. Governor `schedutil`, release defaults (submission budget 5000 on all four boards). `bench/` has the JSON per run and the load and SoC temperature at its start.
