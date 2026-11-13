@@ -737,7 +737,7 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
 
 TEST_CASE("submission-cap default resolves per calibrated board") {
   // The G14C row ships calibrated (receipts/2026-11-13-g14c-batch-work).
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 120000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 100000);
 
   // The G13C/G13G rows carry the measured values from
   // receipts/2026-10-12-submission-cap-calibration and
@@ -774,7 +774,7 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // one row above it (receipts/2026-11-13-g14c-batch-work).
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= (row.board == "G14C" ? 120000 : 40000));
+      CHECK(row.budget <= (row.board == "G14C" ? 100000 : 40000));
     }
   }
 }
@@ -797,7 +797,7 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
   // 40000 or 8000 here.
-  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 120000);
+  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 100000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);

@@ -1,6 +1,6 @@
-# G14C submission budget 40000 -> 120000 (2026-11-13)
+# G14C submission budget 40000 -> 100000 (2026-11-13; swept 120000, re-picked, see REPICK.md)
 
-Board: 14-inch M2 Max (G14C), Linux, Mesa honeykrisp, `MLX_OMARCHY_BATCH_WORK` unset (table) vs `120000` vs `200000`.
+Board: 14-inch M2 Max (G14C), Linux, Mesa honeykrisp, `MLX_OMARCHY_BATCH_WORK` unset (table) vs `120000` vs `200000` (the shipped value is 100000, see REPICK.md).
 600-token decode, runs interleaved, 20 s gaps, a 60 Hz submit-latency probe beside each run.
 First 64 generated token ids identical across arms in every pair (hash `ids_sha`); logprobs were not recorded in these runs. Scheduling only.
 
@@ -50,4 +50,4 @@ The raw profile has a second per-submission figure, the queue interval (time fro
 - Wall time per submission at 120000 is longer than the GPU time above: one decode step divided by submits per step is about 9 ms (2B), 12.4 ms (9B) and 13.5 ms (4B).
 - The probe cannot rank budgets on the M2. A 98 ms eval (cap off) left the probe p99 at about 1 ms (`runs/probe-control`). It shows no frame cost; it does not show that none exists.
 - NOT tested on a real compositor.
-- Only G14C changes. Other rows keep their values; the test ceiling is per row (G14C 120000, others 40000).
+- Only G14C changes. Other rows keep their values; the test ceiling is per row (G14C 100000, others 40000).
