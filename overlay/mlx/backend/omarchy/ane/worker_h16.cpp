@@ -226,17 +226,21 @@ class H16Device : public AneDevice {
     Program loaded;
     loaded.fd = fd;
     loaded.subject = subject;
+    // H16_LOAD reports each surface's tensor span, which EXEC buffers carry;
+    // the manifest binds the surface allocation, the span's upper bound.
     for (size_t i = 0; i < contract.size(); ++i) {
-      if (request.surface_size[i] != contract[i].bytes ||
+      const uint64_t span = sections.surfaces[i].span;
+      if (request.surface_size[i] != span ||
           request.surface_direction[i] != contract[i].direction) {
         refuse(
             "surface " + std::to_string(i) + " with " +
             std::to_string(request.surface_size[i]) + " bytes, direction " +
             std::to_string(request.surface_direction[i]) +
-            "; the manifest binds " + std::to_string(contract[i].bytes) +
+            "; the HWX spans " + std::to_string(span) +
             " bytes, direction " + std::to_string(contract[i].direction));
       }
       loaded.directions.push_back(contract[i].direction);
+      loaded.spans.push_back(span);
       loaded.buffers.emplace_back(static_cast<size_t>(contract[i].bytes), 0);
     }
     programs_.emplace(program.manifest_index, std::move(loaded));
@@ -266,7 +270,9 @@ class H16Device : public AneDevice {
     std::array<drm_ane_h16_buffer, DRM_ANE_H16_SURFACES> buffers{};
     for (size_t i = 0; i < program.buffers.size(); ++i) {
       buffers[i].ptr = reinterpret_cast<uintptr_t>(program.buffers[i].data());
-      buffers[i].size = program.buffers[i].size();
+      // The staging buffer covers the allocation; the tensor lies in its
+      // first span bytes, which is what the driver copies.
+      buffers[i].size = program.spans[i];
     }
     drm_ane_h16_exec request{};
     request.buffers_ptr = reinterpret_cast<uintptr_t>(buffers.data());
@@ -312,6 +318,7 @@ class H16Device : public AneDevice {
     std::string subject;
     std::vector<uint32_t> directions;
     std::vector<std::vector<uint8_t>> buffers; // H16_LOAD surface order
+    std::vector<uint64_t> spans;                // what EXEC copies of each
   };
 
   Program& find(size_t manifest_index, const char* what) {

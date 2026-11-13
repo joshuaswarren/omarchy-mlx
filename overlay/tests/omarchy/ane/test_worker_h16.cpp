@@ -130,8 +130,9 @@ struct FakeKernel : AneH16Kernel {
           h16_build_sections(program.hwx.data(), program.hwx.size());
       load->surface_count = static_cast<uint32_t>(built.surfaces.size());
       for (size_t i = 0; i < built.surfaces.size(); ++i) {
+        // The kernel reports each surface's tensor span.
         const uint64_t size = report_size.count(i) ? report_size.at(i)
-                                                   : built.surfaces[i].allocation;
+                                                   : built.surfaces[i].span;
         load->surface_size[i] = size;
         load->surface_direction[i] = built.surfaces[i].direction;
         program.sizes.push_back(size);
@@ -418,7 +419,7 @@ TEST_CASE("a kernel surface report that disagrees with the manifest is refused")
   CHECK(contains(
       message_of([&] { device->load(add128_program()); }),
       "DRM_IOCTL_ANE_H16_LOAD for program 0 (model.hwx) reported surface 1 "
-      "with 16384 bytes, direction 2; the manifest binds 32768 bytes, direction 2"));
+      "with 16384 bytes, direction 2; the HWX spans 32768 bytes, direction 2"));
   CHECK(kernel->programs.empty()); // closing the file unloaded it
   CHECK(kernel->open_files.size() == 1);
 }
