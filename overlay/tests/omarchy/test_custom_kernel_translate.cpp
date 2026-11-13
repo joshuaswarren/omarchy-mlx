@@ -1273,3 +1273,23 @@ TEST_CASE("bf16 scope end ignores braces inside comments") {
   const auto body = glsl.substr(glsl.find("void main()"));
   CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
 }
+
+TEST_CASE("a brace inside a block comment does not truncate the kernel body") {
+  const char* source =
+      "[[kernel]] void glue_block_comment(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    /* a closing brace } in a block comment */\n"
+      "    v = v * 2.0f;\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
+  CHECK(body.find("_mlx_arg1[c] = float(v);") != std::string::npos);
+}
