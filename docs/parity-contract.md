@@ -137,7 +137,7 @@ A scheduler-issued measurement window must identify the physical M2 Max, allowed
 
 Before accelerator work, acquire the device admission lock and confirm competing GPU work is quiescent. Record the ANE/filler state and keep it identical across arms. Keep model servers off the measured device. Do not change the driver, governor, compilation policy, services or network between arms.
 
-A schedule group is one OS visit; run its listed cells in displayed order. Each OS/model/length cell is a separate capture block. Keep every cell in one visit in the same boot session; do not reboot between them. A reboot ends the visit and its open blocks. Restart any later capture under a new manifest and comparison run ID. A comparison run ID pairs Linux and native blocks for one cell; assign each block a unique ID. Freeze all IDs, OS groups, cell order and required boot changes in the manifest. Keep both Linux arms for one cell in the same block and boot session.
+A schedule group is one OS visit; run its listed cells in displayed order. Each OS/model/length cell is a separate capture block. Keep every cell in a visit in the same boot session; do not reboot between them. A reboot predeclared for an OS switch between completed visits ends the old blocks but preserves their comparison run IDs. An unplanned reboot or interrupted block ends the comparison run. Any later capture starts a new run with a new manifest and new IDs, and recaptures both OS blocks. Each comparison run ID pairs Linux and native blocks for one cell; give each capture block a unique ID. Freeze comparison and block IDs, OS groups, cell order and required boot changes in the manifest. Keep both Linux arms for one cell in the same block and boot session.
 
 | Order | OS | Cells |
 | --- | --- | --- |
@@ -152,7 +152,7 @@ Use AC power and a fixed power policy. Run the unscored settling process for eac
 
 At the start of every warm or cold process on either OS or arm, require each declared sensor to be within 2 degrees Celsius of that reference. If not, wait within the predeclared limit. If the sensor remains out of band, mark the attempt technically invalid without inspecting throughput. For Linux, exclude both arms of the pair and use the next predeclared pair in its frozen A/B order. For native, use the next predeclared process of the same sample type. If no warm replacement remains, mark the warm block incomplete under section 6.4. If no cold replacement remains, mark only the cold set incomplete under section 6.3. Retain all raw runs.
 
-Every process receives a finite deadline within the grant. Stop launching work when the remaining window cannot cover the full process deadline. On a hang/reset, stop the comparison, preserve logs and return recovery to the scheduler. Do not reboot or change hardware as an automatic benchmark recovery step. Any authorized reboot ends the open blocks; later capture starts a new run under line 140.
+Every process receives a finite deadline within the grant. Stop launching work when the remaining window cannot cover the full process deadline. On a hang/reset, stop the comparison, preserve logs and return recovery to the scheduler. Do not reboot or change hardware as an automatic benchmark recovery step. A reboot not predeclared for an OS switch ends the comparison run; later capture uses a new manifest and run IDs for both OS blocks.
 
 ### 6.2 Fixed cells and token inputs
 
