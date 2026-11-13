@@ -364,9 +364,14 @@ void norm_reduce() {
     float b = LOAD_VALUE(norm_in.values[params.lhs_offset + v1 * n_reads + i]);
     sq1 += b * b;
   }
+  // The subgroup operations must execute for the whole subgroup: both
+  // hardware reductions run on every lane, and only the lane-0 stores
+  // are divergent.
+  float part0 = subgroupAdd(sq0);
+  float part1 = subgroupAdd(sq1);
   if (lane == 0u) {
-    norm_partials[2u * sub_id] = subgroupAdd(sq0);
-    norm_partials[2u * sub_id + 1u] = subgroupAdd(sq1);
+    norm_partials[2u * sub_id] = part0;
+    norm_partials[2u * sub_id + 1u] = part1;
   }
   barrier();
   if (sub_id == 0u) {
