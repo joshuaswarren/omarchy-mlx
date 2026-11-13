@@ -1,0 +1,150 @@
+### a1
+{"ctx": 480, "keys_max": 736, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 37.34, "variant_ms_med": 37.073, "gain_pct": 0.72, "gain_ci95": [0.67, 0.8]}
+FUSE-DONE
+### a3
+{"ctx": 480, "keys_max": 544, "runs_stock": [41.608, 37.124, 41.663, 37.168], "runs_variant": [37.082, 37.02, 36.996, 36.981], "digest_stock": ["9e794c81f622a433"], "digest_variant": ["9e794c81f622a433"], "engaged": false, "stock_ms_med": 39.388, "variant_ms_med": 37.008, "gain_pct": 6.04}
+FUSE-DONE
+### d1
+{"ctx": 480, "keys_max": 544, "runs_stock": [42.119, 41.946, 41.583, 41.634, 37.414, 37.154, 37.348, 41.46], "runs_variant": [41.444, 41.655, 41.395, 41.785, 41.321, 37.475, 41.218, 40.898], "digest_stock": ["9e794c81f622a433"], "digest_variant": ["9e794c81f622a433"], "engaged": false, "stock_ms_med": 41.522, "variant_ms_med": 41.358, "gain_pct": 0.39}
+FUSE-DONE
+### n1024r1
+{"ctx": 1024, "keys_max": 1280, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.44, "variant_ms_med": 60.516, "gain_pct": -0.13, "gain_ci95": [-0.59, 0.29]}
+FUSE-DONE
+### n1024r2
+{"ctx": 1024, "keys_max": 1152, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.131, "variant_ms_med": 61.57, "gain_pct": -0.72, "gain_ci95": [-0.9, -0.37]}
+FUSE-DONE
+### n1024r3
+{"ctx": 1024, "keys_max": 1152, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.146, "variant_ms_med": 60.26, "gain_pct": -0.19, "gain_ci95": [-0.59, 0.09]}
+FUSE-DONE
+### n1280r1
+{"ctx": 1280, "keys_max": 1408, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.125, "same_argmax": true, "stock_ms_med": 63.86, "variant_ms_med": 64.457, "gain_pct": -0.93, "gain_ci95": [-3.75, 2.01]}
+FUSE-DONE
+### n1400r1
+{"ctx": 1400, "keys_max": 1528, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.18, "variant_ms_med": 60.331, "gain_pct": -0.25, "gain_ci95": [-0.38, -0.06]}
+FUSE-DONE
+### n1400r2
+{"ctx": 1400, "keys_max": 1528, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 63.455, "variant_ms_med": 63.497, "gain_pct": -0.07, "gain_ci95": [-1.26, 1.25]}
+FUSE-DONE
+### n1536r1
+{"ctx": 1536, "keys_max": 1664, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 62.425, "variant_ms_med": 62.589, "gain_pct": -0.26, "gain_ci95": [-4.18, 2.86]}
+FUSE-DONE
+### n1792r1
+{"ctx": 1792, "keys_max": 1920, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.23, "variant_ms_med": 60.281, "gain_pct": -0.09, "gain_ci95": [-0.22, 0.01]}
+FUSE-DONE
+### n2048r1
+{"ctx": 2048, "keys_max": 2176, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.169, "variant_ms_med": 60.438, "gain_pct": -0.45, "gain_ci95": [-0.72, -0.22]}
+FUSE-DONE
+### n2048r2
+{"ctx": 2048, "keys_max": 2176, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 64.91, "variant_ms_med": 65.738, "gain_pct": -1.28, "gain_ci95": [-1.78, -0.96]}
+FUSE-DONE
+### n256r1
+{"ctx": 256, "keys_max": 512, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.688, "variant_ms_med": 61.456, "gain_pct": 0.38, "gain_ci95": [-1.48, 2.01]}
+FUSE-DONE
+### n480r1
+{"ctx": 480, "keys_max": 736, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 62.002, "variant_ms_med": 61.798, "gain_pct": 0.33, "gain_ci95": [0.13, 0.61]}
+FUSE-DONE
+### n480r2
+{"ctx": 480, "keys_max": 736, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.142, "variant_ms_med": 59.814, "gain_pct": 0.55, "gain_ci95": [0.14, 1.13]}
+FUSE-DONE
+### n480r3
+{"ctx": 480, "keys_max": 608, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.527, "variant_ms_med": 60.786, "gain_pct": -0.43, "gain_ci95": [-1.91, 2.21]}
+FUSE-DONE
+### n640r1
+{"ctx": 640, "keys_max": 768, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 62.393, "variant_ms_med": 61.162, "gain_pct": 1.97, "gain_ci95": [-2.96, 3.86]}
+FUSE-DONE
+### n768m9b2
+{"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 197.046, "variant_ms_med": 197.23, "gain_pct": -0.09, "gain_ci95": [-0.26, 0.08]}
+FUSE-DONE
+### n768r1
+{"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.173, "variant_ms_med": 59.904, "gain_pct": 0.45, "gain_ci95": [0.12, 0.76]}
+FUSE-DONE
+### n768r2
+{"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.222, "variant_ms_med": 59.892, "gain_pct": 0.55, "gain_ci95": [0.06, 1.08]}
+FUSE-DONE
+### n768r3
+{"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.428, "variant_ms_med": 61.088, "gain_pct": 0.55, "gain_ci95": [-3.29, 4.45]}
+FUSE-DONE
+### n832r2
+{"ctx": 832, "keys_max": 960, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.152, "variant_ms_med": 60.835, "gain_pct": 0.52, "gain_ci95": [0.15, 1.13]}
+FUSE-DONE
+### n900r1
+{"ctx": 900, "keys_max": 1028, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0625, "same_argmax": true, "stock_ms_med": 61.154, "variant_ms_med": 61.015, "gain_pct": 0.23, "gain_ci95": [0.04, 0.6]}
+FUSE-DONE
+### n900r2
+{"ctx": 900, "keys_max": 1028, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0625, "same_argmax": true, "stock_ms_med": 61.214, "variant_ms_med": 60.787, "gain_pct": 0.7, "gain_ci95": [0.36, 0.97]}
+FUSE-DONE
+### n900r3
+{"ctx": 900, "keys_max": 1028, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0625, "same_argmax": true, "stock_ms_med": 61.343, "variant_ms_med": 60.978, "gain_pct": 0.59, "gain_ci95": [0.07, 0.9]}
+FUSE-DONE
+### n960r1
+{"ctx": 960, "keys_max": 1088, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.541, "variant_ms_med": 62.396, "gain_pct": -1.39, "gain_ci95": [-3.84, 2.48]}
+FUSE-DONE
+### o1024
+{'keys': 1024, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 0.0001220703125, 'stock_us_per_call': 156.79, 'variant_us_per_call': 110.47, 'gain_pct': 29.55, 'gain_ci95': (29.32, 29.87)}
+FUSE-DONE
+### o1024h12
+{'keys': 1024, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.9073486328125e-06, 'stock_us_per_call': 174.2, 'variant_us_per_call': 193.64, 'gain_pct': -11.16, 'gain_ci95': (-11.21, -11.12)}
+FUSE-DONE
+### o1280
+{'keys': 1280, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0001220703125, 'stock_us_per_call': 167.85, 'variant_us_per_call': 192.18, 'gain_pct': -14.49, 'gain_ci95': (-14.54, -14.45)}
+FUSE-DONE
+### o1536
+{'keys': 1536, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.52587890625e-05, 'stock_us_per_call': 174.76, 'variant_us_per_call': 196.77, 'gain_pct': -12.6, 'gain_ci95': (-12.65, -12.55)}
+FUSE-DONE
+### o1536h4
+{'keys': 1536, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 9.5367431640625e-07, 'stock_us_per_call': 166.65, 'variant_us_per_call': 119.27, 'gain_pct': 28.43, 'gain_ci95': (28.38, 28.48)}
+FUSE-DONE
+### o1792
+{'keys': 1792, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 184.08, 'variant_us_per_call': 207.32, 'gain_pct': -12.62, 'gain_ci95': (-12.68, -12.57)}
+FUSE-DONE
+### o2048
+{'keys': 2048, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 178.65, 'variant_us_per_call': 204.75, 'gain_pct': -14.61, 'gain_ci95': (-15.17, -13.99)}
+FUSE-DONE
+### o2048h4
+{'keys': 2048, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 176.45, 'variant_us_per_call': 129.36, 'gain_pct': 26.68, 'gain_ci95': (26.63, 26.72)}
+FUSE-DONE
+### o2560h4
+{'keys': 2560, 'reps_per_arm': 2000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 186.37, 'variant_us_per_call': 209.99, 'gain_pct': -12.67, 'gain_ci95': (-12.75, -12.61)}
+FUSE-DONE
+### o4096
+{'keys': 4096, 'reps_per_arm': 150, 'engaged_op_maxabs_diff': 7.62939453125e-06, 'stock_us_per_call': 351.47, 'variant_us_per_call': 519.22, 'gain_pct': -47.73, 'gain_ci95': (-48.75, -46.98)}
+FUSE-DONE
+### o480
+{'keys': 480, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 7.62939453125e-06, 'stock_us_per_call': 150.05, 'variant_us_per_call': 101.99, 'gain_pct': 32.03, 'gain_ci95': (31.93, 32.09)}
+FUSE-DONE
+### o480h16
+{'keys': 480, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 7.450580596923828e-09, 'stock_us_per_call': 152.54, 'variant_us_per_call': 105.31, 'gain_pct': 30.96, 'gain_ci95': (30.89, 31.04)}
+FUSE-DONE
+### o512h16
+{'keys': 512, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 155.17, 'variant_us_per_call': 108.98, 'gain_pct': 29.77, 'gain_ci95': (29.74, 29.79)}
+FUSE-DONE
+### o640h12
+{'keys': 640, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.52587890625e-05, 'stock_us_per_call': 155.61, 'variant_us_per_call': 108.67, 'gain_pct': 30.16, 'gain_ci95': (30.13, 30.2)}
+FUSE-DONE
+### o768
+{'keys': 768, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 156.49, 'variant_us_per_call': 109.13, 'gain_pct': 30.27, 'gain_ci95': (30.15, 30.41)}
+FUSE-DONE
+### o768h12
+{'keys': 768, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.9073486328125e-06, 'stock_us_per_call': 155.42, 'variant_us_per_call': 180.54, 'gain_pct': -16.16, 'gain_ci95': (-16.25, -16.08)}
+FUSE-DONE
+### o768h16
+{'keys': 768, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 5.960464477539063e-08, 'stock_us_per_call': 168.8, 'variant_us_per_call': 190.57, 'gain_pct': -12.9, 'gain_ci95': (-12.96, -12.85)}
+FUSE-DONE
+### o768h32
+{'keys': 768, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0001220703125, 'stock_us_per_call': 212.75, 'variant_us_per_call': 305.08, 'gain_pct': -43.4, 'gain_ci95': (-43.51, -43.33)}
+FUSE-DONE
+### o768h4
+{'keys': 768, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 147.96, 'variant_us_per_call': 100.09, 'gain_pct': 32.35, 'gain_ci95': (32.25, 32.44)}
+FUSE-DONE
+### o768h8
+{'keys': 768, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 156.89, 'variant_us_per_call': 109.58, 'gain_pct': 30.15, 'gain_ci95': (30.12, 30.19)}
+FUSE-DONE
+### o900
+{'keys': 900, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 7.450580596923828e-09, 'stock_us_per_call': 161.23, 'variant_us_per_call': 114.28, 'gain_pct': 29.12, 'gain_ci95': (28.99, 29.23)}
+FUSE-DONE
+### oc1024
+{'keys': 1024, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0001220703125, 'stock_us_per_call': 185.79, 'variant_us_per_call': 146.49, 'gain_pct': 21.16, 'gain_ci95': (21.1, 21.23)}
+FUSE-DONE
+### oc768
+{'keys': 768, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 178.9, 'variant_us_per_call': 132.45, 'gain_pct': 25.97, 'gain_ci95': (25.91, 26.01)}
+FUSE-DONE

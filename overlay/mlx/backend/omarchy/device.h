@@ -664,16 +664,25 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
 //
-// Per-chip default (width 256, decode measured with the 2B full-attention layers, receipts fusion-ab-jwm1-w7q-sdpa-pv256* on the 13-inch):
-//   G13G (Apple M1): on up to 768 keys. Measured decode change by context: +1.94 and +1.26 percent at 512 keys (two rows, 10 of 10 pairs faster),
-//     +1.43 at 640, +1.63 at 768 (5 of 5 faster each), +0.91 unresolved at 896 (2 of 5 slower), -1.18 at 1024, -2.09 at 2048, -2.75 at 4096.
-//   G13C, G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
-inline uint32_t sdpa_split_pv_wide_max_keys(const std::string& device_name) {
-  if (device_name.find("G13G") != std::string::npos) return 768;
+// Per-chip default: the variant is on while key-value heads times keys is at most a per-chip budget. Op level (random bf16, one decode query, ABBA blocks) the
+// variant wins or loses by that product and by nothing else that was varied: with 1, 2, 3, 4 or 8 key-value heads the win ends at the same product on a given chip
+// (G13G wins at 1920 and 2048, loses at 2304, 2560 and 3072; G13C wins at 6144 and 8192, loses at 12288). The budget is set from the decode (model) rows, which
+// stop earlier than the op rows:
+//   G13G (Apple M1): 1536, which is 768 keys of the Qwen3.8-2B (2 key-value heads, 8 query heads). Measured decode change by context: +1.94 and +1.26 percent at
+//     512 keys (two rows, 10 of 10 pairs faster), +1.43 at 640, +1.63 at 768 (5 of 5 faster each), +0.91 unresolved at 896 (2 of 5 slower), -1.18 at 1024, -2.09 at
+//     2048, -2.75 at 4096. The Qwen3.8-9B (4 key-value heads, 16 query heads) gets the variant up to 384 keys (op level wins at 480; no decode row below 768, where it measured -0.09 percent, CI -0.26 to 0.08).
+//   G13C (Apple M1 Max): 6144, which is 3072 keys of the 2B and 1536 keys of the 9B. Measured decode change on the 16-inch (two arms interleaved step by step in one
+//     process, ABBA blocks, 95 percent bootstrap interval of the median): 2B with the ANE idle +0.66 at 256 keys, +1.43 at 480, +1.70 at 640, +1.68 at 1024, +1.52 at
+//     2048, +1.27 at 3072 (CI 1.01 to 1.54), -1.21 at 4096 (CI -1.60 to -0.87); 9B beside the ANE +1.02 at 768, +1.05 at 1024, +0.86 at 1536 (CI 0.62 to 1.03),
+//     -0.52 at 2048 (CI -0.76 to -0.34), -1.97 at 4096 (CI -2.13 to -1.82).
+//   G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
+inline uint32_t sdpa_split_pv_wide_max_head_keys(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) return 1536;
+  if (device_name.find("G13C") != std::string::npos) return 6144;
   return 0;
 }
 
-inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_t k_len, const std::string& device_name,
+inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, int pv_env, uint32_t k_len, const std::string& device_name,
                                uint32_t v_offset, int64_t v_head_stride, int64_t v_key_stride) {
   if (!(head_dim == 256 && group == 4u && v_offset % 8u == 0u && v_head_stride % 8 == 0 && v_key_stride % 8 == 0)) {
     return false;
@@ -681,9 +690,9 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_
   if (pv_env > 0) {
     return true;
   }
-  if (pv_env != 0) {  // unset: the per-chip default, measured only where the decode boundary above says so
-    uint32_t max_keys = sdpa_split_pv_wide_max_keys(device_name);
-    return max_keys != 0 && k_len <= max_keys;
+  if (pv_env != 0) {  // unset: the per-chip budget, measured only where the decode rows above say so
+    uint64_t budget = sdpa_split_pv_wide_max_head_keys(device_name);
+    return budget != 0 && static_cast<uint64_t>(kv_heads) * k_len <= budget;
   }
   return false;  // "0"
 }
