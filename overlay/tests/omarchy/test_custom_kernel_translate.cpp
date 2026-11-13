@@ -1228,3 +1228,30 @@ TEST_CASE("literal bfloat16_t rounding does not leak into a float local of the s
   CHECK(body.find("v = v * 3.0f;") != std::string::npos);
   CHECK(body.find("_mlx_bf16_round_trip(v * 3.0f)") == std::string::npos);
 }
+
+TEST_CASE("bf16 local reassignment rounds in its own scope only") {
+  // Review finding: with a same-name float elsewhere, `v = e;` in the bf16
+  // scope must still round, and the float scope must stay untouched.
+  const char* source =
+      "[[kernel]] void glue_scope2(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  {\n"
+      "    bfloat16_t v = in[c];\n"
+      "    v = v * 2.0f;\n"
+      "    y[c] = v;\n"
+      "  }\n"
+      "  {\n"
+      "    float v = in[c + 1];\n"
+      "    v = v * 3.0f;\n"
+      "    y[c + 1] = v;\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
+  CHECK(body.find("v = v * 3.0f;") != std::string::npos);
+  CHECK(body.find("_mlx_bf16_round_trip(v * 3.0f)") == std::string::npos);
+}
