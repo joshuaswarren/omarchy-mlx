@@ -1,4 +1,6 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_half.h"
 
 // Fused matrix-vector path for QuantizedMatmul when x is a single row:
 // out[1, n] = x[1, k] @ dequant(w) with w packed uint32 words holding
@@ -776,11 +778,11 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // reads the rounded output back from memory. A float16_t round trip
 // in registers does not survive the AGX compiler (the epilogue then
 // added the unrounded total; 270 of 896 sums differed on the M1), so
-// the rounding goes through integer packing, as fused_chain.comp
+// the rounding goes through an integer conversion, as fused_chain.comp
 // does, and both the output and the sum derive from that rounded
 // value (converting an f16-representable float to float16_t is exact).
 #ifdef USE_FP16
-#define ROUND_STORAGE(f) (unpackHalf2x16(packHalf2x16(vec2(f, 0.0))).x)
+#define ROUND_STORAGE(f) omarchy_round_f16(f)
 #elif defined(USE_BF16)
 #define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))
 #else
