@@ -1204,8 +1204,7 @@ TEST_CASE("literal bfloat16_t comma declarators without a space stay valid") {
 
 TEST_CASE("literal bfloat16_t rounding does not leak into a float local of the same name") {
   // Review finding: `{ bfloat16_t v ... } { float v ... }` must not round the
-  // float block. A name that is also declared with another type keeps only the
-  // declaration-site rounding (shortcut: its reassignments stay unrounded).
+  // float block (rounding is scoped to the bf16 declaration's block).
   const char* source =
       "[[kernel]] void glue_scope(\n"
       "    const device float* in [[buffer(0)]],\n"

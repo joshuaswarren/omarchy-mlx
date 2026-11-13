@@ -1314,43 +1314,64 @@ void round_bf16_type(
   const std::regex decl_pattern(
       "\\b" + bfloat_name +
       R"(\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
-  std::vector<std::string> bf16_locals;
+  // Each bf16 local owns the text from its declaration to the end of the
+  // enclosing block; reassignments round only inside that span, so a float
+  // of the same name in another scope is never touched. Spans of the same
+  // name that end together (sequential redeclarations in one block) collapse
+  // into the earliest one so nothing is wrapped twice.
+  struct Bf16Scope {
+    std::string name;
+    size_t begin;
+    size_t end;
+  };
+  std::vector<Bf16Scope> scopes;
   for (std::sregex_iterator it(body.begin(), body.end(), decl_pattern);
        it != std::sregex_iterator();
        ++it) {
-    bf16_locals.push_back((*it)[1].str());
+    const auto begin = static_cast<size_t>(it->position());
+    size_t end = body.size();
+    int depth = 0;
+    for (size_t i = begin; i < body.size(); ++i) {
+      if (body[i] == '{') {
+        ++depth;
+      } else if (body[i] == '}') {
+        if (depth == 0) {
+          end = i;
+          break;
+        }
+        --depth;
+      }
+    }
+    const auto name = (*it)[1].str();
+    const bool seen = std::any_of(
+        scopes.begin(), scopes.end(), [&](const Bf16Scope& other) {
+          return other.name == name && other.end == end;
+        });
+    if (!seen) {
+      scopes.push_back({name, begin, end});
+    }
   }
-  // A name that is also declared with another scalar type elsewhere in the
-  // body may live in separate scopes; the name-only reassignment wrap
-  // below would round the non-bf16 variable too. Such names keep only the
-  // declaration-site rounding (shortcut: their later reassignments stay
-  // unrounded; upgrade with real scope tracking).
-  std::vector<std::string> wrap_locals;
-  for (const auto& local : bf16_locals) {
-    const std::regex other_type(
-        R"(\b(?:float|half|int|uint|bool|short|ushort|char|uchar|int32_t|uint32_t|int64_t|uint64_t|size_t|float[234]|half[234])\s+)" +
-        regex_escape(local) + R"(\b)");
-    if (std::regex_search(body, other_type)) {
-      body = std::regex_replace(
-          body,
-          std::regex(
-              "\\b" + bfloat_name + R"(\s+)" + regex_escape(local) +
-              R"(\s*=\s*([^;]+);)"),
-          "float " + local + " = _mlx_bf16_round_trip($1);");
-    } else {
-      wrap_locals.push_back(local);
+  for (size_t k = scopes.size(); k-- > 0;) {
+    const auto scope = scopes[k];
+    const auto segment = body.substr(scope.begin, scope.end - scope.begin);
+    const auto wrapped = std::regex_replace(
+        segment,
+        std::regex(
+            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
+            R"(\s*=\s*([^;]+);)"),
+        "$1" + scope.name + " = _mlx_bf16_round_trip($2);");
+    body.replace(scope.begin, segment.size(), wrapped);
+    const auto delta = static_cast<std::ptrdiff_t>(wrapped.size()) -
+        static_cast<std::ptrdiff_t>(segment.size());
+    for (size_t j = 0; j < k; ++j) {
+      if (scopes[j].end >= scope.end) {
+        scopes[j].end = static_cast<size_t>(
+            static_cast<std::ptrdiff_t>(scopes[j].end) + delta);
+      }
     }
   }
   replace_word(body, bfloat_name + " ", "float ");
   replace_word(header, bfloat_name + " ", "float ");
-  for (const auto& local : wrap_locals) {
-    body = std::regex_replace(
-        body,
-        std::regex(
-            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(local) +
-            R"(\s*=\s*([^;]+);)"),
-        "$1" + local + " = _mlx_bf16_round_trip($2);");
-  }
 }
 
 void resolve_kernel_templates(

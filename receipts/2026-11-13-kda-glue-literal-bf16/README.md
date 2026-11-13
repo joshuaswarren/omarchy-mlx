@@ -59,6 +59,6 @@ package, not the wheel of the 2026-11-11 baseline.
 ## Caveats
 
 - Not run: kernels outside the 26 in the harness.
-- Known gap (follow-up issue 421, not this change): `x = e` reassignments of a bf16 local are rounded only when the name is not also declared with another scalar type; `x += e` and other compound assignments are never rounded.
+- Known gap (follow-up issue 421, not this change): `x += e` and other compound assignments of a bf16 local are never rounded. Reassignment rounding is scoped from the bf16 declaration to the end of its enclosing block; a shadowing float of the same name inside that block is not distinguished.
 - The translation cache key includes the SHA-256 of the loaded libmlx, so a
   rebuilt library never reuses an old `.tr` entry (measured above).
