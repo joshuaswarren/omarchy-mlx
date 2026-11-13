@@ -1,0 +1,16 @@
+== 19:46:25 m1pro long default r1 load 1.02 temp 60213
+LONG m1pro-default Qwen3-4B-Instruct-2507-4bit p443 g128 decode 32.35 [32.29, 32.41] pf 129.3 sha {'9e20669f96a7c584'}
+== 19:46:45 m1pro long default r1 load 0.79 temp 66354
+LONG m1pro-default Qwen3.8-2B-mlx-4Bit p443 g128 decode 74.16 [73.67, 74.66] pf 274.3 sha {'c4ed7eeb93e2eda6'}
+== 19:46:57 m1pro long split r1 load 1.04 temp 67666
+LONG m1pro-split Qwen3-4B-Instruct-2507-4bit p443 g128 decode 41.58 [41.5, 41.67] pf 128.7 sha {'9e20669f96a7c584'}
+== 19:47:14 m1pro long split r1 load 0.96 temp 70932
+LONG m1pro-split Qwen3.8-2B-mlx-4Bit p443 g128 decode 74.0 [74.2, 73.81] pf 274.9 sha {'91d5d220bf5b2c1d'}
+== 19:47:25 m1pro long default r2 load 0.97 temp 71026
+LONG m1pro-default Qwen3-4B-Instruct-2507-4bit p443 g128 decode 32.4 [32.39, 32.41] pf 129.2 sha {'9e20669f96a7c584'}
+== 19:47:44 m1pro long default r2 load 0.76 temp 73448
+LONG m1pro-default Qwen3.8-2B-mlx-4Bit p443 g128 decode 74.7 [74.69, 74.71] pf 275.3 sha {'c4ed7eeb93e2eda6'}
+== 19:47:55 m1pro long split r2 load 0.87 temp 73291
+LONG m1pro-split Qwen3-4B-Instruct-2507-4bit p443 g128 decode 41.44 [41.46, 41.43] pf 128.4 sha {'9e20669f96a7c584'}
+== 19:48:12 m1pro long split r2 load 0.69 temp 75526
+LONG m1pro-split Qwen3.8-2B-mlx-4Bit p443 g128 decode 73.93 [73.36, 74.5] pf 279.5 sha {'91d5d220bf5b2c1d'}

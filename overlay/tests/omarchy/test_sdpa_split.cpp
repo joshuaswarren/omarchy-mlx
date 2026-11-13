@@ -343,6 +343,12 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 Max (G13C C0)") == 320);
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 Max (G14C B1)") == 320);
   CHECK(omarchy::sdpa_split_min_keys("") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M1 Pro (G13S C0)") == 192);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 (G14G B0)") == 192);
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Pro (G13S C0)", 191));
+  CHECK(omarchy::sdpa_split_default("Apple M1 Pro (G13S C0)", 192));
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 191));
+  CHECK(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 192));
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 0);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 320));

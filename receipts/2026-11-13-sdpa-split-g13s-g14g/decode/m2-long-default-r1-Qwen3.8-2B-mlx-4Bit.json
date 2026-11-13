@@ -1,0 +1,24 @@
+{
+ "label": "m2-default",
+ "model": "Qwen3.8-2B-mlx-4Bit",
+ "prompt_tokens": 443,
+ "gen_tokens": 128,
+ "decode_tok_s": [
+  39.39,
+  39.38
+ ],
+ "decode_median": 39.38,
+ "prefill_tok_s": [
+  169.2,
+  167.2
+ ],
+ "tokens_sha": [
+  "c4ed7eeb93e2eda6",
+  "c4ed7eeb93e2eda6"
+ ],
+ "env": {
+  "MLX_OMARCHY_BATCH_WORK": "10000"
+ },
+ "mlx": "0.32.4.dev202611111431+8380f002",
+ "load1_end": 1.11669921875
+}
