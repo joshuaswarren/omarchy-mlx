@@ -616,7 +616,13 @@ def _transcribe(args) -> int:
     # CLI's own share (the discovery fallback cannot see a prefix's share
     # through a symlinked coreml/ and would silently take the split-island
     # path). An explicit MLX_OMARCHY_WHOLE_ENCODER_BUNDLE still wins.
-    _installed_whole = share / "bundles" / "parakeet-encoder-whole"
+    # Lane 3 (an ABI 3 H16 node) takes only its schema-5 bundle: the lanes
+    # 1/2 bundle in the share would make lane-3 discovery refuse.
+    from coreml import ane_lane
+
+    _installed_whole = share / "bundles" / (
+        ane_lane.H16_WHOLE_BUNDLE if ane_lane.h16_node() is not None
+        else "parakeet-encoder-whole")
     if (_installed_whole / "manifest.json").is_file():
         os.environ.setdefault(
             "MLX_OMARCHY_WHOLE_ENCODER_BUNDLE", str(_installed_whole)
@@ -1132,7 +1138,9 @@ def _pin_checks(pinned, expected, contract, tdt, transcript, mel_host,
         # tensor's low bits; transcript, tokens, durations and frame indices
         # are identical. The pin carries one hidden sha per encoder path.
         whole_path = island.whole_bundle is not None
-        whole_sha = expected.get("encoder_hidden_sha256_whole")
+        whole_sha = expected.get(
+            "encoder_hidden_sha256_h16" if getattr(island, "lane3", False)
+            else "encoder_hidden_sha256_whole")
         expected_hidden_sha = (whole_sha if (whole_path and whole_sha)
                                else expected["encoder_hidden_sha256"])
 
