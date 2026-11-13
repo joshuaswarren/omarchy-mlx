@@ -1349,4 +1349,24 @@ TEST_CASE("literal bfloat16_t locals on float-only buffers compile with glslc") 
       "  y[c] = v;\n"
       "}\n";
   CHECK(glslc_status(translate(source, 1), "literal-locals") == 0);
+
+TEST_CASE("the bf16 conversion helper keeps NaN a NaN") {
+  // The bias-add rounding carries into the exponent for NaN payloads:
+  // 0x7f800001 became +inf and 0x7fffffff became -0. MLX's CPU conversion
+  // returns 0x7FC0 for every NaN; the helper must guard the same way.
+  const char* source =
+      "[[kernel]] void glue_nan(\n"
+      "    const device bfloat16_t* in [[buffer(0)]],\n"
+      "    device bfloat16_t* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  y[c] = in[c];\n"
+      "}\n";
+  const auto glsl = translate(source, 1);
+  const auto helper = glsl.find("uint16_t _mlx_float_to_bf16(");
+  REQUIRE(helper != std::string::npos);
+  const auto line = glsl.substr(helper, glsl.find('\n', helper) - helper);
+  CHECK(line.find("0x7fffffffu") != std::string::npos);
+  CHECK(line.find("0x7f800000u") != std::string::npos);
+  CHECK(line.find("0x7fc0u") != std::string::npos);
 }
