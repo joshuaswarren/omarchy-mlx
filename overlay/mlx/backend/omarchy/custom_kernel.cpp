@@ -1261,22 +1261,22 @@ void round_bf16_type(
     std::string& body,
     std::string& header,
     const std::string& bfloat_name) {
-    // C-style casts `(T)x`: Metal constructs a bfloat16_t from x - a
-    // round to the bf16 grid. Rewritten to the concrete type FIRST so the
-    // later `(T)name` word substitution cannot turn the cast into a
-    // no-op `(float)x` (sconv_decode conv_r lost its rounding,
-    // 2026-11-07 recheck); the cast scanner maps bfloat16_t casts to
-    // _mlx_bf16_round_trip.
-    // Injected as a neutral token: translate_types renames the literal
-    // bfloat16_t to float before the cast scanner runs.
-    replace_all(body, "(" + bfloat_name + ")", "(_bf16_cast)");
-    replace_all(header, "(" + bfloat_name + ")", "(_bf16_cast)");
-    // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
-    // Word-bounded: a longer identifier ending in the template name
-    // (POST in the residual+RMSNorm kernel) must not lose its tail.
-    replace_word(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
-    replace_word(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
-    // Comma declarator lists `T a = x, b = y;` become one statement each, so
+  // C-style casts `(T)x`: Metal constructs a bfloat16_t from x - a
+  // round to the bf16 grid. Rewritten to the concrete type FIRST so the
+  // later `(T)name` word substitution cannot turn the cast into a
+  // no-op `(float)x` (sconv_decode conv_r lost its rounding,
+  // 2026-11-07 recheck); the cast scanner maps bfloat16_t casts to
+  // _mlx_bf16_round_trip.
+  // Injected as a neutral token: translate_types renames the literal
+  // bfloat16_t to float before the cast scanner runs.
+  replace_all(body, "(" + bfloat_name + ")", "(_bf16_cast)");
+  replace_all(header, "(" + bfloat_name + ")", "(_bf16_cast)");
+  // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
+  // Word-bounded: a longer identifier ending in the template name
+  // (POST in the residual+RMSNorm kernel) must not lose its tail.
+  replace_word(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
+  replace_word(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
+  // Comma declarator lists `T a = x, b = y;` become one statement each, so
   // the per-local reassignment wrap below never swallows a sibling
   // declarator into its round-trip argument.
   {
@@ -1298,36 +1298,59 @@ void round_bf16_type(
         if (ch == '(' || ch == '[' || ch == '{') ++depth;
         if (ch == ')' || ch == ']' || ch == '}') --depth;
         if ((ch == ',' && depth == 0) || ch == ';') {
-          rewritten += bfloat_name + text.substr(item, i - item) + "; ";
+          auto piece = text.substr(item, i - item);
+          piece.erase(0, piece.find_first_not_of(" \t\n"));
+          rewritten += bfloat_name + " " + piece + "; ";
           item = i + 1;
         }
       }
       out += body.substr(last, begin - last) + rewritten;
       last = begin + text.size();
-    }
-    body = out + body.substr(last);
+  }
+  body = out + body.substr(last);
   }
   // Declarations `T name = expr;`: the declaration becomes float and
-    // the initializing expression rounds like Metal's constructor.
-    const std::regex decl_pattern(
-        "\\b" + bfloat_name +
-        R"(\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
-    std::vector<std::string> bf16_locals;
-    for (std::sregex_iterator it(body.begin(), body.end(), decl_pattern);
-         it != std::sregex_iterator();
-         ++it) {
-      bf16_locals.push_back((*it)[1].str());
-    }
-    replace_word(body, bfloat_name + " ", "float ");
-    replace_word(header, bfloat_name + " ", "float ");
-    for (const auto& local : bf16_locals) {
+  // the initializing expression rounds like Metal's constructor.
+  const std::regex decl_pattern(
+      "\\b" + bfloat_name +
+      R"(\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
+  std::vector<std::string> bf16_locals;
+  for (std::sregex_iterator it(body.begin(), body.end(), decl_pattern);
+       it != std::sregex_iterator();
+       ++it) {
+    bf16_locals.push_back((*it)[1].str());
+  }
+  // A name that is also declared with another scalar type elsewhere in the
+  // body may live in separate scopes; the name-only reassignment wrap
+  // below would round the non-bf16 variable too. Such names keep only the
+  // declaration-site rounding (shortcut: their later reassignments stay
+  // unrounded; upgrade with real scope tracking).
+  std::vector<std::string> wrap_locals;
+  for (const auto& local : bf16_locals) {
+    const std::regex other_type(
+        R"(\b(?:float|half|int|uint|bool|short|ushort|char|uchar|int32_t|uint32_t|int64_t|uint64_t|size_t|float[234]|half[234])\s+)" +
+        regex_escape(local) + R"(\b)");
+    if (std::regex_search(body, other_type)) {
       body = std::regex_replace(
           body,
           std::regex(
-              R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(local) +
+              "\\b" + bfloat_name + R"(\s+)" + regex_escape(local) +
               R"(\s*=\s*([^;]+);)"),
-          "$1" + local + " = _mlx_bf16_round_trip($2);");
+          "float " + local + " = _mlx_bf16_round_trip($1);");
+    } else {
+      wrap_locals.push_back(local);
     }
+  }
+  replace_word(body, bfloat_name + " ", "float ");
+  replace_word(header, bfloat_name + " ", "float ");
+  for (const auto& local : wrap_locals) {
+    body = std::regex_replace(
+        body,
+        std::regex(
+            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(local) +
+            R"(\s*=\s*([^;]+);)"),
+        "$1" + local + " = _mlx_bf16_round_trip($2);");
+  }
 }
 
 void resolve_kernel_templates(
