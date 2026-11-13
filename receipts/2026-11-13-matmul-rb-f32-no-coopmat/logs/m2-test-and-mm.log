@@ -1,0 +1,41 @@
+== 20:34:01 m2 test load 0.74 temp 45190
+===============================================================================
+[doctest] test cases:  2 |  2 passed | 0 failed | 45 skipped
+[doctest] assertions: 16 | 16 passed | 0 failed |
+[doctest] Status: SUCCESS!
+== 20:34:01 m2 mm tile load 0.74 temp 45190
+m2-tile mlx.core.float32 n=256 aT=0 bT=0 0.773 ms 0.0434 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m2-tile mlx.core.float32 n=512 aT=0 bT=0 1.471 ms 0.1824 TFLOP/s err 7.08e-05 fceb1f691fc4
+m2-tile mlx.core.float32 n=1024 aT=0 bT=0 10.237 ms 0.2098 TFLOP/s err 1.75e-04 bb53c6ef5242
+m2-tile mlx.core.float32 n=2048 aT=0 bT=0 79.105 ms 0.2172 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m2-tile mlx.core.float32 n=4096 aT=0 bT=0 629.124 ms 0.2185 TFLOP/s err 4.86e-04 64fb76d69523
+m2-tile mlx.core.float32 n=1024 aT=0 bT=1 10.359 ms 0.2073 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m2-tile mlx.core.float32 n=1024 aT=1 bT=0 10.358 ms 0.2073 TFLOP/s err 1.29e-04 d1e66e6976e5
+m2-tile mlx.core.float32 n=2048 aT=0 bT=1 80.144 ms 0.2144 TFLOP/s err 2.43e-04 0457c011a167
+== 20:34:10 m2 mm rb load 1.09 temp 72038
+m2-rb mlx.core.float32 n=256 aT=0 bT=0 0.269 ms 0.1248 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m2-rb mlx.core.float32 n=512 aT=0 bT=0 0.997 ms 0.2693 TFLOP/s err 7.08e-05 fceb1f691fc4
+m2-rb mlx.core.float32 n=1024 aT=0 bT=0 3.971 ms 0.5409 TFLOP/s err 1.75e-04 bb53c6ef5242
+m2-rb mlx.core.float32 n=2048 aT=0 bT=0 28.788 ms 0.5968 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m2-rb mlx.core.float32 n=4096 aT=0 bT=0 230.603 ms 0.596 TFLOP/s err 4.86e-04 64fb76d69523
+m2-rb mlx.core.float32 n=1024 aT=0 bT=1 3.907 ms 0.5497 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m2-rb mlx.core.float32 n=1024 aT=1 bT=0 3.895 ms 0.5514 TFLOP/s err 1.29e-04 d1e66e6976e5
+m2-rb mlx.core.float32 n=2048 aT=0 bT=1 28.825 ms 0.596 TFLOP/s err 2.43e-04 0457c011a167
+== 20:34:13 m2 mm tile load 1.48 temp 74196
+m2-tile mlx.core.float32 n=256 aT=0 bT=0 0.432 ms 0.0776 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m2-tile mlx.core.float32 n=512 aT=0 bT=0 3.032 ms 0.0885 TFLOP/s err 7.08e-05 fceb1f691fc4
+m2-tile mlx.core.float32 n=1024 aT=0 bT=0 10.212 ms 0.2103 TFLOP/s err 1.75e-04 bb53c6ef5242
+m2-tile mlx.core.float32 n=2048 aT=0 bT=0 79.242 ms 0.2168 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m2-tile mlx.core.float32 n=4096 aT=0 bT=0 629.069 ms 0.2185 TFLOP/s err 4.86e-04 64fb76d69523
+m2-tile mlx.core.float32 n=1024 aT=0 bT=1 10.359 ms 0.2073 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m2-tile mlx.core.float32 n=1024 aT=1 bT=0 10.373 ms 0.207 TFLOP/s err 1.29e-04 d1e66e6976e5
+m2-tile mlx.core.float32 n=2048 aT=0 bT=1 80.133 ms 0.2144 TFLOP/s err 2.43e-04 0457c011a167
+== 20:34:22 m2 mm rb load 1.37 temp 79488
+m2-rb mlx.core.float32 n=256 aT=0 bT=0 0.259 ms 0.1298 TFLOP/s err 2.97e-05 2f4e93d90d5f
+m2-rb mlx.core.float32 n=512 aT=0 bT=0 1.523 ms 0.1763 TFLOP/s err 7.08e-05 fceb1f691fc4
+m2-rb mlx.core.float32 n=1024 aT=0 bT=0 3.93 ms 0.5465 TFLOP/s err 1.75e-04 bb53c6ef5242
+m2-rb mlx.core.float32 n=2048 aT=0 bT=0 28.806 ms 0.5964 TFLOP/s err 2.24e-04 0d3a9b38ddb9
+m2-rb mlx.core.float32 n=4096 aT=0 bT=0 230.142 ms 0.5972 TFLOP/s err 4.86e-04 64fb76d69523
+m2-rb mlx.core.float32 n=1024 aT=0 bT=1 3.93 ms 0.5464 TFLOP/s err 1.20e-04 e5bec02d3c8b
+m2-rb mlx.core.float32 n=1024 aT=1 bT=0 3.964 ms 0.5418 TFLOP/s err 1.29e-04 d1e66e6976e5
+m2-rb mlx.core.float32 n=2048 aT=0 bT=1 28.953 ms 0.5934 TFLOP/s err 2.43e-04 0457c011a167
