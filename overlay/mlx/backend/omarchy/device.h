@@ -664,21 +664,25 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
 //
-// Per-chip default: the variant is on while key-value heads times keys is at most a per-chip budget. Op level (random bf16, one decode query, ABBA blocks) the
-// variant wins or loses by that product and by nothing else that was varied: with 1, 2, 3, 4 or 8 key-value heads the win ends at the same product on a given chip
-// (G13G wins at 1920 and 2048, loses at 2304, 2560 and 3072; G13C wins at 6144 and 8192, loses at 12288). The budget is set from the decode (model) rows, which
-// stop earlier than the op rows:
-//   G13G (Apple M1): 1536, which is 768 keys of the Qwen3.8-2B (2 key-value heads, 8 query heads). Measured decode change by context: +1.94 and +1.26 percent at
-//     512 keys (two rows, 10 of 10 pairs faster), +1.43 at 640, +1.63 at 768 (5 of 5 faster each), +0.91 unresolved at 896 (2 of 5 slower), -1.18 at 1024, -2.09 at
-//     2048, -2.75 at 4096. The Qwen3.8-9B (4 key-value heads, 16 query heads) gets the variant up to 384 keys (op level wins at 480; no decode row below 768, where it measured -0.09 percent, CI -0.26 to 0.08).
-//   G13C (Apple M1 Max): 6144, which is 3072 keys of the 2B and 1536 keys of the 9B. Measured decode change on the 16-inch (two arms interleaved step by step in one
-//     process, ABBA blocks, 95 percent bootstrap interval of the median): 2B with the ANE idle +0.66 at 256 keys, +1.43 at 480, +1.70 at 640, +1.68 at 1024, +1.52 at
+// Per-chip default: a table of the key-value head counts that were measured in decode (model) rows, each with the longest context that measured as a win. Any
+// other head count, and any longer context, keeps the old pass 1: those lengths are not measured in decode rows, so they are left off, not extrapolated.
+// Op rows (random bf16, one decode query) show why the limit depends on the head count: the variant wins or loses by key-value heads times keys. Per chip the
+// win ends at one product for 1, 2, 3, 4 and 8 key-value heads (G13G wins at 1920 and 2048, loses at 2304, 2560 and 3072; G13C wins at 6144 and 8192, loses at
+// 12288). Decode rows stop earlier than the op rows, so the table is set from them (receipts/2026-11-12-sdpa-hd256-kv-heads-budget):
+//   G13G (Apple M1): 2 key-value heads (Qwen3.8-2B), up to 768 keys (the limit stays below the longest winning rows). Decode change of the receipt's rows: at 480 keys +0.33
+//     (CI 0.13 to 0.61), +0.55 (0.14 to 1.13) and -0.43 (-1.91 to 2.21); at 640 keys +1.97 (-2.96 to 3.86); at 768 keys +0.45 (0.12 to 0.76), +0.55 (0.06 to 1.08) and +0.55
+//     (-3.29 to 4.45); at 832 keys +0.52 (0.15 to 1.13); at 900 keys +0.23, +0.70 and +0.59 (each CI above zero); at 960 keys -1.39 (-3.84 to 2.48); at 1024 keys -0.13
+//     (-0.59 to 0.29), -0.72 (-0.90 to -0.37) and -0.19 (-0.59 to 0.09); at 2048 keys -0.45 and -1.28 (each CI below zero). 4 key-value heads (Qwen3.8-9B): no default; at
+//     768 keys it measured -0.09 percent (CI -0.26 to 0.08, not significant) and the op rows lose there.
+//   G13C (Apple M1 Max): 2 key-value heads (2B) up to 3072 keys, 4 key-value heads (9B) up to 1536 keys. Decode change on the 16-inch (two arms interleaved step by
+//     step in one process, ABBA blocks, 95 percent bootstrap interval of the median): 2B with the ANE idle +1.43 at 480 keys, +1.70 at 640, +1.68 at 1024, +1.52 at
 //     2048, +1.27 at 3072 (CI 1.01 to 1.54), -1.21 at 4096 (CI -1.60 to -0.87); 9B beside the ANE +1.02 at 768, +1.05 at 1024, +0.86 at 1536 (CI 0.62 to 1.03),
-//     -0.52 at 2048 (CI -0.76 to -0.34), -1.97 at 4096 (CI -2.13 to -1.82).
+//     -0.52 at 2048 (CI -0.76 to -0.34), -1.97 at 4096 (CI -2.13 to -1.82). The 2B between 3073 and 4095 keys and the 9B between 1537 and 2047 are not measured.
+//     1, 3 and 8 key-value heads are not measured in decode rows.
 //   G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
-inline uint32_t sdpa_split_pv_wide_max_head_keys(const std::string& device_name) {
-  if (device_name.find("G13G") != std::string::npos) return 1536;
-  if (device_name.find("G13C") != std::string::npos) return 6144;
+inline uint32_t sdpa_split_pv_wide_max_keys(const std::string& device_name, uint32_t kv_heads) {
+  if (device_name.find("G13G") != std::string::npos) return kv_heads == 2u ? 768u : 0u;
+  if (device_name.find("G13C") != std::string::npos) return kv_heads == 2u ? 3072u : kv_heads == 4u ? 1536u : 0u;
   return 0;
 }
 
@@ -690,9 +694,9 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, 
   if (pv_env > 0) {
     return true;
   }
-  if (pv_env != 0) {  // unset: the per-chip budget, measured only where the decode rows above say so
-    uint64_t budget = sdpa_split_pv_wide_max_head_keys(device_name);
-    return budget != 0 && static_cast<uint64_t>(kv_heads) * k_len <= budget;
+  if (pv_env != 0) {  // unset: the per-chip table, measured only where the decode rows above say so
+    uint32_t max_keys = sdpa_split_pv_wide_max_keys(device_name, kv_heads);
+    return max_keys != 0 && k_len <= max_keys;  // 0 means unmeasured: a zero-length view must not pass on k_len <= 0
   }
   return false;  // "0"
 }

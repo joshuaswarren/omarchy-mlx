@@ -381,35 +381,49 @@ TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
 }
 
-TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip key-value-heads-times-keys budget when unset") {
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip table of measured key-value head counts when unset") {
   const std::string m1 = "Apple M1 (G13G B1)";
   const std::string m1max = "Apple M1 Max (G13C C0)";
+  const std::string m2max = "Apple M2 Max (G14C B1)";
   // Explicit flag value: selected at any part, any length and head count the split route covers.
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 9000, m1, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, "", 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 8, 1, 9000, m1max, 0, 8192, 256));
-  // Unset: the per-chip budget of key-value heads times keys. G13G 1536 (the Qwen3.8-2B, 2 key-value heads, keeps its merged limit of 768 keys).
+  // Unset, G13G: 2 key-value heads (the Qwen3.8-2B) up to 768 keys; every other head count is unmeasured and stays off.
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m1, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 768, m1, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 769, m1, 0, 8192, 256));
-  // G13G with 4 key-value heads (the Qwen3.8-9B): 384 keys, the product is what counts.
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 384, m1, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 385, m1, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 768, m1, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, -1, 1536, m1, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, -1, 1537, m1, 0, 8192, 256));
-  // G13C 6144: 3072 keys at 2 key-value heads, 1536 at 4, 768 at 8.
+  for (uint32_t kv : {1u, 3u, 4u, 8u}) {
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, kv, -1, 384, m1, 0, 8192, 256));
+  }
+  // Unset, G13C: 2 key-value heads up to 3072 keys, 4 up to 1536; 1, 3 and 8 are unmeasured and stay off.
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 320, m1max, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 3072, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 3073, m1max, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1536, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1537, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 2048, m1max, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 8, -1, 768, m1max, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 8, -1, 769, m1max, 0, 8192, 256));
+  // Head counts and lengths outside the table are off, not extrapolated: 6144 and 6145 keys at 1 key-value head, 3 and 8 heads at lengths the op rows win.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, -1, 6145, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, -1, 6144, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 3, -1, 2048, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 8, -1, 768, m1max, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 4096, m1max, 0, 8192, 256));  // the explicit flag still selects it
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "Apple M2 Max (G14C B1)", 0, 8192, 256));  // G14C has no width-256 default yet
+  // G14C and unknown parts have no width-256 default yet; a zero key count or zero heads must not pass on a zero limit.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m2max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "", 0, 8192, 256));
-  // The product does not wrap at 32 bits.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m2max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, "", 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 0, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256));
+  // Table entries are read through their own function.
+  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1, 2) == 768);
+  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1max, 2) == 3072);
+  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1max, 4) == 1536);
+  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m1max, 0) == 0);
+  CHECK(omarchy::sdpa_split_pv_wide_max_keys(m2max, 2) == 0);
+  // The table has no head-count-times-length product to wrap; these pin that a 32-bit wrap to 0 (0x10000 heads times 0x10000 keys) still gives the old pass 1.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x10000u, -1, 0x10000u, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x10000u, -1, 0x10001u, m1max, 0, 8192, 256));
   // "0" keeps the old pass 1 everywhere.
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, 0, 500, m1, 0, 8192, 256));
@@ -433,7 +447,11 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant meets the floa
   // At these head-width-256 group-4 shapes the flag-on arm is the wide value-phase kernel (omarchy::sdpa_split_pv_wide selects it:
   // the selector test above pins that rule for exactly this width, group and alignment), the flag-off arm stays on the old pass 1,
   // and both are gated against the float64 reference with the same bounds the width-128 value-phase case uses.
-  check_shape(8, 4, 500, 500, 0, 1.0f, false, 256);
+  check_shape(8, 2, 500, 500, 0, 1.0f, false, 256);
+  check_shape(8, 2, 1536, 1536, 0, 1.0f, false, 256);  // 2 key-value heads at the middle of the G13C range
+  check_shape(8, 2, 3072, 3072, 0, 1.0f, false, 256);  // 2 key-value heads at the G13C table limit
+  check_shape(16, 4, 1536, 1536, 0, 1.0f, false, 256); // 4 key-value heads at the G13C table limit
+  check_shape(32, 8, 768, 768, 0, 1.0f, false, 256);   // 8 key-value heads (group 4 over 32 query heads)
   check_shape(16, 4, 777, 777, 0, 1.0f, false, 256);
   check_shape(16, 4, 129, 129, 0, 1.0f, false, 256);  // a single partial block
   check_shape(16, 4, 500, 640, 0, 1.0f, false, 256);  // strided view
