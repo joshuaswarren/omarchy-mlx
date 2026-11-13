@@ -156,6 +156,13 @@ const QmmGeometry& qmm_geometry() {
   }();
   return geometry;
 }
+}  // namespace
+}  // namespace mlx::core
+
+// At mlx::core::omarchy scope with external linkage: the pre-norm
+// prologue planner (fused_chain.cpp) asks the same stock-flavor
+// question RMSNorm::eval_gpu asks before adopting a fold.
+namespace mlx::core::omarchy {
 
 bool apple_norm_2560_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
@@ -191,6 +198,11 @@ bool apple_norm_enabled(
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   return subgroup_ready && apple_norm_shape_selected(row_length, rows);
 }
+
+}  // namespace mlx::core::omarchy
+
+namespace mlx::core {
+namespace {
 
 // Keep in lockstep with the switch in shaders/elementwise.comp.
 enum ElementwiseOperation : uint32_t {
