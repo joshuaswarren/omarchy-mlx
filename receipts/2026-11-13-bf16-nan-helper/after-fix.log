@@ -1,0 +1,24 @@
+provenance: mlx-omarchy 0.32.4.dev202611131434+92f8959 mx=0.32.4.dev202611131434+92f8959 verified=mismatch harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:0aedf645b4facbff
+PASS nan_low_payload in=0x7f800001 got=0x7fc00000 want=any-nan preferred
+PASS nan_full_payload in=0x7fffffff got=0x7fc00000 want=any-nan preferred
+PASS nan_negative_full in=0xffffffff got=0x7fc00000 want=any-nan preferred
+PASS nan_negative_low in=0xff800001 got=0x7fc00000 want=any-nan preferred
+PASS nan_quiet in=0x7fc00000 got=0x7fc00000 want=any-nan preferred
+PASS nan_bf16_negative_quiet in=0xffc00000 got=0xffc00000 want=any-nan other-nan-bits
+PASS nan_bf16_signaling in=0x7f810000 got=0x7f810000 want=any-nan other-nan-bits
+PASS inf_positive in=0x7f800000 got=0x7f800000 want=0x7f800000
+PASS inf_negative in=0xff800000 got=0xff800000 want=0xff800000
+PASS zero_positive in=0x00000000 got=0x00000000 want=0x00000000
+PASS zero_negative in=0x80000000 got=0x80000000 want=0x80000000
+PASS tie_to_even_down in=0x3f808000 got=0x3f800000 want=0x3f800000
+PASS tie_to_even_up in=0x3f818000 got=0x3f820000 want=0x3f820000
+PASS just_below_tie in=0x3f807fff got=0x3f800000 want=0x3f800000
+PASS just_above_tie in=0x3f808001 got=0x3f810000 want=0x3f810000
+PASS max_finite_rounds_to_inf in=0x7f7fffff got=0x7f800000 want=0x7f800000
+PASS subnormal_tiny in=0x00000001 got=0x00000000 want=0x00000000
+PASS subnormal_tie_even in=0x00008000 got=0x00000000 want=0x00000000
+PASS subnormal_tie_odd in=0x00018000 got=0x00020000 want=0x00020000
+PASS one in=0x3f800000 got=0x3f800000 want=0x3f800000
+PASS minus_pi in=0xc0490fdb got=0xc0490000 want=0xc0490000
+SUMMARY rows=21 wrong=0
+RC=0
