@@ -362,13 +362,19 @@ class ResidentAneWorker:
                 self._die(f"expected a resident bundle report, got {line!r}")
             self._banner.append(line)
             self.bundle_loads += 1
+        # A lane-3 worker names the ABI 3 node it resolved ("device
+        # lane=3 node=... abi=3 chip=h16 ...") before the next report.
+        line = self._readline(
+            "relay-bypass ready" if self.relay_bypass else "load report")
+        if line.startswith("device "):
+            self._banner.append(line)
+            line = self._readline(
+                "relay-bypass ready" if self.relay_bypass else "load report")
         if self.relay_bypass:
-            line = self._readline("relay-bypass ready")
             if not line.startswith("relay-bypass ready"):
                 self._die(f"expected the relay-bypass ready banner, got {line!r}")
             self._banner.append(line)
         else:
-            line = self._readline("load report")
             if not line.startswith("resident loaded "):
                 self._die(f"expected the resident load report, got {line!r}")
             self._banner.append(line)
