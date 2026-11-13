@@ -1,0 +1,59 @@
+== old header (origin/main): the test body must not compile
+gate.cpp:14:51: error: invalid initialization of reference of type 'const std::string&' {aka 'const std::__cxx11::basic_string<char>&'} from expression of type 'int'
+gate.cpp:15:51: error: invalid initialization of reference of type 'const std::string&' {aka 'const std::__cxx11::basic_string<char>&'} from expression of type 'int'
+gate.cpp:16:51: error: invalid initialization of reference of type 'const std::string&' {aka 'const std::__cxx11::basic_string<char>&'} from expression of type 'int'
+== new header: all checks must pass
+checks=45 fails=0
+== mutation G13G limit 16 -> 17
+FAIL line 19: omarchy::sdpa_split_pv_wide_max_workgroups(m1) == 16
+FAIL line 27: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1, 0, 8192, 256))
+checks=45 fails=2
+== mutation G13C limit 64 -> 66
+FAIL line 20: omarchy::sdpa_split_pv_wide_max_workgroups(m1max) == 64
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+checks=45 fails=4
+== mutation G13C limit 64 -> 63
+FAIL line 20: omarchy::sdpa_split_pv_wide_max_workgroups(m1max) == 64
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+checks=45 fails=5
+== mutation block count rounded down instead of up
+FAIL line 27: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1, 0, 8192, 256))
+FAIL line 27: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+checks=45 fails=10
+== mutation 64-key blocks instead of 128
+FAIL line 26: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1, 0, 8192, 256)
+FAIL line 26: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+checks=45 fails=10
+== mutation zero guard workgroups != 0 removed
+FAIL line 39: !(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m1max, 0, 8192, 256))
+FAIL line 40: !(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256))
+FAIL line 41: !(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 0, m1, 0, 8192, 256))
+checks=45 fails=3
+== mutation 32-bit workgroup count (wraps)
+FAIL line 43: !(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1max, 0, 8192, 256))
+FAIL line 44: !(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1, 0, 8192, 256))
+checks=45 fails=2
+== mutation key-value heads ignored (keys only)
+FAIL line 31: omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256)
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 32: !(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256))
+FAIL line 40: !(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256))
+FAIL line 43: !(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1max, 0, 8192, 256))
+FAIL line 44: !(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1, 0, 8192, 256))
+checks=45 fails=11

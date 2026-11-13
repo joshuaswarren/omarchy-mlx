@@ -7,6 +7,45 @@ FUSE-DONE
 ### d1
 {"ctx": 480, "keys_max": 544, "runs_stock": [42.119, 41.946, 41.583, 41.634, 37.414, 37.154, 37.348, 41.46], "runs_variant": [41.444, 41.655, 41.395, 41.785, 41.321, 37.475, 41.218, 40.898], "digest_stock": ["9e794c81f622a433"], "digest_variant": ["9e794c81f622a433"], "engaged": false, "stock_ms_med": 41.522, "variant_ms_med": 41.358, "gain_pct": 0.39}
 FUSE-DONE
+### d128h32c512
+{'keys': 512, 'qh': 32, 'kvh': 8, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 93.67, 'variant_us_per_call': 75.99, 'gain_pct': 18.88, 'gain_ci95': (18.78, 18.98)}
+FUSE-DONE
+### d128h32c640
+{'keys': 640, 'qh': 32, 'kvh': 8, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 98.8, 'variant_us_per_call': 118.11, 'gain_pct': -19.54, 'gain_ci95': (-19.68, -19.39)}
+FUSE-DONE
+### d128h8c2048
+{'keys': 2048, 'qh': 8, 'kvh': 2, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 104.09, 'variant_us_per_call': 86.05, 'gain_pct': 17.33, 'gain_ci95': (17.2, 17.48)}
+FUSE-DONE
+### d128h8c2176
+{'keys': 2176, 'qh': 8, 'kvh': 2, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 111.61, 'variant_us_per_call': 133.27, 'gain_pct': -19.4, 'gain_ci95': (-19.49, -19.35)}
+FUSE-DONE
+### d128h8c2560
+{'keys': 2560, 'qh': 8, 'kvh': 2, 'hd': 128, 'reps_per_arm': 2500, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 110.33, 'variant_us_per_call': 129.37, 'gain_pct': -17.26, 'gain_ci95': (-17.59, -16.91)}
+FUSE-DONE
+### e2b1024
+{"ctx": 1024, "keys_max": 1040, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 59.996, "variant_ms_med": 60.142, "gain_pct": -0.24, "gain_ci95": [-1.06, 0.44]}
+REAL-CALL {"keys": 1025, "q_heads": 8, "kv_heads": 2, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.01423670229244145, "f64_err_max_variant": 0.01423670229244145, "f64_err_mean_stock": 0.0007161369890821133, "f64_err_mean_variant": 0.0007161369890821133, "bf16_half_step": 0.021453296938350238, "f64_gate_pass": true, "stock_us_per_call": 159.75, "variant_us_per_call": 172.82, "gain_pct": -8.19, "gain_ci95": [-8.61, -7.71]}
+FUSE-DONE
+### e2b2048
+{"ctx": 2048, "keys_max": 2064, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 64.269, "variant_ms_med": 64.844, "gain_pct": -0.9, "gain_ci95": [-1.13, -0.57]}
+REAL-CALL {"keys": 2049, "q_heads": 8, "kv_heads": 2, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.014564452040555231, "f64_err_max_variant": 0.014564452040555231, "f64_err_mean_stock": 0.000716395136622172, "f64_err_mean_variant": 0.000716395136622172, "bf16_half_step": 0.020225793771983518, "f64_gate_pass": true, "stock_us_per_call": 190.48, "variant_us_per_call": 273.28, "gain_pct": -43.47, "gain_ci95": [-43.82, -43.14]}
+FUSE-DONE
+### e2b640
+{"ctx": 640, "keys_max": 656, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.861, "variant_ms_med": 61.907, "gain_pct": -0.07, "gain_ci95": [-0.66, 0.82]}
+REAL-CALL {"keys": 641, "q_heads": 8, "kv_heads": 2, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.013873719099386506, "f64_err_max_variant": 0.013873719099386506, "f64_err_mean_stock": 0.000729028344435558, "f64_err_mean_variant": 0.000729028344435558, "bf16_half_step": 0.020704484555904065, "f64_gate_pass": true, "stock_us_per_call": 153.2, "variant_us_per_call": 105.33, "gain_pct": 31.25, "gain_ci95": [31.0, 31.45]}
+FUSE-DONE
+### e2b768
+{"ctx": 768, "keys_max": 784, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 64.004, "variant_ms_med": 63.583, "gain_pct": 0.66, "gain_ci95": [0.34, 1.13]}
+REAL-CALL {"keys": 769, "q_heads": 8, "kv_heads": 2, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.015504879996401932, "f64_err_max_variant": 0.015504879996401932, "f64_err_mean_stock": 0.0007292769334527944, "f64_err_mean_variant": 0.0007292769334527944, "bf16_half_step": 0.020718584740496277, "f64_gate_pass": true, "stock_us_per_call": 159.85, "variant_us_per_call": 112.59, "gain_pct": 29.57, "gain_ci95": [29.46, 29.73]}
+FUSE-DONE
+### e9b384
+{"ctx": 384, "keys_max": 392, "n_per_arm": 4, "engaged_logit_maxabs_diff": 0.125, "same_argmax": true, "stock_ms_med": 206.837, "variant_ms_med": 206.357, "gain_pct": 0.23, "gain_ci95": [-0.12, 0.68]}
+REAL-CALL {"keys": 385, "q_heads": 16, "kv_heads": 4, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.007697809119474819, "f64_err_max_variant": 0.007697809119474819, "f64_err_mean_stock": 0.0006687280878476727, "f64_err_mean_variant": 0.0006687280878476727, "bf16_half_step": 0.014753228575719812, "f64_gate_pass": true, "stock_us_per_call": 154.83, "variant_us_per_call": 107.42, "gain_pct": 30.62, "gain_ci95": [30.56, 30.75]}
+FUSE-DONE
+### e9b768
+{"ctx": 768, "keys_max": 776, "n_per_arm": 4, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 201.751, "variant_ms_med": 204.235, "gain_pct": -1.23, "gain_ci95": [-5.15, 0.73]}
+REAL-CALL {"keys": 769, "q_heads": 16, "kv_heads": 4, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.00729462097667799, "f64_err_max_variant": 0.00729462097667799, "f64_err_mean_stock": 0.0006596545575710572, "f64_err_mean_variant": 0.0006596545575710572, "bf16_half_step": 0.014575878581406852, "f64_gate_pass": true, "stock_us_per_call": 166.25, "variant_us_per_call": 189.44, "gain_pct": -13.95, "gain_ci95": [-14.56, -13.19]}
+FUSE-DONE
 ### n1024r1
 {"ctx": 1024, "keys_max": 1280, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.44, "variant_ms_med": 60.516, "gain_pct": -0.13, "gain_ci95": [-0.59, 0.29]}
 FUSE-DONE
@@ -40,6 +79,9 @@ FUSE-DONE
 ### n256r1
 {"ctx": 256, "keys_max": 512, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 61.688, "variant_ms_med": 61.456, "gain_pct": 0.38, "gain_ci95": [-1.48, 2.01]}
 FUSE-DONE
+### n384m9b
+{"ctx": 384, "keys_max": 512, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.125, "same_argmax": true, "stock_ms_med": 210.716, "variant_ms_med": 210.398, "gain_pct": 0.15, "gain_ci95": [-1.42, 1.76]}
+FUSE-DONE
 ### n480r1
 {"ctx": 480, "keys_max": 736, "n_per_arm": 128, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 62.002, "variant_ms_med": 61.798, "gain_pct": 0.33, "gain_ci95": [0.13, 0.61]}
 FUSE-DONE
@@ -49,11 +91,17 @@ FUSE-DONE
 ### n480r3
 {"ctx": 480, "keys_max": 608, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.527, "variant_ms_med": 60.786, "gain_pct": -0.43, "gain_ci95": [-1.91, 2.21]}
 FUSE-DONE
+### n512m9b
+{"ctx": 512, "keys_max": 640, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.064453125, "same_argmax": true, "stock_ms_med": 197.126, "variant_ms_med": 197.599, "gain_pct": -0.24, "gain_ci95": [-1.96, 0.09]}
+FUSE-DONE
 ### n640r1
 {"ctx": 640, "keys_max": 768, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 62.393, "variant_ms_med": 61.162, "gain_pct": 1.97, "gain_ci95": [-2.96, 3.86]}
 FUSE-DONE
 ### n768m9b2
 {"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 197.046, "variant_ms_med": 197.23, "gain_pct": -0.09, "gain_ci95": [-0.26, 0.08]}
+FUSE-DONE
+### n768q1
+{"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 37.317, "variant_ms_med": 37.082, "gain_pct": 0.63, "gain_ci95": [0.54, 0.76]}
 FUSE-DONE
 ### n768r1
 {"ctx": 768, "keys_max": 896, "n_per_arm": 64, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 60.173, "variant_ms_med": 59.904, "gain_pct": 0.45, "gain_ci95": [0.12, 0.76]}
@@ -85,6 +133,12 @@ FUSE-DONE
 ### o1024h12
 {'keys': 1024, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.9073486328125e-06, 'stock_us_per_call': 174.2, 'variant_us_per_call': 193.64, 'gain_pct': -11.16, 'gain_ci95': (-11.21, -11.12)}
 FUSE-DONE
+### o1025
+{'keys': 1025, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.1920928955078125e-07, 'stock_us_per_call': 164.06, 'variant_us_per_call': 177.25, 'gain_pct': -8.05, 'gain_ci95': (-8.08, -8.0)}
+FUSE-DONE
+### o1025h4
+{'keys': 1025, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 152.69, 'variant_us_per_call': 104.69, 'gain_pct': 31.43, 'gain_ci95': (31.37, 31.5)}
+FUSE-DONE
 ### o1280
 {'keys': 1280, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0001220703125, 'stock_us_per_call': 167.85, 'variant_us_per_call': 192.18, 'gain_pct': -14.49, 'gain_ci95': (-14.54, -14.45)}
 FUSE-DONE
@@ -97,14 +151,29 @@ FUSE-DONE
 ### o1792
 {'keys': 1792, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 184.08, 'variant_us_per_call': 207.32, 'gain_pct': -12.62, 'gain_ci95': (-12.68, -12.57)}
 FUSE-DONE
+### o1792h4
+{'keys': 1792, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 170.89, 'variant_us_per_call': 123.51, 'gain_pct': 27.73, 'gain_ci95': (27.68, 27.78)}
+FUSE-DONE
 ### o2048
 {'keys': 2048, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 178.65, 'variant_us_per_call': 204.75, 'gain_pct': -14.61, 'gain_ci95': (-15.17, -13.99)}
 FUSE-DONE
 ### o2048h4
 {'keys': 2048, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 176.45, 'variant_us_per_call': 129.36, 'gain_pct': 26.68, 'gain_ci95': (26.63, 26.72)}
 FUSE-DONE
+### o2049h4
+{'keys': 2049, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.1920928955078125e-07, 'stock_us_per_call': 177.53, 'variant_us_per_call': 189.8, 'gain_pct': -6.91, 'gain_ci95': (-6.95, -6.86)}
+FUSE-DONE
+### o2112h4
+{'keys': 2112, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 178.56, 'variant_us_per_call': 200.78, 'gain_pct': -12.45, 'gain_ci95': (-12.48, -12.4)}
+FUSE-DONE
+### o2176h4
+{'keys': 2176, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 178.0, 'variant_us_per_call': 202.71, 'gain_pct': -13.88, 'gain_ci95': (-13.94, -13.82)}
+FUSE-DONE
 ### o2560h4
-{'keys': 2560, 'reps_per_arm': 2000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 186.37, 'variant_us_per_call': 209.99, 'gain_pct': -12.67, 'gain_ci95': (-12.75, -12.61)}
+{'keys': 2560, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 173.6, 'variant_us_per_call': 198.56, 'gain_pct': -14.37, 'gain_ci95': (-14.5, -14.25)}
+FUSE-DONE
+### o320h32
+{'keys': 320, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 158.5, 'variant_us_per_call': 183.54, 'gain_pct': -15.8, 'gain_ci95': (-15.85, -15.75)}
 FUSE-DONE
 ### o4096
 {'keys': 4096, 'reps_per_arm': 150, 'engaged_op_maxabs_diff': 7.62939453125e-06, 'stock_us_per_call': 351.47, 'variant_us_per_call': 519.22, 'gain_pct': -47.73, 'gain_ci95': (-48.75, -46.98)}
@@ -118,8 +187,14 @@ FUSE-DONE
 ### o512h16
 {'keys': 512, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 155.17, 'variant_us_per_call': 108.98, 'gain_pct': 29.77, 'gain_ci95': (29.74, 29.79)}
 FUSE-DONE
+### o513h16
+{'keys': 513, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 154.18, 'variant_us_per_call': 167.48, 'gain_pct': -8.63, 'gain_ci95': (-8.72, -8.54)}
+FUSE-DONE
 ### o640h12
-{'keys': 640, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.52587890625e-05, 'stock_us_per_call': 155.61, 'variant_us_per_call': 108.67, 'gain_pct': 30.16, 'gain_ci95': (30.13, 30.2)}
+{'keys': 640, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.52587890625e-05, 'stock_us_per_call': 156.65, 'variant_us_per_call': 109.87, 'gain_pct': 29.86, 'gain_ci95': (29.82, 29.89)}
+FUSE-DONE
+### o641h12
+{'keys': 641, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 154.61, 'variant_us_per_call': 167.06, 'gain_pct': -8.05, 'gain_ci95': (-8.15, -7.96)}
 FUSE-DONE
 ### o768
 {'keys': 768, 'reps_per_arm': 200, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 156.49, 'variant_us_per_call': 109.13, 'gain_pct': 30.27, 'gain_ci95': (30.15, 30.41)}

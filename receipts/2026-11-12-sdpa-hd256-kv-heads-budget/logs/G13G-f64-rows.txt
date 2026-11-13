@@ -1,0 +1,6 @@
+### f64h16c384
+{'keys': 384, 'qh': 16, 'kvh': 4, 'hd': 256, 'half_step': 0.0013458612138433352, 'err_max': {'fused': 0.000790470743893823, 'stock': 0.000790470743893823, 'variant': 0.000790470743893823}, 'err_mean': {'fused': 9.374621006249333e-05, 'stock': 9.374622022952805e-05, 'variant': 9.374622022952805e-05}, 'arms_maxabs_diff': 0.0, 'f64_gate_pass': True}
+FUSE-DONE
+### f64h8c768
+{'keys': 768, 'qh': 8, 'kvh': 2, 'hd': 256, 'half_step': 0.0009288724077642252, 'err_max': {'fused': 0.00048747680150887374, 'stock': 0.00048747680150887374, 'variant': 0.00048747680150887374}, 'err_mean': {'fused': 6.362065156786947e-05, 'stock': 6.362062759409596e-05, 'variant': 6.362062759409596e-05}, 'arms_maxabs_diff': 0.0, 'f64_gate_pass': True}
+FUSE-DONE
