@@ -664,16 +664,22 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
 //
-// Per-chip default (width 256, decode measured with the 2B full-attention layers, receipts fusion-ab-jwm1-w7q-sdpa-pv256* on the 13-inch):
-//   G13G (Apple M1): on up to 768 keys. Measured decode change by context: +1.94 and +1.26 percent at 512 keys (two rows, 10 of 10 pairs faster),
-//     +1.43 at 640, +1.63 at 768 (5 of 5 faster each), +0.91 unresolved at 896 (2 of 5 slower), -1.18 at 1024, -2.09 at 2048, -2.75 at 4096.
-//   G13C, G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
-inline uint32_t sdpa_split_pv_wide_max_keys(const std::string& device_name) {
-  if (device_name.find("G13G") != std::string::npos) return 768;
-  return 0;
+// Per-chip default: pass 1 launches one workgroup per key-value head and 128-key block, and the variant wins while that count is at most a per-chip limit and
+// loses above it: 16 on G13G and 64 on G13C, two workgroups per GPU core (8 and 32 cores). The limit is the measured rule, not a fit: every op row (random bf16, one
+// decode query, forced flag, ABBA blocks) sorts that way at 1, 2, 3, 4 and 8 key-value heads, and it is one block wide (1 key-value head on G13G: +26.68 percent at
+// 2048 keys, 16 workgroups, then -6.91 at 2049, 17; on G13C: +22.48 at 8192 keys, 64, then -5.62 at 8193, 65). A decode step at context N attends N + 1 keys, so the
+// model's own call crosses a block boundary one token early; measured in that call: Qwen3.8-2B (2 key-value heads) on G13C +28.42 percent at 3073 keys (50
+// workgroups) and -7.06 at 4097 (66), Qwen3.8-9B (4 key-value heads) +30.99 at 1537 (52) and -7.78 at 2049 (68), on G13G the 2B +29.57 at 769 (14) and -8.19 at 1025 (18),
+// the 9B +30.62 at 385 (16) and -13.95 at 769 (28). Decode rows and the full table are in receipts/2026-11-12-sdpa-hd256-kv-heads-budget. The count assumes 128-key blocks,
+// which is what these parts run (the 64-key block route is off by default there).
+//   G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
+inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) return 16u;
+  if (device_name.find("G13C") != std::string::npos) return 64u;
+  return 0u;
 }
 
-inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_t k_len, const std::string& device_name,
+inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, int pv_env, uint32_t k_len, const std::string& device_name,
                                uint32_t v_offset, int64_t v_head_stride, int64_t v_key_stride) {
   if (!(head_dim == 256 && group == 4u && v_offset % 8u == 0u && v_head_stride % 8 == 0 && v_key_stride % 8 == 0)) {
     return false;
@@ -681,9 +687,10 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_
   if (pv_env > 0) {
     return true;
   }
-  if (pv_env != 0) {  // unset: the per-chip default, measured only where the decode boundary above says so
-    uint32_t max_keys = sdpa_split_pv_wide_max_keys(device_name);
-    return max_keys != 0 && k_len <= max_keys;
+  if (pv_env != 0) {  // unset: the per-chip workgroup limit
+    uint64_t workgroups = static_cast<uint64_t>(kv_heads) * ((static_cast<uint64_t>(k_len) + 127u) / 128u);
+    uint32_t limit = sdpa_split_pv_wide_max_workgroups(device_name);
+    return workgroups != 0 && workgroups <= limit;  // no heads or no keys never selects it; a part with limit 0 never does either
   }
   return false;  // "0"
 }

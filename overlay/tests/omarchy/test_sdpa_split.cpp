@@ -381,30 +381,54 @@ TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
 }
 
-TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip default when unset") {
+TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip workgroup limit when unset") {
   const std::string m1 = "Apple M1 (G13G B1)";
   const std::string m1max = "Apple M1 Max (G13C C0)";
-  // Explicit flag value: selected at any part, any length the split route covers.
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, 9000, m1, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, "", 0, 8192, 256));
-  // Unset: the measured per-chip default only (G13G, up to 768 keys).
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, m1, 0, 8192, 256));
-  CHECK(omarchy::sdpa_split_pv_wide(256, 4, -1, 768, m1, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 769, m1, 0, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, m1max, 0, 8192, 256));  // G13C has no width-256 default yet
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, "", 0, 8192, 256));
+  const std::string m2max = "Apple M2 Max (G14C B1)";
+  // Explicit flag value: selected at any part, any length and head count the split route covers.
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 9000, m1, 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, "", 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 8, 1, 9000, m1max, 0, 8192, 256));
+  // Unset: pass 1 launches one workgroup per key-value head and 128-key block; the variant is on while that count is at most 16 on G13G and 64 on G13C.
+  // The limit is one block wide: 128 keys are one block, 129 are two.
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1) == 16);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1max) == 64);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m2max) == 0);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups("") == 0);
+  struct Edge { uint32_t kv_heads; uint32_t last_on; };
+  // G13G (16 workgroups): 1 head 2048 keys, 2 heads 1024 (the Qwen3.8-2B), 3 heads 640, 4 heads 512 (the Qwen3.8-9B), 8 heads 256.
+  for (Edge e : {Edge{1, 2048}, Edge{2, 1024}, Edge{3, 640}, Edge{4, 512}, Edge{8, 256}}) {
+    CHECK(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1, 0, 8192, 256));
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1, 0, 8192, 256));
+  }
+  // G13C (64 workgroups): 1 head 8192 keys, 2 heads 4096 (the 2B), 3 heads 2688, 4 heads 2048 (the 9B), 8 heads 1024.
+  for (Edge e : {Edge{1, 8192}, Edge{2, 4096}, Edge{3, 2688}, Edge{4, 2048}, Edge{8, 1024}}) {
+    CHECK(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256));
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256));
+  }
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 320, m1max, 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 4097, m1max, 0, 8192, 256));  // the explicit flag still selects it past the limit
+  // G14C and unknown parts have no width-256 default yet; no heads or no keys must not pass on a count of zero.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m2max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "", 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 0, m1, 0, 8192, 256));
+  // A 32-bit product of key-value heads and blocks would wrap to 4 here (0x40000001 heads times 4 blocks is 2^32 + 4); the count is 64-bit.
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1max, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0x40000001u, -1, 512, m1, 0, 8192, 256));
   // "0" keeps the old pass 1 everywhere.
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, 500, m1, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, 0, 500, m1, 0, 8192, 256));
   // Other widths and groups keep their own routes (group 8 would not fit its partial-sum tile in shared memory).
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(128, 4, 1, 500, m1, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(128, 4, 2, 1, 500, m1, 0, 8192, 256));
   for (uint32_t group : {1u, 2u, 8u}) {
-    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, group, 1, 500, m1, 0, 8192, 256));
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, group, 2, 1, 500, m1, 0, 8192, 256));
   }
   // V alignment: each of offset, head stride and key stride alone breaks it; multiples of 4 (enough for the width-128 variant) are not enough here.
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, m1, 4, 8192, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, m1, 0, 8196, 256));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 1, 500, m1, 0, 8192, 252));
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, -1, 500, m1, 0, 8192, 252));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, m1, 4, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, m1, 0, 8196, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, m1, 0, 8192, 252));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m1, 0, 8192, 252));
 }
 
 TEST_CASE("split-K decode SDPA: the width-256 value-phase variant meets the float64 gate at group 4, and the flag-off arm keeps the old pass 1") {
@@ -415,7 +439,11 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant meets the floa
   // At these head-width-256 group-4 shapes the flag-on arm is the wide value-phase kernel (omarchy::sdpa_split_pv_wide selects it:
   // the selector test above pins that rule for exactly this width, group and alignment), the flag-off arm stays on the old pass 1,
   // and both are gated against the float64 reference with the same bounds the width-128 value-phase case uses.
-  check_shape(8, 4, 500, 500, 0, 1.0f, false, 256);
+  check_shape(8, 2, 500, 500, 0, 1.0f, false, 256);
+  check_shape(8, 2, 1536, 1536, 0, 1.0f, false, 256);  // 2 key-value heads at the middle of the G13C range
+  check_shape(8, 2, 3072, 3072, 0, 1.0f, false, 256);  // 2 key-value heads at the G13C table limit
+  check_shape(16, 4, 1536, 1536, 0, 1.0f, false, 256); // 4 key-value heads at the G13C table limit
+  check_shape(32, 8, 768, 768, 0, 1.0f, false, 256);   // 8 key-value heads (group 4 over 32 query heads)
   check_shape(16, 4, 777, 777, 0, 1.0f, false, 256);
   check_shape(16, 4, 129, 129, 0, 1.0f, false, 256);  // a single partial block
   check_shape(16, 4, 500, 640, 0, 1.0f, false, 256);  // strided view
