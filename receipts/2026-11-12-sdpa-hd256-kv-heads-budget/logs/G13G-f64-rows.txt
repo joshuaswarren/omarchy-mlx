@@ -1,6 +1,12 @@
 ### f64h16c384
 {'keys': 384, 'qh': 16, 'kvh': 4, 'hd': 256, 'half_step': 0.0013458612138433352, 'err_max': {'fused': 0.000790470743893823, 'stock': 0.000790470743893823, 'variant': 0.000790470743893823}, 'err_mean': {'fused': 9.374621006249333e-05, 'stock': 9.374622022952805e-05, 'variant': 9.374622022952805e-05}, 'arms_maxabs_diff': 0.0, 'f64_gate_pass': True}
 FUSE-DONE
+### f64h16c512
+{'keys': 512, 'qh': 16, 'kvh': 4, 'hd': 256, 'half_step': 0.0011733327590094334, 'err_max': {'fused': 0.0008090443184651797, 'stock': 0.0008090443184651797, 'variant': 0.0008090443184651797}, 'err_mean': {'fused': 7.927460114793772e-05, 'stock': 7.927459330513847e-05, 'variant': 7.927459330513847e-05}, 'arms_maxabs_diff': 0.0, 'f64_gate_pass': True}
+FUSE-DONE
+### f64h8c1024
+{'keys': 1024, 'qh': 8, 'kvh': 2, 'hd': 256, 'half_step': 0.0007803958203622902, 'err_max': {'fused': 0.0004769786232447504, 'stock': 0.0004769786232447504, 'variant': 0.0004769786232447504}, 'err_mean': {'fused': 6.024675853882447e-05, 'stock': 6.024677150624466e-05, 'variant': 6.024675853882447e-05}, 'arms_maxabs_diff': 6.103515625e-05, 'f64_gate_pass': True}
+FUSE-DONE
 ### f64h8c768
 {'keys': 768, 'qh': 8, 'kvh': 2, 'hd': 256, 'half_step': 0.0009288724077642252, 'err_max': {'fused': 0.00048747680150887374, 'stock': 0.00048747680150887374, 'variant': 0.00048747680150887374}, 'err_mean': {'fused': 6.362065156786947e-05, 'stock': 6.362062759409596e-05, 'variant': 6.362062759409596e-05}, 'arms_maxabs_diff': 0.0, 'f64_gate_pass': True}
 FUSE-DONE

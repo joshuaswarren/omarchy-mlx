@@ -16,6 +16,9 @@ FUSE-DONE
 ### d128h8c2048
 {'keys': 2048, 'qh': 8, 'kvh': 2, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 104.09, 'variant_us_per_call': 86.05, 'gain_pct': 17.33, 'gain_ci95': (17.2, 17.48)}
 FUSE-DONE
+### d128h8c2049
+{'keys': 2049, 'qh': 8, 'kvh': 2, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 3.725290298461914e-09, 'stock_us_per_call': 105.33, 'variant_us_per_call': 118.26, 'gain_pct': -12.27, 'gain_ci95': (-12.43, -12.12)}
+FUSE-DONE
 ### d128h8c2176
 {'keys': 2176, 'qh': 8, 'kvh': 2, 'hd': 128, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 111.61, 'variant_us_per_call': 133.27, 'gain_pct': -19.4, 'gain_ci95': (-19.49, -19.35)}
 FUSE-DONE
@@ -38,9 +41,17 @@ FUSE-DONE
 {"ctx": 768, "keys_max": 784, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 64.004, "variant_ms_med": 63.583, "gain_pct": 0.66, "gain_ci95": [0.34, 1.13]}
 REAL-CALL {"keys": 769, "q_heads": 8, "kv_heads": 2, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.015504879996401932, "f64_err_max_variant": 0.015504879996401932, "f64_err_mean_stock": 0.0007292769334527944, "f64_err_mean_variant": 0.0007292769334527944, "bf16_half_step": 0.020718584740496277, "f64_gate_pass": true, "stock_us_per_call": 159.85, "variant_us_per_call": 112.59, "gain_pct": 29.57, "gain_ci95": [29.46, 29.73]}
 FUSE-DONE
+### e2b896
+{"ctx": 896, "keys_max": 912, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 64.042, "variant_ms_med": 63.921, "gain_pct": 0.19, "gain_ci95": [-0.48, 0.66]}
+REAL-CALL {"keys": 897, "q_heads": 8, "kv_heads": 2, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.015149381593564826, "f64_err_max_variant": 0.015149381593564826, "f64_err_mean_stock": 0.0007403751059547989, "f64_err_mean_variant": 0.0007403751059547989, "bf16_half_step": 0.021477501074617877, "f64_gate_pass": true, "stock_us_per_call": 161.77, "variant_us_per_call": 114.67, "gain_pct": 29.12, "gain_ci95": [29.0, 29.22]}
+FUSE-DONE
 ### e9b384
 {"ctx": 384, "keys_max": 392, "n_per_arm": 4, "engaged_logit_maxabs_diff": 0.125, "same_argmax": true, "stock_ms_med": 206.837, "variant_ms_med": 206.357, "gain_pct": 0.23, "gain_ci95": [-0.12, 0.68]}
 REAL-CALL {"keys": 385, "q_heads": 16, "kv_heads": 4, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.007697809119474819, "f64_err_max_variant": 0.007697809119474819, "f64_err_mean_stock": 0.0006687280878476727, "f64_err_mean_variant": 0.0006687280878476727, "bf16_half_step": 0.014753228575719812, "f64_gate_pass": true, "stock_us_per_call": 154.83, "variant_us_per_call": 107.42, "gain_pct": 30.62, "gain_ci95": [30.56, 30.75]}
+FUSE-DONE
+### e9b512
+{"ctx": 512, "keys_max": 528, "n_per_arm": 8, "engaged_logit_maxabs_diff": 0.064453125, "same_argmax": true, "stock_ms_med": 125.415, "variant_ms_med": 127.381, "gain_pct": -1.57, "gain_ci95": [-6.44, 3.75]}
+REAL-CALL {"keys": 513, "q_heads": 16, "kv_heads": 4, "arms_maxabs_diff": 0.0, "f64_err_max_stock": 0.00695613602731493, "f64_err_max_variant": 0.00695613602731493, "f64_err_mean_stock": 0.0006682770540301845, "f64_err_mean_variant": 0.0006682770540301845, "bf16_half_step": 0.01477311657902938, "f64_gate_pass": true, "stock_us_per_call": 157.74, "variant_us_per_call": 170.61, "gain_pct": -8.16, "gain_ci95": [-8.33, -7.93]}
 FUSE-DONE
 ### e9b768
 {"ctx": 768, "keys_max": 776, "n_per_arm": 4, "engaged_logit_maxabs_diff": 0.0, "same_argmax": true, "stock_ms_med": 201.751, "variant_ms_med": 204.235, "gain_pct": -1.23, "gain_ci95": [-5.15, 0.73]}
