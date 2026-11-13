@@ -1,17 +1,24 @@
 #version 460
+#if defined(USE_F32)
+#define STORAGE_TYPE float
+#else
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#endif
 
-// Register-blocked f16 matmul: the matmul.comp contract (same operand
+// Register-blocked f16 (default) or f32 (USE_F32) matmul: the matmul.comp contract (same operand
 // addressing, batch unravel, gaps, transpose flags, alpha, and the
 // same per-output arithmetic - one float accumulator that visits k in
 // ascending order with zero padding to a multiple of 16, then alpha *
-// acc rounded once to f16) on a 64 x 64 output tile per 256-thread
+// acc rounded once to the storage type) on a 64 x 64 output tile per 256-thread
 // workgroup, each thread owning a 4 x 4 block. matmul.comp does one
 // output per thread and ran the prefill attention matmuls at
 // 0.14-0.20 TFLOP/s on the M1 (2026-09-09 profile); here every pair
 // of 4-wide shared reads feeds sixteen multiply-adds. Dispatch gate
-// (dispatch_matmul): f16, matrix_m >= 32, no bias C.
+// (dispatch_matmul): f16, matrix_m >= 32, no bias C; f32 on the same
+// shapes when the f32 direct and cooperative-matrix routes are not
+// available (a driver without VK_KHR_cooperative_matrix).
 //
 // Causal attention shortcuts, with aux_size = key length minus query
 // length and the row as the query position: flags bit 3 skips output
@@ -27,16 +34,16 @@ const uint TILE_K = 16u;
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer InputA {
-  float16_t values[];
+  STORAGE_TYPE values[];
 } input_a;
 layout(set = 0, binding = 1, std430) readonly buffer InputB {
-  float16_t values[];
+  STORAGE_TYPE values[];
 } input_b;
 layout(set = 0, binding = 2, std430) readonly buffer InputC {
-  float16_t values[];
+  STORAGE_TYPE values[];
 } input_c;
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
-  float16_t values[];
+  STORAGE_TYPE values[];
 } output_data;
 
 layout(push_constant) uniform Params {
@@ -170,7 +177,7 @@ void main() {
             uint output_index = batch_index * out_matrix +
                 row * params.matrix_n + column;
             output_data.values[params.output_offset + output_index] =
-                float16_t(params.alpha * acc[i][j]);
+                STORAGE_TYPE(params.alpha * acc[i][j]);
           }
         }
       }

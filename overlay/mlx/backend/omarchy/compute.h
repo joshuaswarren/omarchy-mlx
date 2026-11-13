@@ -1150,6 +1150,11 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatSG4BF16X32FullNLdsPadCheap,
   QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32,
   QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap,
+  // Register-blocked f32 matmul (shaders/matmul_rb.comp -DUSE_F32=1): the MatmulRbF16 tile with f32 storage, same
+  // arithmetic as MatmulF32 (one float accumulator, ascending k, zero padding to a multiple of 16), so the stored bits
+  // equal it. dispatch_matmul takes it for f32 at matrix_m >= 32 without bias when the f32 direct and cooperative-matrix
+  // routes are unavailable. Appended to keep profile kernel ids stable.
+  MatmulRbF32,
   Count,
 };
 
