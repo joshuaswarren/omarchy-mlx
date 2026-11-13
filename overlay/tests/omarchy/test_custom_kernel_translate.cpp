@@ -1350,3 +1350,124 @@ TEST_CASE("literal bfloat16_t locals on float-only buffers compile with glslc") 
       "}\n";
   CHECK(glslc_status(translate(source, 1), "literal-locals") == 0);
 }
+
+namespace {
+// Run the emitted GLSL helpers and kernel body as C++ (GLSL scalar subset)
+// and print `mismatches=N`. `declarations` defines the buffers the body names;
+// `driver` is the body of main(), calling kernel_main() per invocation.
+int run_emitted_as_cpp(
+    const std::string& glsl,
+    const std::string& driver,
+    const std::string& tag) {
+  std::string helpers;
+  std::size_t at = 0;
+  while ((at = glsl.find("_mlx_", at)) != std::string::npos) {
+    const auto begin = glsl.rfind('\n', at) + 1;
+    const auto end = glsl.find('\n', at);
+    const auto line = glsl.substr(begin, end - begin);
+    if ((line.rfind("float _mlx_", 0) == 0 || line.rfind("uint16_t _mlx_", 0) == 0)) {
+      helpers += line + "\n";
+    }
+    at = end;
+  }
+  const auto main_at = glsl.find("void main() {\n");
+  REQUIRE(main_at != std::string::npos);
+  auto body = glsl.substr(main_at + 14, glsl.rfind('}') - (main_at + 14));
+  // The grid guard (`if (gl_GlobalInvocationID.x >= 640u ...) return;`) would
+  // skip most of the 65536 invocations; the driver sizes its own grid.
+  const auto guard = body.find("if (gl_GlobalInvocationID.x >=");
+  REQUIRE(guard != std::string::npos);
+  body.erase(guard, body.find('\n', guard) - guard);
+  const std::string base = "/tmp/omarchy-translate-test-" + tag;
+  {
+    std::ofstream out(base + ".cpp");
+    out << "#include <bit>\n#include <cstdint>\n#include <cstdio>\n"
+           "using uint = uint32_t;\n"
+           "static struct { uint x, y, z; } gl_GlobalInvocationID;\n"
+           "static float uintBitsToFloat(uint v) { return std::bit_cast<float>(v); }\n"
+           "static uint floatBitsToUint(float v) { return std::bit_cast<uint>(v); }\n"
+           "static struct { uint16_t data[1 << 19]; } _b0, _b1;\n"
+           "static float _mlx_arg0[1 << 19];\n"
+           "static uint _mlx_arg1[1 << 19];\n"
+        << helpers << "static void kernel_main() {\n" << body << "\n}\n"
+        << "int main() { uint mismatches = 0;\n" << driver
+        << "\nstd::printf(\"mismatches=%u\\n\", mismatches); return mismatches != 0; }\n";
+  }
+  const std::string compile = "c++ -std=c++20 -O1 " + base + ".cpp -o " + base +
+      ".bin 2> " + base + ".err";
+  REQUIRE(std::system(compile.c_str()) == 0);
+  return std::system((base + ".bin > " + base + ".out").c_str());
+}
+} // namespace
+
+TEST_CASE("bf16 storage bits survive copy, bitcast and local round trips") {
+  // Every one of the 65536 bf16 patterns (NaN payloads and signs included)
+  // must come out bit-identical from a bf16-to-bf16 copy, from as_type<ushort>
+  // of a bf16 local, and from a bf16 local stored back.
+  const char* copy_source =
+      "[[kernel]] void glue_copy(\n"
+      "    const device bfloat16_t* in [[buffer(0)]],\n"
+      "    device bfloat16_t* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  y[c] = in[c];\n"
+      "}\n";
+  const char* local_source =
+      "[[kernel]] void glue_local(\n"
+      "    const device bfloat16_t* in [[buffer(0)]],\n"
+      "    device bfloat16_t* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t v = in[c];\n"
+      "  y[c] = v;\n"
+      "}\n";
+  const char* bitcast_source =
+      "[[kernel]] void glue_bitcast(\n"
+      "    const device bfloat16_t* in [[buffer(0)]],\n"
+      "    device uint* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t g = in[c];\n"
+      "  y[c] = as_type<ushort>(g);\n"
+      "}\n";
+  const std::string fill =
+      "for (uint p = 0; p < 65536; ++p) _b0.data[p] = uint16_t(p);\n"
+      "for (uint p = 0; p < 65536; ++p) { gl_GlobalInvocationID.x = p; kernel_main();\n";
+  CHECK(run_emitted_as_cpp(translate(copy_source, 1),
+      fill + "if (_b1.data[p] != p) ++mismatches; }", "bits-copy") == 0);
+  CHECK(run_emitted_as_cpp(translate(local_source, 1),
+      fill + "if (_b1.data[p] != p) ++mismatches; }", "bits-local") == 0);
+  CHECK(run_emitted_as_cpp(translate(bitcast_source, 1),
+      fill + "if (_mlx_arg1[p] != p) ++mismatches; }", "bits-bitcast") == 0);
+}
+
+TEST_CASE("f32 to bf16 narrowing keeps NaN a NaN and rounds everything else") {
+  // The bias-add rounding carries into the exponent for NaN payloads:
+  // 0x7f800001 became +inf and 0x7fffffff became -0. For every float with a
+  // 16-bit high half p and low half in {0, 1, 0x7fff, 0x8000, 0x8001, 0xffff}:
+  // NaN in gives NaN out; anything else equals round-to-nearest-even.
+  const char* source =
+      "[[kernel]] void glue_narrow(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device bfloat16_t* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  y[c] = in[c];\n"
+      "}\n";
+  const std::string driver = R"(
+const uint lows[6] = {0u, 1u, 0x7fffu, 0x8000u, 0x8001u, 0xffffu};
+for (uint p = 0; p < 65536; ++p) for (uint k = 0; k < 6; ++k) {
+  const uint bits = (p << 16) | lows[k];
+  const uint idx = p * 6 + k;
+  _mlx_arg0[idx] = std::bit_cast<float>(bits);
+  gl_GlobalInvocationID.x = idx; kernel_main();
+  uint hi = bits >> 16; const uint lo = bits & 0xffffu;
+  const bool nan_in = (bits & 0x7fffffffu) > 0x7f800000u;
+  const uint got = _b1.data[idx];
+  bool ok;
+  if (nan_in) ok = (got & 0x7fffu) > 0x7f80u;
+  else { if (lo > 0x8000u || (lo == 0x8000u && (hi & 1u))) hi += 1u; ok = got == hi; }
+  if (!ok) ++mismatches;
+})";
+  CHECK(run_emitted_as_cpp(translate(source, 1), driver, "narrow") == 0);
+}
