@@ -43,6 +43,7 @@ process I/O, also not arithmetic; both are accounted explicitly.
 from __future__ import annotations
 
 import argparse
+import functools
 import atexit
 import ctypes
 import hashlib
@@ -871,6 +872,15 @@ class AneIsland:
         return results
 
 
+@functools.cache
+def _coopmat_f32_8() -> bool:
+    """Whether the GPU has the f32 8x8x8 cooperative matrix the fp16 linear
+    kernel requires. Devices without VK_KHR_cooperative_matrix (Borealis on
+    G16S) take the batched fp32 matmul route, which produces the same
+    partials and the same drain."""
+    return bool(mx.device_info().get("cooperative_matrix_f32_8", 0))
+
+
 class EncoderRunner:
     def __init__(self, mil_path: Path, model_root: Path, island: AneIsland | None,
                  placed: frozenset[str] = frozenset(
@@ -1640,7 +1650,8 @@ class EncoderRunner:
             rows *= dim
         n_out = int(weight.shape[0])
         if (
-            x.dtype == mx.float16
+            _coopmat_f32_8()
+            and x.dtype == mx.float16
             and weight.dtype == mx.float16
             and 1 <= rows <= 65535 * 32
             and blocks <= 65535
