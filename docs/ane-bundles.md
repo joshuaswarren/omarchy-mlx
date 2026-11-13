@@ -259,20 +259,37 @@ bound exactly once with its direction and size. The sealed loader
 
 The lane-3 Parakeet encoder bundle `parakeet-encoder-whole-h16` is built by
 `overlay/tools/coreml/build_whole_encoder_bundle_h16.py` from the macOS
-harvest (Apple `ANECCompile` for h16g with `output_mask` removed, one fp16
-input `input_features` [3000, 128], one output `encoder_hidden` [375, 640]).
-It pins the HWX by the sha256 it measures, registers the bundle in the
-compiled cache, and `--check` runs it once through
+harvest. ANECCompile refuses the encoder as exported (its sequence-length
+arithmetic runs on int32 and bool tensors), so the harvest compiles the MIL
+that `overlay/tools/coreml/h16_encoder_mil.py` writes: the same graph with
+the mask arithmetic in fp16 on an fp16 `attention_mask` input, and
+`encoder_hidden` as the only output (the ABI 3 driver takes one output per
+program; `encoder_mask` is computed on the host). The bundle has the inputs
+of the M1/M2 whole-encoder container, fp16 `attention_mask` [3000] and fp16
+`input_features` [3000, 128], and the output `encoder_hidden` [375, 640].
+The builder pins the HWX by the sha256 it measures, registers the bundle in
+the compiled cache, and `--check` runs it once through
 `mlx-omarchy-ane-worker --device h16` against the golden `encoder_hidden`
 under the lock's numerical contract (max_abs 0.3, mean_abs 0.02,
 rel_l2 0.1).
 
-Measured: host tests only. The add-128 section bytes equal the kernel's
-KUnit fixture, the C++ builder matches `h16-sections.py` on 6710 HWX
-variants, and the schema-5 loader, the lane-3 device behind a fake driver
-and the bundle builder on a synthetic stand-in pass their suites. No lane-3
-bundle has run on H16 hardware, and no Apple-compiled Parakeet HWX for
-h16g exists yet.
+H16_LOAD reports each surface's tensor span, which can be shorter than the
+surface allocation (the mask: 6016 of 16384 bytes); the worker stages the
+allocation and hands EXEC the span.
+
+Measured on an M4 Pro (Mac16,7, ABI 3 node):
+
+- `--check`: encoder_hidden equals the golden (max_abs 0).
+- The pinned fixture through `mlx-omarchy-parakeet transcribe`: every pinned
+  check matches (mel, the lane-3 `encoder_hidden_sha256_h16`, 104 tokens,
+  frame indices, durations, transcript). The first pass takes 1.6 s
+  including the 0.9 s program load; a resident second pass 0.28 s.
+- A duration-aware input (504 valid frames): `encoder_hidden` is bit-identical
+  to the original model under CoreML on an Apple ANE, padded rows included.
+  The same original model under CoreML on the CPU, and the encoder on the
+  GPU, return NaN for such inputs: a fully masked query row's softmax is
+  NaN and spreads through the padded value rows. Lane 3 keeps the ANE's
+  behaviour.
 
 ## External reference: maderix (Inside the M4 ANE)
 

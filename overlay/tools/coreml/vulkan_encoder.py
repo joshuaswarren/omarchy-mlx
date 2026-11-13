@@ -2010,9 +2010,13 @@ class EncoderRunner:
         features = np.ascontiguousarray(features.reshape(3000, 128)).astype(
             np.float16
         )
+        # The H16 program takes the mask as fp16 (1 valid, 0 padding).
+        mask = np.asarray(inputs["attention_mask"]).reshape(3000)
+        mask = np.ascontiguousarray(mask != 0).astype(np.float16)
         results = self.island.submit_whole(
             "whole-encoder",
-            {"input_features": features.tobytes()},
+            {"attention_mask": mask.tobytes(),
+             "input_features": features.tobytes()},
             {"encoder_hidden": (self.WHOLE_HIDDEN_SHAPE, "fp16")},
         )
         self.executed += 1
