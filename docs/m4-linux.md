@@ -69,8 +69,13 @@ Then run the `mlx-lm`, `transformers` and patch lines from
 
 ## 3. Make the driver file name pass the ICD check
 
-On the M4 Pro with aurora the file is `asahi_icd.aarch64.json`, which
-already matches, and the run needed no change in this step or the next.
+On the M4 Pro with aurora the driver file already passes the check, and
+the run needed no change in this step or the next. Its name:
+
+```text
+asahi_icd.aarch64.json
+```
+
 Do the rest of this step only if your file name does not match.
 
 The backend accepts an ICD JSON only if its path contains `honeykrisp`,
