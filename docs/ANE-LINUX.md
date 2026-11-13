@@ -65,7 +65,7 @@ opens the accel node itself.
   registers an accel node that reports ABI 3 / H16 in
   `DRM_IOCTL_ANE_GET_CAPS`. The uapi header the worker builds against is
   vendored at `overlay/mlx/backend/omarchy/ane/uapi/drm/ane_accel.h`
-  (aurora 3aa52f4f).
+  (aurora-silicon/linux 172b882a62c5).
 - Programs: original Apple HWX files compiled for h16g on macOS, carried in
   schema-5 bundles (`docs/ane-bundles.md`). The worker builds the four
   H16_LOAD sections from each HWX on the host.

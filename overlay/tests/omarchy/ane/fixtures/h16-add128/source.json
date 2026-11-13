@@ -1,15 +1,15 @@
 {
   "fixture": "H16G add-128 program and its four H16_LOAD sections",
   "origin": {
-    "repository": "aurora-silicon/linux (local review tree linux-rover-168)",
-    "commit": "3aa52f4f80ad85539600a5f9f079f9386011ae9f",
+    "repository": "aurora-silicon/linux integration/aurora",
+    "commit": "d88f4e5defc8ea05baf999e0a7ef69f7a1f19fd4",
     "file": "drivers/accel/ane/ane_h16_add128_fixture.h",
     "file_sha256": "191ac244182e47fe0f4f89f146540197f899ee62de975670e84f818358d8b5cf",
     "license": "GPL-2.0-only OR MIT (used here under MIT)",
     "program": "mil-hwx-compiler tests/hardware/prepare_alu 'add 128', target H16G"
   },
   "command": "python3 overlay/tools/ane-export/h16_kernel_fixture.py --header drivers/accel/ane/ane_h16_add128_fixture.h --out-dir overlay/tests/omarchy/ane/fixtures/h16-add128",
-  "cross_check": "tools/testing/selftests/drivers/ane/h16-sections.py (sha256 479806b8c534e08ab02a96d1bdf4312f771480c5d92840a807fe07b77e078a0c) run on model.hwx writes byte-identical generic.bin, operation.bin, procedure.bin and text-properties.bin",
+  "cross_check": "tools/testing/selftests/drivers/ane/h16-sections.py at bab75787ba5574c8b34913518689b2dbb569ff74 (sha256 479806b8c534e08ab02a96d1bdf4312f771480c5d92840a807fe07b77e078a0c) run on model.hwx writes byte-identical generic.bin, operation.bin, procedure.bin and text-properties.bin",
   "files": {
     "model.hwx": {
       "bytes": 49152,
