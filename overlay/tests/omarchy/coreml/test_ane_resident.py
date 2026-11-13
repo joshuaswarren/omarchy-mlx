@@ -82,6 +82,10 @@ _FAKE_WORKER = textwrap.dedent(
     if mode == "refuse-open":
         sys.stderr.write("fake device refused to load\\n")
         sys.exit(1)
+    if mode == "lane3":
+        # A lane-3 worker names the ABI 3 node before the load report.
+        print("device lane=3 node=/dev/accel/accel0 driver=ane abi=3 chip=h16",
+              flush=True)
     print(
         "resident loaded pid=%d deadline_ms=%d iterations=1 detail="
         "resident worker loaded %d program(s) from %d bundle(s)"
@@ -255,6 +259,18 @@ class ResidentAneWorkerTest(unittest.TestCase):
         self.assertEqual(ledger.count("start"), 1)
         self.assertEqual(ledger.count("load"), 2)
         self.assertEqual(ledger.count("submit"), 6)
+
+    def test_a_lane_3_worker_names_its_node_before_the_load_report(self):
+        session = self._session(mode="lane3")
+        with session:
+            marker = b"\x51" * 8
+            results = session.submit(bundle="A", tag="L00",
+                                     inputs={"q": marker, "k": marker},
+                                     outputs=("y",))
+            self.assertEqual(results["y"], marker + marker)
+        counters = session.counters()
+        self.assertEqual(counters["worker_starts"], 1)
+        self.assertEqual(counters["device_program_loads"], 2)
 
     def _fake_chip(self, name: str = "chip"):
         """A sysfs tree whose lowest allowed CPU is an efficiency core and every other CPU a performance core."""
