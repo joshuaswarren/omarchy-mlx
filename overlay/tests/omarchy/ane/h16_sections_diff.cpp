@@ -85,6 +85,8 @@ int main(int argc, char** argv) {
       std::cout << " ids=";
       for (auto& s : out.surfaces) std::cout << (s.name ? *s.name : "None") << "=" << s.id << ",";
       if (out.scratch_id) std::cout << "scratch=" << *out.scratch_id << ",";
+      for (size_t k = 0; k < out.kernel_ids.size(); ++k)
+        std::cout << "__kern_" << k << "=" << out.kernel_ids[k] << ",";
       std::cout << "\n";
     } catch (const AneH16HwxError& e) {
       std::cout << "ERR " << e.reason << "\n";
