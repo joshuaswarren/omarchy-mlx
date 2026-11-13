@@ -660,6 +660,102 @@ TEST_CASE("register-blocked f16 matmul matches the 16x16 tile bit for bit") {
   }
 }
 
+TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u) {
+    // f32 products at m >= 32 take the direct or staged cooperative
+    // matrix there; the 64x64 f32 tile serves drivers without it.
+    skip("cooperative_matrix_f32_8 present; f32 takes the cooperative-matrix routes");
+    return;
+  }
+  Stream stream = gpu_stream();
+  // Without the cooperative matrix, f32 at matrix_m >= 32 runs the
+  // 64x64 register-blocked tile (MatmulRbF32) and a 16-row slice of A
+  // runs the 16x16 tile (MatmulF32). Both visit k in ascending order
+  // with one float accumulator and zero padding to a multiple of 16, so
+  // the stored f32 bits must agree exactly. Shapes: a k tail (1052 % 16
+  // = 12), a transposed b with an n tail, a column-major lhs, a square
+  // 256 product, and a batch of three in each.
+  struct Case {
+    int m;
+    int k;
+    int n;
+    bool a_transposed;
+    bool b_transposed;
+  };
+  auto bits = [](array x) {
+    eval(x);
+    return std::vector<uint32_t>(
+        x.data<uint32_t>(), x.data<uint32_t>() + x.size());
+  };
+  for (const Case& c :
+       {Case{40, 1052, 64, false, false}, Case{70, 64, 70, false, true},
+        Case{48, 96, 80, true, false}, Case{256, 256, 256, false, false},
+        Case{33, 17, 35, true, true}}) {
+    Shape a_shape = c.a_transposed ? Shape{3, c.k, c.m} : Shape{3, c.m, c.k};
+    Shape b_shape = c.b_transposed ? Shape{3, c.n, c.k} : Shape{3, c.k, c.n};
+    std::vector<float> av(3 * c.m * c.k);
+    std::vector<float> bv(3 * c.k * c.n);
+    for (size_t i = 0; i < av.size(); ++i) {
+      av[i] = std::sin(0.13f * static_cast<float>(i)) * 0.5f;
+    }
+    for (size_t i = 0; i < bv.size(); ++i) {
+      bv[i] = std::cos(0.29f * static_cast<float>(i)) * 0.5f;
+    }
+    array a = array(av.begin(), a_shape, float32);
+    array b = array(bv.begin(), b_shape, float32);
+    if (c.a_transposed) {
+      a = swapaxes(a, 1, 2, stream);
+    }
+    if (c.b_transposed) {
+      b = swapaxes(b, 1, 2, stream);
+    }
+    array full = matmul(a, b, stream);
+    array head = matmul(slice(a, {0, 0, 0}, {3, 16, c.k}, stream), b, stream);
+    auto full_bits = bits(full);
+    auto head_bits = bits(head);
+    size_t mismatches = 0;
+    for (int batch = 0; batch < 3; ++batch) {
+      for (int row = 0; row < 16; ++row) {
+        for (int col = 0; col < c.n; ++col) {
+          mismatches += full_bits[(batch * c.m + row) * c.n + col] !=
+              head_bits[(batch * 16 + row) * c.n + col];
+        }
+      }
+    }
+    INFO("m=" << c.m << " k=" << c.k << " n=" << c.n
+              << " aT=" << c.a_transposed << " bT=" << c.b_transposed);
+    CHECK_EQ(mismatches, 0u);
+    // Host reference over every row, so a shared wrong answer cannot
+    // pass both kernels.
+    const float* got = full.data<float>();
+    float max_err = 0.0f;
+    for (int batch = 0; batch < 3; ++batch) {
+      for (int row = 0; row < c.m; ++row) {
+        for (int col = 0; col < c.n; ++col) {
+          double sum = 0.0;
+          for (int inner = 0; inner < c.k; ++inner) {
+            float x = c.a_transposed
+                ? av[(batch * c.k + inner) * c.m + row]
+                : av[(batch * c.m + row) * c.k + inner];
+            float y = c.b_transposed ? bv[(batch * c.n + col) * c.k + inner]
+                                     : bv[(batch * c.k + inner) * c.n + col];
+            sum += static_cast<double>(x) * y;
+          }
+          max_err = std::max(
+              max_err,
+              std::abs(got[(batch * c.m + row) * c.n + col] -
+                       static_cast<float>(sum)));
+        }
+      }
+    }
+    CHECK_LT(max_err, 1e-3f);
+  }
+}
+
 TEST_CASE("direct matmul route: first matching row wins, else the shipped route") {
   using omarchy::ComputeKernel;
   using omarchy::DirectMatmulRoute;
