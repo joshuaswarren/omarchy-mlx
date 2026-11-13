@@ -9241,7 +9241,7 @@ bool dispatch_quantized_gemv_group(
     }
     const int n = w.shape(0);
     if (n <= 0 || w.shape(1) != k / 8 || scales.shape(0) != n ||
-        scales.shape(1) != k / 64 || node.size() != static_cast<size_t>(n) ||
+        scales.shape(1) != k / 64 || node.size() != static_cast<size_t>(rows) * static_cast<size_t>(n) ||
         !whole_dense(w, w.size()) || !whole_dense(scales, scales.size()) ||
         !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
         !input_ready(scales, stream) || !input_ready(biases, stream)) {
