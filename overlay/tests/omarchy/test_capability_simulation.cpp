@@ -97,7 +97,7 @@ struct GateExpectations {
   bool coopmat_claim;
   bool subgroup32_arithmetic; // qmm vec subgroup gate
   bool bf16_gemv_gate;        // subgroup32 + SHUFFLE_RELATIVE
-  bool sdpa_native_gate;      // coopmat+32+wg>=1024+smem>=21504+ops
+  bool sdpa_native_gate;      // 32+wg>=1024+smem>=21504+ops (no coopmat)
 };
 
 GateExpectations expectations() {
@@ -113,7 +113,7 @@ GateExpectations expectations() {
   e.bf16_gemv_gate =
       c.subgroup_size == 32u &&
       (c.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
-  e.sdpa_native_gate = e.coopmat_claim &&
+  e.sdpa_native_gate = c.subgroup_size == 32u &&
       c.max_compute_work_group_invocations >= 1024u &&
       c.max_compute_work_group_size[0] >= 1024u &&
       c.max_compute_shared_memory_size >= (32u * 32u + 2u * 128u + 128u * 32u) *
@@ -269,15 +269,30 @@ bool coopmat_backed() {
   return hw().cooperative_matrix_f32_8;
 }
 
+// True when the runtime hardware itself meets the fused decode SDPA gate
+// (subgroup32, 1024-lane workgroup, shared stream, basic+arithmetic+shuffle).
+bool sdpa_native_backed() {
+  constexpr VkSubgroupFeatureFlags kDecodeOps =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
+  const auto& c = hw();
+  return c.subgroup_size == 32u &&
+      c.max_compute_work_group_invocations >= 1024u &&
+      c.max_compute_work_group_size[0] >= 1024u &&
+      c.max_compute_shared_memory_size >= (32u * 32u + 2u * 128u + 128u * 32u) *
+              sizeof(float) &&
+      (c.subgroup_operations & kDecodeOps) == kDecodeOps;
+}
+
 void expect_simulated_refusal(
     const std::string& message,
-    const char* kernel) {
+    const char* kernel,
+    const char* axis = "cooperative_matrix_fp32_8x8x8") {
   INFO("refusal message: ", message);
   REQUIRE(message.find("capability simulation") != std::string::npos);
   REQUIRE(message.find(g_profile) != std::string::npos);
   REQUIRE(message.find(kernel) != std::string::npos);
-  REQUIRE(message.find("cooperative_matrix_fp32_8x8x8") !=
-      std::string::npos);
+  REQUIRE(message.find(axis) != std::string::npos);
 }
 
 } // namespace
@@ -800,11 +815,12 @@ TEST_CASE("sdpa decode routes per the profile") {
       q, k, v, 1.0f / std::sqrt(float(width)), "", {}, std::nullopt, false,
       stream);
   std::string error = evaluation_error(output);
-  if (e.sdpa_native_gate && !coopmat_backed()) {
+  if (e.sdpa_native_gate && !sdpa_native_backed()) {
     unsetenv("MLX_OMARCHY_SDPA_DECODE_NATIVE");
     std::cout << "[capsim sdpa] profile=" << g_profile
               << " -> named refusal\n";
-    expect_simulated_refusal(error, "SdpaDecodeNativeF16");
+    expect_simulated_refusal(
+        error, "SdpaDecodeNativeF16", "subgroup32_basic_arithmetic_shuffle");
     return;
   }
   REQUIRE(error.empty());
@@ -815,7 +831,7 @@ TEST_CASE("sdpa decode routes per the profile") {
   std::cout << "[capsim sdpa] profile=" << g_profile << " -> "
             << (e.sdpa_native_gate ? "SdpaDecodeNativeF16"
                                    : "composed f16 SDPA")
-            << " (backed=" << coopmat_backed() << ")\n";
+            << " (backed=" << sdpa_native_backed() << ")\n";
 }
 
 // The composition-exact bf16 decode SDPA arm (sdpa_decode_native.comp
@@ -833,6 +849,16 @@ TEST_CASE("bf16 decode sdpa arm routes per the workgroup and shared-memory gate"
   }
   Stream stream = gpu_stream();
   const auto& c = caps();
+  if (expectations().coopmat_claim && !coopmat_backed()) {
+    // The composition this case compares against runs its score matmuls on
+    // the cooperative matrix the profile claims; without it in the runtime
+    // hardware that arm refuses by contract (the named refusals above), so
+    // the bit comparison has no second side on this device.
+    std::cout << "[capsim bf16-sdpa] profile=" << g_profile
+              << " claims a cooperative matrix the hardware lacks; the"
+              << " composed comparison arm refuses by contract\n";
+    return;
+  }
   constexpr int width = 128;
   const size_t shared_needed = (width + 7168 + 256) * sizeof(float);
   const bool arm_ready = c.max_compute_work_group_invocations >= 256u &&
