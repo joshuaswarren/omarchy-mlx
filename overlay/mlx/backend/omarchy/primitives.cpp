@@ -35,6 +35,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/fused_chain.h"
+#include "mlx/backend/omarchy/tail_contract.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
 #include "mlx/distributed/primitives.h"
 #include "mlx/fast_primitives.h"
@@ -9263,12 +9264,8 @@ bool dispatch_quantized_gemv_group(
     }
     const array& sum = tail->sum;
     const array& weight = tail->weight;
-    // The sum is this dispatch's own epilogue output: it has no buffer
-    // yet (member.epilogue->set_data below allocates it), so the
-    // whole_dense data-pointer contract cannot apply — validate it
-    // statically (dtype here, size in the tail width block below).
-    if (sum.dtype() != dtype ||
-        weight.dtype() != dtype || !whole_dense(weight, weight.size()) ||
+    if (!norm_tail_static_contract(
+            sum, weight, dtype, tail->x.shape(-1)) ||
         !input_ready(weight, stream) ||
         !float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
         x.ndim() < 2 || x.shape(-2) != 1 ||

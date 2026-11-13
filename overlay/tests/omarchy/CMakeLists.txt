@@ -771,3 +771,18 @@ set_tests_properties(omarchy_exl3_decode_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                      TIMEOUT 600)
+
+add_executable(omarchy_tail_contract_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_tail_contract.cpp)
+target_link_libraries(omarchy_tail_contract_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_tail_contract_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_tail_contract_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_tail_contract_tests)
+add_test(NAME omarchy_tail_contract_tests COMMAND omarchy_tail_contract_tests)
+set_tests_properties(omarchy_tail_contract_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 300)
