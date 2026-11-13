@@ -287,7 +287,8 @@ needs is pinned and present. There is no CPU or GPU-only encoder fallback:
   never execute);
 * `MLX_OMARCHY_ANE_DEVICE=off` is set (explicit kill switch), or the host
   lacks the ANE: no `/dev/accel/accel0` character device (`MLX_OMARCHY_ACCEL_DEV`
-  relocates it), or the `ane` module is not loaded;
+  relocates it), or no `ane` or chip-specific `ane_*` module is loaded under
+  `/sys/module`;
 * the reference cache does not verify against the lock (run `download`);
 * the audio decodes to zero samples, or the encoder mask's valid frames do
   not form a prefix (a mask with holes is a contract break, never a decode
