@@ -11,8 +11,12 @@ Usage (repo root): python3 -m tools.kernel_recheck.bf16_numeric
 Exit 0 when every row passes, 1 otherwise.
 """
 import sys
+from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import mlx_provenance  # noqa: E402
 
 from . import defs
 
@@ -48,6 +52,9 @@ SOURCE = """
 def main():
     import mlx.core as mx
 
+    # verified=mismatch is expected for a libmlx rebuilt from source and swapped in;
+    # the printed sha-256 prefixes identify the binary that produced the rows.
+    print(mlx_provenance.provenance_line(mlx_provenance.installed_provenance()))
     bits = np.array([b for _, b in BITS], dtype=np.uint32)
     x = bits.view(np.float32)
     kernel = mx.fast.metal_kernel(
