@@ -785,6 +785,14 @@ enum class ComputeKernel : uint16_t {
   // deleted. bf16 + subgroup only, row widths 2048/2560. Append-only
   // profile id.
   QmmVecQ4MultiNormBF16,
+  // Decode GEMV tail fold: the single-member epilogue group whose Add
+  // sum is the next RMSNorm's input recomputes that norm in its LAST
+  // workgroup (atomic ticket + device-scope acquire over the stored
+  // sum bits) and writes the normalized row whole, deleting the stock
+  // gx:1 norm dispatch without per-workgroup prologue cost. The dots
+  // and their x are exactly stock. bf16 + subgroup only, sum widths
+  // 2048/2560. Append-only profile id.
+  QmmVecQ4MultiTailBF16,
   // Attn128 decode SDPA widths: the composition-exact bf16 arm at every
   // multiple of 32 up to 256 (same shader source, -DSDPA_DIM=N; every f32
   // op and its order matches the composed path, so each width is

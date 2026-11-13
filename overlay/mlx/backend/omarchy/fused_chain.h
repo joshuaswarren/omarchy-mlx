@@ -179,6 +179,25 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// Norm tail fold: the group's single member carries the Add epilogue
+// whose sum row is RMSNorm(in, weight, eps)'s input — the residual sum
+// the stock path materializes in this same dispatch — and |x| is that
+// deleted RMSNorm's output. The dispatch's LAST workgroup recomputes
+// the norm over the stored sum bits (the exact fast_norm_apple.comp
+// arithmetic the stock path dispatches for these shapes) and writes
+// the normalized row whole, so every downstream consumer — the next
+// GEMV group's stock kernel included — reads the stock RMSNorm output
+// bits, and the stock norm dispatch and its barrier disappear. Unlike
+// the prologue folds there is no per-workgroup prologue cost: the dots
+// run the stock code over the stock x, and only one workgroup does the
+// extra row pass.
+struct TailPlan {
+  array sum;
+  array weight;
+  array x;
+  float eps;
+};
+
 // Pre-norm prologue fold: the group's shared x is the output of
 // x = RMSNorm(in, weight, eps) whose every tape reader is a member of
 // the group (q, k, v or gate, up). |in| and |weight| are the norm's
@@ -217,7 +236,8 @@ bool dispatch_quantized_gemv_group(
     array* swiglu_out,
     const Stream& stream,
     OutgatePlan* outgate = nullptr,
-    NormPlan* norm = nullptr);
+    NormPlan* norm = nullptr,
+    TailPlan* tail = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -264,6 +284,11 @@ class Device;
 // on every part. Reads the environment on every call and caches nothing,
 // so each caller decides for its own device.
 bool fused_route_enabled(const char* variable, const std::string& device_name);
+
+// MLX_OMARCHY_FUSED_NORM_TAIL gates the norm tail fold (default off:
+// unset or 0 keeps every RMSNorm dispatch exactly as stock). The env
+// is read live so tests can flip it between phases.
+bool norm_tail_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV=0 keeps every QuantizedMatmul, dense BF16
 // decode GEMV group, and Add on the per-node path (the

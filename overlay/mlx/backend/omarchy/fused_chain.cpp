@@ -742,6 +742,11 @@ struct GemvGroup {
   // member. The one dispatch reads in and weight directly and rebuilds
   // the normalized row per workgroup with the stock apple reduction.
   std::optional<NormPlan> norm;
+  // Norm tail fold: set at plan time when the group's single member's
+  // Add epilogue sum is exactly a scanned RMSNorm's input. The
+  // dispatch's last workgroup recomputes that norm over the stored sum
+  // bits and writes the normalized row whole; the dots stay stock.
+  std::optional<TailPlan> tail;
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1295,7 +1300,37 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     claimed.insert(sigmoid->id());
     claimed.insert(tail.id());
   }
-  // Pre-norm prologue plans: tail = RMSNorm(in, weight, eps) whose every
+  // Norm tail plans: RMSNorm nodes whose input row is the residual Add
+  // that rides a one-member GEMV group's epilogue (the o-projection and
+  // down-projection sums). Keyed by the Add output's id; the tail
+  // attach below finds them once the groups form. The deleted norm's
+  // id goes into `claimed` immediately so the prologue scan below never
+  // proposes a prologue fold for the same norm — the tail fold deletes
+  // the norm instead, and the two folds are exclusive.
+  std::unordered_map<std::uintptr_t, TailPlan> tail_plans;
+  const bool norm_tail_on = norm_tail_enabled();
+  if (norm_tail_on) {
+    for (const auto& tail : tape) {
+      if (!is_op(&tail, typeid(fast::RMSNorm)) ||
+          tail.inputs().size() != 2 || claimed.count(tail.id()) ||
+          tail.dtype() != bfloat16 || tail.ndim() < 2 ||
+          tail.shape(-2) != 1) {
+        continue;
+      }
+      tail_plans.emplace(
+          tail.inputs()[0].id(),
+          TailPlan{
+              tail.inputs()[0],
+              tail.inputs()[1],
+              tail,
+              static_cast<const fast::RMSNorm&>(tail.primitive())
+                  .state()
+                  .second});
+      claimed.insert(tail.id());
+    }
+  }
+  // Pre-norm prologue fold: x = rms_norm(in, weight, eps) whose every
+  // tape
   // reader the group attach below verifies is a member of one decode
   // GEMV group (q, k, v or gate, up). The group dispatch rebuilds the
   // normalized row per workgroup with the apple-reduction arithmetic and
@@ -1501,6 +1536,70 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
       }
       state->gemv_groups.push_back(std::move(group));
+    }
+  }
+  // Norm tail attach. A one-member group whose Add epilogue's sum is
+  // exactly a scanned RMSNorm's input folds that norm into this
+  // dispatch's tail: the last workgroup recomputes the apple reduction
+  // over the stored sum bits and writes the normalized row whole, so
+  // any consumer — the next group's stock kernel included — sees the
+  // stock RMSNorm output bits and the stock norm dispatch disappears.
+  // No reader restriction applies to the norm output (the row is
+  // written whole, unlike the prologue folds), but the group must be
+  // the plain single-member epilogue form (no outgate or norm
+  // prologue, no KV window) and the stock path must serve the deleted
+  // norm with the apple kernel (apple_norm_enabled — the same
+  // stock-flavor contract the prologue attach enforces: bf16, single
+  // row, widths 2048/2560, per-row weight). Everything the dispatch
+  // will check is decided here: after adoption the deleted norm never
+  // evaluates, so a dispatch-time refusal would leave its output
+  // unmaterialized (same contract as the prologue attach).
+  if (norm_tail_on && !tail_plans.empty()) {
+    for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+      auto& group = state->gemv_groups[gi];
+      if (group.outgate || group.norm || group.members.size() != 1 ||
+          !group.members[0].epilogue || group.members[0].sum_window) {
+        continue;
+      }
+      auto plan_it = tail_plans.find(group.members[0].epilogue->id());
+      if (plan_it == tail_plans.end()) {
+        continue;
+      }
+      TailPlan plan = std::move(plan_it->second);
+      tail_plans.erase(plan_it);
+      auto weight_node = lookup(plan.weight);
+      auto norm_node = lookup(plan.x);
+      const Stream& member_stream =
+          group.members[0].node.primitive().stream();
+      bool streams_ok =
+          (!weight_node ||
+           weight_node->primitive().stream() == member_stream) &&
+          (!norm_node ||
+           norm_node->primitive().stream() == member_stream);
+      if (!streams_ok) {
+        continue;
+      }
+      auto& encoder = get_command_encoder(member_stream);
+      const auto& caps = encoder.device().capabilities();
+      bool subgroup_ready = caps.subgroup_size == 32u &&
+          (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+              0;
+      size_t width = plan.x.shape(-1);
+      if (plan.x.dtype() != bfloat16 || !subgroup_ready ||
+          encoder.device().compute().binding_limit() <
+              kQmmVecMultiBindings + 3 ||
+          plan.x.ndim() < 2 || plan.x.shape(-2) != 1 ||
+          (width != 2048 && width != 2560) ||
+          plan.weight.dtype() != plan.x.dtype() ||
+          plan.weight.size() != width ||
+          plan.sum.dtype() != plan.x.dtype() ||
+          plan.sum.size() != width ||
+          !apple_norm_enabled(encoder.device(), width, 1)) {
+        continue;
+      }
+      group.tail = std::move(plan);
+      state->roles.emplace(
+          group.tail->x.id(), EagerRole{gi, EagerStep::skip});
     }
   }
   // Out-gate attach validation. A group carrying a plan keeps it only
@@ -2044,6 +2143,13 @@ bool norm_qmv_enabled() {
   return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+// MLX_OMARCHY_FUSED_NORM_TAIL: same live-read, default-off contract as
+// norm_qmv_enabled above, for the tail fold.
+bool norm_tail_enabled() {
+  const char* env = std::getenv("MLX_OMARCHY_FUSED_NORM_TAIL");
+  return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
 bool kv_direct_enabled() {
   return fused_chain_enabled() &&
       (std::getenv("MLX_OMARCHY_KV_DIRECT") == nullptr ||
@@ -2256,11 +2362,12 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
                         stream,
                         group.outgate ? &*group.outgate : nullptr,
-                        group.norm ? &*group.norm : nullptr)
+                        group.norm ? &*group.norm : nullptr,
+                        group.tail ? &*group.tail : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed &&
-          (group.outgate || group.norm)) {
+          (group.outgate || group.norm || group.tail)) {
         // The deleted sigmoid, multiply, or RMSNorm never ran and
         // cannot be replayed here; a refusal after adoption is a
         // planner bug, not a fallback path (plan-time validation

@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string_view>
 #include <initializer_list>
 #include <optional>
@@ -9126,12 +9127,34 @@ const char* qmm_geometry_name() {
   return qmm_geometry().name;
 }
 
+// The tail fold's ticket word: one persistent u32 per (device, stream),
+// allocated dirty, zeroed once with the ClearU32 kernel, and reset to 0
+// by every dispatch's last workgroup — so the same-stream dispatch
+// order the encoder's inter-dispatch barriers provide keeps the word
+// at 0 when each tail dispatch starts. The arrays are retained for the
+// process lifetime (four bytes per stream); a stream that never folds
+// a tail never allocates one.
+array& tail_ticket_word(const Device& device, const Stream& stream) {
+  static std::map<std::pair<const void*, int>, array> counters;
+  auto key =
+      std::make_pair(static_cast<const void*>(&device), stream.index);
+  auto it = counters.find(key);
+  if (it == counters.end()) {
+    array counter = array(Shape{1}, uint32, nullptr, {});
+    counter.set_data(allocate_omarchy(counter.nbytes()));
+    dispatch_clear_u32(counter, 0u, get_command_encoder(stream));
+    it = counters.emplace(std::move(key), std::move(counter)).first;
+  }
+  return it->second;
+}
+
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
     OutgatePlan* outgate,
-    NormPlan* norm) {
+    NormPlan* norm,
+    TailPlan* tail) {
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -9224,6 +9247,32 @@ bool dispatch_quantized_gemv_group(
         x.ndim() < 2 || x.shape(-2) != 1) {
       return false;
     }
+  } else if (tail != nullptr) {
+    // The tail fold leaves the dots and their x exactly stock (x keeps
+    // its usual readiness checks); it deletes the RMSNorm whose INPUT
+    // is this dispatch's Add-epilogue sum, so the sum gets no readiness
+    // check — this dispatch produces it. The kernel's tail reduction
+    // reproduces fast_norm_apple.comp, so the plan fires only on the
+    // shapes that kernel serves on the stock path: bf16, subgroup,
+    // single row, widths 2048/2560, per-row weight.
+    if (members.size() != 1 || members[0].sum_window ||
+        encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3 ||
+        dtype != bfloat16 || !subgroup_ready) {
+      return false;
+    }
+    const array& sum = tail->sum;
+    const array& weight = tail->weight;
+    if (!whole_dense(sum, sum.size()) ||
+        !whole_dense(weight, weight.size()) || sum.dtype() != dtype ||
+        weight.dtype() != dtype || !input_ready(weight, stream) ||
+        !float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
+        x.ndim() < 2 || x.shape(-2) != 1 ||
+        !input_ready(x, stream) || x.data_shared_ptr() == nullptr ||
+        !x.flags().row_contiguous ||
+        x.offset() % x.itemsize() != 0) {
+      return false;
+    }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
       x.ndim() < 2 || (!token_route && x.shape(-2) != 1) ||
       !input_ready(x, stream) ||
@@ -9231,7 +9280,8 @@ bool dispatch_quantized_gemv_group(
       x.offset() % x.itemsize() != 0) {
     return false;
   }
-  if (token_route && (outgate != nullptr || norm != nullptr)) {
+  if (token_route && (outgate != nullptr || norm != nullptr ||
+                      tail != nullptr)) {
     return false;
   }
   const int k = x.shape(-1);
@@ -9249,6 +9299,20 @@ bool dispatch_quantized_gemv_group(
       return false;
     }
   }
+  if (tail != nullptr) {
+    // The tail reduction runs over the SUM row (the member's output
+    // length n), not over k; the same stock-flavor width contract
+    // applies to it. The host derives the ticket total from n, so the
+    // row must be an exact multiple of the 256-thread stock mapping.
+    const auto width = tail->x.shape(-1);
+    if (members[0].node.size() != static_cast<size_t>(width) ||
+        (width != 2048 && width != 2560) ||
+        tail->weight.size() != static_cast<size_t>(width) ||
+        tail->sum.size() != static_cast<size_t>(width) ||
+        width % 256u != 0) {
+      return false;
+    }
+  }
   // The multi-token kernel has no producer-direct KV window contract.
   if (token_route) {
     for (auto& member : members) {
@@ -9263,7 +9327,7 @@ bool dispatch_quantized_gemv_group(
   // to the bf16 subgroup single-token multi kernel only.
   const uint32_t group_columns =
       (!token_route && outgate == nullptr && norm == nullptr &&
-       dtype == bfloat16 && subgroup_ready)
+       tail == nullptr && dtype == bfloat16 && subgroup_ready)
       ? qmm_geometry().columns
       : 8u;
   for (size_t i = 0; i < members.size(); ++i) {
@@ -9413,6 +9477,12 @@ bool dispatch_quantized_gemv_group(
     // workgroup stores it so retained references stay valid.
     norm->x.set_data(allocator().malloc(norm->x.nbytes()));
   }
+  if (tail != nullptr) {
+    // The deleted RMSNorm's output materializes in the tail: the last
+    // workgroup writes the whole normalized row, so retained
+    // references — and the next group's stock kernel — stay valid.
+    tail->x.set_data(allocator().malloc(tail->x.nbytes()));
+  }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
     // so their retained references stay valid (their only readers
@@ -9512,7 +9582,22 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(norm->weight);
     bindings[kQmmVecMultiBindings + 2] = binding(norm->x);
   }
-  auto kernel = norm != nullptr
+  if (tail != nullptr) {
+    // flags bit 20, the norm tail fold; alpha carries the deleted
+    // norm's eps for the tail reduction's rsqrt(mean + eps). Binding 27
+    // is the persistent ticket word (zeroed once at allocation, reset
+    // by each dispatch's last workgroup); the sum row itself is read
+    // through member 0's existing sum binding.
+    params.flags |= 1048576u;
+    params.alpha = tail->eps;
+    bindings[kQmmVecMultiBindings] = binding(tail->x);
+    bindings[kQmmVecMultiBindings + 1] = binding(tail->weight);
+    bindings[kQmmVecMultiBindings + 2] =
+        binding(tail_ticket_word(encoder.device(), stream));
+  }
+  auto kernel = tail != nullptr
+      ? ComputeKernel::QmmVecQ4MultiTailBF16
+      : norm != nullptr
       ? ComputeKernel::QmmVecQ4MultiNormBF16
       : outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16

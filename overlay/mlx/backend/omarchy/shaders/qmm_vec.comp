@@ -96,6 +96,13 @@ uint16_t bf16_store(float value) {
      defined(QMM_VEC_TOKENS))
 #error "QMM_VEC_NORM builds on the bf16 subgroup multi column"
 #endif
+#if defined(QMM_VEC_NORM_TAIL) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI) || \
+     !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_NORM) || \
+     defined(QMM_VEC_OUTGATE) || defined(QMM_VEC_TOKENS) || \
+     defined(QMM_VEC_GREEDY) || defined(QMM_VEC_BATCH))
+#error "QMM_VEC_NORM_TAIL builds on the bf16 subgroup multi column"
+#endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
 // owning ROWS_PER_SLOT consecutive output rows (native qmv_fast keeps four
@@ -125,7 +132,8 @@ uint16_t bf16_store(float value) {
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
 #endif
-#if defined(QMM_VEC_NORM) && SLOTS_PER_GROUP != 4
+#if (defined(QMM_VEC_NORM) || defined(QMM_VEC_NORM_TAIL)) && \
+    SLOTS_PER_GROUP != 4
 #error "QMM_VEC_NORM assumes the 4-slot 128-thread workgroup"
 #endif
 // The x fetch inside Q4_WORD / Q4_ROWS: the out-gate prologue variant
@@ -172,6 +180,11 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // store under the direct-KV flag (bit 12+i), which the host may aim at
 // one token row of a KV cache copy: out_strides[i] base element,
 // in_strides[i] the row gap, matrix_m the head dim.
+#ifdef QMM_VEC_NORM_TAIL
+#define QMM_SUM_QUAL
+#else
+#define QMM_SUM_QUAL writeonly
+#endif
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   uint values[]; \
@@ -188,13 +201,38 @@ layout(set = 0, binding = B + 3, std430) writeonly buffer Output##I { \
 layout(set = 0, binding = B + 4, std430) readonly buffer Addend##I { \
   STORAGE_TYPE values[]; \
 } addend##I; \
-layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
+layout(set = 0, binding = B + 5, std430) QMM_SUM_QUAL buffer Sum##I { \
   STORAGE_TYPE values[]; \
 } sum##I;
 QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#if defined(QMM_VEC_NORM_TAIL)
+// Tail fold (flags bit 20): this group's single member carries the Add
+// epilogue whose sum row is the layer's next RMSNorm input, which the
+// stock path computes in its own gx:1 apple-reduction dispatch. Here
+// the LAST workgroup to finish (atomic ticket against binding 27)
+// recomputes that norm over the stored sum bits and writes the
+// normalized row to binding 25, so every downstream consumer reads the
+// exact stock RMSNorm output bits and the stock norm dispatch and its
+// barrier disappear. Binding 26 is the per-row weight. The ticket word
+// is zeroed by the host once at allocation and reset to 0 by every
+// dispatch's last workgroup, so same-stream dispatch order (the
+// encoder's inter-dispatch barriers) keeps the contract across calls.
+layout(set = 0, binding = 25, std430) writeonly buffer TailOut {
+  uvec4 values[];
+} tail_out;
+layout(set = 0, binding = 26, std430) readonly buffer TailWeight {
+  STORAGE_TYPE values[];
+} tail_weight;
+layout(set = 0, binding = 27, std430) coherent buffer TailCounter {
+  uint values[];
+} tail_counter;
+shared float tail_partials[8u];
+shared uint tail_ticket;
+float tail_factor = 1.0;
+#endif
 #if defined(QMM_VEC_OUTGATE)
 // Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
 // exact arithmetic and rounding of the two elementwise kernels the
@@ -404,6 +442,62 @@ uvec4 norm_quad(uint quad_index) {
     norm_out.values[quad_index] = packed;
   }
   return packed;
+}
+#endif
+
+#if defined(QMM_VEC_NORM_TAIL)
+// The tail reduction over the stored sum row (params.shape[0] bf16
+// values at element 0): the apple-reduction mapping over 256 stock
+// threads — per-thread contiguous n_reads = N/256 block sums (precise,
+// no FMA), two hardware 32-lane subgroupAdd stages (this workgroup's
+// four subgroups hold stock threads 64*sub + lane and 64*sub + 32 +
+// lane, so each hardware reduction sees the same 32 operand values in
+// the same lane order and returns the same bits), the 8-partial second
+// stage, then inversesqrt(mean + eps) with eps in params.alpha.
+// Bit-exact with the stock gx:1 norm kernel the tail deletes.
+void tail_reduce() {
+  uint thread = gl_LocalInvocationID.x;
+  uint sub_id = thread / 32u;
+  uint lane = thread % 32u;
+  uint n_reads = params.shape[0] / 256u;
+  uint v0 = 64u * sub_id + lane;
+  uint v1 = v0 + 32u;
+  precise float sq0 = 0.0;
+  precise float sq1 = 0.0;
+  for (uint i = 0u; i < n_reads; ++i) {
+    float a = LOAD_VALUE(sum0.values[v0 * n_reads + i]);
+    sq0 += a * a;
+    float b = LOAD_VALUE(sum0.values[v1 * n_reads + i]);
+    sq1 += b * b;
+  }
+  // The subgroup operations must execute for the whole subgroup: both
+  // hardware reductions run on every lane, and only the lane-0 stores
+  // are divergent.
+  float part0 = subgroupAdd(sq0);
+  float part1 = subgroupAdd(sq1);
+  if (lane == 0u) {
+    tail_partials[2u * sub_id] = part0;
+    tail_partials[2u * sub_id + 1u] = part1;
+  }
+  barrier();
+  if (sub_id == 0u) {
+    float v = (lane < 8u) ? tail_partials[lane] : 0.0;
+    float total = subgroupAdd(v);
+    if (lane == 0u) {
+      tail_partials[0] = total;
+    }
+  }
+  barrier();
+  float mean_square = tail_partials[0] / float(params.shape[0]);
+  tail_factor = inversesqrt(mean_square + params.alpha);
+}
+
+// Per element r = bf16(x * (norm * weight)) with the apple
+// association, x the stored sum bit pattern.
+uint16_t tail_half(uint index) {
+  precise float nw = tail_factor * LOAD_VALUE(tail_weight.values[index]);
+  precise float result = LOAD_VALUE(sum0.values[index]) * nw;
+  return STORE_VALUE(result);
 }
 #endif
 
@@ -1239,6 +1333,37 @@ void main() {
       }
     }
   }
+#if defined(QMM_VEC_NORM_TAIL)
+  // The tail fold: control flow is uniform here (the store block above
+  // has no barrier), every dispatched workgroup takes exactly one
+  // ticket after releasing its sum stores device-wide, and the last
+  // workgroup in acquires the other workgroups' sum stores and runs
+  // the apple reduction over the whole row. The reset store keeps the
+  // ticket word at 0 for the next dispatch on this stream.
+  memoryBarrierBuffer();
+  barrier();
+  if (lane == 0u) {
+    tail_ticket = atomicAdd(tail_counter.values[0], 1u);
+  }
+  barrier();
+  uint tail_total =
+      (params.shape[0] + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  if (tail_ticket + 1u == tail_total) {
+    memoryBarrierBuffer();
+    tail_reduce();
+    for (uint q = lane; q < params.shape[0] / 8u; q += 128u) {
+      uint base = q * 8u;
+      tail_out.values[q] = uvec4(
+          uint(tail_half(base)) | (uint(tail_half(base + 1u)) << 16u),
+          uint(tail_half(base + 2u)) | (uint(tail_half(base + 3u)) << 16u),
+          uint(tail_half(base + 4u)) | (uint(tail_half(base + 5u)) << 16u),
+          uint(tail_half(base + 6u)) | (uint(tail_half(base + 7u)) << 16u));
+    }
+    if (lane == 0u) {
+      tail_counter.values[0] = 0u;
+    }
+  }
+#endif
 }
 #else
 void main() {
