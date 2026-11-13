@@ -48,3 +48,7 @@ Qwen2.5-1.5B-Instruct-4bit decode 124.6 tok/s, granite-4.0-1b-4bit 117.7, Qwen3.
 ## Defaults
 
 `decode-ab.txt` runs three interleaved rounds of the default, `MLX_OMARCHY_FUSED_GEMV=0` and `MLX_OMARCHY_FUSED_TRIO=0` on one build. The spread inside one arm is larger than the difference between arms and no arm wins on every model, so G16S keeps the existing defaults (fused GEMV on, default cooperative-matrix pick).
+
+## Dual-Mesa battery (`battery-dual-mesa.md`)
+
+The full battery on the same binaries against the system Mesa (git-05ddb00f5c) and a private aurora-wip Mesa (git-623effac89, with the packHalf2x16 round-toward-zero lowering), plus the private Mesa with the opt-in routes: 76 units each, all pass, identical counts. Shaders that used `packHalf2x16` as an f32 to f16 rounding step now use an integer round-to-nearest-even conversion (`shaders/omarchy_half.h`).

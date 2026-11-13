@@ -1,4 +1,6 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_half.h"
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #ifdef USE_BF16
@@ -24,7 +26,7 @@ uint bf16_bits(float value) {
 #define AFFINE_LOAD(v) float(v)
 #define X_LO(word) unpackHalf2x16(word).x
 #define X_HI(word) unpackHalf2x16(word).y
-#define PACK_OUT(a, b) packHalf2x16(vec2((a), (b)))
+#define PACK_OUT(a, b) omarchy_pack_f16x2_rne((a), (b))
 #endif
 
 // Scalar-FMA prefill Q4/group-64 f16 (and, built with USE_BF16, bf16)
