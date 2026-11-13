@@ -3,10 +3,10 @@
 """Build and register the lane-3 (H16, driver ABI 3) whole Parakeet encoder.
 
 The H16 counterpart of build_whole_encoder_bundle.py. Its input is the output
-of the one-time macOS harvest (ane-harvest.sh):
+of a one-time macOS capture run:
 
   hwx-compiled/encoder-ane/<target>/model.hwx
-      Apple ANECCompile for the M4 generation of the CoreML encoder MIL
+      CoreML-compiled (ANECCompile) for the M4 generation of the CoreML encoder MIL
       rewritten by h16_encoder_mil.py: the int32/bool mask arithmetic
       ANECCompile refuses becomes fp16 arithmetic on an fp16 attention_mask
       input, and encoder_hidden is the only output (the ABI 3 driver
@@ -48,14 +48,14 @@ for entry in (str(_TOOLS), str(_TOOLS / "coreml")):
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
-# Reference section builder: aurora-silicon/linux (Apple-compiled HWX:
+# Reference section builder: aurora-silicon/linux (CoreML-compiled HWX:
 # split __KERN_n kernel data and __TEXT,__const constants)
 # tools/testing/selftests/drivers/ane/h16-sections.py (GPL-2.0-only; loaded
 # at build time, never copied into this repository).
 H16_SECTIONS_PATH = "tools/testing/selftests/drivers/ane/h16-sections.py"
 H16_SECTIONS_SHA256 = "bd45fc0fc5ced98dac177d51d805c9ef01343e9703fc37c3a2cc20e60d6e5836"
 # ane-linux-experiments commit of tools/ane-compile-hwx.mm, the ANECCompile
-# wrapper the harvest builds (ane-harvest.sh ALE_COMMIT).
+# wrapper the capture run builds.
 COMPILER_WRAPPER_COMMIT = "0a769e44f282ccb9101efc01be7edf51cf849687"
 
 HWX_SUBTYPE_H16G = 7
@@ -65,7 +65,7 @@ BUNDLE_NAME = "parakeet-encoder-whole-h16"
 PAYLOAD = "program-0.hwx"
 # The encoder MIL rewritten by h16_encoder_mil.py (fp16 mask arithmetic,
 # encoder_hidden only), compiled by ANECCompile for h16g.
-HARVEST_PROGRAM = "encoder-ane"
+CAPTURE_PROGRAM = "encoder-ane"
 # The inputs of the M1/M2 whole-encoder container: fp16 attention_mask [3000]
 # (1 valid frame, 0 padding) and dense fp16 input_features [3000, 128] ->
 # encoder_hidden [375, 640].
@@ -111,9 +111,9 @@ def load_reference_sections(path: Path):
     return module
 
 
-def harvest_layout(harvest: Path) -> dict[str, Path | str]:
-    """Resolve the harvest files; every one must exist."""
-    program = harvest / "hwx-compiled" / HARVEST_PROGRAM
+def capture_layout(capture: Path) -> dict[str, Path | str]:
+    """Resolve the capture-run files; every one must exist."""
+    program = capture / "hwx-compiled" / CAPTURE_PROGRAM
     target_file = program / "target"
     if target_file.is_file():
         target = target_file.read_text().strip()
@@ -122,21 +122,21 @@ def harvest_layout(harvest: Path) -> dict[str, Path | str]:
         if len(found) != 1:
             raise BuildError(
                 f"{program} has no target file and {len(found)} compiled "
-                "targets; the harvest did not compile the rewritten encoder"
+                "targets; the capture run did not compile the rewritten encoder"
             )
         target = found[0]
     layout = {
         "target": target,
         "hwx": program / target / "model.hwx",
-        "features": harvest / "capture" / "ane" / "encoder_input_features.npy",
-        "mask": harvest / "capture" / "ane" / "encoder_input_mask.npy",
-        "hidden": harvest / "capture" / "ane" / "encoder_hidden.npy",
-        "lock": harvest / "meta" / "parakeet-reference.lock",
-        "run_log": harvest / "meta" / "run.log",
+        "features": capture / "capture" / "ane" / "encoder_input_features.npy",
+        "mask": capture / "capture" / "ane" / "encoder_input_mask.npy",
+        "hidden": capture / "capture" / "ane" / "encoder_hidden.npy",
+        "lock": capture / "meta" / "parakeet-reference.lock",
+        "run_log": capture / "meta" / "run.log",
     }
     for name in ("hwx", "features", "mask", "hidden", "lock"):
         if not Path(layout[name]).is_file():
-            raise BuildError(f"harvest file missing: {layout[name]}")
+            raise BuildError(f"capture file missing: {layout[name]}")
     return layout
 
 
@@ -208,7 +208,7 @@ def _host_build(run_log: Path) -> str:
     if fields:
         return "macOS {} ({}) ANECCompile".format(
             fields.get("ProductVersion", "?"), fields.get("BuildVersion", "?"))
-    return "macOS ANECCompile (ane-harvest)"
+    return "macOS ANECCompile (capture run)"
 
 
 def build_manifest(info: dict, hwx_sha: str, hwx_size: int, target: str,
@@ -297,13 +297,13 @@ def cache_key(hwx_sha: str, hwx_size: int, target: str):
     )
 
 
-def build(harvest: Path, reference, cache, source_commit: str,
+def build(capture: Path, reference, cache, source_commit: str,
           repo_lock: Path) -> tuple[Path, bool, dict]:
-    layout = harvest_layout(harvest)
+    layout = capture_layout(capture)
     lock_sha = _sha256_file(Path(layout["lock"]))
     if lock_sha != _sha256_file(repo_lock):
         raise BuildError(
-            f"harvest lock {layout['lock']} differs from {repo_lock}; the "
+            f"capture lock {layout['lock']} differs from {repo_lock}; the "
             "goldens were captured for another reference"
         )
     hwx_path = Path(layout["hwx"])
@@ -390,14 +390,14 @@ def compare(hidden, golden, contract: dict) -> dict:
                                                  "encoder_rel_l2_err")}}
 
 
-def check(bundle: Path, harvest: Path, worker: Path, device: str,
+def check(bundle: Path, capture: Path, worker: Path, device: str,
           deadline_ms: int, lock: Path) -> dict:
     """One run on the ABI 3 node, compared with the golden hidden."""
     import numpy as np
 
     if device == "h16" and not any(Path("/dev/accel").glob("accel*")):
         raise BuildError("--check needs this machine's /dev/accel ABI 3 node")
-    layout = harvest_layout(harvest)
+    layout = capture_layout(capture)
     contract = json.loads(lock.read_text())["numerical_contract"]
     features = dense_features(np.load(layout["features"]))
     mask = dense_mask(np.load(layout["mask"]))
@@ -443,8 +443,8 @@ def _default_worker() -> Path:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--harvest", required=True, type=Path,
-                        help="unpacked ane-harvest-<date> directory")
+    parser.add_argument("--capture", required=True, type=Path,
+                        help="unpacked macOS capture-run directory")
     parser.add_argument("--kernel-tree", type=Path, default=None,
                         help="aurora checkout holding the pinned h16-sections.py "
                              "(or the script itself)")
@@ -471,7 +471,7 @@ def main(argv: list[str]) -> int:
         ["git", "-C", str(Path(__file__).resolve().parents[3]), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True).stdout.strip()
     cache = CompiledCache(args.cache_root or default_cache_root())
-    bundle, hit, record = build(args.harvest, reference, cache, commit, repo_lock)
+    bundle, hit, record = build(args.capture, reference, cache, commit, repo_lock)
     print(json.dumps(record, indent=2, sort_keys=True))
     print(f"bundle {'cache-hit' if hit else 'published'}: {bundle}")
     if args.out:
@@ -480,7 +480,7 @@ def main(argv: list[str]) -> int:
             (args.out / name).write_bytes((bundle / name).read_bytes())
         print(f"copied to {args.out}")
     if args.check:
-        report = check(bundle, args.harvest, args.worker or _default_worker(),
+        report = check(bundle, args.capture, args.worker or _default_worker(),
                        args.device, args.deadline_ms, repo_lock)
         print(json.dumps(report, indent=2, sort_keys=True))
         if report["failures"]:

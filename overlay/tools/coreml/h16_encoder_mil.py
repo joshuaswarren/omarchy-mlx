@@ -16,8 +16,8 @@ slices of it; the 375 x 375 attention mask is the fp16 outer product of the
 padded query rows. encoder_hidden is the only output: the H16 driver takes
 one output per program, and encoder_mask is computed on the host.
 
-Measured on the Mac16,7 ANE against the original model on an Apple ANE
-(CoreML, same h16 generation): encoder_hidden is bit-identical for a full
+Measured on the Mac16,7 ANE against the original model under CoreML on
+macOS (same h16 generation): encoder_hidden is bit-identical for a full
 mask and for a 504-frame duration-aware mask, padded rows included.
 
   h16_encoder_mil.py ENCODER.mil OUT.mil

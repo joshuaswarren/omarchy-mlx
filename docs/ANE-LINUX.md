@@ -66,7 +66,7 @@ opens the accel node itself.
   `DRM_IOCTL_ANE_GET_CAPS`. The uapi header the worker builds against is
   vendored at `overlay/mlx/backend/omarchy/ane/uapi/drm/ane_accel.h`
   (aurora-silicon/linux 172b882a62c5).
-- Programs: original Apple HWX files compiled for h16g on macOS, carried in
+- Programs: CoreML-compiled HWX files for h16g, built on macOS, carried in
   schema-5 bundles (`docs/ane-bundles.md`). The worker builds the four
   H16_LOAD sections from each HWX on the host.
 - Worker: `mlx-omarchy-ane-worker --device h16` picks the first
@@ -105,7 +105,7 @@ opens the accel node itself.
   `MLX_OMARCHY_WHOLE_ENCODER_BUNDLE`, and on the GPU otherwise. The program
   returns `encoder_hidden`; `encoder_mask` comes from the model graph's mask
   arithmetic on the GPU. `build_whole_encoder_bundle_h16.py` builds the
-  bundle from the macOS harvest.
+  bundle from the files of a one-time macOS capture run.
 
 What is measured: host tests only (section bytes against the kernel's
 add-128 fixture, a 6710-file differential against `h16-sections.py`, the
@@ -114,7 +114,7 @@ keeps one program resident, the resident step and state suite, the bundle
 builder on a synthetic stand-in). Swap mode and concurrent residency are
 untested on hardware: the cost of an unload plus a load per switch, and
 whether the switch-safe driver patch keeps every output correct, are open. Nothing in lane 3 has run on H16 hardware. The
-h16g Parakeet HWX does not exist until the macOS harvest has run. The driver
+h16g Parakeet HWX does not exist until the macOS capture run has happened. The driver
 keeps every loaded program's firmware mappings until reboot, so each worker
 process that loads the 450 MB encoder uses program-window space that only a
 reboot returns; how many loads fit is not measured.
