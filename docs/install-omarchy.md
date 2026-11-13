@@ -153,7 +153,7 @@ already waits on the stream's previous completion. Splitting preserves
 order, and results are bit-identical (greedy ids digests identical in every
 A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max
 at 40000 (the table value before 2026-11-13; the G14C row is now 100000,
-`receipts/2026-11-13-g14c-batch-work`: decode +0.5 % on 4B, +1.3 % on 2B, +1.4 %
+`receipts/2026-11-13-g14c-batch-work`: decode +0.5 % on 4B, +0.9 % on 2B, +1.4 %
 on 9B against 40000): a 4B decode step drops from p50 20.9 ms to 5.6 ms per
 submission (decode tok/s −0.15 %). The 9B drops from 49.6 ms to 4.4 ms
 (+6 % decode).

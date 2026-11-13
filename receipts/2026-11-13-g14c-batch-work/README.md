@@ -4,7 +4,7 @@ Board: 14-inch M2 Max (G14C), Linux, Mesa honeykrisp, `MLX_OMARCHY_BATCH_WORK` u
 600-token decode, runs interleaved, 20 s gaps, a 60 Hz submit-latency probe beside each run.
 First 64 generated token ids identical across arms in every pair (hash `ids_sha`); logprobs were not recorded in these runs. Scheduling only.
 
-Shipped value 100000 vs default 40000 (REPICK.md, 10 pairs on 4B, 9 on 2B, 3 on 9B in total): small but consistent gains, 4B about +0.5%, 2B about +1.3%, 9B about +1.4%, every rerun pair positive. The first 2B run read +0.3% with one negative pair; the 6-pair rerun read +1.27%, 6 of 6 positive.
+Shipped value 100000 vs default 40000 (REPICK.md, pooled first run plus 6-pair rerun): small but consistent gains, 4B about +0.5% (10 pairs, all positive), 2B about +0.9% (9 pairs; the first 3 pairs read +0.3% with one negative pair, the 6-pair rerun +1.27%, 6 of 6 positive), 9B about +1.4% (3 pairs, all positive).
 
 ## Speed (tok/s; first-campaign rows are means, rerun rows list each run)
 
