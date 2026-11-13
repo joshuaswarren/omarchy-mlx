@@ -3785,10 +3785,6 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
     int groups_per_row = k / group_size;
     for (auto dtype : dtypes) {
       for (int n : n_shapes) {
-        // The wide rows exist for the word path, which needs n % 8 == 0.
-        // Other n at k = 512/1024 run the general kernel and, in f16,
-        // exceed this bound by about 0.01 independent of the hoist.
-        if (k_mult == 16 && n % 8 != 0) continue;
         std::vector<float> matrix(static_cast<size_t>(n) * k);
         for (auto& v : matrix) v = dist(gen);
         std::vector<float> x_values(k);
