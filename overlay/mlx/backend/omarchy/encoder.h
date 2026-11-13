@@ -128,15 +128,20 @@ inline int batch_node_budget() {
 // flushes the open batch once its summed work-group counts reach the
 // budget. Per-group GPU cost is chip-dependent (order 0.1 ms per 1000
 // groups on the M2 Max, 2 ms per 1000 groups on the 13-inch M1), so the
-// default is a per-board table calibrated from device-timestamp profiles
-// to land typical decode submissions at p50 in the 2-6 ms band:
+// default is a per-board table calibrated from device-timestamp profiles.
+// A board's budget is the largest swept value that keeps its Qwen3-4B
+// decode submission p50 in the 2-6 ms smooth band; for the 2026-11-13
+// boards below it must also keep the p99 at or under ~40 ms (half the
+// ~78 ms stutter threshold) with no sampled submission reaching 78 ms, so
+// the tail cannot hitch the desktop and not only the median does:
 // receipts/2026-10-02-submission-cap-19 (G14C),
 // receipts/2026-10-12-submission-cap-calibration (G13C, G13G) and
 // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (G13S, G14G, G16S,
 // G17P). Board codes key the rows like the direct-matmul routes above
 // (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
-// G14C M2 Max, G14G M2, G16S M4 Pro, G17P A18 Pro. A single dispatch whose group count alone exceeds the
-// budget still runs whole: splitting happens between dispatches. Copies
+// G14C M2 Max, G14G M2, G16S M4 Pro, G17P A18 Pro. A single dispatch
+// whose group count alone exceeds the budget still runs whole: splitting
+// happens between dispatches. Copies
 // and fills are not counted; the node and byte budgets keep those
 // batches bounded. MLX_OMARCHY_BATCH_WORK=<groups> overrides the table;
 // =0 turns the work cap off (node and byte budgets still apply).
@@ -147,18 +152,20 @@ inline int batch_node_budget() {
 struct BatchWorkCalibration {
   // CapabilityReport device-name substring, e.g. "Apple M1 Max (G13C)".
   std::string_view board;
-  // Calibrated work-groups per submission; 0 marks a board that has no
-  // measurement yet (the row documents the gap instead of guessing).
+  // Calibrated work-groups per submission. A row is added only once the
+  // board has been swept, so every row below is measured; an unlisted
+  // board falls through to kBatchWorkFallback (calibrated_batch_work()
+  // returns 0 for it).
   uint64_t budget;
 };
 inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
-    {"G13S", 20000},  // M1 Pro (16-inch, 16 GB), Borealis Mesa be147e3625: Qwen3-4B p50 4.70 ms, Qwen3.8-2B 1.56 ms; 40000 puts the 4B at 9.31 ms (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p)
+    {"G13S", 10000},  // M1 Pro (16-inch, 16 GB, 16 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 2.50 ms, p99 36.2 ms, max 43.2 ms; 20000 raised the p99 to 72.3 ms (max 86.0, at the #19 stutter); decode +17.4% 2B and +20.6% 4B against 5000, tokens identical (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p, /tail)
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
     {"G14C", 40000},  // receipts/2026-10-02-submission-cap-19
-    {"G14G", 10000},  // M2 (13-inch, 8 GB), Borealis Mesa be147e3625: Qwen3-4B p50 4.80 ms, Qwen3.8-2B 3.94 ms; 15000 puts the 4B at 7.18 ms (same receipt)
-    {"G16S", 10000},  // M4 Pro (16-inch, 24 GB), Borealis Mesa c208afc352: Qwen3-4B p50 5.40 ms, Qwen3.8-2B 1.60 ms; 15000 puts the 4B at 8.14 ms (same receipt)
-    {"G17P", 5000},  // A18 Pro (MacBook Neo, 8 GB), Borealis Mesa c208afc352: Qwen3-4B p50 4.35 ms, Qwen3.8-2B 4.06 ms; 8000 puts the 4B at 6.56 ms (same receipt)
+    {"G14G", 8000},  // M2 (13-inch, 8 GB, 8 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 3.64 ms, p99 37.9 ms, max 47.8 ms; 10000 raised the p99 to 48.3 ms (max 56.3); decode +2.7% 2B and +2.7% 4B against 5000, tokens identical (same receipt, /tail)
+    {"G16S", 10000},  // M4 Pro (16-inch, 24 GB, 20 GPU cores), Borealis Mesa c208afc352: Qwen3-4B submission p50 5.40 ms, p99 26.6 ms, max 31.3 ms; 15000 would raise the p99 to 41.6 ms; decode +21.0% 2B and +14.9% 4B against 5000, tokens identical (same receipt)
+    {"G17P", 5000},  // A18 Pro (MacBook Neo, 8 GB, 5 GPU cores), Borealis Mesa c208afc352: equals the fallback. Qwen3-4B submission p50 4.35 ms, p99 24.8 ms, max 47.2 ms; 8000 would raise the p99 to 48.9 ms (same receipt)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
 
@@ -169,8 +176,7 @@ inline constexpr uint64_t kBatchWorkBudget = 40000;
 inline constexpr uint64_t kBatchWorkFallback = 5000;
 
 // Pure table lookup for the runtime doctest: the calibrated budget for a
-// device name; 0 when nothing calibrated matches (unknown board or a row
-// still at its placeholder).
+// device name; 0 when no row's board substring matches (an unlisted board).
 inline uint64_t calibrated_batch_work(std::string_view device_name) {
   const BatchWorkCalibration* best = nullptr;
   for (const auto& row : kBatchWorkCalibration) {
@@ -217,7 +223,7 @@ inline uint64_t batch_work_budget(std::string_view device_name) {
   }
   // Per-device calibration, cached on the name: the call sites run this
   // once per evaluated node, where the uncached path costs one getenv
-  // plus a four-row scan (75 ns measured on x86 with 81 environment
+  // plus a seven-row scan (75 ns measured on x86 with 81 environment
   // entries, issue 207 review), and the name comes from
   // hardware_capabilities(), a stable reference, so a one-entry
   // thread_local compare is enough. The name is copied so a caller

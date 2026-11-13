@@ -748,11 +748,15 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 8000);
 
-  // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p: the largest swept
-  // budget that keeps both models at or under 6 ms p50 on each board. The
+  // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (tail/ rework): the
+  // largest swept budget that keeps the Qwen3-4B submission p50 at or under
+  // 6 ms AND the p99 at or under ~40 ms (half the ~78 ms #19 stutter) on
+  // each board. G13S lands 10000 (p99 36.2 ms; 20000 reached p99 72.3 ms),
+  // G14G 8000 (p99 37.9 ms; 10000 reached 48.3 ms). G16S keeps 10000 (p99
+  // 26.6 ms) and G17P keeps 5000 (= fallback) under this stricter rule. The
   // names are the deviceName strings the Borealis driver reports.
-  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S C0)") == 20000);
-  CHECK(omarchy::calibrated_batch_work("Apple M2 (G14G B0)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S C0)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 (G14G B0)") == 8000);
   CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 10000);
   CHECK(omarchy::calibrated_batch_work("Apple A18 Pro (G17P B1)") == 5000);
 

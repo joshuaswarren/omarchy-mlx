@@ -1,0 +1,13 @@
+m2r3 arm=default Qwen3.8-2B-mlx-4Bit load 0.25 temp 35642 17:09:38
+DECODE 38.66 tok/s  PREFILL 168.42 tok/s  digest aa59209598cf8404
+m2r3 arm=default Qwen3-4B-Instruct-2507-4bit load 0.48 temp 64312 17:10:22
+DECODE 19.58 tok/s  PREFILL 78.72 tok/s  digest ee93832054590f55
+m2r3 arm=8000 Qwen3.8-2B-mlx-4Bit load 0.31 temp 74594 17:11:47
+DECODE 39.71 tok/s  PREFILL 168.67 tok/s  digest aa59209598cf8404
+m2r3 arm=8000 Qwen3-4B-Instruct-2507-4bit load 0.16 temp 71265 17:12:30
+DECODE 20.10 tok/s  PREFILL 78.82 tok/s  digest ee93832054590f55
+m2r3 arm=10000 Qwen3.8-2B-mlx-4Bit load 0.37 temp 78070 17:13:54
+DECODE 39.97 tok/s  PREFILL 168.74 tok/s  digest aa59209598cf8404
+m2r3 arm=10000 Qwen3-4B-Instruct-2507-4bit load 0.38 temp 74621 17:14:36
+DECODE 20.23 tok/s  PREFILL 78.78 tok/s  digest ee93832054590f55
+ALL DONE 17:16:00

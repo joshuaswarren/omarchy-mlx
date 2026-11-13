@@ -1,10 +1,12 @@
 # Submission budgets for G13S, G14G, G16S and G17P
 
-Date: 2026-11-13. This receipt backs the four new rows of `kBatchWorkCalibration` in `overlay/mlx/backend/omarchy/encoder.h`: M1 Pro (G13S) 20000, M2 (G14G) 10000, M4 Pro (G16S) 10000, A18 Pro (G17P) 5000. Before this change all four boards took the 5000 fallback.
+Date: 2026-11-13. This receipt backs the four new rows of `kBatchWorkCalibration` in `overlay/mlx/backend/omarchy/encoder.h`. Before this change all four boards took the 5000 fallback.
+
+**Tail rework (2026-11-14, see `tail/`).** The p50-only rule first picked G13S 20000 and G14G 10000, but their submission *tail* ran up near the ~78 ms stutter of issue #19 (G13S 20000: 4B p99 72.3 ms, max 86.0). The budgets are now chosen under a tail rule and the final rows are **G13S 10000, G14G 8000, G16S 10000, G17P 5000**. The p50/p95 sweep tables below are unchanged (the raw data they came from still stands); read `tail/README.md` for the p99/max tables, the new budgets and the decode A/B at the new value.
 
 ## Rule
 
-The rule is the one in `receipts/2026-10-20-g13g-batch-work-8000`. Each board gets the largest swept budget that keeps the submission p50 of both models at or under 6 ms.
+Final rule (`tail/`): the largest swept budget whose Qwen3-4B decode submission keeps p50 at or under 6 ms **and** p99 at or under ~40 ms (half the ~78 ms stutter threshold), with no sampled submission reaching 78 ms. The original rule, kept below for the p50 tables, was the one in `receipts/2026-10-20-g13g-batch-work-8000`: the largest swept budget that keeps the submission p50 of both models at or under 6 ms.
 
 ## Machines and stack
 

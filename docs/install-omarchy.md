@@ -146,15 +146,22 @@ into ~2-6 ms submissions. A single dispatch larger than the budget still
 runs whole. Splitting happens between dispatches. Copies/fills ride the
 node and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap
 (headless boxes). Boards with no calibrated row take 5000 (shortest
-submissions measured to stay in the band). The 13-inch M1 row is 8000: on
+submissions measured to stay in the band). A row is the largest swept budget
+that keeps the Qwen3-4B submission p50 in the 2-6 ms band and its p99 at or
+under ~40 ms, half the ~78 ms stutter threshold, so the tail stays clear of
+a desktop hitch and not only the median does. The 13-inch M1 row is 8000: on
 that board 8000 gives p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B) and
-decodes 2.4 % faster than 5000. The M1 Pro row is 20000, the M2 and
-M4 Pro rows 10000 and the A18 Pro row 5000. On the M1 Pro, 20000 against
-the old 5000 default decodes Qwen3.8-2B at 77.9 against 61.4 tok/s and
-Qwen3-4B at 44.2 against 31.3, with the same tokens. Scheduling only: every submission
-already waits on the stream's previous completion. Splitting preserves
-order, and results are bit-identical (greedy ids digests identical in every
-A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max
+decodes 2.4 % faster than 5000. The M1 Pro row is 10000, the M2 row 8000,
+the M4 Pro row 10000 and the A18 Pro row 5000 (= the fallback). On the M1
+Pro, 10000 against the old 5000 default decodes Qwen3.8-2B at 71.7 tok/s
+against 61.0 and Qwen3-4B at 37.5 against 31.1, with the same
+tokens, at 4B submission p99 36.2 ms and max 43.2 ms (the earlier 20000 pick
+reached p99 72.3 ms, max 86.0, at the stutter). On the M2, 8000 decodes
++2.7 % on both models at 4B submission p99 37.9 ms (10000 reached 48.3 ms).
+Scheduling only: every submission already waits on the stream's previous
+completion. Splitting preserves order, and results are bit-identical (greedy
+ids digests identical in every A/B pair; `receipts/2026-10-02-submission-cap-19`).
+Measured on the M2 Max
 at the default: a 4B decode step drops from p50 20.9 ms to 5.6 ms per
 submission (decode tok/s −0.15 %). The 9B drops from 49.6 ms to 4.4 ms
 (+6 % decode).
