@@ -3762,7 +3762,13 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
   // always 3*group_size so lane boundaries land mid-slot (a known
   // sensitive boundary for the reduction step).
   std::vector<int> n_shapes{1, 7, 9, 37, 64, 256};
-  std::vector<std::pair<int, int>> qbits{{64, 4}, {32, 4}, {64, 8}, {32, 8}};
+  // k_mult 16 gives k = 512 or 1024: k % 512 == 0 and n % 8 == 0 is the
+  // 4-bit word path whose scale/bias loads are hoisted ahead of the dot
+  // (k = 3 * group never reaches it). Scales and biases differ per row
+  // and per group, so a hoisted load that reads the wrong row or group
+  // gives a gap of order M_max, far above the bound below.
+  std::vector<std::tuple<int, int, int>> qbits{{64, 4, 3}, {32, 4, 3},
+      {64, 8, 3}, {32, 8, 3}, {64, 4, 16}, {32, 4, 16}};
   std::vector<Dtype> dtypes{float32};
   if (float16_available()) {
     dtypes.push_back(float16);
@@ -3772,13 +3778,17 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
   std::mt19937 gen(91);
   std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
 
-  for (auto [group_size, bits] : qbits) {
-    int k = group_size * 3;
+  for (auto [group_size, bits, k_mult] : qbits) {
+    int k = group_size * k_mult;
     int pack = 32 / bits;
     int words_per_row = k / pack;
     int groups_per_row = k / group_size;
     for (auto dtype : dtypes) {
       for (int n : n_shapes) {
+        // The wide rows exist for the word path, which needs n % 8 == 0.
+        // Other n at k = 512/1024 run the general kernel and, in f16,
+        // exceed this bound by about 0.01 independent of the hoist.
+        if (k_mult == 16 && n % 8 != 0) continue;
         std::vector<float> matrix(static_cast<size_t>(n) * k);
         for (auto& v : matrix) v = dist(gen);
         std::vector<float> x_values(k);
