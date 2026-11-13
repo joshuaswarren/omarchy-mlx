@@ -1,0 +1,8 @@
+# mlx-lm 0.31.3, chat prompt "Explain in three sentences why the sky is blue.", 64 new tokens, greedy
+# provenance: mx 0.32.4 core.so sha256 cfcbabfdc22f5834 built from tree fda22841 (python bindings, one process per model, GPU lock held)
+# prefill: warm, 297-318 token prompt; decode: tok/s over the 64 tokens
+model                          prefill_tok_s  decode_tok_s  peak_GB  output
+Qwen2.5-1.5B-Instruct-4bit     663.9          124.6         0.98     coherent (Rayleigh scattering answer)
+granite-4.0-1b-4bit            563.5          117.7         0.99     coherent (Rayleigh scattering answer)
+Qwen3.5-4B-MLX-4bit            71.2           35.3          3.29     coherent (reasoning trace begins)
+# decode run-to-run spread on this machine is about +-10 percent (see decode-ab.txt: granite default 93-115, Qwen2.5-1.5B 140-158, Qwen3.5-4B 33-36)
