@@ -1,0 +1,18 @@
+PREFLIGHT host=jwm2-linux boot=7ff1f87d-cca0-4de6-9e24-197c32b9416d load=0.41
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p1 19:10:12
+default {"decode_tps": 108.24, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.67ms max=0.90ms mean=0.21ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 120000 p1 19:10:40
+120000 {"decode_tps": 109.61, "submits_per_step": 1.042, "probe": "submit-latency: n=359 p50=0.17ms p99=0.76ms max=0.95ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p2 19:11:09
+default {"decode_tps": 107.84, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.66ms max=0.77ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 120000 p2 19:11:38
+120000 {"decode_tps": 109.36, "submits_per_step": 1.042, "probe": "submit-latency: n=359 p50=0.17ms p99=0.71ms max=0.76ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p3 19:12:07
+default {"decode_tps": 105.9, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.70ms max=0.88ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 120000 p3 19:12:36
+120000 {"decode_tps": 106.31, "submits_per_step": 1.042, "probe": "submit-latency: n=359 p50=0.16ms p99=0.78ms max=0.88ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p4 19:13:05
+default {"decode_tps": 105.56, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.83ms max=1.26ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 120000 p4 19:13:34
+120000 {"decode_tps": 106.75, "submits_per_step": 1.042, "probe": "submit-latency: n=359 p50=0.18ms p99=0.76ms max=0.79ms mean=0.23ms over2x(>33.3ms)=0/359"}
+BATCHWORK2B_DONE
