@@ -1,3 +1,4 @@
+provenance: mlx-omarchy 0.32.4.dev202611131434+92f8959 mx=0.32.4.dev202611131434+92f8959 verified=mismatch harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:aa048347f850593d
 PASS nan_low_payload in=0x7f800001 got=0x7fc00000 want=any-nan preferred
 PASS nan_full_payload in=0x7fffffff got=0x7fc00000 want=any-nan preferred
 PASS nan_negative_full in=0xffffffff got=0x7fc00000 want=any-nan preferred
