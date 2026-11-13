@@ -22,9 +22,10 @@ One run per budget. 100000 reads lower than 90000 on the queue interval, so run 
 |---|---|---|---|---|
 | 4B | 68.65 / 68.90 / 67.99 / 68.02 | 69.21 / 69.41 / 68.06 / 68.30 | +0.5% mean (+0.8, +0.7, +0.1, +0.4) | 4 of 4 positive |
 | 2B | 108.00 / 108.25 / 107.44 | 109.32 / 108.78 / 106.48 | +0.3% mean (+1.2, +0.5, -0.9) | 2 of 3 |
-| 9B | 37.70 / 38.02 / 37.98 | 38.33 / 38.69 / 38.31 | +1.5% mean (+1.7, +1.8, +0.9) | 3 of 3 |
+| 9B | 37.70 / 38.02 / 37.98 | 38.33 / 38.69 / 38.31 | +1.4% mean (+1.7, +1.8, +0.9) | 3 of 3 |
 
-Token ids identical in all 20 runs; 0 of 20 runs had a frame over 33.3 ms beside decode (probe, not a real compositor).
+First 64 token ids identical in all 20 runs (logprobs not recorded); 0 of 20 runs had a frame over 33.3 ms beside decode (probe, not a real compositor).
 My prediction for 4B was +0.8 to 1.4%; it came in at +0.5%, so the gain is smaller than at 120000 (+1.2 to 1.5%). Submissions per step on 4B: 3.19 default, 2.09 at 100000 (1.07 at 120000).
-At 80000 (`batchwork80k`, 3 pairs): 4B +0.1%, 2B +1.5%, 9B +1.3%. w7P's data agrees: 80000 vs 40000 is 1.02.
+At 80000 (`batchwork80k`, 3 pairs): 4B +0.1%, 2B +1.5%, 9B +1.2%. w7P's data agrees: 80000 vs 40000 is 1.02.
 The earlier 120000 tables stay in the README as the swept comparison.
+Method: GPU rows use inclusive quantiles (as `subcap_calibrate.py` does); queue-interval rows use nearest-rank percentiles. They can differ by up to 1.5 ms at p99. The p50 verdicts do not change. The queue-interval scripts read the jsonl files in `~/.local/share/apple-silicon-lab/artifacts/w9C/g14c-subcap*` (not in this repo, 8 MB each).

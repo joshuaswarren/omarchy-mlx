@@ -41,7 +41,7 @@ Probe: `scripts/submit-latency.c`, 60 Hz, 256-byte fill.
 | 80000 | 144 | 2.88 | 3.34 | 5.29 | 6.68 |
 | 120000 | 142 | 4.54 | 4.86 | 5.93 | 10.06 |
 
-120000 passes all three legs by the rule's own metric, the summed GPU dispatch time per submission. The 4B wall time of one decode step over submits per step (13.5 ms) is not that metric: it also counts CPU encode time and gaps between submissions. The samples cover prefill and decode submissions together (not split). Only Qwen3-4B was sampled; the #407 rule takes 4B as the limiting model.
+120000 passes all three legs by (superseded: it fails the queue-interval p50, see REPICK.md) the rule's own metric, the summed GPU dispatch time per submission. The 4B wall time of one decode step over submits per step (13.5 ms) is not that metric: it also counts CPU encode time and gaps between submissions. The samples cover prefill and decode submissions together (not split). Only Qwen3-4B was sampled; the #407 rule takes 4B as the limiting model.
 
 The raw profile has a second per-submission figure, the queue interval (time from queue start to queue end). At 120000 its p50 is about 6.2 ms (p99 about 11.5 ms, max about 13.2 ms); at 40000 its p50 is about 2.7 ms. By that figure the p50 sits just over 6 ms. The raw `subcap.jsonl.*` files (43 MB) are not in the repo; the lab keeps them under `artifacts/w9C/g14c-subcap/`.
 

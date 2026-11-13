@@ -159,7 +159,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13S", 0},  // M1 Pro: uncalibrated, the reporter's chip, not in the fleet
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
-    {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.3% (Qwen3.8-2B), +1.5% (Qwen3.8-9B) decode against 40000, ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
+    {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.3% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
     {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
