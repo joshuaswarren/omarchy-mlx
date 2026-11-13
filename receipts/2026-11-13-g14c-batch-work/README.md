@@ -4,6 +4,8 @@ Board: 14-inch M2 Max (G14C), Linux, Mesa honeykrisp, `MLX_OMARCHY_BATCH_WORK` u
 600-token decode, runs interleaved, 20 s gaps, a 60 Hz submit-latency probe beside each run.
 First 64 generated token ids identical across arms in every pair (hash `ids_sha`); logprobs were not recorded in these runs. Scheduling only.
 
+Shipped value 100000 vs default 40000 (REPICK.md, pooled first run plus 6-pair rerun): small but consistent gains, 4B about +0.5% (10 pairs, all positive), 2B about +0.9% (9 pairs; the first 3 pairs read +0.3% with one negative pair, the 6-pair rerun +1.27%, 6 of 6 positive), 9B about +1.4% (3 pairs, all positive).
+
 ## Speed (tok/s; first-campaign rows are means, rerun rows list each run)
 
 | Model | default (40000) | 120000 | gain | pairs positive | script |
@@ -41,7 +43,7 @@ Probe: `scripts/submit-latency.c`, 60 Hz, 256-byte fill.
 | 80000 | 144 | 2.88 | 3.34 | 5.29 | 6.68 |
 | 120000 | 142 | 4.54 | 4.86 | 5.93 | 10.06 |
 
-120000 passes all three legs by (superseded: it fails the queue-interval p50, see REPICK.md) the rule's own metric, the summed GPU dispatch time per submission. The 4B wall time of one decode step over submits per step (13.5 ms) is not that metric: it also counts CPU encode time and gaps between submissions. The samples cover prefill and decode submissions together (not split). Only Qwen3-4B was sampled; the #407 rule takes 4B as the limiting model.
+120000 passes the rule's own metric, the summed GPU dispatch time per submission, but it fails the queue-interval p50 below (see REPICK.md; the shipped value is 100000). The 4B wall time of one decode step over submits per step (13.5 ms) is not that metric: it also counts CPU encode time and gaps between submissions. The samples cover prefill and decode submissions together (not split). Only Qwen3-4B was sampled; the #407 rule takes 4B as the limiting model.
 
 The raw profile has a second per-submission figure, the queue interval (time from queue start to queue end). At 120000 its p50 is about 6.2 ms (p99 about 11.5 ms, max about 13.2 ms); at 40000 its p50 is about 2.7 ms. By that figure the p50 sits just over 6 ms. The raw `subcap.jsonl.*` files (43 MB) are not in the repo; the lab keeps them under `artifacts/w9C/g14c-subcap/`.
 

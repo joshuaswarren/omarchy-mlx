@@ -29,3 +29,13 @@ My prediction for 4B was +0.8 to 1.4%; it came in at +0.5%, so the gain is small
 At 80000 (`batchwork80k`, 3 pairs): 4B +0.1%, 2B +1.5%, 9B +1.2%. w7P's data agrees: 80000 vs 40000 is 1.02.
 The earlier 120000 tables stay in the README as the swept comparison.
 Method: GPU rows use inclusive quantiles (as `subcap_calibrate.py` does); queue-interval rows use nearest-rank percentiles. They can differ by up to 1.5 ms at p99. The p50 verdicts do not change. The queue-interval scripts read the jsonl files in `~/.local/share/apple-silicon-lab/artifacts/w9C/g14c-subcap*` (not in this repo, 8 MB each).
+
+## Reruns (`runs/*-rerun`, 6 interleaved pairs each, first 64 ids identical, 0 frames over 33.3 ms)
+
+| Row | Gain | Pairs |
+|---|---|---|
+| 4B at 100000 | +0.48% (+0.96, +0.22, +0.59, +0.69, +0.12, +0.32) | 6 of 6 |
+| 2B at 100000 | +1.27% (+1.79, +1.21, +1.37, +0.85, +1.18, +1.21) | 6 of 6 |
+| 4B at 80000 | +0.83% (+0.80, +0.41, +0.47, +0.82, +1.27, +1.23) | 6 of 6 |
+
+Pooled with the first run at 100000: 4B +0.49% over 10 pairs, 2B +0.9% over 9 pairs. The first-run 2B row above (+0.3%) and 4B at 80000 (+0.1%) were low draws.
