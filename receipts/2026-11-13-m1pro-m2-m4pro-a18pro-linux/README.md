@@ -39,8 +39,9 @@ Source build of `aurora-silicon/omarchy-mlx` `ec849019` (#407: main `f3ec9599` p
 | M1 Pro | 60/60 cases, 27086/27086 assertions | 29/29, 131707/131707 | exit 0, buffer round trip OK |
 | M2 | 60/60 cases, 27086/27086 assertions | 29/29, 131707/131707 | exit 0, buffer round trip OK |
 | M4 Pro | 59/60 cases, 27085/27086 assertions | 29/29, 131711/131711 | exit 0, buffer round trip OK |
+| A18 Pro | 59/60 cases, 27085/27086 assertions | 29/29, 131711/131711 | exit 0, buffer round trip OK |
 
-The M4 Pro failure is `independent streams measure against the serialized sum`: a rerun of the same build (`suite/m4pro-rerun.txt`) measured ratio 0.876 (serialized 0.0498 s, interleaved 0.0568 s, 400 iterations) against the 0.95 floor, and both copies verified byte-for-byte. See [KNOWN-ISSUES](../../docs/KNOWN-ISSUES.md#m4-pro-g16s-on-borealis-the-independent-streams-timing-floor-fails). The `SUBMIT-RECOVER` and `failed to advance` lines in the logs come from the child processes that test the stall paths.
+The M4 Pro failure is `independent streams measure against the serialized sum`: a rerun of the same build (`suite/m4pro-rerun.txt`) measured ratio 0.876 (serialized 0.0498 s, interleaved 0.0568 s, 400 iterations) against the 0.95 floor, and both copies verified byte-for-byte. The A18 Pro fails the same case with ratio 0.437 in the full suite and 0.384 to 0.442 in three runs of that case alone (`suite/a18pro-full.txt`), again with both copies verified. See [KNOWN-ISSUES](../../docs/KNOWN-ISSUES.md#m4-pro-g16s-and-a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails). The `SUBMIT-RECOVER` and `failed to advance` lines in the logs come from the child processes that test the stall paths.
 
 ## LLM decode and prefill
 
