@@ -9263,9 +9263,13 @@ bool dispatch_quantized_gemv_group(
     }
     const array& sum = tail->sum;
     const array& weight = tail->weight;
-    if (!whole_dense(sum, sum.size()) ||
-        !whole_dense(weight, weight.size()) || sum.dtype() != dtype ||
-        weight.dtype() != dtype || !input_ready(weight, stream) ||
+    // The sum is this dispatch's own epilogue output: it has no buffer
+    // yet (member.epilogue->set_data below allocates it), so the
+    // whole_dense data-pointer contract cannot apply — validate it
+    // statically (dtype here, size in the tail width block below).
+    if (sum.dtype() != dtype ||
+        weight.dtype() != dtype || !whole_dense(weight, weight.size()) ||
+        !input_ready(weight, stream) ||
         !float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
         x.ndim() < 2 || x.shape(-2) != 1 ||
         !input_ready(x, stream) || x.data_shared_ptr() == nullptr ||
