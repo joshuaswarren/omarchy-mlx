@@ -320,6 +320,54 @@ std::vector<float> host_quantized_matmul(
   return out;
 }
 
+// Reference for the 4-bit f16 decode path. Native qmv (T = half) forms the
+// per-group x sum from half-precision chain sums of each x quad,
+// ((h0 + h1) + h2) + h3 rounded to half at every add, accumulated in float;
+// qmm_vec.comp does the same on purpose (Q4_QUAD_LOAD under USE_FP16). A
+// double-precision sum without that rounding drifts from the device by
+// about bias * 2^-12 per quad, which grows with k (0.05 at k = 1024).
+// x is rounded to half first, as the device receives it; the dot and the
+// scale/bias terms stay in double.
+std::vector<float> host_quantized_matmul_half_quad_sum(
+    const HostQuantizedWeights& w,
+    const std::vector<float>& x,
+    int n,
+    int k,
+    int group_size) {
+  int words_per_row = k / 8;
+  int groups = k / group_size;
+  std::vector<float> xh(k);
+  for (int i = 0; i < k; ++i) {
+    xh[i] = static_cast<float>(float16_t(x[i]));
+  }
+  auto half_add = [](float a, float b) {
+    return static_cast<float>(float16_t(a + b));
+  };
+  std::vector<double> input_sum(groups, 0.0);
+  for (int quad = 0; quad < k / 4; ++quad) {
+    float chain = half_add(
+        half_add(half_add(xh[4 * quad], xh[4 * quad + 1]), xh[4 * quad + 2]),
+        xh[4 * quad + 3]);
+    input_sum[(4 * quad) / group_size] += chain;
+  }
+  std::vector<float> out(n);
+  for (int column = 0; column < n; ++column) {
+    double acc = 0.0;
+    for (int g = 0; g < groups; ++g) {
+      double dot = 0.0;
+      for (int inner = g * group_size; inner < (g + 1) * group_size; ++inner) {
+        uint32_t word = w.words[column * words_per_row + inner / 8];
+        dot += static_cast<double>((word >> ((inner % 8) * 4)) & 0xFu) *
+            xh[inner];
+      }
+      acc += w.scales[column * groups + g] * dot +
+          w.biases[column * groups + g] * input_sum[g];
+    }
+    out[column] = static_cast<float>(acc);
+  }
+  return out;
+}
+
 // The GatherQQMM / QQMatmul affine contract carries no biases: the
 // dequantized value is q * scale only.
 std::vector<float> host_scale_only_quantized_matmul(
@@ -3785,10 +3833,6 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
     int groups_per_row = k / group_size;
     for (auto dtype : dtypes) {
       for (int n : n_shapes) {
-        // The wide rows exist for the word path, which needs n % 8 == 0.
-        // Other n at k = 512/1024 run the general kernel and, in f16,
-        // exceed this bound by about 0.01 independent of the hoist.
-        if (k_mult == 16 && n % 8 != 0) continue;
         std::vector<float> matrix(static_cast<size_t>(n) * k);
         for (auto& v : matrix) v = dist(gen);
         std::vector<float> x_values(k);
@@ -3804,8 +3848,11 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
         HostQuantizedWeights rounded = host;
         rounded.scales = scales_rt;
         rounded.biases = biases_rt;
-        std::vector<float> expected = host_quantized_matmul(
-            rounded, x_values, 1, n, k, group_size, bits);
+        std::vector<float> expected = (dtype == float16 && bits == 4)
+            ? host_quantized_matmul_half_quad_sum(
+                  rounded, x_values, n, k, group_size)
+            : host_quantized_matmul(
+                  rounded, x_values, 1, n, k, group_size, bits);
 
         // With subgroup_ready=true the dispatch path picks
         // QmmVecSubgroup on the M1; this is the production path.
