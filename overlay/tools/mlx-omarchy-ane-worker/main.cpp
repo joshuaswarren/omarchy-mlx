@@ -1002,7 +1002,8 @@ enum class DetachResult { SessionIntact, SessionLost };
 // One client of the daemon. Bytes move with read/write, not splice:
 // splice needs one end to be a pipe, and here both ends are sockets.
 // The pump tracks the resident wire framing in both directions
-// ("submit"/"in <len>"+payload/"run" requests; "iter"/"out
+// ("submit"/"step"/"reset", "emit", "in <len>"+payload and "run"
+// requests; "iter"/"out
 // <len>"+payload/"done"/"failed:" responses) so it knows where a
 // request cycle stands when the client goes away:
 //
@@ -1130,7 +1131,9 @@ DetachResult run_framed_pump(
             client_open = false;
           }
         } else {
-          if (client_line.compare(0, 7, "submit ") == 0) {
+          if (client_line.compare(0, 7, "submit ") == 0 ||
+              client_line.compare(0, 5, "step ") == 0 ||
+              client_line.compare(0, 6, "reset ") == 0) {
             cycle = Cycle::Request;
           } else if (client_line.compare(0, 3, "in ") == 0) {
             client_payload = frame_payload_length(client_line);
