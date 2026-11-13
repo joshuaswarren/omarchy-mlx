@@ -1294,3 +1294,19 @@ TEST_CASE("a brace inside a block comment does not truncate the kernel body") {
   CHECK(body.find("v = _mlx_bf16_round_trip(v * 2.0f);") != std::string::npos);
   CHECK(body.find("_mlx_arg1[c] = float(v);") != std::string::npos);
 }
+
+TEST_CASE("a comma inside a comment in a bf16 initializer is not a declarator separator") {
+  // Review finding: `bfloat16_t v = in[c] /* comma, here */;` lost its ')'.
+  const char* source =
+      "[[kernel]] void glue_comment_comma(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  bfloat16_t v = in[c] /* comma, here */;\n"
+      "  y[c] = v;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(body.find("float v = _mlx_bf16_round_trip(_mlx_arg0[c] );") != std::string::npos);
+}
