@@ -3,7 +3,7 @@
 """Host tests for the lane-3 (H16, ABI 3) whole-encoder bundle and its
 runtime selection.
 
-The real Apple-compiled encoder HWX comes from the one-time macOS harvest;
+The real CoreML-compiled encoder HWX comes from a one-time macOS capture run;
 these tests use a synthetic stand-in with the same surface contract (one
 fp16 input of 3000x128, one output of 375x640). It is a container for the
 section builder's rules, not a runnable program. The builder cases need the
@@ -126,7 +126,7 @@ def synthetic_hwx(surfaces=None, subtype=7, scratch=None, tasks=2):
     return bytes(b)
 
 
-def make_harvest(root: Path, hwx: bytes, target="h16g", lock=LOCK):
+def make_capture(root: Path, hwx: bytes, target="h16g", lock=LOCK):
     program = root / "hwx-compiled" / "encoder-ane"
     (program / target).mkdir(parents=True)
     (program / target / "model.hwx").write_bytes(hwx)
@@ -194,9 +194,9 @@ class BuilderTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="h16-bundle-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
-    def build(self, hwx, **harvest):
-        root = self.tmp / f"harvest-{len(list(self.tmp.iterdir()))}"
-        make_harvest(root, hwx, **harvest)
+    def build(self, hwx, **capture):
+        root = self.tmp / f"capture-{len(list(self.tmp.iterdir()))}"
+        make_capture(root, hwx, **capture)
         cache = CompiledCache(self.tmp / "cache")
         return h16.build(root, self.reference, cache, "c" * 40, LOCK), root
 
@@ -238,7 +238,7 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(manifest["release_asset"]["model_sha256"], collection)
         # A second build is a verified cache hit.
         cache = CompiledCache(self.tmp / "cache")
-        again = h16.build(self.tmp / "harvest-0", self.reference, cache, "c" * 40, LOCK)
+        again = h16.build(self.tmp / "capture-0", self.reference, cache, "c" * 40, LOCK)
         self.assertTrue(again[1])
 
     def test_surface_order_follows_the_hwx(self):
@@ -287,13 +287,13 @@ class BuilderTest(unittest.TestCase):
             h16.load_reference_sections(fake)
         self.assertIn("is not the pinned h16-sections.py", str(raised.exception))
 
-    def test_missing_harvest_file(self):
+    def test_missing_capture_file(self):
         root = self.tmp / "empty"
-        make_harvest(root, synthetic_hwx())
+        make_capture(root, synthetic_hwx())
         (root / "capture" / "ane" / "encoder_hidden.npy").unlink()
         with self.assertRaises(h16.BuildError) as raised:
-            h16.harvest_layout(root)
-        self.assertIn("harvest file missing", str(raised.exception))
+            h16.capture_layout(root)
+        self.assertIn("capture file missing", str(raised.exception))
 
 
 class CheckTest(unittest.TestCase):
@@ -336,9 +336,9 @@ class CheckTest(unittest.TestCase):
     def test_check_runs_the_worker_once_and_compares(self):
         tmp = Path(tempfile.mkdtemp(prefix="h16-check-test-"))
         self.addCleanup(shutil.rmtree, tmp, True)
-        harvest = tmp / "harvest"
-        make_harvest(harvest, synthetic_hwx())
-        golden = np.load(harvest / "capture" / "ane" / "encoder_hidden.npy")
+        capture = tmp / "capture"
+        make_capture(capture, synthetic_hwx())
+        golden = np.load(capture / "capture" / "ane" / "encoder_hidden.npy")
         answer = tmp / "answer.bin"
         answer.write_bytes(golden.astype("<f2").tobytes())
         worker = tmp / "fake-worker"
@@ -358,7 +358,7 @@ class CheckTest(unittest.TestCase):
         worker.chmod(0o755)
         bundle = tmp / "bundle"
         bundle.mkdir()
-        report = h16.check(bundle, harvest, worker, "fake-h16-for-test", 1000, LOCK)
+        report = h16.check(bundle, capture, worker, "fake-h16-for-test", 1000, LOCK)
         self.assertEqual(report["failures"], [])
         self.assertLess(report["measured"]["encoder_max_abs_err"], 0.01)
 
