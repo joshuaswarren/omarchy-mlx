@@ -3055,7 +3055,7 @@ Translation translate_msl(
   glsl << declarations << hoisted_consts << shared_declarations;
   if (needs_bfloat) {
     glsl << "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
-         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
+         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); if ((bits & 0x7fffffffu) > 0x7f800000u) return uint16_t(0x7fc0u); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
          << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n"
          << "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
   }
