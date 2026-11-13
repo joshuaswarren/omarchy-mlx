@@ -1332,7 +1332,16 @@ void round_bf16_type(
     size_t end = body.size();
     int depth = 0;
     for (size_t i = begin; i < body.size(); ++i) {
-      if (body[i] == '{') {
+      // Comments are still in the text at this pass: a brace inside one must
+      // not open or close a block.
+      if (body.compare(i, 2, "//") == 0) {
+        i = body.find('\n', i);
+        if (i == std::string::npos) break;
+      } else if (body.compare(i, 2, "/*") == 0) {
+        i = body.find("*/", i + 2);
+        if (i == std::string::npos) break;
+        ++i;
+      } else if (body[i] == '{') {
         ++depth;
       } else if (body[i] == '}') {
         if (depth == 0) {
