@@ -4,8 +4,9 @@
 A float32 buffer of chosen bit patterns goes through `bfloat16_t v = x[i]; y[i] = v;`
 on the GPU. Non-NaN inputs must equal round-to-nearest-even to the bf16 grid
 (`defs.bf16`); NaN inputs must stay NaN. MLX's own CPU conversion
-(`mlx/types/bf16.h`) returns 0x7FC0 for every NaN, so the preferred NaN bits are
-0x7FC00000; any NaN passes, the bits are printed.
+(`mlx/types/bf16.h`) returns 0x7FC0 for every NaN; the translator's helper does the same for a float NaN
+that needs narrowing and passes an already-bf16 NaN (low 16 bits zero) through
+unchanged so storage bits survive. Any NaN passes; the bits are printed.
 
 Usage (repo root): python3 -m tools.kernel_recheck.bf16_numeric
 Exit 0 when every row passes, 1 otherwise.
@@ -26,6 +27,8 @@ BITS = [
     ("nan_negative_full", 0xFFFFFFFF),
     ("nan_negative_low", 0xFF800001),
     ("nan_quiet", 0x7FC00000),
+    ("nan_bf16_negative_quiet", 0xFFC00000),
+    ("nan_bf16_signaling", 0x7F810000),
     ("inf_positive", 0x7F800000),
     ("inf_negative", 0xFF800000),
     ("zero_positive", 0x00000000),
