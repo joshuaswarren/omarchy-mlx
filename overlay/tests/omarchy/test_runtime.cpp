@@ -748,6 +748,13 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 8000);
 
+  // The G18G row (M6) resolves to its own calibrated budget, not the
+  // 5000 fallback: without the row the M6 split every decode step into
+  // 12 (2B) and 20 (4B) submissions, against 2 and 3 with the row.
+  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
+        omarchy::batch_work_fallback());
+
   // The uncalibrated M1 Pro row stays at 0: no guessed number for the
   // reporter's board (G13S, t6000).
   CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 0);
@@ -784,6 +791,7 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
+  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
