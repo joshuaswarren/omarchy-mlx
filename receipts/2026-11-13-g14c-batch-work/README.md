@@ -2,14 +2,14 @@
 
 Board: 14-inch M2 Max (G14C), Linux, Mesa honeykrisp, `MLX_OMARCHY_BATCH_WORK` unset (table) vs `120000` vs `200000`.
 600-token decode, runs interleaved, 20 s gaps, a 60 Hz submit-latency probe beside each run.
-Ids and logprobs identical across arms in every pair (scheduling only).
+First 64 generated token ids identical across arms in every pair (hash `ids_sha`); logprobs were not recorded in these runs. Scheduling only.
 
-## Speed (tok/s, medians unless a row lists pairs)
+## Speed (tok/s; first-campaign rows are means, rerun rows list each run)
 
 | Model | default (40000) | 120000 | gain | pairs positive | script |
 |---|---|---|---|---|---|
 | 4B | 67.97 | 68.97 | +1.5% | all (6 procs) | `w9c-linux-batchwork24.sh` |
-| 4B rerun | 68.75 / 68.72 / 68.77 | 69.65 / 69.56 / 69.55 | +1.3% | 3 of 3 | `w9c-linux-batchwork4b.sh` |
+| 4B rerun | 68.75 / 68.72 / 68.77 | 69.65 / 69.56 / 69.55 | +1.2% | 3 of 3 | `w9c-linux-batchwork4b.sh` |
 | 2B | 105.99 | 106.84 | +0.8% | all | `w9c-linux-batchwork24.sh` |
 | 2B rerun | 108.24 / 107.84 / 105.90 / 105.56 | 109.61 / 109.36 / 106.31 / 106.75 | +1.05% mean | 4 of 4 | `w9c-linux-batchwork2b.sh` |
 | 9B | 37.95 | 38.59 | +1.7% | all (6 procs) | `w9c-linux-batchwork9.sh` |
@@ -31,7 +31,7 @@ Probe: `scripts/submit-latency.c`, 60 Hz, 256-byte fill.
 
 ## Limits
 
-- Submissions at 120000 are about 12 to 13 ms (9B about 12, 4B about 13), above the 2 to 6 ms band the doc comment describes.
+- Submissions at 120000 take about 9 ms (2B), 12.4 ms (9B) and 13.5 ms (4B), computed as one decode step divided by submits per step. That is above the 2 to 6 ms band the doc comment describes.
 - The probe cannot rank budgets on the M2. A 98 ms eval (cap off) left the probe p99 at about 1 ms (`runs/probe-control`). It shows no frame cost; it does not show that none exists.
 - NOT tested on a real compositor.
 - Only G14C changes. Other rows keep their values; the test ceiling is per row (G14C 120000, others 40000).

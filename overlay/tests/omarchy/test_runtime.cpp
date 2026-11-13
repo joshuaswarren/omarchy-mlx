@@ -736,7 +736,7 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
 }
 
 TEST_CASE("submission-cap default resolves per calibrated board") {
-  // The G14C row ships calibrated (receipts/2026-10-02-submission-cap-19).
+  // The G14C row ships calibrated (receipts/2026-11-13-g14c-batch-work).
   CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 120000);
 
   // The G13C/G13G rows carry the measured values from
