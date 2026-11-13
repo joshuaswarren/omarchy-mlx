@@ -51,6 +51,8 @@ def main():
     parser.add_argument("--reference", type=pathlib.Path, required=True)
     parser.add_argument("--driver", type=pathlib.Path, required=True)
     parser.add_argument("--work", type=pathlib.Path, required=True)
+    parser.add_argument("--extra", type=pathlib.Path, nargs="*", default=[],
+                        help="further HWX files (whole models) to compare as they are")
     parser.add_argument("--mutations", type=int, default=4000)
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location("h16_sections", args.reference)
@@ -58,7 +60,7 @@ def main():
     spec.loader.exec_module(ref)
 
     base = FIXTURE.read_bytes()
-    _, text, _, _, _ = ref.parse(base)
+    _, text, *_ = ref.parse(base)
     args.work.mkdir(parents=True, exist_ok=True)
     paths = []
     for i, data in enumerate([base, *mutations(base, text[2], text[1], args.mutations)]):
@@ -69,6 +71,7 @@ def main():
     synth.mkdir(exist_ok=True)
     subprocess.run([str(args.driver), "emit", str(synth)], check=True, stdout=subprocess.DEVNULL)
     paths += sorted(synth.glob("*.hwx"), key=lambda p: int(p.stem[1:]))
+    paths += args.extra
 
     expect = []
     for path in paths:
