@@ -13004,9 +13004,9 @@ void GatedDeltaUpdate::eval_gpu(
   // MLX_OMARCHY_GDN_GQA_DECODE=0 restores the expansion.
   static const bool gdn_gqa_decode =
       decode_path_override("MLX_OMARCHY_GDN_GQA_DECODE") != 0;
-  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read once per process); the untiled prefetch
+  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read live, so a test can flip it between routes); the untiled prefetch
   // kernel needs the state offsets to be multiples of 4 (checked again at dispatch).
-  static const bool gdn_pf_env =
+  const bool gdn_pf_env =
       decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   const bool f32_gqa_route = decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32;
   // The f32-A_log route (Qwen3.5-9B) with Hk != Hv: the untiled prefetch kernel with native GQA
@@ -14930,7 +14930,7 @@ void GdnConvDeltaUpdate::eval_gpu(
   const bool bf16a_untiled_default =
       decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
       omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
-  static const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
+  const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
   const bool dense_inputs = [&] {
     for (const auto& x : inputs) {
