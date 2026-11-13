@@ -1151,3 +1151,34 @@ TEST_CASE("C-style cast to the bf16 template parameter rounds like Metal") {
   CHECK(body.find("_mlx_bf16_round_trip(") != std::string::npos);
   CHECK(body.find("_mlx_float_to_bf16(") != std::string::npos);
 }
+
+TEST_CASE("literal bfloat16_t locals and casts round like Metal") {
+  // kda_glue_pre/post (2026-11-13 device dump): the literal bfloat16_t type
+  // was a plain float, so every cast, local initializer and reassignment
+  // skipped the bf16 rounding Metal applies, and only the output store
+  // rounded (6755 of 12288 q elements differed from the Metal-faithful
+  // reference). Mirrors the typename path: cast, declaration, reassignment
+  // and a comma declarator list all round.
+  const char* source =
+      "[[kernel]] void glue_literal(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  float a = in[c];\n"
+      "  bfloat16_t cq = (bfloat16_t)a, ck = (bfloat16_t)(a * 2.0f);\n"
+      "  bfloat16_t sq_ = cq * ck;\n"
+      "  float yq = (float)(bfloat16_t)((float)cq * (float)sq_);\n"
+      "  sq_ = yq + 1.0f;\n"
+      "  y[c] = yq + sq_;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  const auto body = glsl.substr(glsl.find("void main()"));
+  CHECK(paren_balance(glsl) == 0);
+  CHECK(body.find("float cq = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("float ck = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("float sq_ = _mlx_bf16_round_trip(cq * ck)") != std::string::npos);
+  CHECK(body.find("float yq = _mlx_bf16_round_trip(") != std::string::npos);
+  CHECK(body.find("sq_ = _mlx_bf16_round_trip(yq + 1.0") != std::string::npos);
+  CHECK(body.find("bfloat16_t") == std::string::npos);
+}
