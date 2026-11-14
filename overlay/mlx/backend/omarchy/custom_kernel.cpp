@@ -149,6 +149,26 @@ size_t skip_msl_comment(const std::string& value, size_t index) {
   }
   return index;
 }
+size_t find_msl_delimiter(
+    const std::string& value,
+    size_t from,
+    char delimiter) {
+  for (size_t index = from; index < value.size(); ++index) {
+    const auto comment_end = skip_msl_comment(value, index);
+    if (comment_end != index) {
+      if (comment_end >= value.size()) {
+        return std::string::npos;
+      }
+      index = comment_end;
+      continue;
+    }
+    if (value[index] == delimiter) {
+      return index;
+    }
+  }
+  return std::string::npos;
+}
+
 
 size_t matching_delimiter(
     const std::string& value,
@@ -2315,7 +2335,7 @@ Translation translate_msl(
   if (marker == std::string::npos) {
     throw std::runtime_error("generated MSL kernel entry point is missing");
   }
-  const auto arguments_open = source.find('(', marker);
+  const auto arguments_open = find_msl_delimiter(source, marker, '(');
   const auto arguments_close =
       matching_delimiter(source, arguments_open, '(', ')');
   const auto body_open = source.find('{', arguments_close);
