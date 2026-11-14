@@ -1543,3 +1543,76 @@ TEST_CASE("a quoted include containing a comment marker stays a string") {
   auto glsl_control = translate(control, 1);
   CHECK(glsl_control.find("threadgroup") == std::string::npos);
 }
+
+TEST_CASE("a digit separator in a define does not open a char literal") {
+  // Review reproduction (PR #427): prepending a C++14 numeric separator
+  // to the unchanged residual fixture is accepted by base. Lexing the
+  // separator apostrophe as a character-literal opener masked every
+  // following helper signature, its threadgroup parameters stayed
+  // unspecialized, and translation threw. The odd separator count
+  // 1'000 is the failing shape; 1'000'000 already passed because the
+  // second apostrophe closed the phantom literal. A real character
+  // literal must keep working.
+  std::string source = "#define COUNT 1'000\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string even = "#define COUNT 1'000'000\n";
+  even += residual_norm_style;
+  CHECK(translate(even, 1).find("threadgroup") == std::string::npos);
+  std::string literal =
+      "[[kernel]] void char_literal_probe(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint lid [[thread_position_in_threadgroup]]) {\n"
+      "  out[0] = (in[lid] == 'x') ? in[0] : in[1];\n"
+      "}\n";
+  auto glsl_literal = translate(literal, 1);
+  CHECK(glsl_literal.find("'x'") != std::string::npos);
+}
+
+TEST_CASE("a raw string with an embedded quote stays one token") {
+  // Reviewer-noted gap: the lexer has no raw-string state, so the quote
+  // inside R"tag(")tag" toggles a plain string and the unterminated
+  // remainder masks every following helper. The raw token must be
+  // scanned to its closing delimiter instead.
+  std::string source = "#define DOC R\"tag(\")tag\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("hex separators, suffixes and digit-adjacent literals keep their roles") {
+  // Separators after hex digits inside a number token stay separators:
+  // the helpers that follow each define stay visible to the scan.
+  std::string hex = "#define HEXMASK 0x1'a'f\n";
+  hex += residual_norm_style;
+  auto glsl_hex = translate(hex, 1);
+  CHECK(glsl_hex.find("threadgroup") == std::string::npos);
+  CHECK(glsl_hex.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string hex_pairs = "#define ROUTE 0xDE'AD'BEEF\n";
+  hex_pairs += residual_norm_style;
+  CHECK(translate(hex_pairs, 1).find("threadgroup") == std::string::npos);
+  std::string suffixed = "#define COUNTU 1'000u\n";
+  suffixed += residual_norm_style;
+  CHECK(translate(suffixed, 1).find("threadgroup") == std::string::npos);
+  // A digit-adjacent character literal must stay a literal: the paren
+  // or the operator ends the number before the quote opens.
+  std::string neighbors =
+      "[[kernel]] void separator_neighbors(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint lid [[thread_position_in_threadgroup]]) {\n"
+      "  out[0] = (in[lid] == '1' ? 1.0f : 0.0f) + ('2' == '2' ? 1.0f : 0.0f);\n"
+      "  out[1] = 1+'\\'' ? in[0] : in[1];\n"
+      "}\n";
+  auto glsl_neighbors = translate(neighbors, 1);
+  CHECK(glsl_neighbors.find("'1'") != std::string::npos);
+  CHECK(glsl_neighbors.find("'2'") != std::string::npos);
+  CHECK(glsl_neighbors.find("'\\''") != std::string::npos);
+}
