@@ -4078,7 +4078,8 @@ static int decode_path_override(const char* name) {
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
 // live): the largest pass length T whose [1, T, K] bf16 x runs as batch-shared
 // decode GEMV (one dispatch per block of 4 rows) instead of the coopmat prefill
-// tile. The cap is 4 on every part but G13C, where it is 8 (qmv_small_t_device_cap):
+// tile. The cap is 4 on every part but G13C and G16S, where it is 8
+// (qmv_small_t_device_cap):
 // above 4 a second GEMV block costs more than the tile on G13G (PR #296). The
 // request is clamped to 8 here and to the part's cap at the call site. Unset,
 // empty or 0 keeps the shipped route. Each row is
@@ -4100,7 +4101,9 @@ static int qmv_small_t_max_rows() {
 static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
   if (requested_max < 2) return 0;
   const std::string& name = encoder.device().capabilities().device_name;
-  int cap = (name.find("G13C") != std::string::npos) ? 8 : 4;
+  const bool wide = name.find("G13C") != std::string::npos ||
+      name.find("G16S") != std::string::npos;
+  int cap = wide ? 8 : 4;
   return std::min(requested_max, cap);
 }
 
