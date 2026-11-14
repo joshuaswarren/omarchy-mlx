@@ -1,0 +1,311 @@
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -679,10 +679,63 @@
+         n += 1
+ 
+ 
++# mlx-omarchy speculative verify. A verify pass scores every drafted position, so
++# it needs the full logits that the last-logits patch trims to one row. It is a
++# short pass (num_draft + 1 rows), and MLX_OMARCHY_QMV_SMALL_T sends its 4-bit
++# linears to the batch-shared GEMV, whose rows match the single-token decode
++# kernel bit for bit, so greedy speculative output equals plain greedy decode.
++# Both variables are read live, so the pass is evaluated inside the block. A
++# QMV_SMALL_T value already set in the environment is left as it is.
++@contextlib.contextmanager
++def _omarchy_verify_pass(rows):
++    keys = ("MLX_OMARCHY_FULL_LOGITS", "MLX_OMARCHY_QMV_SMALL_T")
++    saved = {k: os.environ.get(k) for k in keys}
++    os.environ["MLX_OMARCHY_FULL_LOGITS"] = "1"
++    if saved["MLX_OMARCHY_QMV_SMALL_T"] is None and rows > 1:
++        os.environ["MLX_OMARCHY_QMV_SMALL_T"] = str(min(rows, 8))
++    try:
++        yield
++    finally:
++        for k, v in saved.items():
++            if v is None:
++                os.environ.pop(k, None)
++            else:
++                os.environ[k] = v
++
++
++def _omarchy_lookup_draft(history, num_draft, ngram_max, ngram_min):
++    """Prompt-lookup draft: the tokens that followed the most recent earlier
++    occurrence of the longest matching suffix n-gram (ngram_max down to
++    ngram_min) of ``history``."""
++    for n in range(ngram_max, ngram_min - 1, -1):
++        if len(history) <= n:
++            continue
++        pattern = history[-n:]
++        for i in range(len(history) - n - 1, -1, -1):
++            if history[i : i + n] == pattern:
++                draft = history[i + n : i + n + num_draft]
++                if draft:
++                    return draft
++    return []
++
++
++def _omarchy_snapshot(prompt_cache):
++    # Recurrent layers (ArraysCache: GDN, conv state) cannot be trimmed; keep
++    # their state so a rejected draft can be rolled back.
++    return [None if c.is_trimmable() else list(c.state) for c in prompt_cache]
++
++
++def _omarchy_restore(prompt_cache, snapshot, num_tokens):
++    cache.trim_prompt_cache([c for c in prompt_cache if c.is_trimmable()], num_tokens)
++    for c, s in zip(prompt_cache, snapshot):
++        if s is not None:
++            c.state = s
++
++
+ def speculative_generate_step(
+     prompt: mx.array,
+     model: nn.Module,
+-    draft_model: nn.Module,
++    draft_model: Optional[nn.Module],
+     *,
+     num_draft_tokens: int = 2,
+     max_tokens: int = 256,
+@@ -693,6 +746,9 @@
+     kv_bits: Optional[int] = None,
+     kv_group_size: int = 64,
+     quantized_kv_start: int = 0,
++    lookup_ngram_max: int = 3,
++    lookup_ngram_min: int = 2,
++    lookup_min_hit_rate: float = 0.3,
+ ) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
+     """
+     A generator producing token ids based on the given prompt from the model.
+@@ -700,7 +756,10 @@
+     Args:
+         prompt (mx.array): The input prompt.
+         model (nn.Module): The model to use for generation.
+-        draft_model (nn.Module): The draft model for speculative decoding.
++        draft_model (nn.Module, optional): The draft model for speculative
++          decoding. ``None`` drafts by prompt lookup: the tokens that followed
++          the latest earlier match of the current n-gram suffix in the prompt
++          and the generated text.
+         num_draft_tokens (int, optional): The number of draft tokens for
+           speculative decoding. Default: ``2``.
+         max_tokens (int): The maximum number of tokens. Use``-1`` for an infinite
+@@ -711,13 +770,20 @@
+           A list of functions that take tokens and logits and return the processed
+           logits. Default: ``None``.
+         prompt_cache (List[Any], optional): A pre-computed prompt cache. Note, if
+-          provided, the cache will be updated in place. The cache must be trimmable.
++          provided, the cache will be updated in place. Layers that cannot be
++          trimmed (recurrent state) are rolled back by replaying the accepted
++          tokens.
+         prefill_step_size (int): Step size for processing the prompt.
+         kv_bits (int, optional): Number of bits to use for KV cache quantization.
+           None implies no cache quantization. Default: ``None``.
+         kv_group_size (int): Group size for KV cache quantization. Default: ``64``.
+         quantized_kv_start (int): Step to begin using a quantized KV cache.
+            when ``kv_bits`` is non-None. Default: ``0``.
++        lookup_ngram_max (int): Longest n-gram matched by prompt lookup.
++        lookup_ngram_min (int): Shortest n-gram matched by prompt lookup.
++        lookup_min_hit_rate (float): Prompt lookup drafts only while the running
++          rate at which its first drafted token is right stays at or above this;
++          below it, plain decode steps keep scoring the lookup until it recovers.
+ 
+     Yields:
+         Tuple[mx.array, mx.array, bool]: One token, a vector of log probabilities,
+@@ -726,20 +792,20 @@
+ 
+     y = prompt.astype(mx.uint32)
+     prev_tokens = None
++    lookup = draft_model is None
+ 
+     # Create the KV cache for generation
+     if prompt_cache is None:
+         model_cache = cache.make_prompt_cache(model)
+-        draft_cache = cache.make_prompt_cache(draft_model)
++        draft_cache = [] if lookup else cache.make_prompt_cache(draft_model)
+     else:
+         model_cache = prompt_cache[: len(model.layers)]
+         draft_cache = prompt_cache[len(model.layers) :]
+ 
+-    if not cache.can_trim_prompt_cache(model_cache):
+-        types = {type(c).__name__ for c in model_cache if not c.is_trimmable()}
+-        raise ValueError(
+-            f"Speculative decoding requires a trimmable prompt cache " f"(got {types})."
+-        )
++    model_trim = cache.can_trim_prompt_cache(model_cache)
++    draft_trim = lookup or cache.can_trim_prompt_cache(draft_cache)
++    history = prompt.tolist() if lookup else None
++    hit_rate = 1.0
+ 
+     sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
+ 
+@@ -795,13 +861,24 @@
+             mx.clear_cache()
+         return y
+ 
++    def _replay(model, cache, tokens):
++        if tokens.size:
++            with _omarchy_verify_pass(tokens.size):
++                with mx.stream(generation_stream):
++                    model(tokens[None], cache=cache)
++                mx.eval([c.state for c in cache])
++
+     def _rewind_cache(num_draft, num_accept):
+-        cache.trim_prompt_cache(model_cache, num_draft - num_accept)
+-        cache.trim_prompt_cache(draft_cache, max(num_draft - num_accept - 1, 0))
++        if model_trim:
++            cache.trim_prompt_cache(model_cache, num_draft - num_accept)
++        if not lookup and draft_trim:
++            cache.trim_prompt_cache(draft_cache, max(num_draft - num_accept - 1, 0))
+ 
+     def _draft_generate(y, num_draft):
+         if num_draft == 0:
+             return mx.array([], mx.uint32)
++        if lookup:
++            return mx.array(draft_list, mx.uint32)
+         ys = []
+         for _ in range(num_draft):
+             y, _ = _step(draft_model, draft_cache, y)
+@@ -810,22 +887,57 @@
+         return mx.concatenate(ys)
+ 
+     with mx.stream(generation_stream):
+-        draft_y = _prefill(draft_model, draft_cache, y)
++        draft_y = y if lookup else _prefill(draft_model, draft_cache, y)
+         y = _prefill(model, model_cache, y)
+ 
+     ntoks = 0
+     # Set these so the finally block doesn't raise
+     num_draft = 0
+     n = 0
++    draft_list = []
++    model_snap = None
+     try:
+         while True:
+             num_draft = min(max_tokens - ntoks, num_draft_tokens)
++            if lookup:
++                draft_list = _omarchy_lookup_draft(
++                    history, num_draft, lookup_ngram_max, lookup_ngram_min
++                )
++                if not draft_list or hit_rate < lookup_min_hit_rate:
++                    # Plain decode for a stretch, pipelined like generate_step;
++                    # each token still scores what the lookup would have drafted.
++                    steps = min(8, max_tokens - ntoks if max_tokens >= 0 else 8)
++                    num_draft = n = 0
++                    model_snap = None
++                    nxt = _step(model, model_cache, y)
++                    mx.async_eval(nxt[0])
++                    for i in range(steps):
++                        cur = nxt
++                        if i + 1 < steps:
++                            nxt = _step(model, model_cache, cur[0])
++                            mx.async_eval(nxt[0])
++                        tok = cur[0].item()
++                        guess = _omarchy_lookup_draft(history, 1, lookup_ngram_max, lookup_ngram_min)
++                        if guess:
++                            hit_rate = 0.8 * hit_rate + 0.2 * (guess[0] == tok)
++                        history.append(tok)
++                        ntoks += 1
++                        yield tok, cur[1][0], False
++                    if ntoks == max_tokens:
++                        break
++                    y = cur[0]
++                    continue
++                num_draft = len(draft_list)
++            model_snap = None if model_trim or num_draft == 0 else _omarchy_snapshot(model_cache)
++            draft_snap = None if draft_trim or num_draft == 0 else _omarchy_snapshot(draft_cache)
++            draft_in = draft_y
+             draft_tokens = _draft_generate(draft_y, num_draft)
+             if prev_tokens is not None:
+                 prev_tokens = prev_tokens[: prev_tokens.size - y.size - num_draft + 1]
+-            y = mx.concatenate([y, draft_tokens])
+-            tokens, logprobs = _step(model, model_cache, y, num_draft + 1)
+-            mx.eval(tokens, draft_tokens)
++            verify_in = mx.concatenate([y, draft_tokens])
++            with _omarchy_verify_pass(num_draft + 1):
++                tokens, logprobs = _step(model, model_cache, verify_in, num_draft + 1)
++                mx.eval(tokens, draft_tokens)
+             draft_tokens = draft_tokens.tolist()
+             tokens = tokens.tolist()
+             n = 0
+@@ -835,32 +947,59 @@
+                     break
+                 n += 1
+                 ntoks += 1
++                if lookup:
++                    history.append(tn)
+                 yield tn, lpn, True
+                 if ntoks == max_tokens:
+                     break
++            if lookup:
++                hit_rate = 0.8 * hit_rate + 0.2 * (n > 0)
+             if ntoks < max_tokens:
+                 ntoks += 1
++                if lookup:
++                    history.append(tokens[n])
+                 yield tokens[n], logprobs[n], False
+ 
+             if ntoks == max_tokens:
+                 break
+ 
++            # Roll recurrent layers back to the last accepted token. The
++            # trimmable layers are trimmed to the same point by _rewind_cache.
++            if model_snap is not None and n < num_draft:
++                _omarchy_restore(model_cache, model_snap, verify_in.size)
++                _replay(model, model_cache, verify_in[: verify_in.size - num_draft + n])
++            if draft_snap is not None and n < num_draft:
++                fed = draft_in.size + num_draft - 1
++                _omarchy_restore(draft_cache, draft_snap, fed)
++                keep = mx.concatenate(
++                    [draft_in, mx.array(draft_tokens[: min(n, num_draft - 1)], mx.uint32)]
++                )
++                _replay(draft_model, draft_cache, keep)
++
+             y = mx.array([tokens[n]], mx.uint32)
+             draft_y = y
+ 
+             # If we accepted all the draft tokens, include the last
+             # draft token in the next draft step since it hasn't been
+             # processed yet by the draft model
+-            if n == num_draft:
++            if n == num_draft and not lookup and num_draft > 0:
+                 draft_y = mx.concatenate(
+                     [mx.array(draft_tokens[-1:], mx.uint32), draft_y]
+                 )
+ 
+             if prev_tokens is not None:
+                 prev_tokens = prev_tokens[: -max(num_draft - n, 1)]
+-            _rewind_cache(num_draft, n)
++            if model_snap is None:
++                _rewind_cache(num_draft, n)
++            elif not lookup and draft_trim:
++                cache.trim_prompt_cache(draft_cache, max(num_draft - n - 1, 0))
+     finally:
+-        _rewind_cache(num_draft, n)
++        if model_snap is None:
++            _rewind_cache(num_draft, n)
++        elif n < num_draft:
++            # stopped on a rejected pass: leave the cache at the last accepted token
++            _omarchy_restore(model_cache, model_snap, verify_in.size)
++            _replay(model, model_cache, verify_in[: verify_in.size - num_draft + n])
+ 
+ 
+ def stream_generate(
+@@ -907,7 +1046,19 @@
+ 
+     kwargs["max_tokens"] = max_tokens
+ 
+-    if draft_model is None:
++    # mlx-omarchy prompt lookup: MLX_OMARCHY_PROMPT_LOOKUP=K (1..7) drafts up to K
++    # tokens per step from earlier text and verifies them in one short pass.
++    # Unset, empty or 0 keeps plain decode. A draft model takes precedence.
++    lookup_k = os.environ.get("MLX_OMARCHY_PROMPT_LOOKUP", "")
++    lookup_k = int(lookup_k) if lookup_k.strip().isdigit() else 0
++    if draft_model is None and lookup_k > 0 and kwargs.get("input_embeddings") is None:
++        kwargs["num_draft_tokens"] = min(lookup_k, 7)
++        for k in ("max_kv_size", "prompt_progress_callback", "input_embeddings"):
++            kwargs.pop(k, None)
++        if kwargs.get("prefill_step_size") is None:
++            kwargs.pop("prefill_step_size", None)
++        token_generator = speculative_generate_step(prompt, model, None, **kwargs)
++    elif draft_model is None:
+         kwargs.pop("num_draft_tokens", None)
+         token_generator = generate_step(prompt, model, **kwargs)
+         # from_draft always false for non-speculative generation
