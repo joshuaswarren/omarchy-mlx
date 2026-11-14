@@ -1529,38 +1529,72 @@ std::vector<uint8_t> code_mask(const std::string& value) {
       mask[index] = 1;
     } else if (value.compare(index, 2, "//") == 0) {
       line_comment = true;
+      in_number = false;
       ++index;
     } else if (value.compare(index, 2, "/*") == 0) {
       block_comment = true;
+      in_number = false;
       ++index;
     } else if (c == '"') {
       in_string = true;
+      in_number = false;
     } else if (c == '\'') {
       in_char = true;
     } else {
       mask[index] = 1;
+      const char prev = index > 0 ? value[index - 1] : '\0';
+      const bool prev_ident =
+          (prev >= '0' && prev <= '9') || (prev >= 'a' && prev <= 'z') ||
+          (prev >= 'A' && prev <= 'Z') || prev == '_';
+      const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
+      if (in_number && !word) {
+        in_number = false;
+      }
+      if (c >= '0' && c <= '9' && !prev_ident) {
+        in_number = true;
+      }
       if (c == 'R' && index + 1 < value.size() && value[index + 1] == '"') {
-        size_t scan = index + 2;
-        while (scan < value.size() && value[scan] != '(') {
-          ++scan;
+        size_t start = index;
+        while (start > 0) {
+          const char b = value[start - 1];
+          const bool ident = (b >= '0' && b <= '9') ||
+                             (b >= 'a' && b <= 'z') ||
+                             (b >= 'A' && b <= 'Z') || b == '_';
+          if (!ident) {
+            break;
+          }
+          --start;
         }
-        if (scan < value.size()) {
-          const std::string delim = value.substr(index + 2, scan - index - 2);
-          const size_t close = value.find(")" + delim + "\"", scan + 1);
-          if (close != std::string::npos) {
-            index = close + delim.size() + 1;
-          } else {
-            index = value.size() - 1;
+        const std::string prefix = value.substr(start, index - start + 1);
+        const bool known_prefix = prefix == "R" || prefix == "uR" ||
+                                  prefix == "UR" || prefix == "LR" ||
+                                  prefix == "u8R";
+        size_t scan = index + 2;
+        if (known_prefix) {
+          while (scan < value.size() && value[scan] != '(') {
+            ++scan;
           }
         }
-      } else {
-        const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-                          (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
-        if (in_number && !word) {
-          in_number = false;
-        }
-        if (c >= '0' && c <= '9') {
-          in_number = true;
+        if (known_prefix && scan < value.size()) {
+          const std::string delim = value.substr(index + 2, scan - index - 2);
+          bool delim_ok = delim.size() <= 16;
+          for (const char d : delim) {
+            const bool delim_char = (d >= '0' && d <= '9') ||
+                                    (d >= 'a' && d <= 'z') ||
+                                    (d >= 'A' && d <= 'Z') || d == '_';
+            if (!delim_char) {
+              delim_ok = false;
+            }
+          }
+          if (delim_ok) {
+            const size_t close = value.find(")" + delim + "\"", scan + 1);
+            if (close != std::string::npos) {
+              index = close + delim.size() + 1;
+            } else {
+              index = value.size() - 1;
+            }
+          }
         }
       }
     }
