@@ -13011,7 +13011,7 @@ void GatedDeltaUpdate::eval_gpu(
   const bool f32_gqa_route = decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32;
   // The f32-A_log route (Qwen3.5-9B) with Hk != Hv: the untiled prefetch kernel with native GQA
   // (GatedDeltaDecodeBF16PfComposedGqa) is the default on the parts where it was measured bit-equal to the
-  // tiled one and faster (gdn_pf_gqa_default_part: G14C and G13C), unless MLX_OMARCHY_GDN_DECODE_TILE is set
+  // tiled one and faster (gdn_pf_gqa_default_part: G14C, G13C and G16S), unless MLX_OMARCHY_GDN_DECODE_TILE is set
   // (1 keeps the tiled kernel, 0 the untiled one with the expansion), MLX_OMARCHY_GDN_PF_GQA=0, MLX_OMARCHY_GDN_PF=0
   // or MLX_OMARCHY_GDN_GQA_DECODE=0. MLX_OMARCHY_GDN_PF_GQA=1 (read live) also turns it on where the tile is
   // off (the tiled route has its own native GQA, gqa_native). q and k keep their Hk heads, so the two expansion

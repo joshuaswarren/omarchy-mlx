@@ -552,12 +552,15 @@ std::string kernel_limit_heap_warning(
 
 // GatedDeltaUpdate decode on the f32 A_log raw route (Qwen3.5-9B) with Hk != Hv: the parts whose
 // default is the untiled prefetch kernel with native GQA (ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa),
-// because that route was measured bit-equal to the tiled one and faster on them (receipts/2026-10-18-gdn-pf-gqa).
+// because that route was measured bit-equal to the tiled one and faster on them (G14C and G13C:
+// receipts/2026-10-18-gdn-pf-gqa; G16S, the M4 Pro: Qwen3.5-4B-MLX-4bit decode 54.9 -> 60.5 tok/s, identical
+// tokens, receipts/2026-11-14-m4-pro-gpu-tuning).
 // Keyed on the device name so an unmeasured part keeps its previous default (a G13 part other than G13C
 // already runs the untiled kernel with the expansion copies). Pure.
 inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13C") != std::string::npos;
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G16S") != std::string::npos;
 }
 
 // GatedDeltaUpdate decode on the bf16 A_log raw route: the (part, head ratio) pairs whose default is the untiled prefetch
