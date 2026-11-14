@@ -16227,7 +16227,7 @@ void ScaledDotProductAttention::eval_gpu(
         decode_caps.max_compute_work_group_size[0] >= 128u &&
         (decode_caps.subgroup_operations & kSplitSubgroupFeatures) == kSplitSubgroupFeatures;
     const bool split_wanted = split_env > 0 ||
-        (split_env < 0 && omarchy::sdpa_split_default(decode_caps.device_name, static_cast<uint32_t>(k_len)));
+        (split_env < 0 && omarchy::sdpa_split_default(decode_caps.device_name, static_cast<uint32_t>(k_len), head_dim));
     if (split_wanted && split_device_ready &&
         (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
         q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
