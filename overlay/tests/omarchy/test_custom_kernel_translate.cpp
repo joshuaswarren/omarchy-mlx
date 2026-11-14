@@ -1325,6 +1325,29 @@ TEST_CASE("a parenthesis in a kernel-signature comment is ignored") {
   CHECK(glsl.find("void main()") != std::string::npos);
 }
 
+TEST_CASE("an unbalanced parenthesis in a header comment is ignored") {
+  // The body is comment-stripped before the passes; the header is not, so
+  // every header scan must skip comments itself.
+  const char* line_comment =
+      "// returns float scale( with a note that is never closed\n"
+      "inline float twice(float x) { return x * 2.0f; }\n"
+      "[[kernel]] void header_line_comment(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  y[thread_position_in_grid.x] = twice(1.0f);\n"
+      "}\n";
+  CHECK(translate(line_comment, 1).find("void main()") != std::string::npos);
+  const char* block_comment =
+      "/* see uint index( and (float cast */\n"
+      "inline float twice(float x) { return x * 2.0f; }\n"
+      "[[kernel]] void header_block_comment(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  y[thread_position_in_grid.x] = twice(1.0f);\n"
+      "}\n";
+  CHECK(translate(block_comment, 1).find("void main()") != std::string::npos);
+}
+
 namespace {
 // Real compiler check: skipped (stated in the log) only where glslc is absent.
 bool glslc_present() {
