@@ -80,14 +80,13 @@ plus Laya, and it needs a 96 GB machine.
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port | Data-only; h16 bring-up module |
-| M4 Pro | [Experimental](receipts/2026-11-13-m4-pro-g16s-gpu/README.md): MacBook Pro (G16S) with the aurora kernel driver and Mesa Borealis; standing battery passes | Data-only; h16 bring-up module |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
 this project measures on. The M4 row needs the out-of-tree G16G driver
 stack named in its receipt. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
-to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet. The beta path for M4 on Linux, with its steps, the Mesa notes and what is measured, is in [docs/m4-linux.md](docs/m4-linux.md).
+to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet. The beta path for M4 on Linux, with its steps and what is not measured, is in [docs/m4-linux.md](docs/m4-linux.md).
 
 The ANE is separate hardware from the GPU. It has its own driver and its
 own tested state. Chip-by-chip ANE status, including what each untested

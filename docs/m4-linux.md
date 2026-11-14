@@ -1,29 +1,16 @@
 # MLX on an M4 under Omarchy
 
 Status: beta. This is a path for M4 owners who run Linux with the
-aurora M4 integration. Two M4 machines have results here.
+aurora M4 integration, and it needs the M4 GPU patches below. Only one
+M4 machine has results here, and it is not the machine most readers have.
 
 | Machine | GPU id | Driver | Status |
 |---|---|---|---|
 | M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). |
-| M4 Pro MacBook Pro (J616s, T6040) | G16S | aurora kernel driver, Mesa Borealis (`26.3.0-devel`, `git-05ddb00f5c`) | Measured. See the [M4 Pro receipt](../receipts/2026-11-13-m4-pro-g16s-gpu/README.md). |
+| M4 Pro (J616s, t6040) | G16S | Mesa Borealis | **Not measured.** The steps below come from reading the source. |
 
-On the M4 Pro the standing battery passes: 57 suites, 8 capability
-simulation profiles and 16 flash cases, one process per suite. Decode, 64
-greedy tokens, mlx-lm 0.31.3: Qwen2.5-1.5B-Instruct-4bit 137.0 tok/s,
-granite-4.0-1b-4bit 105.5, Qwen3.5-4B-MLX-4bit 55.0. Decode varies about
-10 percent between runs.
-
-## Mesa
-
-Stock Mesa Borealis `git-05ddb00f5c` runs the battery, and with the
-opt-in switches (`MLX_OMARCHY_QMM_VEC_TOKEN_MULTI`, `MLX_OMARCHY_GDN_*`) the
-backend builds and runs the opt-in routes the suites reach, the multi-token
-GEMV included. The overlay carries its own f16 `rsqrt` workaround, so the
-f16 elementwise kernels compile on stock Borealis. A standalone
-pipeline-creation sweep with other device features stops 22 shaders with
-`Unhandled ALU op pack_64_4x16`; the receipt lists them and which of them
-the suites dispatch through the backend.
+Nothing on this page has run on an M4 Pro. If it fails on your machine,
+the failure is the useful result: send it with the table row.
 
 ## Before you start
 
@@ -141,6 +128,12 @@ choose the venv python and the driver setting.
   difference between arms and no consistent winner, so those two are not
   extended to it
   ([`decode-ab.txt`](../receipts/2026-11-13-m4-pro-g16s-gpu/decode-ab.txt)).
+- **Cooperative matrix on G16S.** Stock Borealis does not expose it on the M4 Pro: the part runs
+  on the G17P profile. With aurora-silicon/mesa#319 (or the broader #299) it is on by default, and
+  this series then takes the cooperative-matrix prefill routes. Without it #321 applies.
+- **The f16 elementwise kernels need this series.** A release wheel built
+  before the series fails the f16 `sqrt`, `exp`, `rsqrt`, `normal` and
+  `erfinv` pipelines on G16S. The M4 Pro source-build receipt includes the series.
 - #321 follows the driver, not the name. The bf16 4-bit prefill route
   on the scalar-FMA kernel applies to any device whose cooperative-matrix
   route is unreachable. That means no fp32 cooperative matrix, a subgroup
@@ -148,15 +141,31 @@ choose the venv python and the driver setting.
   `MLX_OMARCHY_NO_COOPMAT=1`. If your driver does not expose the
   cooperative matrix, you get #321 and not the default pick. The
   collector's capability report shows which case you are in.
-- **G16S exposes no cooperative matrix**, so #321 applies there.
-- **The f16 elementwise kernels need this series.** A release wheel built
-  before the series fails the f16 `sqrt`, `exp`, `rsqrt`, `normal` and
-  `erfinv` pipelines on G16S. The M4 Pro receipt was measured on a source
-  build that includes the series.
-- **Op checks may fail** on other Apple9 machines. A failed op reference in
-  the first run is a valid table fact.
+- **Op checks may fail.** It is not known whether the wheel's kernels pass
+  on Apple9 under Borealis. A failed op reference in the first run is a
+  valid table fact.
 - **The ANE is not supported on M4 under Linux.** The M4 ANE row is
   data-only (h16 bring-up module).
 - **Decode and prefill numbers are not in the collector.** They come from
   the benchmark scripts. Record the prompt-ids digest with them so two
   machines compare the same prompt.
+
+## M4 Pro source build (this series)
+
+Measured on a MacBook Pro M4 Pro (J616s, T6040) with the aurora kernel driver and Mesa Borealis
+`git-05ddb00f5c` ([receipt](../receipts/2026-11-13-m4-pro-g16s-gpu/README.md),
+[tuning](../receipts/2026-11-14-m4-pro-gpu-tuning/README.md)). On the M4 Pro the standing battery passes: 57 suites, 8 capability
+simulation profiles and 16 flash cases, one process per suite. Decode with the
+G16S defaults of this series on stock Borealis, 128 greedy tokens, mlx-lm 0.31.3 (tuning receipt):
+Qwen2.5-1.5B-Instruct-4bit 135.7 tok/s, granite-4.0-1b-4bit 120.5, Qwen3.5-4B-MLX-4bit 64.6,
+Qwen3-8B-4bit 41.9. With the cooperative matrix (aurora-wip plus mesa#319) warm prefill of a
+2k-token prompt goes from 652 to 1541, 292 to 1129, 167 to 568 and 94 to 315 tok/s.
+
+Stock Mesa Borealis `git-05ddb00f5c` runs the battery, and with the
+opt-in switches (`MLX_OMARCHY_QMM_VEC_TOKEN_MULTI`, `MLX_OMARCHY_GDN_*`) the
+backend builds and runs the opt-in routes the suites reach, the multi-token
+GEMV included. The overlay carries its own f16 `rsqrt` workaround, so the
+f16 elementwise kernels compile on stock Borealis. A standalone
+pipeline-creation sweep with other device features stops 22 shaders with
+`Unhandled ALU op pack_64_4x16`; the receipt lists them and which of them
+the suites dispatch through the backend.
