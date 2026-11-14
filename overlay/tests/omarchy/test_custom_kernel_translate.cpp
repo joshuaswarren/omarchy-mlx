@@ -1616,3 +1616,60 @@ TEST_CASE("hex separators, suffixes and digit-adjacent literals keep their roles
   CHECK(glsl_neighbors.find("'2'") != std::string::npos);
   CHECK(glsl_neighbors.find("'\\''") != std::string::npos);
 }
+
+TEST_CASE("a digit ending an identifier does not start a number token") {
+  // Review reproduction (PR #427): prepending these defines to the
+  // unchanged residual fixture is accepted by base. EMPTY1 is an
+  // identifier, not a preprocessing number: treating its final digit
+  // as a number start made the next apostrophe a phantom separator,
+  // the paren reset the state, and the character literal in the
+  // second define then ran unterminated across the rest of the text,
+  // masking every helper. An identifier with a trailing digit followed
+  // by a normal helper stays visible.
+  std::string source = "#define EMPTY1\n#define DOC EMPTY1'('\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string plain = "#define EMPTY1\n";
+  plain += residual_norm_style;
+  auto glsl_plain = translate(plain, 1);
+  CHECK(glsl_plain.find("threadgroup") == std::string::npos);
+  CHECK(glsl_plain.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("an identifier ending in R before a quote stays a plain string") {
+  // Review reproduction (PR #427): prepending these defines to the
+  // unchanged residual fixture is accepted by base. STR is an
+  // identifier, so STR"hello" is an ordinary string; the lexer took
+  // the identifier's final R as a raw-string prefix, searched past
+  // the closing quote for a delimiter, found the next helper's open
+  // paren, and masked the rest of the text when the bogus terminator
+  // never came. A raw prefix must start a token: the real raw forms
+  // with R and u8R keep working, the quoted-paren control accepts,
+  // and the separator define stays a number.
+  std::string source = "#define STR\n#define DOC STR\"hello\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string quoted = "#define DOC STR\"(hello)\"\n";
+  quoted += residual_norm_style;
+  CHECK(translate(quoted, 1).find("threadgroup") == std::string::npos);
+  std::string real_raw =
+      "#define DOC2 R\"x(has \" quote ( and ) inside)x\"\n";
+  real_raw += residual_norm_style;
+  auto glsl_raw = translate(real_raw, 1);
+  CHECK(glsl_raw.find("threadgroup") == std::string::npos);
+  CHECK(glsl_raw.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string u8_raw = "#define DOC3 u8R\"(quote \" here)\"\n";
+  u8_raw += residual_norm_style;
+  CHECK(translate(u8_raw, 1).find("threadgroup") == std::string::npos);
+  std::string separator = "#define COUNT 1'000\n";
+  separator += residual_norm_style;
+  CHECK(translate(separator, 1).find("threadgroup") == std::string::npos);
+}
