@@ -1,0 +1,37 @@
+## arm=default round=1
+# 2026-11-14T08:16:48+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=2868000
+RESULT Qwen3-8B-4bit pf300 296 304.2 pf2k 2016 319.8 decode 128 42.29 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=geom:MLX_OMARCHY_QMM_GEOM=2x16 round=1
+# 2026-11-14T08:17:10+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=2868000
+RESULT Qwen3-8B-4bit pf300 296 309.2 pf2k 2016 321.1 decode 128 41.93 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=vocab:MLX_OMARCHY_ARGREDUCE_CHUNKED=1,MLX_OMARCHY_LSE_CHUNKED=1 round=1
+# 2026-11-14T08:17:28+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 307.4 pf2k 2016 318.9 decode 128 42.72 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=default round=2
+# 2026-11-14T08:17:45+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 306.5 pf2k 2016 321.1 decode 128 41.12 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=geom:MLX_OMARCHY_QMM_GEOM=2x16 round=2
+# 2026-11-14T08:17:58+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 306.6 pf2k 2016 320.3 decode 128 41.80 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=vocab:MLX_OMARCHY_ARGREDUCE_CHUNKED=1,MLX_OMARCHY_LSE_CHUNKED=1 round=2
+# 2026-11-14T08:18:13+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 306.3 pf2k 2016 320.2 decode 128 41.55 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=default round=3
+# 2026-11-14T08:18:27+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 306.6 pf2k 2016 321.0 decode 128 42.50 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=geom:MLX_OMARCHY_QMM_GEOM=2x16 round=3
+# 2026-11-14T08:18:40+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 303.8 pf2k 2016 321.5 decode 128 41.42 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+## arm=vocab:MLX_OMARCHY_ARGREDUCE_CHUNKED=1,MLX_OMARCHY_LSE_CHUNKED=1 round=3
+# 2026-11-14T08:18:58+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 305.3 pf2k 2016 321.3 decode 128 41.32 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+AB_DONE

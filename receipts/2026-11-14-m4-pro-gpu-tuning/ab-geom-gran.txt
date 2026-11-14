@@ -1,0 +1,25 @@
+## arm=default round=1
+# 2026-11-14T08:19:31+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1173.0 pf2k 2038 1134.6 decode 53 105.91 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+## arm=geom:MLX_OMARCHY_QMM_GEOM=2x16 round=1
+# 2026-11-14T08:19:36+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1171.9 pf2k 2038 1135.4 decode 53 120.00 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+## arm=default round=2
+# 2026-11-14T08:19:40+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1173.1 pf2k 2038 1134.3 decode 53 105.08 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+## arm=geom:MLX_OMARCHY_QMM_GEOM=2x16 round=2
+# 2026-11-14T08:19:44+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1191.3 pf2k 2038 1142.8 decode 53 119.59 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+## arm=default round=3
+# 2026-11-14T08:19:48+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1179.7 pf2k 2038 1132.4 decode 53 98.24 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+## arm=geom:MLX_OMARCHY_QMM_GEOM=2x16 round=3
+# 2026-11-14T08:19:52+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1216.9 pf2k 2038 1146.9 decode 53 120.15 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+AB_DONE

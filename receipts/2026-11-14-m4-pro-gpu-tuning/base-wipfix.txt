@@ -1,0 +1,9 @@
+# 2026-11-14T07:56:36+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 488.5 pf2k 2017 567.6 decode 128 54.43 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+RESULT Qwen3-8B-4bit pf300 296 305.9 pf2k 2016 321.0 decode 128 41.73 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 485.9 pf2k 2017 565.3 decode 128 54.81 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+RESULT Qwen3-8B-4bit pf300 296 304.2 pf2k 2016 321.0 decode 128 41.91 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli

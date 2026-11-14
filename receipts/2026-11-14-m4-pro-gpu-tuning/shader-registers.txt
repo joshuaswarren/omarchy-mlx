@@ -1,0 +1,18 @@
+# 664 compute shaders, AGX_MESA_DEBUG=shaderdb, MESA_SHADER_CACHE_DISABLE=true, Mesa 26.3.0-devel 05ddb00f5c
+# register file cap on AGX3B: 192 16-bit halves per thread
+# shaders with spills:
+qmm_vec_q4_multi_token16_bf16                           gprs 191 spills:fills 442:581
+qmm_vec_q4_multi_token16_subgroup_bf16                  gprs 191 spills:fills 421:570
+gdn_vjp_bf16                                            gprs 191 spills:fills 87:164
+gated_delta_prefill_coopmat_batch_bf16                  gprs 191 spills:fills 47:31
+gated_delta_prefill_coopmat_hoist_bf16                  gprs 191 spills:fills 15:24
+matmul_direct_f32_nt_k4s8                               gprs 191 spills:fills 15:15
+gated_delta_prefill_bf16                                gprs 191 spills:fills 6:14
+matmul_direct_f32_tn_ws8                                gprs 191 spills:fills 5:5
+# hot decode shaders:
+gated_delta_decode_composed_bf16                        gprs 127 spills:fills 0:0
+gated_delta_decode_perrow_pf_composed_gqa_bf16          gprs  63 spills:fills 0:0
+qmm_vec_q4_multi_subgroup_bf16                          gprs  71 spills:fills 0:0
+qmm_vec_q4_multi_subgroup_bf16_r2s16                    gprs  71 spills:fills 0:0
+sdpa_decode_native_f16                                  gprs  43 spills:fills 0:0
+# gprs histogram (bucket of 32 halves): {0: 317, 1: 175, 2: 72, 3: 45, 4: 38, 5: 17}
