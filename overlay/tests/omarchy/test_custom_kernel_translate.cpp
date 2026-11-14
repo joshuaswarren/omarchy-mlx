@@ -1491,3 +1491,55 @@ TEST_CASE("a header comment with an unbalanced paren does not break the helper s
   auto glsl = translate(source, 1);
   CHECK(glsl.find("void main()") != std::string::npos);
 }
+
+TEST_CASE("a line comment naming a stage does not steal the helper signature") {
+  // Review reproduction (PR #427): in the residual_norm_style fixture,
+  // changing only the first comment to name a stage with a paren made the
+  // helper-signature regex match the word pair inside the comment; the
+  // comment paren was skipped and the name 'stage' was paired with the
+  // next real function's parameters, refusing the kernel that base
+  // accepted. A regex match inside a comment must be skipped entirely.
+  std::string source(residual_norm_style);
+  source.replace(0, std::strlen("// One row reduction stage.\n"),
+                 "// One row reduction stage (shared scratch).\n");
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("float msv_row_inv_rms(float acc, float eps, int axis, uint") !=
+        std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a block comment naming a stage does not steal the helper signature") {
+  // Same reproduction through a block comment: the word pair inside
+  // comment prose must not become a helper name paired with the next
+  // real function's parameters.
+  std::string source(residual_norm_style);
+  source.replace(0, std::strlen("// One row reduction stage.\n"),
+                 "/* One row reduction stage (shared scratch). */\n");
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("float msv_row_inv_rms(float acc, float eps, int axis, uint") !=
+        std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a quoted include containing a comment marker stays a string") {
+  // Review reproduction (PR #427): prepending this quoted include to the
+  // unchanged residual fixture is accepted by base. Lexing the /* inside
+  // the string as a comment opener swallowed the following helper, its
+  // threadgroup parameters stayed unspecialized, and translation threw.
+  // String and character literals (escapes included) must never be
+  // scanned for comment markers; the slash-slash control accepts too.
+  std::string source = "#include \"dir/*marker.h\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string control = "#include \"dir//marker.h\"\n";
+  control += residual_norm_style;
+  auto glsl_control = translate(control, 1);
+  CHECK(glsl_control.find("threadgroup") == std::string::npos);
+}
