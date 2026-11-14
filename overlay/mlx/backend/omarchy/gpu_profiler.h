@@ -312,7 +312,8 @@ class GpuProfiler {
   }
 
   // Called at the end of a successful submit(); sub is 0 for submissions
-  // that carried no completion signal.
+  // that carried no completion signal. slot is -1 when the submit carried
+  // no command buffer: that slot's dispatches belong to its own submission.
   void on_submit_end(
       const void* owner,
       uint64_t sub,
@@ -323,7 +324,7 @@ class GpuProfiler {
     }
     submissions_++;
     Ctx* ctx = find(owner);
-    if (ctx != nullptr) {
+    if (ctx != nullptr && slot >= 0) {
       ctx->slots[slot].last_sub = sub;
     }
     emitf("{\"k\":\"s\",\"s\":%" PRIu64 ",\"dur\":%" PRIu64
