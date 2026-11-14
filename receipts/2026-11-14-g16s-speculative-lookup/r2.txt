@@ -1,0 +1,67 @@
+## 2026-11-14T16:25:34+01:00 model=mlx-community/Qwen3-8B-4bit st=4 k=3  tmax=71
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.8, "spec_tps": 36.2, "speedup": 1.072, "identical": true, "passes": 148, "drafted": 317, "accepted": 107, "replays": 0, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 34.6, "spec_tps": 70.6, "speedup": 2.043, "identical": true, "passes": 66, "drafted": 198, "accepted": 189, "replays": 0, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 34.3, "spec_tps": 27.9, "speedup": 0.812, "identical": true, "passes": 67, "drafted": 81, "accepted": 0, "replays": 0, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T16:26:54+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=3  tmax=71
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.6, "spec_tps": 36.6, "speedup": 1.088, "identical": true, "passes": 148, "drafted": 317, "accepted": 107, "replays": 0, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 33.8, "spec_tps": 72.6, "speedup": 2.147, "identical": true, "passes": 66, "drafted": 198, "accepted": 189, "replays": 0, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 37.8, "spec_tps": 27.0, "speedup": 0.714, "identical": true, "passes": 67, "drafted": 81, "accepted": 0, "replays": 0, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T16:28:58+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=5  tmax=64
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.6, "spec_tps": 27.8, "speedup": 0.825, "identical": true, "passes": 136, "drafted": 463, "accepted": 119, "replays": 0, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 33.6, "spec_tps": 67.0, "speedup": 1.99, "identical": true, "passes": 45, "drafted": 222, "accepted": 211, "replays": 0, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 33.9, "spec_tps": 21.3, "speedup": 0.629, "identical": true, "passes": 67, "drafted": 131, "accepted": 0, "replays": 0, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T16:30:40+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=7  tmax=67
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.8, "spec_tps": 25.1, "speedup": 0.743, "identical": true, "passes": 133, "drafted": 617, "accepted": 122, "replays": 0, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 34.7, "spec_tps": 72.3, "speedup": 2.082, "identical": true, "passes": 34, "drafted": 238, "accepted": 221, "replays": 0, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 35.9, "spec_tps": 19.6, "speedup": 0.545, "identical": true, "passes": 67, "drafted": 175, "accepted": 0, "replays": 0, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T16:32:39+01:00 model=mlx-community/Qwen3.5-4B-MLX-4bit st=4 k=3  tmax=71
+RESULT {"prompt": "code", "prompt_tokens": 368, "gen": 256, "base_tps": 45.0, "spec_tps": 36.9, "speedup": 0.819, "identical": true, "passes": 154, "drafted": 320, "accepted": 102, "replays": 80, "sha": "abb288017022"}
+RESULT {"prompt": "quote", "prompt_tokens": 327, "gen": 256, "base_tps": 44.5, "spec_tps": 99.0, "speedup": 2.227, "identical": true, "passes": 66, "drafted": 197, "accepted": 190, "replays": 3, "sha": "01706f00e98d"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 73, "base_tps": 44.7, "spec_tps": 32.1, "speedup": 0.718, "identical": true, "passes": 72, "drafted": 57, "accepted": 0, "replays": 19, "sha": "62a409109ffc"}
+TEXT(last): Sunlight appears white but is actually composed of all colors of the visible spectrum. When this light enters Earth's atmosphere, it collides with gas molecules and particles, causing a phenomenon cal
+rc=0
+## 2026-11-14T16:34:46+01:00 model=mlx-community/Qwen3.5-4B-MLX-4bit st=8 k=5  tmax=69
+RESULT {"prompt": "code", "prompt_tokens": 368, "gen": 256, "base_tps": 45.2, "spec_tps": 29.9, "speedup": 0.662, "identical": true, "passes": 145, "drafted": 484, "accepted": 111, "replays": 83, "sha": "abb288017022"}
+RESULT {"prompt": "quote", "prompt_tokens": 327, "gen": 256, "base_tps": 44.6, "spec_tps": 99.2, "speedup": 2.226, "identical": true, "passes": 44, "drafted": 219, "accepted": 212, "replays": 2, "sha": "01706f00e98d"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 73, "base_tps": 44.7, "spec_tps": 28.4, "speedup": 0.636, "identical": true, "passes": 72, "drafted": 91, "accepted": 0, "replays": 19, "sha": "62a409109ffc"}
+TEXT(last): Sunlight appears white but is actually composed of all colors of the visible spectrum. When this light enters Earth's atmosphere, it collides with gas molecules and particles, causing a phenomenon cal
+rc=0
+## 2026-11-14T16:36:39+01:00 model=mlx-community/Qwen3.5-4B-MLX-4bit st=8 k=7  tmax=71
+RESULT {"prompt": "code", "prompt_tokens": 368, "gen": 256, "base_tps": 44.4, "spec_tps": 27.3, "speedup": 0.614, "identical": true, "passes": 142, "drafted": 643, "accepted": 114, "replays": 85, "sha": "abb288017022"}
+RESULT {"prompt": "quote", "prompt_tokens": 327, "gen": 256, "base_tps": 43.4, "spec_tps": 106.4, "speedup": 2.452, "identical": true, "passes": 35, "drafted": 240, "accepted": 221, "replays": 3, "sha": "01706f00e98d"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 73, "base_tps": 44.8, "spec_tps": 26.4, "speedup": 0.59, "identical": true, "passes": 72, "drafted": 124, "accepted": 0, "replays": 19, "sha": "62a409109ffc"}
+TEXT(last): Sunlight appears white but is actually composed of all colors of the visible spectrum. When this light enters Earth's atmosphere, it collides with gas molecules and particles, causing a phenomenon cal
+rc=0
+## 2026-11-14T16:38:04+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=3 --draft mlx-community/Qwen3-0.6B-4bit tmax=69
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.8, "spec_tps": 40.7, "speedup": 1.204, "identical": true, "passes": 73, "drafted": 219, "accepted": 183, "replays": 0, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 34.4, "spec_tps": 44.8, "speedup": 1.304, "identical": true, "passes": 66, "drafted": 196, "accepted": 190, "replays": 0, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 35.9, "spec_tps": 31.2, "speedup": 0.871, "identical": true, "passes": 30, "drafted": 90, "accepted": 38, "replays": 0, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T16:40:09+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=5 --draft mlx-community/Qwen3-0.6B-4bit tmax=71
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.8, "spec_tps": 33.2, "speedup": 0.984, "identical": true, "passes": 55, "drafted": 272, "accepted": 201, "replays": 0, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 34.1, "spec_tps": 41.4, "speedup": 1.213, "identical": true, "passes": 44, "drafted": 216, "accepted": 212, "replays": 0, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 36.0, "spec_tps": 22.5, "speedup": 0.627, "identical": true, "passes": 27, "drafted": 135, "accepted": 41, "replays": 0, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T16:42:21+01:00 model=mlx-community/Qwen3.5-4B-MLX-4bit st=8 k=3 --draft mlx-community/Qwen3.5-0.8B-MLX-4bit tmax=67
+RESULT {"prompt": "code", "prompt_tokens": 368, "gen": 256, "base_tps": 45.2, "spec_tps": 37.8, "speedup": 0.836, "identical": true, "passes": 77, "drafted": 230, "accepted": 179, "replays": 24, "sha": "abb288017022"}
+RESULT {"prompt": "quote", "prompt_tokens": 327, "gen": 256, "base_tps": 44.8, "spec_tps": 50.6, "speedup": 1.129, "identical": true, "passes": 64, "drafted": 192, "accepted": 192, "replays": 0, "sha": "01706f00e98d"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 73, "base_tps": 45.5, "spec_tps": 23.8, "speedup": 0.524, "identical": true, "passes": 33, "drafted": 99, "accepted": 39, "replays": 26, "sha": "62a409109ffc"}
+TEXT(last): Sunlight appears white but is actually composed of all colors of the visible spectrum. When this light enters Earth's atmosphere, it collides with gas molecules and particles, causing a phenomenon cal
+rc=0
+## 2026-11-14T16:43:18+01:00 model=mlx-community/Qwen3.5-4B-MLX-4bit st=8 k=5 --draft mlx-community/Qwen3.5-0.8B-MLX-4bit tmax=69
+RESULT {"prompt": "code", "prompt_tokens": 368, "gen": 256, "base_tps": 43.2, "spec_tps": 35.0, "speedup": 0.81, "identical": true, "passes": 56, "drafted": 280, "accepted": 199, "replays": 26, "sha": "abb288017022"}
+RESULT {"prompt": "quote", "prompt_tokens": 327, "gen": 256, "base_tps": 44.9, "spec_tps": 49.3, "speedup": 1.099, "identical": true, "passes": 43, "drafted": 215, "accepted": 213, "replays": 1, "sha": "01706f00e98d"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 73, "base_tps": 45.7, "spec_tps": 16.7, "speedup": 0.366, "identical": true, "passes": 32, "drafted": 160, "accepted": 40, "replays": 30, "sha": "62a409109ffc"}
+TEXT(last): Sunlight appears white but is actually composed of all colors of the visible spectrum. When this light enters Earth's atmosphere, it collides with gas molecules and particles, causing a phenomenon cal
+rc=0
+R2_DONE
