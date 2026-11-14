@@ -1486,6 +1486,40 @@ void resolve_kernel_templates(
   }
 }
 
+// First '(' at or after `from` that sits outside // and /* */ comments.
+// Comment state is tracked from the string start: the helper-signature
+// regex is comment-blind and can match word pairs inside comment prose,
+// so `from` itself may sit inside a comment (a forward-only skip would
+// miss the marker that opened it and land on a paren in the same
+// sentence, which once sent the delimiter scan into comment text and
+// threw 'unbalanced delimiter' on balanced kernel text; v0.7.43 mel
+// frontend).
+size_t find_open_paren_outside_comments(const std::string& value, size_t from) {
+  bool in_line = false;
+  bool in_block = false;
+  for (size_t index = 0; index < value.size(); ++index) {
+    if (in_line) {
+      if (value[index] == '\n') {
+        in_line = false;
+      }
+    } else if (in_block) {
+      if (value.compare(index, 2, "*/") == 0) {
+        in_block = false;
+        ++index;
+      }
+    } else if (value.compare(index, 2, "//") == 0) {
+      in_line = true;
+      ++index;
+    } else if (value.compare(index, 2, "/*") == 0) {
+      in_block = true;
+      ++index;
+    } else if (value[index] == '(' && index >= from) {
+      return index;
+    }
+  }
+  return std::string::npos;
+}
+
 // Helpers in the user header may take `threadgroup T*` parameters (shared
 // scratch passed by pointer, e.g. the msv_row_inv_rms reduction stage in
 // mlx-serve's fused residual+RMSNorm kernel). GLSL has neither pointer
@@ -1513,7 +1547,8 @@ void specialize_threadgroup_helper_params(
          it != std::sregex_iterator();
          ++it) {
       const std::string helper = (*it)[2].str();
-      const size_t paren = header.find('(', (*it).position(0));
+      const size_t paren =
+          find_open_paren_outside_comments(header, (*it).position(0));
       if (paren == std::string::npos) {
         continue;
       }
