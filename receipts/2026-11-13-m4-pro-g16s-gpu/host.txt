@@ -1,0 +1,8 @@
+machine: Apple M4 Pro (J616s / T6040), 14 CPU cores, 48 GB unified memory
+kernel: 7.3.0 (aurora M4 integration), GPU driver aurora
+vulkan: Mesa 26.3.0-devel (git-05ddb00f5c), driver Borealis, derived from Honeykrisp, API 1.4.363
+device: Apple M4 Pro (G16S B1), vendor 0x10005, integrated GPU
+limits: subgroupSize 32, maxComputeWorkGroupInvocations 1024, maxComputeSharedMemorySize 32768, maxStorageBufferRange 2147483647
+extensions: no VK_KHR_cooperative_matrix
+toolchain: glslc 2026.4, Python 3.14.9, mlx-lm 0.31.3, transformers 5.22.2, GCC 16.1
+tree: battery on the code of b445c037 (this branch); model runs on f4077931 (see models.txt); tests built Release, MLX_BUILD_OMARCHY=ON, MLX_OMARCHY_ANE_DEVICE=ON

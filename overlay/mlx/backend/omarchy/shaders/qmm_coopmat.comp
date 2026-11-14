@@ -434,11 +434,11 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #ifdef X_BF16
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
-#elif defined(X_F32)
-        coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
-            mat_a[SUBGROUP_ROW_BLOCKS];
 #else
-        coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+        // f16 x is widened to an f32 A matrix: B is f32, and a matrix unit
+        // multiplies one input type (f16 x f16 or f32 x f32); no driver
+        // lists an f16 A with an f32 B configuration.
+        coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
 #endif
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
@@ -455,11 +455,22 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
           // stay in bounds: clamp to the last real row.
           uint row = row_base + (g_sub_rb + rb) * MAT;
           row = min(row, params.matrix_m - 1u);
+#ifdef X_F32
           coopMatLoad(
               mat_a[rb], input_x.values,
               x_slice + row * params.matrix_k + k_base + ks * MAT,
               params.matrix_k,
               gl_CooperativeMatrixLayoutRowMajor);
+#else
+          coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> a16;
+          coopMatLoad(
+              a16, input_x.values,
+              x_slice + row * params.matrix_k + k_base + ks * MAT,
+              params.matrix_k,
+              gl_CooperativeMatrixLayoutRowMajor);
+          mat_a[rb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+                              gl_MatrixUseA>(a16);
+#endif
         }
 #endif
         for (uint cb = 0u; cb < 4u; ++cb) {

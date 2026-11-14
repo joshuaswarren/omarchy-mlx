@@ -498,6 +498,21 @@ bool tape_no_reuse();
 // freed buffer instead of recycling it, for the whole process.
 bool buffer_cache_disabled();
 
+// Value an MLX process gives ASAHI_AGX3B_COOPERATIVE_MATRIX before Vulkan
+// loads, or nullptr to leave the environment alone. Honeykrisp exposes
+// the AGX3B 8x8 cooperative matrix (VK_KHR_cooperative_matrix) per chip;
+// on an M4 Pro (|dt_compatible| names apple,t6040) MLX turns it on so the
+// coopmat GEMM, attention and GDN paths run by default. An explicit
+// |explicit_value| always wins (nullptr result). |mlx_coopmat| is
+// MLX_OMARCHY_COOPMAT: "0" opts this process out (the result is "0", so
+// the driver hides the extension); any other value keeps the default.
+// Drivers without the variable ignore it. Pure; the runtime applies it in
+// configure_honeykrisp_icd().
+const char* default_agx3b_cooperative_matrix(
+    const char* explicit_value,
+    const char* mlx_coopmat,
+    std::string_view dt_compatible);
+
 // Honeykrisp GPU-memory heap default for an MLX process (HK_SYSMEM):
 // max(50% of |mem_total_bytes|, |mem_total_bytes| - 16 GiB), rounded down
 // to 1 MiB like mesa, clamped to 62 GiB (the per-process user VA window
@@ -537,12 +552,15 @@ std::string kernel_limit_heap_warning(
 
 // GatedDeltaUpdate decode on the f32 A_log raw route (Qwen3.5-9B) with Hk != Hv: the parts whose
 // default is the untiled prefetch kernel with native GQA (ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa),
-// because that route was measured bit-equal to the tiled one and faster on them (receipts/2026-10-18-gdn-pf-gqa).
+// because that route was measured bit-equal to the tiled one and faster on them (G14C and G13C:
+// receipts/2026-10-18-gdn-pf-gqa; G16S, the M4 Pro: Qwen3.5-4B-MLX-4bit decode 54.9 -> 60.5 tok/s, identical
+// tokens, receipts/2026-11-14-m4-pro-gpu-tuning).
 // Keyed on the device name so an unmeasured part keeps its previous default (a G13 part other than G13C
 // already runs the untiled kernel with the expansion copies). Pure.
 inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13C") != std::string::npos;
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G16S") != std::string::npos;
 }
 
 // GatedDeltaUpdate decode on the bf16 A_log raw route: the (part, head ratio) pairs whose default is the untiled prefetch
@@ -605,6 +623,15 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
 // the single-workgroup kernels. Keyed on the device name, so an unmeasured part keeps its previous default. Pure.
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
+}
+
+// The fused f16 decode SDPA kernel (sdpa_decode_native*.comp) uses no cooperative matrix, but its gate has always required one,
+// and the M1/M2 parts keep that gate until their own numbers exist. On G16S (Apple M4 Pro, Borealis, no cooperative matrix) the
+// gate is 32-wide subgroups with basic, arithmetic and shuffle operations, a 1024-lane workgroup and the shared stream; there the
+// fused kernel measured 586 -> 177 microseconds per call at 1100 keys and 1872 -> 308 at 4096 keys against the three-dispatch
+// composition (16 query / 8 kv heads, width 128). Pure.
+inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
+  return device_name.find("G16S") != std::string::npos;
 }
 
 // Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.

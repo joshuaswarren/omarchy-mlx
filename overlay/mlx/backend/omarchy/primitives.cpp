@@ -115,9 +115,11 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
 // context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
 // identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
-// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
-// every other chip until its paired A/B lands. The accepted overrides are
-// 2x4 and 2x16.
+// tokens identical, and 4x8 was 3.60 percent slower there — #351; on G16S,
+// the M4 Pro, three interleaved rounds of 128 tokens: granite-4.0-1b-4bit
+// 105.1 -> 120.0 tok/s, Qwen3.5-4B-MLX-4bit 60.6 -> 64.8, Qwen2.5-1.5B and
+// Qwen3-8B within noise, tokens identical), 2x4 on every other chip until
+// its paired A/B lands. The accepted overrides are 2x4 and 2x16.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -132,7 +134,8 @@ const QmmGeometry& qmm_geometry() {
     if (v.empty()) {
       const std::string& chip = omarchy::device().capabilities().device_name;
       if (chip.find("G13G") != std::string::npos ||
-          chip.find("G13C") != std::string::npos) {
+          chip.find("G13C") != std::string::npos ||
+          chip.find("G16S") != std::string::npos) {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
@@ -9241,7 +9244,7 @@ bool dispatch_quantized_gemv_group(
     }
     const int n = w.shape(0);
     if (n <= 0 || w.shape(1) != k / 8 || scales.shape(0) != n ||
-        scales.shape(1) != k / 64 || node.size() != static_cast<size_t>(n) ||
+        scales.shape(1) != k / 64 || node.size() != static_cast<size_t>(rows) * static_cast<size_t>(n) ||
         !whole_dense(w, w.size()) || !whole_dense(scales, scales.size()) ||
         !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
         !input_ready(scales, stream) || !input_ready(biases, stream)) {
@@ -13004,14 +13007,14 @@ void GatedDeltaUpdate::eval_gpu(
   // MLX_OMARCHY_GDN_GQA_DECODE=0 restores the expansion.
   static const bool gdn_gqa_decode =
       decode_path_override("MLX_OMARCHY_GDN_GQA_DECODE") != 0;
-  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read once per process); the untiled prefetch
+  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read live, so a test can flip it between routes); the untiled prefetch
   // kernel needs the state offsets to be multiples of 4 (checked again at dispatch).
-  static const bool gdn_pf_env =
+  const bool gdn_pf_env =
       decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   const bool f32_gqa_route = decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32;
   // The f32-A_log route (Qwen3.5-9B) with Hk != Hv: the untiled prefetch kernel with native GQA
   // (GatedDeltaDecodeBF16PfComposedGqa) is the default on the parts where it was measured bit-equal to the
-  // tiled one and faster (gdn_pf_gqa_default_part: G14C and G13C), unless MLX_OMARCHY_GDN_DECODE_TILE is set
+  // tiled one and faster (gdn_pf_gqa_default_part: G14C, G13C and G16S), unless MLX_OMARCHY_GDN_DECODE_TILE is set
   // (1 keeps the tiled kernel, 0 the untiled one with the expansion), MLX_OMARCHY_GDN_PF_GQA=0, MLX_OMARCHY_GDN_PF=0
   // or MLX_OMARCHY_GDN_GQA_DECODE=0. MLX_OMARCHY_GDN_PF_GQA=1 (read live) also turns it on where the tile is
   // off (the tiled route has its own native GQA, gqa_native). q and k keep their Hk heads, so the two expansion
@@ -14930,7 +14933,7 @@ void GdnConvDeltaUpdate::eval_gpu(
   const bool bf16a_untiled_default =
       decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
       omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
-  static const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
+  const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
   const bool dense_inputs = [&] {
     for (const auto& x : inputs) {
@@ -16018,13 +16021,22 @@ void ScaledDotProductAttention::eval_gpu(
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
   constexpr uint32_t kDecodeSharedBytes =
       (32u * 32u + 2u * 128u + 128u * 32u) * sizeof(float);
-  const bool decode_subgroup_ready = decode_caps.cooperative_matrix_f32_8 &&
-      decode_caps.subgroup_size == 32u &&
-      decode_caps.max_compute_work_group_invocations >= 1024u &&
-      decode_caps.max_compute_work_group_size[0] >= 1024u &&
-      decode_caps.max_compute_shared_memory_size >= kDecodeSharedBytes &&
-      (decode_caps.subgroup_operations & kDecodeSubgroupFeatures) ==
-          kDecodeSubgroupFeatures;
+  // The f16 arm needs 32-wide subgroups with basic, arithmetic and shuffle
+  // operations, a 1024-lane workgroup and the shared stream above. The
+  // kernel does not use the cooperative matrix, but the gate keeps
+  // requiring one except on the parts sdpa_decode_f16_without_coopmat_part
+  // names (G16S, where it was measured), so no other part changes route.
+  auto decode_subgroup_gate = [&](const omarchy::CapabilityReport& c) {
+    return (c.cooperative_matrix_f32_8 ||
+            omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&
+        c.subgroup_size == 32u &&
+        c.max_compute_work_group_invocations >= 1024u &&
+        c.max_compute_work_group_size[0] >= 1024u &&
+        c.max_compute_shared_memory_size >= kDecodeSharedBytes &&
+        (c.subgroup_operations & kDecodeSubgroupFeatures) ==
+            kDecodeSubgroupFeatures;
+  };
+  const bool decode_subgroup_ready = decode_subgroup_gate(decode_caps);
   // The composition-exact bf16 arm uses no subgroup operations at all - its
   // per-thread work and barriers need only the 256-thread workgroup and the
   // static shared the arm declares (29,952 bytes at query width 64, 30,720
@@ -16309,14 +16321,18 @@ void ScaledDotProductAttention::eval_gpu(
     params.in_strides[3] = checked_u32(v.strides()[3], tag, out);
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(q), binding(k), binding(v), binding(out)};
+    // The bf16 arm uses neither the cooperative matrix nor subgroup
+    // operations; only the f16 arm depends on the gate above.
+    if (!decode_bf16) {
       omarchy::capsim::require_backed(
           encoder.device(),
           decode_caps,
           decode_subgroup_ready,
           decode_kernel_name(),
-          "cooperative_matrix_fp32_8x8x8+workgroup_limits+"
-          "shared_memory_limit_bytes",
-          encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
+          "cooperative_matrix_fp32_8x8x8+subgroup32_basic_arithmetic_shuffle+"
+          "workgroup_limits+shared_memory_limit_bytes",
+          decode_subgroup_gate(encoder.device().hardware_capabilities()));
+    }
     if (params.flags != 0u) {
       // Native-shape per-block two-pass (f16 only; bf16 always one-pass).
       // The fused kernel keeps one workgroup per head, so its walk runs
@@ -16441,8 +16457,16 @@ void ScaledDotProductAttention::eval_gpu(
       static_cast<uint64_t>(batch) * heads * q_len * k_len;
   const bool score_exceeds_heap_budget = flash_caps.total_memory > 0 &&
       flash_score_elements > flash_caps.total_memory / (4u * sizeof(float));
+  // The composed route binds its whole score matrix: f32 words, or bf16
+  // words under MLX_OMARCHY_SDPA_BF16_FAST. Past the device's storage
+  // binding range (2 GiB - 1 on Borealis) the dispatch is refused, so such
+  // a shape belongs to the flash kernel, which never materializes scores.
+  const uint64_t score_item_bytes = bf16_fast ? 2u : 4u;
+  const bool score_binding_too_large = flash_caps.max_storage_buffer_range > 0 &&
+      flash_score_elements * score_item_bytes > flash_caps.max_storage_buffer_range;
   const bool flash_wants =
-      flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
+      flash_score_elements > (1ull << 30) || score_binding_too_large ||
+      score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
   // Route precedence: the pin and MIN_L are explicit flash overrides
@@ -16524,10 +16548,39 @@ void ScaledDotProductAttention::eval_gpu(
     params.v_batchstride = checked_u32(v.strides()[0], tag, out);
     std::array<omarchy::ComputeBinding, 4> flash_bindings{
         binding(q), binding(k), binding(v), binding(out)};
+    // A capability simulation can route a shape here (the score-binding
+    // and heap checks read the simulated limits); the kernel itself needs
+    // the hardware's workgroup and shared memory.
+    {
+      const auto& hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          flash_caps,
+          flash_route_ready,
+          "SdpaPrefillFlashBF16Hd128",
+          "workgroup_limits+shared_memory_limit_bytes",
+          hw.max_compute_work_group_size[0] >= 256u &&
+              hw.max_compute_work_group_invocations >= 256u &&
+              hw.max_compute_shared_memory_size >= 28928u);
+    }
     constexpr int kFlashRowsPerTile = 32;
     const int q_tiles = (q_len + kFlashRowsPerTile - 1) / kFlashRowsPerTile;
     // One q tile per dispatch: all heads ride the same dispatch, the
     // firmware timer stays ~5-12 ms per dispatch at full shape.
+    //
+    // The dispatches of one primitive would otherwise share a single
+    // submission, and the work-group budget of the evaluator cannot see
+    // them: a tile dispatch is only `heads` groups but each group walks the
+    // whole key range. A device without a cooperative-matrix flash arm runs
+    // this kernel at about 50 GMAC/s, so a 16384-token prefill of 8 heads
+    // (550 GMAC) is one ~11 s submission, past the kernel's per-job GPU
+    // timeout. Close the submission whenever the tiles recorded since the
+    // last commit reach kFlashSubmitMacs multiply-accumulates (about 80 ms
+    // at that rate). Scheduling only: results are unchanged.
+    constexpr double kFlashSubmitMacs = 4.0e9;
+    const double tile_macs = 2.0 * kFlashRowsPerTile * static_cast<double>(k_len) *
+        128.0 * static_cast<double>(heads) * static_cast<double>(batch);
+    double open_macs = 0.0;
     for (int tile = 0; tile < q_tiles; ++tile) {
       params.dims = checked_u32(tile, tag, out);
       encoder.dispatch_compute(
@@ -16537,6 +16590,14 @@ void ScaledDotProductAttention::eval_gpu(
           1u,
           static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
+      open_macs += tile_macs;
+      // commit() is not valid while a compiled tape records (see
+      // dispatch_qmm_tile): the tiles then stay in one submission.
+      if (!encoder.in_tape_recording && open_macs >= kFlashSubmitMacs &&
+          tile + 1 < q_tiles) {
+        encoder.commit();
+        open_macs = 0.0;
+      }
     }
     return;
   }

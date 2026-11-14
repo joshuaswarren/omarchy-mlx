@@ -361,13 +361,14 @@ TEST_CASE("gdn raw decode: calls outside the prefetch native GQA route do not ch
 }
 
 // The default route of the f32 A_log decode with Hk != Hv (Qwen3.5-9B: 16 key heads, 32 value heads). On the parts where the
-// untiled prefetch kernel with native GQA was measured bit-equal to the tiled one and faster (G14C and G13C), it is the default
+// untiled prefetch kernel with native GQA was measured bit-equal to the tiled one and faster (G14C, G13C and G16S), it is the default
 // kernel; every other part keeps its previous default (the tiled composed kernel, and on a legacy G13 part the untiled composed
 // prefetch kernel with the expansion copies). Explicit MLX_OMARCHY_GDN_DECODE_TILE and MLX_OMARCHY_GDN_PF_GQA=0 win. The kernel
 // is named by enum on the device that runs the test; the part rule is checked on names.
 TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches and the routes outside it") {
   CHECK(omarchy::gdn_pf_gqa_default_part("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::gdn_pf_gqa_default_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::gdn_pf_gqa_default_part("Apple M4 Pro (G16S B1)"));
   CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M2 Pro (G14S B1)"));
   CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M1 Ultra (G13D C0)"));

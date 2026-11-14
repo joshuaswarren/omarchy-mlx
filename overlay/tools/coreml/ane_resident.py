@@ -157,6 +157,8 @@ class ResidentAneWorker:
         seal_libane_sha: str | None = None,
         daemon_socket: str | os.PathLike[str] | None = None,
         daemon_connect_ms: int = 1000,
+        device: str | None = None,
+        h16_residency: str | None = None,
     ):
         if not bundles:
             raise ResidentWorkerError("a resident session needs at least one bundle")
@@ -166,6 +168,28 @@ class ResidentAneWorker:
             )
         self.worker = Path(worker)
         self.libane = Path(libane)
+        # Lane 3: "h16" runs the worker with --device h16 (the in-kernel
+        # ABI 3 node) instead of --libane; there is no library to pin.
+        if device is not None and device != "h16":
+            raise ResidentWorkerError(f"unknown ANE device {device!r}")
+        if device is not None and seal_libane_sha is not None:
+            raise ResidentWorkerError(
+                "--device h16 loads no library; a libane pin cannot apply"
+            )
+        self.device = device
+        # Lane 3 only: how the programs of all resident bundles share the
+        # kernel ("auto", "concurrent" or "swap"; see the worker's
+        # --h16-residency). None leaves the worker's default (auto).
+        if h16_residency is not None:
+            if device != "h16":
+                raise ResidentWorkerError(
+                    "h16_residency applies to the lane-3 device only"
+                )
+            if h16_residency not in ("auto", "concurrent", "swap"):
+                raise ResidentWorkerError(
+                    f"unknown h16 residency {h16_residency!r}"
+                )
+        self.h16_residency = h16_residency
         self.bundles = {name: Path(path) for name, path in bundles.items()}
         self.scratch = Path(scratch)
         self.deadline_ms = deadline_ms
@@ -223,6 +247,7 @@ class ResidentAneWorker:
         self.batch_opens = 0
         self.batch_rounds = 0
         self.worker_starts = 0
+        self.resets = 0
         self.bundle_loads = 0
         self.device_program_loads = 0
         self.timeouts = 0
@@ -319,7 +344,10 @@ class ResidentAneWorker:
         argv = [
             str(self.worker),
             "--relay-bypass" if self.relay_bypass else "--serve",
-            "--libane", str(self.libane),
+            *(["--device", self.device] if self.device
+              else ["--libane", str(self.libane)]),
+            *(["--h16-residency", self.h16_residency]
+              if self.h16_residency else []),
             "--deadline-ms", str(self.deadline_ms),
             "--iterations", str(self.iterations),
         ]
@@ -351,13 +379,19 @@ class ResidentAneWorker:
                 self._die(f"expected a resident bundle report, got {line!r}")
             self._banner.append(line)
             self.bundle_loads += 1
+        # A lane-3 worker names the ABI 3 node it resolved ("device
+        # lane=3 node=... abi=3 chip=h16 ...") before the next report.
+        line = self._readline(
+            "relay-bypass ready" if self.relay_bypass else "load report")
+        if line.startswith("device "):
+            self._banner.append(line)
+            line = self._readline(
+                "relay-bypass ready" if self.relay_bypass else "load report")
         if self.relay_bypass:
-            line = self._readline("relay-bypass ready")
             if not line.startswith("relay-bypass ready"):
                 self._die(f"expected the relay-bypass ready banner, got {line!r}")
             self._banner.append(line)
         else:
-            line = self._readline("load report")
             if not line.startswith("resident loaded "):
                 self._die(f"expected the resident load report, got {line!r}")
             self._banner.append(line)
@@ -457,10 +491,62 @@ class ResidentAneWorker:
         per submit -- more than the process launch residency saves -- so
         the file round trip is gone and only the bytes cross.
         """
+        return self._job("submit", [bundle], tag, inputs, outputs)
+
+    def step(
+        self,
+        bundles: Sequence[str],
+        tag: str,
+        inputs: Mapping[str, bytes],
+        outputs: Sequence[str],
+    ) -> dict[str, bytes]:
+        """One decode step over several resident bundles, in order.
+
+        Every tensor a bundle produces is offered by name to the bundles
+        after it (intermediates stay inside the worker), ``inputs`` supply
+        what no earlier bundle produced, and ``outputs`` names the tensors
+        that come back (any produced tensor, intermediates included). The
+        whole step is one deadline-bounded unit, and the state tensors of
+        every bundle in it advance by one step.
+        """
+        if not bundles:
+            raise ResidentWorkerError("a step needs at least one bundle")
+        return self._job("step", list(bundles), tag, inputs, outputs)
+
+    def reset_state(self, bundle: str | None = None) -> None:
+        """Zero the state tensors of one resident bundle, or of all of them
+        (``None``): the start of a new sequence. The device and the loaded
+        programs are untouched."""
         if self._process is None and self._socket is None:
             raise ResidentWorkerError("no resident session is open")
-        if bundle not in self.bundles:
+        if bundle is not None and bundle not in self.bundles:
             raise ResidentWorkerError(f"unknown resident bundle {bundle!r}")
+        target = "*" if bundle is None else bundle
+        if self.relay_bypass:
+            self._write_bytes(f"reset {target}\nrun\n".encode())
+            expect = "done"
+        else:
+            self._write_bytes(f"reset {target}\n".encode())
+            expect = "reset status=0"
+        line = self._readline(f"state reset of {target}")
+        if not line.startswith(expect):
+            self._die(f"resident reset of {target} failed: {line!r}")
+        self.resets += 1
+
+    def _job(
+        self,
+        verb: str,
+        names: Sequence[str],
+        tag: str,
+        inputs: Mapping[str, bytes],
+        outputs: Sequence[str],
+    ) -> dict[str, bytes]:
+        bundle = ",".join(names)
+        if self._process is None and self._socket is None:
+            raise ResidentWorkerError("no resident session is open")
+        for name in names:
+            if name not in self.bundles:
+                raise ResidentWorkerError(f"unknown resident bundle {name!r}")
 
         in_bytes = 0
         ordered = list(inputs.items())
@@ -479,13 +565,16 @@ class ResidentAneWorker:
             # <len>\n" + bytes frame per produced output, then
             # "done\n".
             request = bytearray()
-            request += f"submit {bundle}\n".encode()
+            request += f"{verb} {' '.join(names)}\n".encode()
+            if verb == "step":
+                for name in outputs:
+                    request += f"emit {name}\n".encode()
             for name, payload in ordered:
                 request += f"in {name} {len(payload)}\n".encode()
                 request += payload
             request += b"run\n"
         else:
-            job = ["submit", bundle]
+            job = [verb, bundle]
             for name, payload in ordered:
                 job += ["--inline", f"{name}={len(payload)}"]
             for name in outputs:

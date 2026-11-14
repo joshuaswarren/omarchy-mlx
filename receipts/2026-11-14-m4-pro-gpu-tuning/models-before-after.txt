@@ -1,0 +1,201 @@
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=1
+# 2026-11-14T09:27:05+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 187.4 pf2k 2017 166.6 decode 128 55.65 peak 3.97 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=1
+# 2026-11-14T09:27:25+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 188.6 pf2k 2017 167.0 decode 128 64.43 peak 3.97 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=1
+# 2026-11-14T09:27:46+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 490.4 pf2k 2017 568.5 decode 128 64.91 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=1
+# 2026-11-14T09:27:55+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 492.3 pf2k 2017 567.3 decode 128 64.67 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=1
+# 2026-11-14T09:28:05+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 188.7 pf2k 2017 166.8 decode 128 64.81 peak 3.97 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=1
+# 2026-11-14T09:28:26+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 132.9 pf2k 2016 93.6 decode 128 41.61 peak 6.16 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=1
+# 2026-11-14T09:28:57+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 134.6 pf2k 2016 93.2 decode 128 42.02 peak 6.16 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=1
+# 2026-11-14T09:29:29+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 302.5 pf2k 2016 309.9 decode 128 41.66 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=1
+# 2026-11-14T09:29:43+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 302.4 pf2k 2016 309.7 decode 128 40.82 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=1
+# 2026-11-14T09:29:56+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 134.9 pf2k 2016 93.5 decode 128 41.77 peak 6.16 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=1
+# 2026-11-14T09:30:28+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 522.0 pf2k 2038 292.4 decode 53 109.22 peak 1.69 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=1
+# 2026-11-14T09:30:38+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 542.5 pf2k 2038 291.2 decode 53 120.09 peak 1.69 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=1
+# 2026-11-14T09:30:49+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1164.3 pf2k 2038 1129.1 decode 53 119.00 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=1
+# 2026-11-14T09:30:53+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1166.7 pf2k 2038 1125.5 decode 53 119.31 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=1
+# 2026-11-14T09:30:57+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 542.7 pf2k 2038 292.9 decode 53 119.09 peak 1.69 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=1
+# 2026-11-14T09:31:07+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 649.6 pf2k 2037 653.1 decode 128 134.77 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=1
+# 2026-11-14T09:31:14+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 650.8 pf2k 2037 650.2 decode 128 133.54 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=1
+# 2026-11-14T09:31:21+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 1505.6 pf2k 2037 1517.2 decode 128 137.14 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=1
+# 2026-11-14T09:31:25+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 1499.6 pf2k 2037 1552.1 decode 128 137.72 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=1
+# 2026-11-14T09:31:29+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 651.7 pf2k 2037 642.0 decode 128 135.32 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=2
+# 2026-11-14T09:31:36+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 188.7 pf2k 2017 166.7 decode 128 52.62 peak 3.97 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=2
+# 2026-11-14T09:31:56+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 189.2 pf2k 2017 167.6 decode 128 64.78 peak 3.97 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=2
+# 2026-11-14T09:32:16+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 492.0 pf2k 2017 566.5 decode 128 64.74 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=2
+# 2026-11-14T09:32:26+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 490.3 pf2k 2017 569.0 decode 128 64.85 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=2
+# 2026-11-14T09:32:36+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 188.5 pf2k 2017 166.7 decode 128 64.89 peak 3.97 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=2
+# 2026-11-14T09:32:56+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 134.0 pf2k 2016 93.8 decode 128 41.74 peak 6.16 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=2
+# 2026-11-14T09:33:27+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 134.1 pf2k 2016 93.7 decode 128 41.76 peak 6.16 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=2
+# 2026-11-14T09:33:59+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 306.3 pf2k 2016 320.3 decode 128 41.91 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=2
+# 2026-11-14T09:34:12+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 305.9 pf2k 2016 319.9 decode 128 41.92 peak 6.08 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=2
+# 2026-11-14T09:34:26+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen3-8B-4bit pf300 296 134.4 pf2k 2016 93.6 decode 128 41.88 peak 6.16 text_sha 9ee73549c37f
+TEXT: <think> Okay, the user wants to know why the sky is blue in three sentences. Let me start by recalling the basic explanation. The sky appears blue because sunli
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=2
+# 2026-11-14T09:34:57+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 539.2 pf2k 2038 293.2 decode 53 109.49 peak 1.69 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=2
+# 2026-11-14T09:35:07+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 543.7 pf2k 2038 293.6 decode 53 120.89 peak 1.69 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=2
+# 2026-11-14T09:35:17+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1078.1 pf2k 2038 1144.9 decode 53 120.75 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=2
+# 2026-11-14T09:35:22+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 1163.6 pf2k 2038 1133.1 decode 53 120.53 peak 1.65 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=2
+# 2026-11-14T09:35:26+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT granite-4.0-1b-4bit pf300 318 544.9 pf2k 2038 292.8 decode 53 119.11 peak 1.69 text_sha 288995c87e1f
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. Sunlight is composed of various colors, each with different wavelengths. As sunlight enters
+# pmax-now 4512000 build=0
+## arm=before(sys,b445c03) round=2
+# 2026-11-14T09:35:36+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-pr/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 646.4 pf2k 2037 651.6 decode 128 133.10 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=after-sys(fed73df) round=2
+# 2026-11-14T09:35:42+01:00 icd=system coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 648.5 pf2k 2037 653.6 decode 128 137.82 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=after-275(fed73df) round=2
+# 2026-11-14T09:35:49+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 1524.5 pf2k 2037 1557.1 decode 128 137.32 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=after-fix(fed73df,55c06da6) round=2
+# 2026-11-14T09:35:53+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 1508.7 pf2k 2037 1530.1 decode 128 137.44 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+# pmax-now 4512000 build=0
+## arm=fix-nocoopmat round=2
+# 2026-11-14T09:35:57+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=4512000
+RESULT Qwen2.5-1.5B-Instruct-4bit pf300 317 646.3 pf2k 2037 650.2 decode 128 134.72 peak 1.38 text_sha 6fa09084770d
+TEXT: The sky appears blue due to a phenomenon called Rayleigh scattering. When sunlight enters the Earth's atmosphere, it encounters molecules and tiny particles of 
+FINAL_DONE

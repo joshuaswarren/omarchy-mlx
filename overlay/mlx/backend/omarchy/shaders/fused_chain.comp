@@ -7,6 +7,8 @@
 // Each instruction rounds to the storage dtype, matching per-node dispatch.
 
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_half.h"
 
 #ifdef USE_FP16
 #extension GL_EXT_shader_16bit_storage : require
@@ -14,9 +16,11 @@
 #define STORAGE_TYPE float16_t
 #define LOAD_VALUE(x) float(x)
 #define STORE_VALUE(f) STORAGE_TYPE(f)
-// The float16_t round trip failed M1 equality; integer packing preserves
-// the required intermediate rounding. Compiler-pass attribution is unproved.
-#define ROUND_INTERMEDIATE(f) (unpackHalf2x16(packHalf2x16(vec2(f, 0.0))).x)
+// The float16_t round trip failed M1 equality; an integer round-to-nearest-even
+// conversion preserves the required intermediate rounding on every driver
+// (packHalf2x16 rounding is implementation-defined). Compiler-pass
+// attribution of the float16_t failure is unproved.
+#define ROUND_INTERMEDIATE(f) omarchy_round_f16(f)
 #elif defined(USE_BF16)
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require

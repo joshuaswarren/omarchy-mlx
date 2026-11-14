@@ -41,6 +41,8 @@
 using namespace mlx::core::omarchy::ane;
 
 #ifdef MLX_OMARCHY_ANE_DEVICE
+#include "mlx/backend/omarchy/ane/worker_h16.h"
+
 namespace mlx::core::omarchy::ane {
 std::unique_ptr<AneDevice> make_libane_device(const std::string& library);
 }
@@ -48,10 +50,46 @@ std::unique_ptr<AneDevice> make_libane_device(const std::string& library);
 
 namespace {
 
+// The device a session runs on. libane (--libane PATH) runs schema-4 ANEC
+// bundles on the omarchy-ane ABI 1/2 drivers; lane 3 (--device h16[:NODE])
+// runs schema-5 HWX bundles on the in-kernel ABI 3 node through
+// H16_LOAD/H16_EXEC, with no library loaded.
+struct DeviceSelection {
+  bool h16{false};
+  std::string libane; // --libane PATH
+  std::string node;   // --device h16:NODE; empty = first ABI 3 H16 node
+  // --h16-residency auto|concurrent|swap: how lane 3 keeps the programs of
+  // all resident bundles on the kernel (see worker_h16.h).
+  std::string residency{"auto"};
+};
+
+// A bundle runs only on its own lane: schema 5 (HWX, ABI 3) on --device h16,
+// schema 4 (ANEC, ABI 1/2) on libane. Refused before any device is opened.
+[[maybe_unused]] void require_bundle_lane(
+    const AneBundle& bundle,
+    const DeviceSelection& device,
+    const std::string& name) {
+  const bool hwx = bundle.manifest.manifest_version == kAneManifestVersionHwx;
+  if (device.h16 && !hwx) {
+    throw std::runtime_error(
+        "[omarchy-ane] bundle " + name + " is schema " +
+        std::to_string(bundle.manifest.manifest_version) +
+        " (ANEC, driver ABI " +
+        std::to_string(bundle.manifest.driver_abi_major) +
+        "); --device h16 runs schema-5 HWX bundles only");
+  }
+  if (!device.h16 && hwx) {
+    throw std::runtime_error(
+        "[omarchy-ane] bundle " + name +
+        " is schema 5 (HWX, driver ABI 3); it runs on --device h16, not "
+        "libane");
+  }
+}
+
 int usage() {
   std::fprintf(
       stderr,
-      "usage: mlx-omarchy-ane-worker --bundle DIR --libane PATH\n"
+      "usage: mlx-omarchy-ane-worker --bundle DIR (--libane PATH | --device h16[:NODE])\n"
       "       [--deadline-ms N] [--iterations N]\n"
       "       [--input NAME=FILE]... [--expect NAME=FILE]...\n"
       "       [--save NAME=FILE]...\n"
@@ -86,9 +124,29 @@ int usage() {
       "  client side:\n"
       "  mlx-omarchy-ane-worker --stop --socket PATH\n"
       "\n"
-      "every mode except the one-shot form requires --libane and at\n"
-      "least one --bundle; --serve, --relay-bypass, --daemon and\n"
-      "--stop are mutually exclusive\n");
+      "every mode except --stop requires one device and at least one\n"
+      "--bundle; --serve, --relay-bypass, --daemon and --stop are\n"
+      "mutually exclusive\n"
+      "\n"
+      "devices (exactly one; every resident form takes them the same way\n"
+      "as --libane PATH above):\n"
+      "  --libane PATH       omarchy-ane libane; schema-4 ANEC bundles on\n"
+      "                      driver ABI 1 or 2\n"
+      "  --device h16[:NODE] lane 3: the in-kernel ABI 3 accel node (first\n"
+      "                      /dev/accel/accel* reporting ABI 3 / H16, or\n"
+      "                      NODE); schema-5 HWX bundles, no library, no\n"
+      "                      --seal-expect-libane\n"
+      "  --h16-residency auto|concurrent|swap\n"
+      "                      lane 3 only: how the programs of every resident\n"
+      "                      bundle share the kernel. auto (default): all\n"
+      "                      stay loaded until the driver answers -EBUSY\n"
+      "                      (one resident program), then programs are\n"
+      "                      swapped in on demand; concurrent: refuse -EBUSY\n"
+      "                      at open; swap: always one program at a time\n"
+      "  stdin (--serve): reset NAME|* zeroes a bundle's state tensors;\n"
+      "         step NAME[,NAME...] [--inline NAME=BYTES]... [--emit NAME]...\n"
+      "         runs the bundles in order in one deadline-bounded step,\n"
+      "         outputs feeding same-named inputs of the next bundle\n");
   return 64;
 }
 
@@ -267,6 +325,9 @@ std::string sealed_device_library(
 }
 
 struct ResidentJob {
+  // "submit", "step" (bundle is a comma-separated list, run in order) or
+  // "reset" (bundle is a name or *).
+  std::string kind{"submit"};
   std::string bundle;
   std::map<std::string, std::string> inputs;
   std::map<std::string, std::string> saves;
@@ -286,13 +347,24 @@ struct ResidentJob {
 bool parse_job(const std::string& line, ResidentJob& job, std::string& error) {
   std::istringstream stream(line);
   std::string token;
-  if (!(stream >> token) || token != "submit") {
-    error = "expected 'submit BUNDLE' or 'quit'";
+  if (!(stream >> token) ||
+      (token != "submit" && token != "step" && token != "reset")) {
+    error = "expected 'submit BUNDLE', 'step BUNDLE[,BUNDLE...]', "
+            "'reset BUNDLE|*' or 'quit'";
     return false;
   }
+  job.kind = token;
   if (!(stream >> job.bundle)) {
-    error = "submit is missing its bundle name";
+    error = token + " is missing its bundle name";
     return false;
+  }
+  if (token == "reset") {
+    std::string extra;
+    if (stream >> extra) {
+      error = "reset takes only a bundle name or *";
+      return false;
+    }
+    return true;
   }
   while (stream >> token) {
     std::string argument;
@@ -354,7 +426,7 @@ struct ResidentSession {
 
 ResidentSession open_resident_session(
     const std::vector<std::pair<std::string, std::string>>& bundle_args,
-    const std::string& libane_path,
+    const DeviceSelection& device,
     long deadline_ms,
     long iterations,
     const std::map<std::string, std::map<std::string, std::string>>&
@@ -393,6 +465,7 @@ ResidentSession open_resident_session(
           entry.first.c_str(), ms_since(load_started));
     }
     const AneBundle& bundle = session.loads.back().bundle;
+    require_bundle_lane(bundle, device, entry.first);
     std::printf(
         "resident bundle=%s index=%zu name=%s programs=%zu driver_abi=%llu "
         "graph=%s\n",
@@ -406,17 +479,32 @@ ResidentSession open_resident_session(
   }
   std::fflush(stdout);
 
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(deadline_ms);
+  options.iterations = static_cast<int>(iterations);
+  if (device.h16) {
+    // Lane 3: resolve the node once here and print its identity; the
+    // resident child opens exactly that node.
+    const AneH16Identity identity =
+        probe_h16_node(device.node, *make_h16_system_kernel());
+    std::printf("device %s\n", identity.describe().c_str());
+    std::fflush(stdout);
+    const std::string node = identity.node;
+    const AneH16Residency residency = parse_h16_residency(device.residency);
+    session.worker = std::make_unique<AneWorker>(
+        [node, residency] { return make_h16_device(node, residency); },
+        options);
+    return session;
+  }
+
   const auto library_started = std::chrono::steady_clock::now();
   const std::string device_library = sealed_device_library(
-      libane_path, seal_libane_expect, session.library_images);
+      device.libane, seal_libane_expect, session.library_images);
   if (timing) {
     std::fprintf(
         stderr, "[omarchy-ane] timing libane seal %.1f ms\n",
         ms_since(library_started));
   }
-  AneWorkerOptions options;
-  options.deadline = std::chrono::milliseconds(deadline_ms);
-  options.iterations = static_cast<int>(iterations);
   session.worker = std::make_unique<AneWorker>(
       [device_library] { return make_libane_device(device_library); },
       options);
@@ -432,7 +520,7 @@ ResidentSession open_resident_session(
 // caller that owns it.
 int serve_resident(
     const std::vector<std::pair<std::string, std::string>>& bundle_args,
-    const std::string& libane_path,
+    const DeviceSelection& device,
     long deadline_ms,
     long iterations,
     const std::map<std::string, std::map<std::string, std::string>>&
@@ -440,7 +528,7 @@ int serve_resident(
     const std::map<std::string, std::string>& seal_libane_expect) {
 #ifndef MLX_OMARCHY_ANE_DEVICE
   (void)bundle_args;
-  (void)libane_path;
+  (void)device;
   (void)deadline_ms;
   (void)iterations;
   (void)seal_expects;
@@ -452,7 +540,7 @@ int serve_resident(
   return 70;
 #else
   ResidentSession session = open_resident_session(
-      bundle_args, libane_path, deadline_ms, iterations, seal_expects,
+      bundle_args, device, deadline_ms, iterations, seal_expects,
       seal_libane_expect);
   AneWorker& worker = *session.worker;
   const std::map<std::string, size_t>& index_of = session.index_of;
@@ -540,14 +628,44 @@ int serve_resident(
       std::fprintf(stderr, "malformed job: %s\n", error.c_str());
       return 64;
     }
-    auto found = index_of.find(job.bundle);
-    if (found == index_of.end()) {
-      std::fprintf(
-          stderr, "job names unknown resident bundle '%s'\n",
-          job.bundle.c_str());
+    // The bundles this job runs, in order; reset names one or all.
+    std::vector<size_t> sequence;
+    {
+      std::istringstream names(job.bundle);
+      std::string name;
+      const char separator = job.kind == "step" ? ',' : '\n';
+      while (std::getline(names, name, separator)) {
+        if (name == "*" && job.kind == "reset") continue;
+        auto found = index_of.find(name);
+        if (found == index_of.end()) {
+          std::fprintf(
+              stderr, "job names unknown resident bundle '%s'\n",
+              name.c_str());
+          return 64;
+        }
+        sequence.push_back(found->second);
+      }
+    }
+    if (job.kind == "reset") {
+      AneWorkerReport cleared = job.bundle == "*"
+          ? worker.reset_all_state()
+          : worker.reset_state(sequence.front());
+      std::printf(
+          "reset status=%d bundle=%s detail=%s\n",
+          cleared.status == AneWorkerStatus::Completed ? 0 : 1,
+          job.bundle.c_str(), cleared.detail.c_str());
+      std::fflush(stdout);
+      if (cleared.status != AneWorkerStatus::Completed) {
+        return 1;
+      }
+      continue;
+    }
+    if (sequence.empty()) {
+      std::fprintf(stderr, "step names no bundle\n");
       return 64;
     }
-    const AneBundle& bundle = session.bundles[found->second];
+    const bool is_step = job.kind == "step";
+    const AneBundle& bundle = session.bundles[sequence.front()];
 
     // Three phases, reported per job: an operator who sees a slow
     // submit needs to know whether the time went to host staging or to
@@ -574,17 +692,23 @@ int serve_resident(
       inputs[entry.first] = std::move(payload);
     }
     const auto stage_ended = std::chrono::steady_clock::now();
-    for (const auto& tensor : bundle.manifest.inputs) {
-      if (!inputs.count(tensor.name)) {
-        std::fprintf(
-            stderr, "missing --input for manifest input '%s'\n",
-            tensor.name.c_str());
-        return 65;
+    // A step's later bundles may take their inputs from earlier ones, so
+    // only a plain submit can check the manifest inputs up front.
+    if (!is_step) {
+      for (const auto& tensor : bundle.manifest.inputs) {
+        if (!inputs.count(tensor.name)) {
+          std::fprintf(
+              stderr, "missing --input for manifest input '%s'\n",
+              tensor.name.c_str());
+          return 65;
+        }
       }
     }
 
     std::map<std::string, AneWorker::Buffer> outputs;
-    AneWorkerReport report = worker.submit(found->second, inputs, &outputs);
+    AneWorkerReport report = is_step
+        ? worker.step(sequence, inputs, &outputs, job.emits)
+        : worker.submit(sequence.front(), inputs, &outputs);
     if (report.status != AneWorkerStatus::Completed) {
       std::printf(
           "job status=1 bundle=%s elapsed_ms=%lld detail=%s\n",
@@ -687,7 +811,7 @@ int serve_resident(
 // the pump and tears the resident down.
 int serve_resident_bypass(
     const std::vector<std::pair<std::string, std::string>>& bundle_args,
-    const std::string& libane_path,
+    const DeviceSelection& device,
     long deadline_ms,
     long iterations,
     const std::map<std::string, std::map<std::string, std::string>>&
@@ -695,7 +819,7 @@ int serve_resident_bypass(
     const std::map<std::string, std::string>& seal_libane_expect) {
 #ifndef MLX_OMARCHY_ANE_DEVICE
   (void)bundle_args;
-  (void)libane_path;
+  (void)device;
   (void)deadline_ms;
   (void)iterations;
   (void)seal_expects;
@@ -707,7 +831,7 @@ int serve_resident_bypass(
   return 70;
 #else
   ResidentSession session = open_resident_session(
-      bundle_args, libane_path, deadline_ms, iterations, seal_expects,
+      bundle_args, device, deadline_ms, iterations, seal_expects,
       seal_libane_expect);
   AneWorker& worker = *session.worker;
 
@@ -878,7 +1002,8 @@ enum class DetachResult { SessionIntact, SessionLost };
 // One client of the daemon. Bytes move with read/write, not splice:
 // splice needs one end to be a pipe, and here both ends are sockets.
 // The pump tracks the resident wire framing in both directions
-// ("submit"/"in <len>"+payload/"run" requests; "iter"/"out
+// ("submit"/"step"/"reset", "emit", "in <len>"+payload and "run"
+// requests; "iter"/"out
 // <len>"+payload/"done"/"failed:" responses) so it knows where a
 // request cycle stands when the client goes away:
 //
@@ -1006,7 +1131,9 @@ DetachResult run_framed_pump(
             client_open = false;
           }
         } else {
-          if (client_line.compare(0, 7, "submit ") == 0) {
+          if (client_line.compare(0, 7, "submit ") == 0 ||
+              client_line.compare(0, 5, "step ") == 0 ||
+              client_line.compare(0, 6, "reset ") == 0) {
             cycle = Cycle::Request;
           } else if (client_line.compare(0, 3, "in ") == 0) {
             client_payload = frame_payload_length(client_line);
@@ -1031,7 +1158,7 @@ DetachResult run_framed_pump(
 
 int serve_resident_daemon(
     const std::vector<std::pair<std::string, std::string>>& bundle_args,
-    const std::string& libane_path,
+    const DeviceSelection& device,
     long deadline_ms,
     long iterations,
     long idle_time_ms,
@@ -1041,7 +1168,7 @@ int serve_resident_daemon(
     const std::string& socket_path) {
 #ifndef MLX_OMARCHY_ANE_DEVICE
   (void)bundle_args;
-  (void)libane_path;
+  (void)device;
   (void)deadline_ms;
   (void)iterations;
   (void)idle_time_ms;
@@ -1094,7 +1221,7 @@ int serve_resident_daemon(
   // The seal contract holds end to end: every bundle and the device
   // library are sealed and bound to the pin BEFORE device load.
   ResidentSession session = open_resident_session(
-      bundle_args, libane_path, deadline_ms, iterations, seal_expects,
+      bundle_args, device, deadline_ms, iterations, seal_expects,
       seal_libane_expect);
   AneWorker& worker = *session.worker;
 
@@ -1359,6 +1486,8 @@ int stop_resident_daemon(const std::string& socket_path) {
 int main(int argc, char** argv) {
   std::string bundle_dir;
   std::string libane_path;
+  std::string device_spec;
+  std::string residency_spec;
   long deadline_ms = 2000;
   long iterations = 1;
   bool serve = false;
@@ -1406,6 +1535,10 @@ int main(int argc, char** argv) {
       }
     } else if (flag == "--libane") {
       libane_path = value();
+    } else if (flag == "--device") {
+      device_spec = value();
+    } else if (flag == "--h16-residency") {
+      residency_spec = value();
     } else if (flag == "--deadline-ms") {
       deadline_ms = std::stol(value());
     } else if (flag == "--iterations") {
@@ -1472,9 +1605,46 @@ int main(int argc, char** argv) {
     }
     return stop_resident_daemon(socket_path);
   }
-  if (libane_path.empty()) {
+  DeviceSelection device;
+  if (!device_spec.empty()) {
+    if (device_spec == "h16") {
+      device.h16 = true;
+    } else if (device_spec.rfind("h16:", 0) == 0 && device_spec.size() > 4) {
+      device.h16 = true;
+      device.node = device_spec.substr(4);
+    } else {
+      std::fprintf(stderr, "--device expects h16 or h16:NODE\n");
+      return usage();
+    }
+    if (!libane_path.empty()) {
+      std::fprintf(stderr, "--libane and --device are mutually exclusive\n");
+      return usage();
+    }
+    if (!seal_libane_expect.empty()) {
+      std::fprintf(
+          stderr,
+          "--seal-expect-libane has no library to pin under --device h16\n");
+      return usage();
+    }
+  } else if (libane_path.empty()) {
     return usage();
   }
+  if (!residency_spec.empty()) {
+    if (!device.h16) {
+      std::fprintf(stderr, "--h16-residency applies to --device h16 only\n");
+      return usage();
+    }
+    device.residency = residency_spec;
+#ifdef MLX_OMARCHY_ANE_DEVICE
+    try {
+      (void)parse_h16_residency(device.residency);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "%s\n", error.what());
+      return usage();
+    }
+#endif
+  }
+  device.libane = libane_path;
   if (serve || relay_bypass || daemon_mode) {
     if (resident_bundles.empty()) {
       std::fprintf(
@@ -1512,7 +1682,7 @@ int main(int argc, char** argv) {
         ::chmod((socket_path + ".pid").c_str(), 0600);
       }
       int rc = serve_resident_daemon(
-          resident_bundles, libane_path, deadline_ms, iterations,
+          resident_bundles, device, deadline_ms, iterations,
           idle_time_ms, seal_expects, seal_libane_expect, socket_path);
       ::unlink((socket_path + ".pid").c_str());
       return rc;
@@ -1536,11 +1706,11 @@ int main(int argc, char** argv) {
     try {
       if (relay_bypass) {
         return serve_resident_bypass(
-            resident_bundles, libane_path, deadline_ms, iterations,
+            resident_bundles, device, deadline_ms, iterations,
             seal_expects, seal_libane_expect);
       }
       return serve_resident(
-          resident_bundles, libane_path, deadline_ms, iterations,
+          resident_bundles, device, deadline_ms, iterations,
           seal_expects, seal_libane_expect);
     } catch (const std::exception& error) {
       std::fprintf(stderr, "error: %s\n", error.what());
@@ -1589,8 +1759,19 @@ int main(int argc, char** argv) {
     options.iterations = static_cast<int>(iterations);
 
 #ifdef MLX_OMARCHY_ANE_DEVICE
-    AneWorker worker(
-        [libane_path] { return make_libane_device(libane_path); }, options);
+    require_bundle_lane(bundle, device, bundle_dir);
+    AneWorker::DeviceFactory factory;
+    if (device.h16) {
+      const AneH16Identity identity =
+          probe_h16_node(device.node, *make_h16_system_kernel());
+      std::printf("device %s\n", identity.describe().c_str());
+      const std::string node = identity.node;
+      const AneH16Residency residency = parse_h16_residency(device.residency);
+      factory = [node, residency] { return make_h16_device(node, residency); };
+    } else {
+      factory = [libane_path] { return make_libane_device(libane_path); };
+    }
+    AneWorker worker(factory, options);
 #else
     std::fprintf(
         stderr,

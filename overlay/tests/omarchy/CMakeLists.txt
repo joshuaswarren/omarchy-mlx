@@ -125,6 +125,19 @@ target_link_options(omarchy_ane_worker_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_ane_worker_tests)
 add_test(NAME omarchy_ane_worker_tests COMMAND omarchy_ane_worker_tests)
 
+# Resident decode-step features of the generic worker: persistent state
+# tensors, reset, and multi-program / multi-bundle steps under one deadline.
+add_executable(omarchy_ane_worker_state_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_worker_state.cpp)
+target_link_libraries(omarchy_ane_worker_state_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_ane_worker_state_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_worker_state_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_worker_state_tests)
+add_test(NAME omarchy_ane_worker_state_tests
+         COMMAND omarchy_ane_worker_state_tests)
+
 # Host-only ABI profile gate tests (E3.1). No /proc, /sys, libane, or
 # ANE device touched; runs on any architecture so the gate's decision
 # logic is covered even when the binary cannot link the worker.
@@ -148,6 +161,34 @@ target_link_options(omarchy_ane_tile_layout_tests
 doctest_discover_tests(omarchy_ane_tile_layout_tests)
 add_test(NAME omarchy_ane_tile_layout_tests
          COMMAND omarchy_ane_tile_layout_tests)
+
+# Lane 3 (ABI 3, H16): the host section builder against the kernel's
+# add-128 fixture, and the device behind a fake driver at the syscall seam.
+# Neither touches /dev/accel.
+add_executable(omarchy_ane_h16_sections_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_h16_sections.cpp)
+target_link_libraries(omarchy_ane_h16_sections_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_ane_h16_sections_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_h16_sections_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_h16_sections_tests)
+add_test(NAME omarchy_ane_h16_sections_tests
+         COMMAND omarchy_ane_h16_sections_tests)
+
+add_executable(omarchy_ane_h16_device_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_worker_h16.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/ane/worker_h16.cpp)
+target_link_libraries(omarchy_ane_h16_device_tests PRIVATE mlx doctest)
+target_compile_definitions(omarchy_ane_h16_device_tests
+                           PRIVATE MLX_OMARCHY_ANE_DEVICE=1)
+target_compile_options(omarchy_ane_h16_device_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_h16_device_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_h16_device_tests)
+add_test(NAME omarchy_ane_h16_device_tests
+         COMMAND omarchy_ane_h16_device_tests)
 
 
 if(TARGET mlx-omarchy-ane-worker)

@@ -211,11 +211,141 @@ Vulkan or ANE device. On success it prints the graph identity, tensor lists,
 
 ## Tests
 
-`tools/ci/run-ane-bundle-tests.sh` runs the real-package Python adapter tests
-and the host-only C++ loader suite. The tests cover schema rejection, exact ABI,
+`tools/ci/run-ane-bundle-tests.sh` runs the real-package Python adapter tests,
+the host-only C++ loader suite and the two lane-3 suites
+(`omarchy_ane_h16_sections_tests`, `omarchy_ane_h16_device_tests`). The tests cover schema rejection, exact ABI,
 program/payload mapping, dispatch order, tensor ranges, zero ordinary tensors,
 allocation and channel mismatches, digest ordering, unknown files, symlink
 entries, and the not-found contract.
+
+## Manifest schema 5: HWX programs (lane 3)
+
+Schema 5 is the sibling of schema 4 for driver ABI 3: the in-kernel
+`accel/ane` H16 node (T6041 family, M4 Pro), which takes the original HWX
+through `DRM_IOCTL_ANE_H16_LOAD` and runs it with `DRM_IOCTL_ANE_H16_EXEC`.
+Schema 4 is unchanged; a schema-4 manifest that names `h16g` or ABI 3 is
+refused as before, and a schema-5 manifest that names `h13`, `h14`, ABI 1
+or ABI 2 is refused.
+
+Differences from schema 4:
+
+| Field | Schema 5 contract |
+| --- | --- |
+| `manifest_version` | Exact integer `5`. |
+| `tile_shift` | Not allowed. |
+| `compiler.target`, `driver_abi_major` | Exactly `h16g` and `3`. |
+| `payloads` | Role `hwx` only, at least one; no `weights` (an HWX carries its constants). |
+| Tensor `stride` | Must cover `byte_size`; no tile alignment. |
+| Program `outputs` | Exactly one binding (the driver accepts one output per program). |
+| Binding `surface` | Replaces `channel`: the H16 surface index in HWX segment order, the order H16_LOAD reports. |
+| Binding `allocation_bytes` | Exactly the HWX `__FVMLIB` segment size of that surface. |
+| Program `task_descriptors` | The task count of the HWX `__TEXT,__text` stream. |
+| Program `scratch_bytes` | The `__DATA,__bss` size, or 0. The scratch is kernel-owned and is not a surface. |
+
+Bindings keep the schema-4 forms: `raw: true` copies staged bytes to the
+surface verbatim; otherwise the NCHW plane and row strides place them, with
+the same `tile_layout.h` packing the libane device uses.
+
+Validation runs before any worker or device: after every payload digest
+matches, each HWX is mapped and the four H16_LOAD sections (generic,
+operation, procedure, text properties) are built from it with the rules of
+the kernel tree's reference client
+`tools/testing/selftests/drivers/ane/h16-sections.py`
+(`overlay/mlx/backend/omarchy/ane/h16_hwx.cpp` derives the same bytes). Every
+refusal of that client refuses the bundle. Then the CPU subtype must be 7
+(H16G), the HWX must have at most four surfaces, and every surface must be
+bound exactly once with its direction and size. The sealed loader
+(`load_bundle_sealed`) treats an HWX like any other payload.
+
+The lane-3 Parakeet encoder bundle `parakeet-encoder-whole-h16` is built by
+`overlay/tools/coreml/build_whole_encoder_bundle_h16.py` from the files of a
+macOS capture run. ANECCompile refuses the encoder as exported (its
+sequence-length arithmetic runs on int32 and bool tensors), so the capture run
+compiles the MIL
+that `overlay/tools/coreml/h16_encoder_mil.py` writes: the same graph with
+the mask arithmetic in fp16 on an fp16 `attention_mask` input, and
+`encoder_hidden` as the only output (the ABI 3 driver takes one output per
+program; `encoder_mask` is computed on the host). The bundle has the inputs
+of the M1/M2 whole-encoder container, fp16 `attention_mask` [3000] and fp16
+`input_features` [3000, 128], and the output `encoder_hidden` [375, 640].
+The builder pins the HWX by the sha256 it measures, registers the bundle in
+the compiled cache, and `--check` runs it once through
+`mlx-omarchy-ane-worker --device h16` against the golden `encoder_hidden`
+under the lock's numerical contract (max_abs 0.3, mean_abs 0.02,
+rel_l2 0.1).
+
+H16_LOAD reports each surface's tensor span, which can be shorter than the
+surface allocation (the mask: 6016 of 16384 bytes); the worker stages the
+allocation and hands EXEC the span.
+
+Measured on an M4 Pro (Mac16,7, ABI 3 node):
+
+- `--check`: encoder_hidden equals the golden (max_abs 0).
+- The pinned fixture through `mlx-omarchy-parakeet transcribe`: every pinned
+  check matches (mel, the lane-3 `encoder_hidden_sha256_h16`, 104 tokens,
+  frame indices, durations, transcript). The first pass takes 1.6 s
+  including the 0.9 s program load; a resident second pass 0.28 s.
+- A duration-aware input (504 valid frames): `encoder_hidden` is bit-identical
+  to the original model under CoreML on macOS, padded rows included.
+  The same original model under CoreML on the CPU, and the encoder on the
+  GPU, return NaN for such inputs: a fully masked query row's softmax is
+  NaN and spreads through the padded value rows. Lane 3 keeps the ANE's
+  behaviour.
+
+## Resident steps and state tensors
+
+These belong to the resident worker (`--serve`, `--daemon`,
+`--relay-bypass`, `AneWorker::open`), not to a lane: they hold for schema-4
+and schema-5 bundles alike and are exercised by `omarchy_ane_worker_state_tests`
+behind a fake device.
+
+**State tensors.** A manifest's `state` list names tensors that persist
+between submits. A state tensor a program reads before any program of the
+plan wrote it takes the value the previous submit or step left; the value
+the plan leaves behind is stored once the whole plan succeeded. State is
+zero before the first submit of a session and after a reset. It lives in
+the resident child, per bundle, as dense tensor bytes (the same form as an
+input); it never reaches the device between submits except through the
+programs that read it. A caller input with a state tensor's name seeds the
+tensor for that submit instead of the stored value. Several iterations in
+one submit (`--iterations N`) advance the state once per iteration. A
+one-shot `run()` starts from zero state and carries it across its own
+iterations only. Before this, a plan that read a state tensor failed with
+"has no staged value".
+
+Reset: `AneWorker::reset_state(bundle)` / `reset_all_state()`, stdin
+`reset NAME` or `reset *` (`--serve`), `reset NAME` followed by `run` on the
+resident's wire protocol (`--daemon`, `--relay-bypass`),
+`ResidentAneWorker.reset_state(bundle=None)`. A reset zeroes state only: the
+child, the device and the loaded programs stay.
+
+**Steps.** A submit already runs the bundle's whole `dispatch_plan` (several
+programs, intermediates routed through the worker's memory). A step does the
+same for several bundles in order, as one bounded unit:
+
+- `AneWorker::step(bundles, inputs, outputs, emit, deadline)`; stdin
+  `step NAME[,NAME...] [--inline NAME=BYTES]... [--emit NAME]...`;
+  wire `step NAME NAME...`, `emit NAME` lines, input frames, `run`;
+  `ResidentAneWorker.step(bundles, tag, inputs, outputs)`.
+- Every tensor a bundle produces is offered by name to the bundles after
+  it; `inputs` supply the rest. Names are the only routing (a bundle that
+  reads `t` gets the `t` an earlier bundle wrote). A bundle may appear more
+  than once.
+- The result is the `emit` tensors (any produced tensor, intermediates
+  included) or, with no `emit`, the last bundle's manifest outputs. A
+  missing input is named with its bundle and position
+  (`step bundle 'b' (2 of 3): ...`); an emit nothing produced is refused.
+- The whole step is one deadline: the explicit step deadline when given,
+  else the worker's per-submit deadline; inside a batch scope
+  (`batch N` ... `batch-end`) the earlier of that and the batch's own. A
+  miss kills the child and quarantines the worker exactly like a missed
+  submit; a failed program ends the session, so a step never leaves a
+  session with half-advanced state. State of every bundle in the step
+  advances by one step. `--serve` has no per-step deadline word: it uses the
+  per-submit deadline or the open batch.
+
+On lane 3 every program of every bundle of a session is loaded at open; how
+they share the kernel (`--h16-residency`) is described in `docs/ANE-LINUX.md`.
 
 ## External reference: maderix (Inside the M4 ANE)
 

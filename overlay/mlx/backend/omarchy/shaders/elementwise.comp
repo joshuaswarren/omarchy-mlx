@@ -622,7 +622,14 @@ void main() {
         value = sqrt(lhs);
         break;
       case 8:
+#ifdef USE_FP16
+        // The G16 AGX packer refuses rsqrt whose source is a bare f16
+        // widening. dims is at most 4, so the shifted word is always 0 and
+        // the runtime OR keeps the operand's exact bits (including -0).
+        value = inversesqrt(uintBitsToFloat(floatBitsToUint(lhs) | (params.dims >> 16u)));
+#else
         value = inversesqrt(lhs);
+#endif
         break;
       case 9:
         value = lhs - rhs;

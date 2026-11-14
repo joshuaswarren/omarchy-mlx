@@ -544,8 +544,8 @@ void require_hd_bit_identical(
   }
 }
 
-bool hd_route_ready(Stream stream) {
-  HdCacheInputs probe = make_hd_cache(bfloat16, 93, 128, stream);
+bool hd_route_ready(Stream stream, Dtype dtype = bfloat16) {
+  HdCacheInputs probe = make_hd_cache(dtype, 93, 128, stream);
   return dispatches_for([&] { return hd_sdpa(probe, stream); }, stream) == 1;
 }
 
@@ -668,9 +668,19 @@ TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") 
     return;
   }
   Stream stream = gpu_stream();
+  // The f16 arm is gated on the device (32-wide subgroups with basic,
+  // arithmetic and shuffle operations, a 1024-lane workgroup, the shared
+  // stream); a device below the gate composes. Probe the route like the
+  // bf16 case so the dispatch-count assertions only run where it engages.
+  const bool fused_available = hd_route_ready(stream, float16);
+  if (!fused_available) {
+    printf("Skipping hd128 f16 fused-route assertions: route refuses on "
+           "this device (composition agreement still exercised)\n");
+  }
   HdCacheInputs in = make_hd_cache(float16, 263, 320, stream);
-  uint64_t dispatches = dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
-  CHECK_EQ(dispatches, 1);
+  if (fused_available) {
+    CHECK_EQ(dispatches_for([&] { return hd_sdpa(in, stream); }, stream), 1);
+  }
   require_close(
       flat(hd_sdpa(in, stream), stream),
       flat(hd_composition(in, 263, stream), stream),
@@ -680,9 +690,10 @@ TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") 
   // Past the one-pass crossover the native-shape two-pass pair answers:
   // two dispatches, same composition agreement.
   HdCacheInputs long_in = make_hd_cache(float16, 1100, 1100, stream);
-  uint64_t long_dispatches =
-      dispatches_for([&] { return hd_sdpa(long_in, stream); }, stream);
-  CHECK_EQ(long_dispatches, 2);
+  if (fused_available) {
+    CHECK_EQ(
+        dispatches_for([&] { return hd_sdpa(long_in, stream); }, stream), 2);
+  }
   require_close(
       flat(hd_sdpa(long_in, stream), stream),
       flat(hd_composition(long_in, 1100, stream), stream),

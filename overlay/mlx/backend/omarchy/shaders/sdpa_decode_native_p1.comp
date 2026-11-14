@@ -22,6 +22,8 @@
 // one-pass (see the fused kernel comment).
 
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_half.h"
 
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -159,6 +161,6 @@ void main() {
   for (uint p = 0u; p < PAIRS; ++p) {
     scratch_data.values[head_base + 2u * blocks +
                         (p * blocks + block) * SIMD + lane] =
-        packHalf2x16(vec2(o0[p], o1[p]));
+        omarchy_pack_f16x2_rne(o0[p], o1[p]);
   }
 }

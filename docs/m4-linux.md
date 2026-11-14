@@ -31,7 +31,9 @@ ls /usr/share/vulkan/icd.d
 ```
 
 Keep `deviceName`, `vendorID`, `driverID`, `driverName` and
-`apiVersion`. Steps 3 and 4 depend on them.
+`apiVersion`. Steps 3 and 4 depend on them. On the M4 Pro with aurora the
+summary reads `Apple M4 Pro (G16S B1)`, vendor `0x10005`, driver
+`Borealis`, API 1.4.363.
 
 ## 2. Install the release wheel
 
@@ -46,6 +48,15 @@ Then run the `mlx-lm`, `transformers` and patch lines from
 [From a release wheel](INSTALL.md#from-a-release-wheel).
 
 ## 3. Make the driver file name pass the ICD check
+
+On the M4 Pro with aurora the driver file already passes the check, and
+the run needed no change in this step or the next. Its name:
+
+```text
+asahi_icd.aarch64.json
+```
+
+Do the rest of this step only if your file name does not match.
 
 The backend accepts an ICD JSON only if its path contains `honeykrisp`,
 `asahi_icd` or `libvulkan_asahi`
@@ -72,7 +83,8 @@ needs Vulkan 1.3 or newer (1.4 is fine). Otherwise it refuses with
 `not an Apple GPU running Omarchy Honeykrisp`
 (`overlay/mlx/backend/omarchy/device.cpp`).
 
-If it refuses, you have two options:
+The M4 Pro device above was admitted without an override. If yours
+refuses, you have two options:
 
 - `MLX_OMARCHY_ALLOW_NON_APPLE=1` lets the run proceed. It marks the
   device as a development device, so use it for bring-up and not for a
@@ -110,8 +122,18 @@ choose the venv python and the driver setting.
 - Two of the G16G routes do not apply to G16S. The M4 changes #316
   (fused GEMV off by default) and #317 (bf16 linear layers on the
   scalar-FMA kernel) test the device name for `G16G`. A G16S device gets
-  fused GEMV on and the default cooperative-matrix pick. Nothing is
-  measured on G16S, so those two are not extended to it.
+  fused GEMV on and the default cooperative-matrix pick. An interleaved
+  comparison on G16S (default, fused GEMV off, fused trio off; three
+  rounds, three models) showed a spread inside each arm larger than the
+  difference between arms and no consistent winner, so those two are not
+  extended to it
+  ([`decode-ab.txt`](../receipts/2026-11-13-m4-pro-g16s-gpu/decode-ab.txt)).
+- **Cooperative matrix on G16S.** Stock Borealis does not expose it on the M4 Pro: the part runs
+  on the G17P profile. With aurora-silicon/mesa#319 (or the broader #299) it is on by default, and
+  this series then takes the cooperative-matrix prefill routes. Without it #321 applies.
+- **The f16 elementwise kernels need this series.** A release wheel built
+  before the series fails the f16 `sqrt`, `exp`, `rsqrt`, `normal` and
+  `erfinv` pipelines on G16S. The M4 Pro source-build receipt includes the series.
 - #321 follows the driver, not the name. The bf16 4-bit prefill route
   on the scalar-FMA kernel applies to any device whose cooperative-matrix
   route is unreachable. That means no fp32 cooperative matrix, a subgroup
@@ -127,3 +149,23 @@ choose the venv python and the driver setting.
 - **Decode and prefill numbers are not in the collector.** They come from
   the benchmark scripts. Record the prompt-ids digest with them so two
   machines compare the same prompt.
+
+## M4 Pro source build (this series)
+
+Measured on a MacBook Pro M4 Pro (J616s, T6040) with the aurora kernel driver and Mesa Borealis
+`git-05ddb00f5c` ([receipt](../receipts/2026-11-13-m4-pro-g16s-gpu/README.md),
+[tuning](../receipts/2026-11-14-m4-pro-gpu-tuning/README.md)). On the M4 Pro the standing battery passes: 57 suites, 8 capability
+simulation profiles and 16 flash cases, one process per suite. Decode with the
+G16S defaults of this series on stock Borealis, 128 greedy tokens, mlx-lm 0.31.3 (tuning receipt):
+Qwen2.5-1.5B-Instruct-4bit 135.7 tok/s, granite-4.0-1b-4bit 120.5, Qwen3.5-4B-MLX-4bit 64.6,
+Qwen3-8B-4bit 41.9. With the cooperative matrix (aurora-wip plus mesa#319) warm prefill of a
+2k-token prompt goes from 652 to 1541, 292 to 1129, 167 to 568 and 94 to 315 tok/s.
+
+Stock Mesa Borealis `git-05ddb00f5c` runs the battery, and with the
+opt-in switches (`MLX_OMARCHY_QMM_VEC_TOKEN_MULTI`, `MLX_OMARCHY_GDN_*`) the
+backend builds and runs the opt-in routes the suites reach, the multi-token
+GEMV included. The overlay carries its own f16 `rsqrt` workaround, so the
+f16 elementwise kernels compile on stock Borealis. A standalone
+pipeline-creation sweep with other device features stops 22 shaders with
+`Unhandled ALU op pack_64_4x16`; the receipt lists them and which of them
+the suites dispatch through the backend.

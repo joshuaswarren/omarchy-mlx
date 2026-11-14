@@ -78,6 +78,7 @@ function(omarchy_shader name source)
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
               "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_half.h"
       VERBATIM)
   else()
     add_custom_command(
@@ -87,6 +88,7 @@ function(omarchy_shader name source)
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
               "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_half.h"
       VERBATIM)
   endif()
   add_custom_command(
@@ -959,7 +961,9 @@ target_sources(
           ${CMAKE_CURRENT_SOURCE_DIR}/stream.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/ane/manifest.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/ane/bundle.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/ane/h16_hwx.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/ane/worker.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/ane/worker_h16.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/ane/worker_libane.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/vulkan.cpp)
 target_include_directories(mlx PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/shaders")

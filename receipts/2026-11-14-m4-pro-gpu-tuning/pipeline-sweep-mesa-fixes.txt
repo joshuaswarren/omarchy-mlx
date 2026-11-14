@@ -1,0 +1,7 @@
+matmul_direct_bf16_nn | Unhandled ALU op f2bf rc=1
+matmul_direct_bf16_nt | Unhandled ALU op f2bf rc=1
+matmul_direct_bf16_nt_k4s8 | Unhandled ALU op f2bf rc=1
+matmul_direct_bf16_tn | Unhandled ALU op f2bf rc=1
+matmul_direct_bf16_tn_ws8 | Unhandled ALU op f2bf rc=1
+matmul_direct_bf16_tt | Unhandled ALU op f2bf rc=1
+sdpa_prefill_flash_causal_coopmat_bf16 | Unhandled ALU op f2bf rc=1

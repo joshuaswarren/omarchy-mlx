@@ -55,6 +55,70 @@ Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and Parakeet
 error. The raw files above show that pass loading on `bd34a12`. A tokens-per-second figure for the per-call path on that
 module has not been measured.
 
+## M4 Pro ANE (lane 3)
+
+Lane 3 runs the H16 Neural Engine of the M4 Pro (T6041 family) through the
+in-kernel `accel/ane` driver at driver ABI 3. It loads no libane: the worker
+opens the accel node itself.
+
+- Kernel: an aurora kernel whose ANE driver reaches its `program` stage and
+  registers an accel node that reports ABI 3 / H16 in
+  `DRM_IOCTL_ANE_GET_CAPS`. The uapi header the worker builds against is
+  vendored at `overlay/mlx/backend/omarchy/ane/uapi/drm/ane_accel.h`
+  (aurora-silicon/linux 172b882a62c5).
+- Programs: CoreML-compiled HWX files for h16g, built on macOS, carried in
+  schema-5 bundles (`docs/ane-bundles.md`). The worker builds the four
+  H16_LOAD sections from each HWX on the host.
+- Worker: `mlx-omarchy-ane-worker --device h16` picks the first
+  `/dev/accel/accel*` that reports ABI 3 / H16, `--device h16:/dev/accel/accelN`
+  names one; every one-shot and resident form takes it in place of
+  `--libane PATH`. It prints `device lane=3 node=... driver=ane
+  drm_version=... abi=3 chip=h16 ...` before any load.
+- Each loaded program gets its own open file (the driver keeps one program
+  per file); closing the file unloads it. Each EXEC passes every surface in
+  the order H16_LOAD reported; the driver copies inputs in and the output
+  out. Every surface lives in a host buffer of the device, so a program that
+  is not on the kernel at the moment keeps its staged inputs and outputs.
+- Residency: whether a second file may hold a program while the first one
+  does is a property of the driver. A driver without the switch-safe
+  transport answers the second `H16_LOAD` with `-EBUSY` (one program
+  resident); a switch-safe driver accepts any number. `--h16-residency
+  auto|concurrent|swap` (default `auto`; `h16_residency=` on
+  `ResidentAneWorker`) decides what the worker does about it:
+  `concurrent` keeps every program loaded and fails the load, at session
+  open, with the driver's reason on `-EBUSY`; `swap` keeps one program on the
+  kernel, loads each program once at open so the driver validates it, and
+  afterwards unloads the previous program and loads the next one on demand
+  (one unload and one load per switch, from the same sealed mapping);
+  `auto` is `concurrent` until the driver says `-EBUSY`, then `swap` with
+  the capacity the driver showed (a driver that holds two programs gets
+  least-recently-used eviction at two). On a switch-safe driver `auto` never
+  unloads anything. An `-EBUSY` while this worker holds no program means
+  another client owns the node's program slot and is reported as such. Every
+  refused or failed load closes its file again; the worker's release (or its
+  death) closes the rest.
+- Steps and state: a resident session on any lane serves `step` (several
+  bundles, in order, one deadline) and per-bundle state tensors with reset;
+  see `docs/ane-bundles.md`, "Resident steps and state tensors".
+- Parakeet: on an H16 machine the encoder runs as the one-program bundle
+  `parakeet-encoder-whole-h16` when it is in the compiled cache or named by
+  `MLX_OMARCHY_WHOLE_ENCODER_BUNDLE`, and on the GPU otherwise. The program
+  returns `encoder_hidden`; `encoder_mask` comes from the model graph's mask
+  arithmetic on the GPU. `build_whole_encoder_bundle_h16.py` builds the
+  bundle from the files of a one-time macOS capture run.
+
+What is measured: host tests only (section bytes against the kernel's
+add-128 fixture, a 6710-file differential against `h16-sections.py`, the
+schema-5 loader, the device behind a fake driver including a driver that
+keeps one program resident, the resident step and state suite, the bundle
+builder on a synthetic stand-in). Swap mode and concurrent residency are
+untested on hardware: the cost of an unload plus a load per switch, and
+whether the switch-safe driver patch keeps every output correct, are open. Nothing in lane 3 has run on H16 hardware. The
+h16g Parakeet HWX does not exist until the macOS capture run has happened. The driver
+keeps every loaded program's firmware mappings until reboot, so each worker
+process that loads the 450 MB encoder uses program-window space that only a
+reboot returns; how many loads fit is not measured.
+
 ## Turn on the ANE for your chip
 
 The collector prints the steps that match your kernel. One wording source:

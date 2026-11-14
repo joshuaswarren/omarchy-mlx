@@ -423,6 +423,14 @@ def _check_ane_capability(module_dir: Path | None = None) -> None:
             "product has no non-ANE encoder path, so transcribe refuses "
             "instead of falling back"
         )
+    # H16 (M4 Pro): lane 3 runs the HWX whole encoder on the in-kernel
+    # ABI 3 node when its bundle is present; otherwise the encoder runs on
+    # the GPU (AneIsland.encoder_island). The libane module checks below
+    # are for lanes 1 and 2 only.
+    from coreml import ane_lane
+
+    if ane_lane.h16_node() is not None or ane_lane.h16_machine():
+        return
     accel = Path(os.environ.get("MLX_OMARCHY_ACCEL_DEV", "/dev/accel/accel0"))
     if not accel.exists():
         raise TranscribeRefusal(
@@ -608,7 +616,13 @@ def _transcribe(args) -> int:
     # CLI's own share (the discovery fallback cannot see a prefix's share
     # through a symlinked coreml/ and would silently take the split-island
     # path). An explicit MLX_OMARCHY_WHOLE_ENCODER_BUNDLE still wins.
-    _installed_whole = share / "bundles" / "parakeet-encoder-whole"
+    # Lane 3 (an ABI 3 H16 node) takes only its schema-5 bundle: the lanes
+    # 1/2 bundle in the share would make lane-3 discovery refuse.
+    from coreml import ane_lane
+
+    _installed_whole = share / "bundles" / (
+        ane_lane.H16_WHOLE_BUNDLE if ane_lane.h16_node() is not None
+        else "parakeet-encoder-whole")
     if (_installed_whole / "manifest.json").is_file():
         os.environ.setdefault(
             "MLX_OMARCHY_WHOLE_ENCODER_BUNDLE", str(_installed_whole)
@@ -763,7 +777,7 @@ def _open_encoder(args, pin, lock, cache_dir, worker, share,
     )
     source = _ensure_encoder_source(lock, pin, cache_dir)
     runner = encoder_module.EncoderRunner(
-        source / "model.mil", source / "model-root", island,
+        source / "model.mil", source / "model-root", island.encoder_island(),
     )
 
     return island, source, runner
@@ -1124,7 +1138,9 @@ def _pin_checks(pinned, expected, contract, tdt, transcript, mel_host,
         # tensor's low bits; transcript, tokens, durations and frame indices
         # are identical. The pin carries one hidden sha per encoder path.
         whole_path = island.whole_bundle is not None
-        whole_sha = expected.get("encoder_hidden_sha256_whole")
+        whole_sha = expected.get(
+            "encoder_hidden_sha256_h16" if getattr(island, "lane3", False)
+            else "encoder_hidden_sha256_whole")
         expected_hidden_sha = (whole_sha if (whole_path and whole_sha)
                                else expected["encoder_hidden_sha256"])
 
@@ -1134,7 +1150,7 @@ def _pin_checks(pinned, expected, contract, tdt, transcript, mel_host,
               _npy_sha(hidden_host) == expected_hidden_sha,
               {"expected": expected_hidden_sha,
                "actual": _npy_sha(hidden_host),
-               "encoder_path": "whole-encoder" if whole_path else "islands"})
+               "encoder_path": island.encoder_path})
         check("emissions", len(actual_tokens) == expected["emissions"],
               {"expected": expected["emissions"], "actual": len(actual_tokens)})
         check("token_ids", actual_tokens == native_tokens,

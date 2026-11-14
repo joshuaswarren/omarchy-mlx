@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
@@ -129,8 +130,8 @@ void check_route(Stream s, int hk, int hv, bool a_log_f32,
   array h0_f32 = pattern({B, hv, D, D}, 25, 0.1f, 0.0f, s);
   array h0_bf16 = astype(h0_f32, bfloat16, s);
 
-  array ref_out;
-  array ref_state;
+  std::optional<array> ref_out;
+  std::optional<array> ref_state;
   for (int pass = 0; pass < 2; ++pass) {
     for (const auto& e : env) {
       setenv(e.name, e.value, 1);
@@ -166,10 +167,10 @@ void check_route(Stream s, int hk, int hv, bool a_log_f32,
       CHECK_EQ(out[1].dtype(), float32);
     } else {
       CHECK_EQ(out[1].dtype(), bfloat16);
-      array d_out = abs(subtract(ref_out, astype(out[0], float32, s), s), s);
-      array d_state = abs(subtract(ref_state, astype(out[1], float32, s), s), s);
-      array m_out = max(d_out, std::vector<int>{0, 1, 2, 3}, s);
-      array m_state = max(d_state, std::vector<int>{0, 1, 2, 3}, s);
+      array d_out = abs(subtract(*ref_out, astype(out[0], float32, s), s), s);
+      array d_state = abs(subtract(*ref_state, astype(out[1], float32, s), s), s);
+      array m_out = mlx::core::max(d_out, std::vector<int>{0, 1, 2, 3}, false, s);
+      array m_state = mlx::core::max(d_state, std::vector<int>{0, 1, 2, 3}, false, s);
       eval(m_out, m_state);
       CHECK_LT(m_out.item<float>(), 0.05f);
       CHECK_LT(m_state.item<float>(), 0.05f);
@@ -217,8 +218,8 @@ TEST_CASE("gdn raw decode: explicit bf16 state stays bf16 and tracks fp32 refere
 
   array diff_out = abs(subtract(res_f32[0], astype(res_bf16[0], float32, s), s), s);
   array diff_st = abs(subtract(res_f32[1], astype(res_bf16[1], float32, s), s), s);
-  array max_out = max(diff_out, std::vector<int>{0, 1, 2, 3}, s);
-  array max_st = max(diff_st, std::vector<int>{0, 1, 2, 3}, s);
+  array max_out = mlx::core::max(diff_out, std::vector<int>{0, 1, 2, 3}, false, s);
+  array max_st = mlx::core::max(diff_st, std::vector<int>{0, 1, 2, 3}, false, s);
   eval(max_out, max_st);
 
   CHECK_LT(max_out.item<float>(), 0.05f);

@@ -2,6 +2,7 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "omarchy_trig.h"
+#include "omarchy_half.h"
 
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
@@ -222,12 +223,9 @@ void rope_side(
 
 #ifdef TRIO_SWIGLU
 vec4 round4(vec4 v) {
-  // swiglu.comp rounding: packHalf2x16 round trip, identical bits.
-  return vec4(
-      unpackHalf2x16(packHalf2x16(vec2(v.x, 0.0))).x,
-      unpackHalf2x16(packHalf2x16(vec2(v.y, 0.0))).x,
-      unpackHalf2x16(packHalf2x16(vec2(v.z, 0.0))).x,
-      unpackHalf2x16(packHalf2x16(vec2(v.w, 0.0))).x);
+  // swiglu.comp rounding: round-to-nearest-even conversion, identical bits.
+  return vec4(omarchy_round_f16(v.x), omarchy_round_f16(v.y),
+              omarchy_round_f16(v.z), omarchy_round_f16(v.w));
 }
 #endif
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/ane/bundle.h"
+#include "mlx/backend/omarchy/ane/h16_hwx.h"
 
 #include <json.hpp>
 
@@ -1258,6 +1259,85 @@ void validate_program_contract(
   }
 }
 
+// Schema 5: one program's manifest bindings against the HWX surfaces that
+// h16_build_sections() derived (the same parse H16_LOAD's host sections come
+// from). Returns the per-surface contract in HWX segment order.
+std::vector<AneH16SurfaceContract> validate_h16_program_contract(
+    const AneProgram& program,
+    const AneH16Sections& hwx,
+    size_t program_index) {
+  const std::string prefix = "program " + std::to_string(program_index);
+  if (hwx.subtype != kAneHwxSubtypeH16G) {
+    throw bundle_error(
+        prefix + " HWX has CPU subtype " + std::to_string(hwx.subtype) +
+        "; compiler.target '" + kAneCompilerTargetH16G + "' requires " +
+        std::to_string(kAneHwxSubtypeH16G));
+  }
+  if (program.task_descriptors != hwx.tasks) {
+    throw bundle_error(
+        prefix + " task_descriptors does not match the HWX task count " +
+        std::to_string(hwx.tasks));
+  }
+  if (program.scratch_bytes != hwx.scratch_bytes) {
+    throw bundle_error(
+        prefix + " scratch_bytes does not match the HWX __DATA,__bss size " +
+        std::to_string(hwx.scratch_bytes));
+  }
+  // DRM_ANE_H16_SURFACES: H16_LOAD reports at most four surfaces.
+  constexpr size_t kMaxSurfaces = 4;
+  if (hwx.surfaces.size() > kMaxSurfaces) {
+    throw bundle_error(
+        prefix + " HWX has " + std::to_string(hwx.surfaces.size()) +
+        " surfaces; H16_LOAD reports at most " + std::to_string(kMaxSurfaces));
+  }
+  if (program.inputs.size() + program.outputs.size() != hwx.surfaces.size()) {
+    throw bundle_error(
+        prefix + " binds " +
+        std::to_string(program.inputs.size() + program.outputs.size()) +
+        " surfaces; the HWX has " + std::to_string(hwx.surfaces.size()));
+  }
+  std::vector<AneH16SurfaceContract> contract(hwx.surfaces.size());
+  auto bind = [&](const AneProgramBinding& binding, uint32_t direction,
+                  const char* role) {
+    const std::string label = prefix + " " + role + " " + binding.tensor;
+    if (binding.channel >= hwx.surfaces.size()) {
+      throw bundle_error(
+          label + " names surface " + std::to_string(binding.channel) +
+          ", the HWX has " + std::to_string(hwx.surfaces.size()));
+    }
+    const AneH16Surface& surface = hwx.surfaces[binding.channel];
+    if (surface.direction != direction) {
+      throw bundle_error(
+          label + " names surface " + std::to_string(binding.channel) +
+          ", which is an HWX " + (surface.direction == 2 ? "output" : "input"));
+    }
+    if (contract[binding.channel].direction != 0) {
+      throw bundle_error(
+          label + " binds surface " + std::to_string(binding.channel) +
+          " a second time");
+    }
+    if (binding.allocation_bytes != surface.allocation) {
+      throw bundle_error(
+          label + " allocation_bytes does not match HWX surface " +
+          std::to_string(binding.channel) + " size " +
+          std::to_string(surface.allocation));
+    }
+    if (binding.dtype != "float16" && binding.dtype != "bfloat16" &&
+        binding.dtype != "bool") {
+      throw bundle_error(
+          label + " H16 surface requires a 16-bit or 1-byte bool tensor dtype");
+    }
+    contract[binding.channel] = {surface.allocation, direction};
+  };
+  for (const auto& binding : program.inputs) {
+    bind(binding, 1, "input");
+  }
+  for (const auto& binding : program.outputs) {
+    bind(binding, 2, "output");
+  }
+  return contract;
+}
+
 } // namespace
 
 AneAnecHeader parse_anec_header(
@@ -1666,12 +1746,38 @@ AneBundle load_bundle_snapshot(
     if (path.empty()) {
       throw bundle_error("program payload mapping disappeared after manifest validation");
     }
+    if (bundle.manifest.manifest_version == kAneManifestVersionHwx) {
+      // Same gate as an ANEC header: the HWX is parsed and its four H16_LOAD
+      // sections are built (every h16-sections.py refusal applies) before
+      // any worker or device sees it. All digests were checked above.
+      AneMappedFile mapped(path.string());
+      AneH16Sections sections;
+      try {
+        sections = h16_build_sections(mapped.data(), mapped.size());
+      } catch (const AneH16HwxError& error) {
+        throw bundle_error(
+            "program " + std::to_string(p) + " HWX refused: " + error.reason);
+      }
+      AneValidatedProgram validated;
+      validated.manifest_index = p;
+      validated.format = AneProgramFormat::hwx;
+      validated.hwx = std::move(path);
+      validated.h16_surfaces =
+          validate_h16_program_contract(program, sections, p);
+      validated.h16_tasks = sections.tasks;
+      bundle.programs.push_back(std::move(validated));
+      continue;
+    }
     AneAnecHeader header =
         parse_anec_header(path, bundle.manifest.tile_shift);
     validate_program_contract(
         program, header, path, p, uint64_t{1} << bundle.manifest.tile_shift);
-    bundle.programs.push_back(
-        {p, std::move(header), std::move(path), bundle.manifest.tile_shift});
+    AneValidatedProgram validated;
+    validated.manifest_index = p;
+    validated.anec_header = std::move(header);
+    validated.anec = std::move(path);
+    validated.tile_shift = bundle.manifest.tile_shift;
+    bundle.programs.push_back(std::move(validated));
   }
   return bundle;
 }

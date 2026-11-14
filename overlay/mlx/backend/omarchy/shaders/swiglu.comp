@@ -1,9 +1,11 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_half.h"
 
 // Four-wide SwiGLU: the fused_chain.comp program
 //   r0 = sigmoid(gate); r1 = gate * r0; out = r1 * up
 // with every intermediate rounded to the storage dtype exactly the way
-// the interpreter rounds it (the same packHalf2x16 round trip for f16,
+// the interpreter rounds it (the same round-to-nearest-even conversion for f16,
 // the same bf16_store for bf16), so the stored bits match. The
 // interpreter indexes its register file dynamically per instruction
 // and reached 7 GB/s on the M1 for the prefill MLP (2026-09-09
@@ -22,7 +24,7 @@
 #define LOAD_VEC(x) vec4(x)
 #define STORE_VEC(v) f16vec4(v)
 float round_intermediate(float f) {
-  return unpackHalf2x16(packHalf2x16(vec2(f, 0.0))).x;
+  return omarchy_round_f16(f);
 }
 #else
 #extension GL_EXT_shader_16bit_storage : require

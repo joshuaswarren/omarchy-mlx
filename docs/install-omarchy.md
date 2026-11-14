@@ -209,6 +209,18 @@ even when it is above the kernel limit. In that case MLX prints one
 `[omarchy] warning:` line at device creation. It names the heap and the kernel
 limit, so the allocation failure that follows has a stated cause.
 
+Cooperative matrix on the M4 Pro (`ASAHI_AGX3B_COOPERATIVE_MATRIX`,
+`MLX_OMARCHY_COOPMAT`). Mesa exposes the AGX3B 8x8 cooperative matrix
+(`VK_KHR_cooperative_matrix`) behind `ASAHI_AGX3B_COOPERATIVE_MATRIX`, with a
+per-chip default. On an M4 Pro (`apple,t6040`) MLX processes set the variable
+to `1` before Vulkan loads, so the coopmat prefill GEMM, attention and GDN
+routes run without extra setup. An explicit `ASAHI_AGX3B_COOPERATIVE_MATRIX`
+always wins. `MLX_OMARCHY_COOPMAT=0` opts one MLX process out: MLX then sets
+the variable to `0` and the driver hides the extension. Other chips keep the
+driver default. A Mesa build without the variable ignores it and runs the
+non-coopmat routes as before. Every other Vulkan application keeps the
+driver default.
+
 Serving placement (`MLX_OMARCHY_UCLAMP_MIN`, default 1024). The serve
 raises `uclamp_min` on its startup thread. It uses an unprivileged
 `sched_setattr` call. Every serving thread then inherits the scheduler's

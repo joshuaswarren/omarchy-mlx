@@ -20,6 +20,9 @@ if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
     -DMLX_BUILD_PYTHON_BINDINGS=OFF
 fi
 
-cmake --build "$BUILD_DIR" --target omarchy_ane_bundle_tests -j4
+cmake --build "$BUILD_DIR" --target omarchy_ane_bundle_tests \
+  omarchy_ane_h16_sections_tests omarchy_ane_h16_device_tests -j4
 "$BUILD_DIR/tests/omarchy/omarchy_ane_bundle_tests"
+"$BUILD_DIR/tests/omarchy/omarchy_ane_h16_sections_tests"
+"$BUILD_DIR/tests/omarchy/omarchy_ane_h16_device_tests"
 echo "[receipt] schema-3 adapter and bundle validation passed on $(uname -m)"

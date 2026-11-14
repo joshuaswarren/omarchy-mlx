@@ -22,3 +22,10 @@ The worker accepts only a per-ABI lane selected by `MLX_OMARCHY_ANE_ABI` (defaul
 Every lane additionally requires: Linux AArch64, device-tree ANE node status `okay`, bound `ane` platform driver, runtime PM `active` (the gate opens the device first, so a runtime-PM-managed node with `power/control=auto` resumes; `on` control is accepted too; a non-active status is refused), and a readable+writable `/dev/accel/accel0`. The lane is exclusive — a per-ABI pin (libane commit, module name) never satisfies a request for the other lane, and an `MLX_OMARCHY_ANE_ABI=N` worker refuses a bundle whose `driver_abi_major` is not `N`. The bundle manifest parser also refuses a target/abi mismatch: `compiler.target=h13` requires `driver_abi_major: 1`, `compiler.target=h14` requires `driver_abi_major: 2`.
 
 The runtime identity records the graph hash, raw manifest hash, payload-collection model hash, kernel, module source version, libane commit, the active ABI lane, and the matched DT-compatible string. The worker queries `DRM_IOCTL_VERSION` and requires the driver's ABI major to match the runtime ABI. Missing or mismatched values produce a compatibility error.
+
+Lane 3 (driver ABI 3, H16) does not use this runtime. Its schema-5 bundles
+run through the bounded worker CLI with `--device h16` (`docs/ANE-LINUX.md`);
+the `MLX_OMARCHY_ANE_ABI` gate above accepts only `1` and `2` and refuses a
+schema-5 bundle through its `driver_abi_major` cross-check. The only change
+here is the manifest version refusal, which now names both supported
+schemas: `unsupported manifest_version (expected 4 or 5)`.
