@@ -1,0 +1,6 @@
+idle: submit-latency: n=717 p50=0.13ms p99=0.19ms max=6.12ms mean=0.15ms over2x(>33.3ms)=0/717
+bw=5000: submit-latency: n=718 p50=0.12ms p99=0.19ms max=3.79ms mean=0.12ms over2x(>33.3ms)=0/718
+bw=20000: submit-latency: n=718 p50=0.12ms p99=0.19ms max=3.59ms mean=0.13ms over2x(>33.3ms)=0/718
+bw=40000: submit-latency: n=718 p50=0.12ms p99=0.19ms max=1.27ms mean=0.13ms over2x(>33.3ms)=0/718
+bw=0: submit-latency: n=717 p50=0.14ms p99=0.21ms max=3.42ms mean=0.14ms over2x(>33.3ms)=0/717
+PROBE_DONE
