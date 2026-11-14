@@ -359,6 +359,58 @@ TEST_CASE("a resident session loads once and serves every submit") {
   CHECK(!worker.quarantined());
 }
 
+TEST_CASE("bundles that share a manifest name need their own session names") {
+  FakeDevice::behavior = FakeDevice::Behavior::ReportState;
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(4000);
+  options.iterations = 1;
+  AneWorker worker([] { return std::unique_ptr<AneDevice>(new FakeDevice); },
+                   options);
+
+  // Second bundle: same manifest name as the first, but it writes "z", so
+  // an output name shows which bundle a submit really ran.
+  AneBundle other = toy_bundle();
+  other.manifest.outputs[0].name = "z";
+  other.manifest.programs[0].outputs[0].tensor = "z";
+  REQUIRE(other.manifest.name == toy_bundle().manifest.name);
+
+  // Default names come from the manifests: the repeat is refused on the
+  // host and no session opens.
+  auto refusal = [&](const std::vector<std::string>& names) {
+    try {
+      worker.open({toy_bundle(), other}, names);
+    } catch (const std::invalid_argument& error) {
+      return std::string(error.what());
+    }
+    return std::string("opened");
+  };
+  CHECK(refusal({}).find("duplicate manifest name 'toy-add'") !=
+        std::string::npos);
+  CHECK(!worker.resident());
+  CHECK(!worker.quarantined());
+
+  // Explicit, distinct session names keep the two apart: each index runs
+  // its own bundle.
+  REQUIRE(worker.open({toy_bundle(), other}, {"first", "second"}).status ==
+          AneWorkerStatus::Completed);
+  for (size_t index : {size_t{1}, size_t{0}, size_t{1}}) {
+    std::map<std::string, AneWorker::Buffer> inputs;
+    inputs["a"] = marked_input(0x51);
+    inputs["b"] = marked_input(0x51);
+    std::map<std::string, AneWorker::Buffer> outputs;
+    auto report = worker.submit(index, inputs, &outputs);
+    REQUIRE(report.status == AneWorkerStatus::Completed);
+    CHECK(outputs.count(index == 0 ? "y" : "z") == 1);
+    CHECK(outputs.count(index == 0 ? "z" : "y") == 0);
+  }
+  REQUIRE(worker.close().status == AneWorkerStatus::Completed);
+
+  // Explicit names are held to the same rule.
+  CHECK(refusal({"same", "same"}).find("duplicate session name 'same'") !=
+        std::string::npos);
+  CHECK(!worker.resident());
+}
+
 TEST_CASE("a resident submit past its deadline quarantines the worker") {
   FakeDevice::behavior = FakeDevice::Behavior::ReportState;
   AneWorkerOptions options;

@@ -923,6 +923,9 @@ AneWorkerReport AneWorker::open(
   // The wire-protocol names: the caller's session keys when given, the
   // manifest names otherwise. Validated here so a mismatch dies on the
   // host instead of as a mid-session "unknown request" from the child.
+  // Both paths go through the same check: the child maps each name to one
+  // bundle index, so an empty or repeated name would bind a submit to the
+  // wrong bundle.
   std::vector<std::string> names;
   names.reserve(bundles.size());
   if (session_names.empty()) {
@@ -934,16 +937,23 @@ AneWorkerReport AneWorker::open(
       throw std::invalid_argument(
           "resident ANE session needs one session name per bundle");
     }
+    names = session_names;
+  }
+  {
+    const char* what = session_names.empty() ? "manifest name" : "session name";
     std::set<std::string> unique;
-    for (const auto& name : session_names) {
+    for (const auto& name : names) {
       if (name.empty()) {
-        throw std::invalid_argument("session names must not be empty");
+        throw std::invalid_argument(
+            std::string(what) + "s must not be empty");
       }
       if (!unique.insert(name).second) {
         throw std::invalid_argument(
-            "duplicate session name '" + name + "'");
+            "duplicate " + std::string(what) + " '" + name +
+            "'" + (session_names.empty()
+                       ? "; pass one session name per bundle"
+                       : ""));
       }
-      names.push_back(name);
     }
   }
   if (quarantined()) {
