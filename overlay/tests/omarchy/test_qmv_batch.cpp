@@ -301,7 +301,6 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
     std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
     return;
   }
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "0", s); }), batch4));
   CHECK(ran(traced_kernels([&] { short_pass(x3, q, "3", s); }), batch4));
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "3", s); }), batch4));
@@ -310,10 +309,14 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   const bool wide_cap = dev_caps.device_name.find("G13C") != std::string::npos ||
       dev_caps.device_name.find("G16S") != std::string::npos;
   if (wide_cap) {
-    // On G13C and G16S, MLX_OMARCHY_QMV_SMALL_T=8 engages through 8 rows via 4-row blocks.
+    // G13C and G16S default the short pass on when the variable is unset: it
+    // engages through 8 rows, the range an explicit =8 covers. =0 forces it off.
+    CHECK(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
+    CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "", s); }), batch4));
     CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "8", s); }), batch4));
   } else {
-    // Elsewhere, values above 4 stay capped at 4.
+    // Elsewhere the route stays opt-in: unset is off and values above 4 cap at 4.
+    CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
     CHECK_FALSE(ran(traced_kernels([&] { short_pass(x5, q, "8", s); }), batch4));
   }
   setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);
