@@ -8629,7 +8629,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      constexpr uint32_t kBlockRows = 4u;
+      // A 5-to-8-row pass fits one 8-row dispatch on a part whose cap is 8,
+      // which reads the weight stream once instead of twice (two 4-row
+      // blocks). Each row still matches the single-row chain, because the
+      // batch-8 shader runs the same per-row chain as the batch-4 shader.
+      // MLX_OMARCHY_QMV_BATCH8=0 keeps 4-row blocks.
+      const bool batch8 = params.matrix_m > 4u &&
+          qmv_small_t_device_cap(encoder, 8) >= 8 &&
+          decode_path_override("MLX_OMARCHY_QMV_BATCH8") != 0;
+      const uint32_t kBlockRows = batch8 ? 8u : 4u;
+      const omarchy::ComputeKernel block_kernel = batch8
+          ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16
+          : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
       for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
         uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
         omarchy::ComputeParams block = params;
@@ -8639,7 +8650,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         block.lhs_offset = params.lhs_offset + row * params.matrix_k;
         block.output_offset = params.output_offset + row * params.matrix_n;
         encoder.dispatch_compute(
-            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            block_kernel,
             bindings,
             block,
             n_groups_qmm_vec,
