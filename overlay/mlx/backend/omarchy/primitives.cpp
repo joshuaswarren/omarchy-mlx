@@ -4078,7 +4078,8 @@ static int decode_path_override(const char* name) {
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
 // live): the largest pass length T whose [1, T, K] bf16 x runs as batch-shared
 // decode GEMV (one dispatch per block of 4 rows) instead of the coopmat prefill
-// tile. The cap is 4 on every part but G13C, where it is 8 (qmv_small_t_device_cap):
+// tile. The cap is 4 on every part but G13C and G16S, where it is 8
+// (qmv_small_t_device_cap):
 // above 4 a second GEMV block costs more than the tile on G13G (PR #296). The
 // request is clamped to 8 here and to the part's cap at the call site. Unset,
 // empty or 0 keeps the shipped route. Each row is
@@ -4100,7 +4101,9 @@ static int qmv_small_t_max_rows() {
 static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
   if (requested_max < 2) return 0;
   const std::string& name = encoder.device().capabilities().device_name;
-  int cap = (name.find("G13C") != std::string::npos) ? 8 : 4;
+  const bool wide = name.find("G13C") != std::string::npos ||
+      name.find("G16S") != std::string::npos;
+  int cap = wide ? 8 : 4;
   return std::min(requested_max, cap);
 }
 
@@ -8626,7 +8629,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      constexpr uint32_t kBlockRows = 4u;
+      // A 5-to-8-row pass fits one 8-row dispatch on a part whose cap is 8,
+      // which reads the weight stream once instead of twice (two 4-row
+      // blocks). Each row still matches the single-row chain, because the
+      // batch-8 shader runs the same per-row chain as the batch-4 shader.
+      // MLX_OMARCHY_QMV_BATCH8=0 keeps 4-row blocks.
+      const bool batch8 = params.matrix_m > 4u &&
+          qmv_small_t_device_cap(encoder, 8) >= 8 &&
+          decode_path_override("MLX_OMARCHY_QMV_BATCH8") != 0;
+      const uint32_t kBlockRows = batch8 ? 8u : 4u;
+      const omarchy::ComputeKernel block_kernel = batch8
+          ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16
+          : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
       for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
         uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
         omarchy::ComputeParams block = params;
@@ -8636,7 +8650,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         block.lhs_offset = params.lhs_offset + row * params.matrix_k;
         block.output_offset = params.output_offset + row * params.matrix_n;
         encoder.dispatch_compute(
-            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            block_kernel,
             bindings,
             block,
             n_groups_qmm_vec,

@@ -902,6 +902,10 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectBF16NtK4S8,
   // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
   QmmVecQ4WordSubgroupBatch4BF16,
+  // Wider batch-shared bf16 decode GEMV (B <= 8): one dispatch for a short
+  // verify pass of 5 to 8 rows, so the weight stream is read once instead of
+  // once per 4-row block. Each row matches QmmVecQ4WordSubgroupBatch4BF16.
+  QmmVecQ4WordSubgroupBatch8BF16,
   // Bonsai 1-bit / 2-bit affine decode: enum bindings for the shader
   // lookup tables in compute.cpp. The dispatch tables reference these
   // names; the matching fast primitives live in mlx/fast.cpp via the

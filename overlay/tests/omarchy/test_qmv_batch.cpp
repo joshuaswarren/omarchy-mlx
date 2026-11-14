@@ -307,12 +307,13 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "3", s); }), batch4));
   CHECK(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
   const auto& dev_caps = omarchy::device(s.device.index).capabilities();
-  const bool is_g13c = dev_caps.device_name.find("G13C") != std::string::npos;
-  if (is_g13c) {
-    // On G13C, MLX_OMARCHY_QMV_SMALL_T=8 engages through 8 rows via 4-row blocks.
+  const bool wide_cap = dev_caps.device_name.find("G13C") != std::string::npos ||
+      dev_caps.device_name.find("G16S") != std::string::npos;
+  if (wide_cap) {
+    // On G13C and G16S, MLX_OMARCHY_QMV_SMALL_T=8 engages through 8 rows via 4-row blocks.
     CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "8", s); }), batch4));
   } else {
-    // On non-G13C parts, values above 4 stay capped at 4.
+    // Elsewhere, values above 4 stay capped at 4.
     CHECK_FALSE(ran(traced_kernels([&] { short_pass(x5, q, "8", s); }), batch4));
   }
   setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);

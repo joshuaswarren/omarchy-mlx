@@ -295,6 +295,7 @@
 #include "qmm_vec_q4_word_f32.h"
 #include "qmm_vec_q4_word_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_batch4_bf16.h"
+#include "qmm_vec_q4_word_subgroup_batch8_bf16.h"
 #include "qmm_vec_q4_word_subgroup_f16.h"
 #include "qmm_vec_q4_word_subgroup_f32.h"
 #include "qmm_vec_q4_multi_bf16.h"
@@ -2026,6 +2027,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_batch4_bf16,
           qmm_vec_q4_word_subgroup_batch4_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16:
+      return {
+          qmm_vec_q4_word_subgroup_batch8_bf16,
+          qmm_vec_q4_word_subgroup_batch8_bf16_size};
     case ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16:
       return {
           gated_delta_prefill_recur32_masked_bf16,

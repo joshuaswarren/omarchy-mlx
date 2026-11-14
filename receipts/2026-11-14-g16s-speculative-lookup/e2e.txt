@@ -1,0 +1,21 @@
+## 2026-11-14T17:59:26+01:00 mlx-community/Qwen3-8B-4bit 3 tmax=60
+E2E {"prompt": "code", "base_tps": 38.9, "spec_tps": 45.9, "speedup": 1.179, "identical": true, "gen": 256, "sha": "70b05fefc6b8"}
+E2E {"prompt": "quote", "base_tps": 39.6, "spec_tps": 72.5, "speedup": 1.833, "identical": true, "gen": 256, "sha": "78712f34f17b"}
+E2E {"prompt": "chat", "base_tps": 42.4, "spec_tps": 41.0, "speedup": 0.966, "identical": true, "gen": 68, "sha": "b22c39f089c9"}
+rc=0
+## 2026-11-14T18:01:07+01:00 mlx-community/Qwen3.5-4B-MLX-4bit 3 tmax=70
+E2E {"prompt": "code", "base_tps": 52.8, "spec_tps": 52.8, "speedup": 1.0, "identical": true, "gen": 256, "sha": "abb288017022"}
+E2E {"prompt": "quote", "base_tps": 52.4, "spec_tps": 99.9, "speedup": 1.907, "identical": true, "gen": 256, "sha": "01706f00e98d"}
+E2E {"prompt": "chat", "base_tps": 55.8, "spec_tps": 54.1, "speedup": 0.969, "identical": true, "gen": 73, "sha": "62a409109ffc"}
+rc=0
+## 2026-11-14T18:03:17+01:00 mlx-community/Qwen3-8B-4bit 3 256 mlx-community/Qwen3-0.6B-4bit tmax=68
+E2E {"prompt": "code", "base_tps": 39.5, "spec_tps": 38.6, "speedup": 0.976, "identical": true, "gen": 256, "sha": "70b05fefc6b8"}
+E2E {"prompt": "quote", "base_tps": 39.1, "spec_tps": 41.0, "speedup": 1.049, "identical": true, "gen": 256, "sha": "78712f34f17b"}
+E2E {"prompt": "chat", "base_tps": 41.8, "spec_tps": 31.3, "speedup": 0.749, "identical": true, "gen": 68, "sha": "b22c39f089c9"}
+rc=0
+## 2026-11-14T18:05:11+01:00 mlx-community/Qwen3.5-4B-MLX-4bit 3 256 mlx-community/Qwen3.5-0.8B-MLX-4bit tmax=71
+E2E {"prompt": "code", "base_tps": 51.5, "spec_tps": 39.9, "speedup": 0.774, "identical": true, "gen": 256, "sha": "abb288017022"}
+E2E {"prompt": "quote", "base_tps": 53.2, "spec_tps": 49.7, "speedup": 0.935, "identical": true, "gen": 256, "sha": "01706f00e98d"}
+E2E {"prompt": "chat", "base_tps": 55.4, "spec_tps": 25.0, "speedup": 0.452, "identical": true, "gen": 73, "sha": "62a409109ffc"}
+rc=0
+E2E_DONE
