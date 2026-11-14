@@ -53,6 +53,34 @@ every driver except NVIDIA proprietary. The test still prints its
 ratio for every run, so a per-driver floor can be set from
 collected numbers. AMD (RADV) is untested.
 
+## M4 Pro (G16S) and A18 Pro (G17P) on Borealis: the independent-streams timing floor fails
+
+On a MacBook Pro 16-inch with the M4 Pro (`Apple M4 Pro (G16S B1)`,
+20-core GPU), Mesa 26.3.0-devel Borealis `c208afc352`, Linux 7.3,
+`independent streams measure against the serialized sum` is the one
+failing case of `omarchy_runtime_tests` (59/60). The rerun printed
+`iters=400 serialized_median=0.0497847s concurrent_median=0.0568427s
+ratio=0.875833`, against the 0.95 floor. The first run on the same
+build failed the same case; its ratio was not kept. Both destination
+buffers still verify byte-for-byte (the two `memcmp` checks pass), so
+this is a timing loss, not a correctness failure. The device exposes 8
+compute queues and the test interleaves both streams on one `VkQueue`.
+The M1 Pro (G13S) and M2 (G14G) on Borealis `be147e3625` pass the
+floor. The cause is not known: the two driver builds differ, so this
+run does not separate the G16S hardware from the newer driver. The
+floor stays asserted for this device; logs are in
+`receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/suite/`.
+
+The MacBook Neo with the A18 Pro (`Apple A18 Pro (G17P B1)`, 5-core
+GPU), on the same Borealis build `c208afc352`, fails the same case and
+only that case (59/60). Its ratio is lower: 0.437 in the full suite
+(400 iterations) and 0.442, 0.384 and 0.388 in three runs of that case
+alone (153 to 156 iterations). The interleaved run takes 2.3 to 2.6
+times as long as the serialized one, which is below the 0.5 a global
+serialization lock would give, so interleaving two streams costs more
+than queueing them one after the other on this device. Both copies
+still verify byte-for-byte. The cause is not known.
+
 ## Sum over a long row: row-reduce route, on by default
 
 A float32, float16 or bfloat16 Sum over a row-contiguous suffix of at least 256 elements runs one 256-wide workgroup per output row with a fixed shared-memory tree (`shaders/reduce_row.comp`). `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels, which gave one invocation a whole row. Max and Min are not affected.

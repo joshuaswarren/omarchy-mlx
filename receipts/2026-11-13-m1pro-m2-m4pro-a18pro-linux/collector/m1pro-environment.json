@@ -1,0 +1,15 @@
+{
+  "_redaction": {
+    "home_path": 3
+  },
+  "available": true,
+  "env": [],
+  "executable": "[home]/mlxpr/venv/bin/python",
+  "implementation": "CPython",
+  "machine": "aarch64",
+  "prepared_tree": false,
+  "python": "3.14.10",
+  "repo_dirty": false,
+  "source_commit": null,
+  "wheels": []
+}

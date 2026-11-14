@@ -1,0 +1,79 @@
+{
+  "_redaction": {
+    "home_path": 2
+  },
+  "available": true,
+  "kernel_spike": {
+    "available": false,
+    "error": "binary not built (overlay/benchmarks/omarchy, see its CMakeLists.txt)"
+  },
+  "python": {
+    "available": true,
+    "device": "Device(gpu, 0)",
+    "error": null,
+    "matmul": [
+      {
+        "max_ms": 0.244,
+        "median_ms": 0.232,
+        "min_ms": 0.22,
+        "n": 256,
+        "reps": 8,
+        "tflops": 0.1447
+      },
+      {
+        "max_ms": 0.872,
+        "median_ms": 0.857,
+        "min_ms": 0.845,
+        "n": 512,
+        "reps": 8,
+        "tflops": 0.3133
+      },
+      {
+        "max_ms": 5.753,
+        "median_ms": 5.696,
+        "min_ms": 5.614,
+        "n": 1024,
+        "reps": 8,
+        "tflops": 0.377
+      }
+    ],
+    "provenance": {
+      "dist": "mlx-omarchy",
+      "dist_version": "0.32.4.dev202611111431+8380f002",
+      "files": [
+        {
+          "label": "mlx.core extension",
+          "match": true,
+          "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
+          "record_sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
+          "sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc"
+        },
+        {
+          "label": "mlx/lib/libmlx.so",
+          "match": true,
+          "path": "mlx/lib/libmlx.so",
+          "record_sha256": "aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f",
+          "sha256": "aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f"
+        }
+      ],
+      "mismatch": null,
+      "mx_version": "0.32.4.dev202611111431+8380f002",
+      "verified": "match",
+      "version_match": true
+    }
+  },
+  "python_probe": {
+    "argv": [
+      "[home]/mlxpr/venv/bin/python",
+      "-c",
+      "\nimport json, statistics, time\nres = {\"available\": False, \"device\": None, \"error\": None, \"matmul\": []}\ntry:\n    import mlx.core as mx\n    res[\"available\"] = True\n    res[\"device\"] = str(mx.default_device())\n\n    import sys as _sys\n    _sys.path.insert(0, \"[home]/mlxpr/omx/scripts\")\n    from mlx_provenance import prepare_probe\n\n    res[\"provenance\"] = prepare_probe(mx)\n    res[\"device\"] = str(mx.default_device())\n    if res[\"provenance\"].get(\"verified\") == \"mismatch\":\n        res[\"available\"] = False\n        res[\"error\"] = (\"refusing to emit timing numbers: \"\n                        + res[\"provenance\"][\"mismatch\"])\n        print(json.dumps(res))\n        raise SystemExit(0)\n    sync = getattr(mx, \"synchronize\", None)\n    for n in (256, 512, 1024):\n        a = mx.random.normal((n, n))\n        b = mx.random.normal((n, n))\n        for _ in range(2):\n            c = a @ b\n            mx.eval(c)\n            if sync:\n                sync()\n        times = []\n        for _ in range(8):\n            start = time.perf_counter()\n            c = a @ b\n            mx.eval(c)\n            if sync:\n                sync()\n            times.append((time.perf_counter() - start) * 1000)\n        med = statistics.median(times)\n        res[\"matmul\"].append({\n            \"n\": n, \"reps\": len(times),\n            \"median_ms\": round(med, 3),\n            \"min_ms\": round(min(times), 3),\n            \"max_ms\": round(max(times), 3),\n            \"tflops\": round(2 * n ** 3 / (med / 1000) / 1e12, 4),\n        })\nexcept Exception as exc:\n    res[\"available\"] = False\n    res[\"error\"] = f\"{type(exc).__name__}: {exc}\"\nprint(json.dumps(res))\n"
+    ],
+    "available": true,
+    "duration_ms": 149,
+    "error": null,
+    "exit_code": 0,
+    "label": "python microbench",
+    "stderr": "provenance: mlx-omarchy 0.32.4.dev202611111431+8380f002 mx=0.32.4.dev202611111431+8380f002 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:aa7a9d17160b9ff5",
+    "stdout": "{\"available\": true, \"device\": \"Device(gpu, 0)\", \"error\": null, \"matmul\": [{\"n\": 256, \"reps\": 8, \"median_ms\": 0.232, \"min_ms\": 0.22, \"max_ms\": 0.244, \"tflops\": 0.1447}, {\"n\": 512, \"reps\": 8, \"median_ms\": 0.857, \"min_ms\": 0.845, \"max_ms\": 0.872, \"tflops\": 0.3133}, {\"n\": 1024, \"reps\": 8, \"median_ms\": 5.696, \"min_ms\": 5.614, \"max_ms\": 5.753, \"tflops\": 0.377}], \"provenance\": {\"dist\": \"mlx-omarchy\", \"verified\": \"match\", \"mismatch\": null, \"files\": [{\"path\": \"mlx/core.cpython-314-aarch64-linux-gnu.so\", \"label\": \"mlx.core extension\", \"sha256\": \"615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc\", \"record_sha256\": \"615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc\", \"match\": true}, {\"path\": \"mlx/lib/libmlx.so\", \"label\": \"mlx/lib/libmlx.so\", \"sha256\": \"aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f\", \"record_sha256\": \"aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f\", \"match\": true}], \"dist_version\": \"0.32.4.dev202611111431+8380f002\", \"mx_version\": \"0.32.4.dev202611111431+8380f002\", \"version_match\": true}}"
+  }
+}

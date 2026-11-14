@@ -1,0 +1,10 @@
+label=j616s date=2026-11-13T05:27:15Z kernel=7.3.0-aurora-fleet67
+governor=schedutil load=0.07 0.17 0.15
+	apiVersion         = 1.4.363
+	deviceName         = Apple M4 Pro (G16S B1)
+	driverInfo         = Mesa 26.3.0-devel (git-c208afc352), Borealis, derived from Honeykrisp
+apple,j616s apple,t6040 apple,arm-platform 
+Mem:           23463        2415       11263         760       10710       21047
+  "mx_version": "0.32.4.dev202611111431+8380f002",
+  "version_match": true
+}

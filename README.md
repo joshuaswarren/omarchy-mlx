@@ -77,14 +77,20 @@ plus Laya, and it needs a 96 GB machine.
 | M1 | Tested | Parakeet islands |
 | M1 Max | Tested | Whole encoder |
 | M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
-| M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested |
+| M1 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 16-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 31.5 tok/s | Untested |
+| M2 | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Air 13-inch, 8-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 19.4 tok/s | Untested |
+| M1 Ultra, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port | Data-only; h16 bring-up module |
+| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 49.3 tok/s | Untested |
+| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 13.5 tok/s | Untested |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
 this project measures on. The M4 row needs the out-of-tree G16G driver
-stack named in its receipt. On an M3 or M4 Mac, run the tester kit,
+stack named in its receipt. The M1 Pro, M2, M4 Pro and A18 Pro rows
+run the release wheel on Fedora with aurora's Borealis Vulkan driver
+(Linux 7.3); the setup is in [docs/INSTALL.md](docs/INSTALL.md#fedora-with-the-borealis-driver). Each of these rows is one machine with the GPU core count shown; the other core counts of those chips are not measured. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
 to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet. The beta path for M4 on Linux, with its steps and what is not measured, is in [docs/m4-linux.md](docs/m4-linux.md).
 
