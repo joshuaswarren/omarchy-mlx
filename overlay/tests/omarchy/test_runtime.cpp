@@ -1256,6 +1256,64 @@ TEST_CASE(
   alloc.free(dst);
 }
 
+TEST_CASE("the working-set ceiling counts quarantined buffers") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s = new_stream(Device::gpu);
+  auto& encoder = omarchy::get_command_encoder(s);
+  const size_t saved_gc = alloc.get_gc_limit();
+  alloc.clear_cache();
+
+  alloc.free(alloc.malloc(1u << 20));
+  REQUIRE(alloc.get_cache_memory() == (1u << 20));
+
+  // A buffer recorded by the open batch and then freed waits in the
+  // quarantine: its device memory stays committed to this client.
+  constexpr size_t kQuarantined = 16u << 20;
+  auto src = alloc.malloc(kQuarantined);
+  auto dst = alloc.malloc(4096);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  array src_view(
+      Shape{static_cast<int>(kQuarantined / sizeof(float))},
+      float32,
+      nullptr,
+      {});
+  src_view.set_data(
+      allocator::Buffer{src_buf},
+      src_view.size(),
+      src_view.strides(),
+      src_view.flags(),
+      0,
+      [](allocator::Buffer) {});
+  encoder.add_temporary(src_view);
+  encoder.copy_buffer(
+      src_buf->buffer,
+      static_cast<omarchy::VulkanBuffer*>(dst.ptr())->buffer,
+      4096);
+  alloc.free(src);
+  REQUIRE(alloc.has_quarantined());
+  REQUIRE(alloc.get_cache_memory() == (1u << 20));
+
+  // active + cache + request fits the ceiling with 8 MiB to spare; the
+  // 16 MiB quarantine does not, so the malloc must release the cache.
+  constexpr size_t kRequest = 4u << 20;
+  alloc.set_gc_limit(
+      alloc.get_active_memory() + alloc.get_cache_memory() + kRequest +
+      (8u << 20));
+  auto fresh = alloc.malloc(kRequest);
+  alloc.set_gc_limit(saved_gc);
+  CHECK(alloc.get_cache_memory() == 0);
+
+  encoder.commit();
+  encoder.synchronize();
+  alloc.free(fresh);
+  alloc.free(dst);
+  alloc.clear_cache();
+}
+
 TEST_CASE("re-recorded buffers stay quarantined until completion") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");

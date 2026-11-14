@@ -237,6 +237,8 @@ class VulkanAllocator : public allocator::Allocator {
   // release_quarantine). Held outside the reuse cache until released.
   std::vector<VulkanBuffer*> quarantine_;
   size_t pending_quarantine_bytes_{0};
+  // Bytes of every buffer in quarantine_: freed, but still device memory.
+  size_t quarantine_bytes_{0};
 };
 
 MLX_API VulkanAllocator& allocator();
