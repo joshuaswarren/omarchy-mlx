@@ -1,0 +1,12 @@
+## 2026-11-14T17:33:44+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=3 --minn 2 --adapt 0.3 tmax=69
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 34.3, "spec_tps": 43.4, "speedup": 1.265, "identical": true, "passes": 56, "drafted": 168, "accepted": 98, "replays": 0, "plain": 101, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 34.7, "spec_tps": 74.1, "speedup": 2.136, "identical": true, "passes": 65, "drafted": 195, "accepted": 189, "replays": 0, "plain": 1, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 37.0, "spec_tps": 37.0, "speedup": 0.999, "identical": true, "passes": 1, "drafted": 3, "accepted": 0, "replays": 0, "plain": 66, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
+## 2026-11-14T17:35:29+01:00 model=mlx-community/Qwen3-8B-4bit st=8 k=5 --minn 2 --adapt 0.3 tmax=66
+RESULT {"prompt": "code", "prompt_tokens": 337, "gen": 256, "base_tps": 33.9, "spec_tps": 37.1, "speedup": 1.094, "identical": true, "passes": 44, "drafted": 218, "accepted": 110, "replays": 0, "plain": 101, "sha": "70b05fefc6b8"}
+RESULT {"prompt": "quote", "prompt_tokens": 333, "gen": 256, "base_tps": 34.5, "spec_tps": 69.0, "speedup": 2.002, "identical": true, "passes": 44, "drafted": 217, "accepted": 211, "replays": 0, "plain": 1, "sha": "78712f34f17b"}
+RESULT {"prompt": "chat", "prompt_tokens": 23, "gen": 68, "base_tps": 36.8, "spec_tps": 35.4, "speedup": 0.963, "identical": true, "passes": 1, "drafted": 5, "accepted": 0, "replays": 0, "plain": 66, "sha": "b22c39f089c9"}
+TEXT(last): The sky appears blue because sunlight, which is white light, is made up of all the colors of the spectrum. When sunlight passes through Earth's atmosphere, the shorter wavelengths of light—like blue a
+rc=0
