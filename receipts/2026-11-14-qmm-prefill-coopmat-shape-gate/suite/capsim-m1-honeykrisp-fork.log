@@ -1,0 +1,21 @@
+[omarchy] CAPABILITY SIMULATION ACTIVE: profile 'm1-honeykrisp-fork' (stands in for driver_variant honeykrisp_fork)
+[omarchy] simulated runs are not hardware results: no benchmark or generated-id-digest evidence may be recorded from this process.
+[omarchy] simulated device 0: 'Apple M4 Pro (G16S B1)' (Borealis) as subgroup_size=32 subgroup_ops_mask=0x6ff cooperative_matrix_fp32_8x8x8=1 shared_memory_limit_bytes=32768 workgroup_invocations=1024 workgroup_size_x=1024 atomic_float_add=1
+unit: profile registry + apply() deltas OK
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[capsim q4-gemv] profile=m1-honeykrisp-fork subgroup_gate=1 bound=0.0462067
+[capsim bf16-gemv] profile=m1-honeykrisp-fork gemv_gate=1 hw32=1 max_abs_err=0.0366859 bound=0.163149
+[capsim f32-coopmat] profile=m1-honeykrisp-fork -> MatmulF32Coopmat (backed=1)
+[capsim q4-prefill] profile=m1-honeykrisp-fork -> QmmTileRbF16 (backed=1)
+[capsim bf16-q4-prefill] profile=m1-honeykrisp-fork rb=unset kernel=518 max_diff=0.124687 bound=0.365573
+[capsim bf16-q4-prefill] profile=m1-honeykrisp-fork rb=0 kernel=322 max_diff=0.124687 bound=0.365573
+[capsim sdpa] profile=m1-honeykrisp-fork -> SdpaDecodeNativeF16 (backed=1)
+[capsim bf16-sdpa] profile=m1-honeykrisp-fork leg=decode arm_ready=1 kernel=484
+[capsim bf16-sdpa] profile=m1-honeykrisp-fork leg=batch2 arm_ready=1 kernel=484
+[capsim bf16-sdpa] profile=m1-honeykrisp-fork leg=rows4 arm_ready=1 kernel=526
+[capsim bf16-sdpa] profile=m1-honeykrisp-fork leg=keys7100 arm_ready=1 kernel=484
+===============================================================================
+[doctest] test cases:   10 |   10 passed | 0 failed | 0 skipped
+[doctest] assertions: 6613 | 6613 passed | 0 failed |
+[doctest] Status: SUCCESS!

@@ -1,0 +1,21 @@
+[omarchy] CAPABILITY SIMULATION ACTIVE: profile 'no-cooperative-matrix' (stands in for driver_variant other)
+[omarchy] simulated runs are not hardware results: no benchmark or generated-id-digest evidence may be recorded from this process.
+[omarchy] simulated device 0: 'Apple M4 Pro (G16S B1)' (Borealis) as subgroup_size=64 subgroup_ops_mask=0x6cf cooperative_matrix_fp32_8x8x8=0 shared_memory_limit_bytes=32768 workgroup_invocations=1024 workgroup_size_x=1024 atomic_float_add=1
+unit: profile registry + apply() deltas OK
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[capsim q4-gemv] profile=no-cooperative-matrix subgroup_gate=0 bound=0.0462067
+[capsim bf16-gemv] profile=no-cooperative-matrix gemv_gate=0 max_abs_err=0.0366859 bound=0.163149
+[capsim f32-coopmat] profile=no-cooperative-matrix -> 16x16 tile (backed=1)
+[capsim q4-prefill] profile=no-cooperative-matrix -> QmmTileRbF16 (backed=1)
+[capsim bf16-q4-prefill] profile=no-cooperative-matrix rb=unset kernel=655 max_diff=0.124687 bound=0.365573
+[capsim bf16-q4-prefill] profile=no-cooperative-matrix rb=0 kernel=322 max_diff=0.124687 bound=0.365573
+[capsim sdpa] profile=no-cooperative-matrix -> composed f16 SDPA (backed=1)
+[capsim bf16-sdpa] profile=no-cooperative-matrix leg=decode arm_ready=1 kernel=484
+[capsim bf16-sdpa] profile=no-cooperative-matrix leg=batch2 arm_ready=1 kernel=484
+[capsim bf16-sdpa] profile=no-cooperative-matrix leg=rows4 arm_ready=1 kernel=526
+[capsim bf16-sdpa] profile=no-cooperative-matrix leg=keys7100 arm_ready=1 kernel=484
+===============================================================================
+[doctest] test cases:   10 |   10 passed | 0 failed | 0 skipped
+[doctest] assertions: 6596 | 6596 passed | 0 failed |
+[doctest] Status: SUCCESS!
