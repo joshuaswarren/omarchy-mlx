@@ -1,8 +1,26 @@
 # mlx-lm 0.31.3, chat prompt "Explain in three sentences why the sky is blue.", 64 new tokens, greedy
-# provenance: mx 0.32.4 core.so sha256 cfcbabfdc22f5834 built from tree fda22841 (python bindings, one process per model, GPU lock held)
-# prefill: warm, 297-318 token prompt; decode: tok/s over the 64 tokens
-model                          prefill_tok_s  decode_tok_s  peak_GB  output
-Qwen2.5-1.5B-Instruct-4bit     663.9          124.6         0.98     coherent (Rayleigh scattering answer)
-granite-4.0-1b-4bit            563.5          117.7         0.99     coherent (Rayleigh scattering answer)
-Qwen3.5-4B-MLX-4bit            71.2           35.3          3.29     coherent (reasoning trace begins)
-# decode run-to-run spread on this machine is about +-10 percent (see decode-ab.txt: granite default 93-115, Qwen2.5-1.5B 140-158, Qwen3.5-4B 33-36)
+# tree: f4077931 (this branch), wheel mlx_omarchy-0.32.4.dev202611132133+f407793 built by scripts/build-wheel.sh (DEV_RELEASE=1)
+# python: one process per model, GPU lock held; Mesa 26.3.0-devel (git-05ddb00f5c) Borealis, system ICD
+# command per model:
+#   flock /tmp/m1-gpu.lock timeout 1200 python -I gen.py <repo>
+# gen.py: mlx_lm.load(repo); warm the long prompt ("Summarize the following text. " + 20 x a 13-word sentence)
+#   with 4 tokens, then time 1 token on it (warm prefill); then stream_generate the chat prompt for 64 tokens
+#   (decode tok/s = generation_tps, peak = peak_memory)
+# warm prefill: 297-318 token prompt; decode: tok/s over the 64 tokens
+model                          warm_prefill_tok_s  decode_tok_s  peak_GB  output
+Qwen2.5-1.5B-Instruct-4bit     651.5               137.0         0.98     coherent (Rayleigh scattering answer)
+granite-4.0-1b-4bit            538.5               105.5         0.99     coherent (Rayleigh scattering answer)
+Qwen3.5-4B-MLX-4bit            189.5               55.0          2.69     coherent (reasoning trace begins)
+# decode run-to-run spread on this machine is about +-10 percent (decode-ab.txt: granite default 93-115,
+# Qwen2.5-1.5B 140-158, Qwen3.5-4B 33-36 on an earlier tree)
+#
+# Later commits on this branch (864cbf12..b445c037) change no default route on G16S: the fused f16 decode gate
+# still selects G16S, the flash loop change only acts while a tape records, and the cooperative-matrix shader
+# change only runs where a cooperative matrix is enabled. The same prompts on b445c037
+# (wheel 0.32.4.dev202611132346+b445c03) give the same text for all three models.
+#
+# Cooperative matrices enabled (development Mesa build with ASAHI_AGX3B_COOPERATIVE_MATRIX=1), b445c037:
+# Qwen2.5-1.5B-Instruct-4bit warm prefill 1115.2, granite-4.0-1b-4bit 784.3, Qwen3.5-4B-MLX-4bit 313.1 tok/s;
+# all three coherent. Before 7d7bdb0b, Qwen2.5-1.5B failed there with a refused qmm_coopmat_f16 pipeline.
+# Those runs were taken in a machine state where decode on the f4077931 wheel was also slower (36.2 vs 137.0
+# tok/s for Qwen2.5-1.5B), so only the prefill ratio and the output are compared: system ICD 515.3 vs 1115.2.

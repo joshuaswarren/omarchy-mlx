@@ -87,7 +87,7 @@ share one GPU class and driver path. The Tested rows are the machines
 this project measures on. The M4 row needs the out-of-tree G16G driver
 stack named in its receipt. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
-to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet. The beta path for M4 on Linux, with its steps, the Mesa requirement for the opt-in routes and what is measured, is in [docs/m4-linux.md](docs/m4-linux.md).
+to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet. The beta path for M4 on Linux, with its steps, the Mesa notes and what is measured, is in [docs/m4-linux.md](docs/m4-linux.md).
 
 The ANE is separate hardware from the GPU. It has its own driver and its
 own tested state. Chip-by-chip ANE status, including what each untested

@@ -8,29 +8,22 @@ aurora M4 integration. Two M4 machines have results here.
 | M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). |
 | M4 Pro MacBook Pro (J616s, T6040) | G16S | aurora kernel driver, Mesa Borealis (`26.3.0-devel`, `git-05ddb00f5c`) | Measured. See the [M4 Pro receipt](../receipts/2026-11-13-m4-pro-g16s-gpu/README.md). |
 
-On the M4 Pro the standing battery passes: 53 suites, 8 capability
-simulation profiles and 15 flash cases, one process per suite. Decode, 64
-greedy tokens, mlx-lm 0.31.3: Qwen2.5-1.5B-Instruct-4bit 124.6 tok/s,
-granite-4.0-1b-4bit 117.7, Qwen3.5-4B-MLX-4bit 35.3. Decode varies about
+On the M4 Pro the standing battery passes: 57 suites, 8 capability
+simulation profiles and 16 flash cases, one process per suite. Decode, 64
+greedy tokens, mlx-lm 0.31.3: Qwen2.5-1.5B-Instruct-4bit 137.0 tok/s,
+granite-4.0-1b-4bit 105.5, Qwen3.5-4B-MLX-4bit 55.0. Decode varies about
 10 percent between runs.
 
-## Mesa requirement
+## Mesa
 
-Mesa Borealis `git-05ddb00f5c` does not compile 22 of the shaders in this
-repository: they stop with `Unhandled ALU op pack_64_4x16`
-(`qmm_vec_q4_multi_*` including the multi-token routes,
-`qmm_vec_greedy_bf16`, `gated_delta_*_bf16`, `gdn_vjp_bf16`). Running them
-needs two compiler fixes in `aurora-silicon/mesa`:
-
-- `.lower_pack_64_4x16 = true` in `agx_nir_options`, so `nir_opt_algebraic`
-  does not fuse two 16-bit pairs into a `pack_64_4x16` that has no register
-  form;
-- keep the f16 to f32 widening in front of an f32 `rsqrt` on AGX3B and C.
-
-Without them those 22 routes cannot run on G16S. They are opt-in routes
-and no default-route suite dispatches them, so the battery and the model
-numbers above do not need the fixes. The overlay carries its own f16 `rsqrt`
-workaround, so the f16 elementwise kernels compile on stock Borealis.
+Stock Mesa Borealis `git-05ddb00f5c` runs the battery, and with the
+opt-in switches (`MLX_OMARCHY_QMM_VEC_TOKEN_MULTI`, `MLX_OMARCHY_GDN_*`) the
+backend builds and runs the opt-in routes the suites reach, the multi-token
+GEMV included. The overlay carries its own f16 `rsqrt` workaround, so the
+f16 elementwise kernels compile on stock Borealis. A standalone
+pipeline-creation sweep with other device features stops 22 shaders with
+`Unhandled ALU op pack_64_4x16`; the receipt lists them and which of them
+the suites dispatch through the backend.
 
 ## Before you start
 

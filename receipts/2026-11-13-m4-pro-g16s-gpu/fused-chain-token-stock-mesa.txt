@@ -1,0 +1,28 @@
+# omarchy_fused_chain_tests --test-case='token-multi q4 gemv group is per-row bit-identical to the single-row route'
+# stock Mesa 26.3.0-devel (git-05ddb00f5c), MLX_OMARCHY_TRACE_DISPATCH=1 MESA_SHADER_CACHE_DISABLE=1, code at b445c037-equivalent overlay
+# kernel dispatch counts (enum names from compute.h):
+#   QmmVecQ4MultiToken4SubgroupBF16 18, QmmVecQ4MultiToken8SubgroupBF16 12, QmmVecQ4MultiSubgroupBF16 16, QmmVecQ4WordSubgroupBF16 204
+# no MESA error lines; raw suite log of the standing battery follows
+
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1725:
+TEST CASE:  token-multi q4 gemv group is per-row bit-identical to the single-row route
+
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=9 dispatches=4)
+
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=12 dispatches=4)
+
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=16 dispatches=4)
+
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=9 dispatches=4)
+
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=12 dispatches=4)
+
+/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=16 dispatches=4)
+
+===============================================================================
+[doctest] test cases:     42 |     42 passed | 0 failed | 0 skipped
+[doctest] assertions: 379400 | 379400 passed | 0 failed |
+[doctest] Status: SUCCESS!
