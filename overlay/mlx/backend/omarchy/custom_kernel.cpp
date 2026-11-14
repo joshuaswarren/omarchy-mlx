@@ -1501,16 +1501,19 @@ std::vector<uint8_t> code_mask(const std::string& value) {
   bool in_string = false;
   bool in_char = false;
   bool in_number = false;
+  char last_byte = '\0';
   for (size_t index = 0; index < value.size(); ++index) {
     const char c = value[index];
     if (line_comment) {
       if (c == '\n') {
         line_comment = false;
         mask[index] = 1;
+        last_byte = '\n';
       }
     } else if (block_comment) {
       if (value.compare(index, 2, "*/") == 0) {
         block_comment = false;
+        last_byte = '/';
         ++index;
       }
     } else if (in_string) {
@@ -1518,45 +1521,62 @@ std::vector<uint8_t> code_mask(const std::string& value) {
         ++index;
       } else if (c == '"') {
         in_string = false;
+        last_byte = '"';
       }
     } else if (in_char) {
       if (c == '\\') {
         ++index;
       } else if (c == '\'') {
         in_char = false;
+        last_byte = '\'';
       }
     } else if (in_number && c == '\'') {
       mask[index] = 1;
     } else if (value.compare(index, 2, "//") == 0) {
       line_comment = true;
       in_number = false;
+      last_byte = '/';
       ++index;
     } else if (value.compare(index, 2, "/*") == 0) {
       block_comment = true;
       in_number = false;
+      last_byte = '/';
       ++index;
     } else if (c == '"') {
       in_string = true;
       in_number = false;
+      last_byte = '"';
     } else if (c == '\'') {
       in_char = true;
+      last_byte = '\'';
+    } else if (c == '\\' && index + 1 < value.size() &&
+               value[index + 1] == '\n') {
+      mask[index] = 1;
+      mask[index + 1] = 1;
+      ++index;
     } else {
       mask[index] = 1;
-      const char prev = index > 0 ? value[index - 1] : '\0';
-      const bool prev_ident =
-          (prev >= '0' && prev <= '9') || (prev >= 'a' && prev <= 'z') ||
-          (prev >= 'A' && prev <= 'Z') || prev == '_';
+      const bool last_ident =
+          (last_byte >= '0' && last_byte <= '9') ||
+          (last_byte >= 'a' && last_byte <= 'z') ||
+          (last_byte >= 'A' && last_byte <= 'Z') || last_byte == '_';
       const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
                         (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
       if (in_number && !word) {
         in_number = false;
       }
-      if (c >= '0' && c <= '9' && !prev_ident) {
+      if (c >= '0' && c <= '9' && !last_ident) {
         in_number = true;
       }
       if (c == 'R' && index + 1 < value.size() && value[index + 1] == '"') {
+        std::string prefix;
         size_t start = index;
         while (start > 0) {
+          if (value[start - 1] == '\n' && start >= 2 &&
+              value[start - 2] == '\\') {
+            start -= 2;
+            continue;
+          }
           const char b = value[start - 1];
           const bool ident = (b >= '0' && b <= '9') ||
                              (b >= 'a' && b <= 'z') ||
@@ -1564,9 +1584,15 @@ std::vector<uint8_t> code_mask(const std::string& value) {
           if (!ident) {
             break;
           }
+          prefix.push_back(b);
           --start;
         }
-        const std::string prefix = value.substr(start, index - start + 1);
+        for (size_t low = 0; low * 2 < prefix.size(); ++low) {
+          const char swap = prefix[low];
+          prefix[low] = prefix[prefix.size() - 1 - low];
+          prefix[prefix.size() - 1 - low] = swap;
+        }
+        prefix.push_back('R');
         const bool known_prefix = prefix == "R" || prefix == "uR" ||
                                   prefix == "UR" || prefix == "LR" ||
                                   prefix == "u8R";
@@ -1597,6 +1623,7 @@ std::vector<uint8_t> code_mask(const std::string& value) {
           }
         }
       }
+      last_byte = c;
     }
   }
   return mask;
