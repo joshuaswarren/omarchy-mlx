@@ -755,11 +755,6 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
         omarchy::batch_work_fallback());
 
-  // The G16S row (M4 Pro) takes 15000 (receipts/2026-11-14-m4-pro-batch-work);
-  // the M4 (G16G) has no row and keeps the fallback.
-  CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
-  CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
-
   // The uncalibrated M1 Pro row stays at 0: no guessed number for the
   // reporter's board (G13S, t6000).
   CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 0);

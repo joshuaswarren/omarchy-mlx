@@ -139,7 +139,7 @@ inline int batch_node_budget() {
 // beside decode, not tested on a real compositor). Board
 // codes key the rows like the direct-matmul routes above
 // (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
-// G14C M2 Max, G16S M4 Pro, G18G M6. A single dispatch whose group count alone exceeds the
+// G14C M2 Max, G18G M6. A single dispatch whose group count alone exceeds the
 // budget still runs whole: splitting happens between dispatches. Copies
 // and fills are not counted; the node and byte budgets keep those
 // batches bounded. MLX_OMARCHY_BATCH_WORK=<groups> overrides the table;
@@ -160,7 +160,6 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
     {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
-    {"G16S", 15000},  // M4 Pro, Mesa aurora-wip + #319: decode +12.2% (Qwen2.5-1.5B), +2.8% (Qwen3.5-4B), +1.6% (Qwen3-8B), +0.4% (granite-4.0-1b) against 5000, outputs identical; 20000 and up cost granite 1-8% (receipts/2026-11-14-m4-pro-batch-work)
     {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
