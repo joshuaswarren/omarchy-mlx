@@ -1500,6 +1500,7 @@ std::vector<uint8_t> code_mask(const std::string& value) {
   bool block_comment = false;
   bool in_string = false;
   bool in_char = false;
+  bool in_number = false;
   for (size_t index = 0; index < value.size(); ++index) {
     const char c = value[index];
     if (line_comment) {
@@ -1524,6 +1525,8 @@ std::vector<uint8_t> code_mask(const std::string& value) {
       } else if (c == '\'') {
         in_char = false;
       }
+    } else if (in_number && c == '\'') {
+      mask[index] = 1;
     } else if (value.compare(index, 2, "//") == 0) {
       line_comment = true;
       ++index;
@@ -1536,6 +1539,30 @@ std::vector<uint8_t> code_mask(const std::string& value) {
       in_char = true;
     } else {
       mask[index] = 1;
+      if (c == 'R' && index + 1 < value.size() && value[index + 1] == '"') {
+        size_t scan = index + 2;
+        while (scan < value.size() && value[scan] != '(') {
+          ++scan;
+        }
+        if (scan < value.size()) {
+          const std::string delim = value.substr(index + 2, scan - index - 2);
+          const size_t close = value.find(")" + delim + "\"", scan + 1);
+          if (close != std::string::npos) {
+            index = close + delim.size() + 1;
+          } else {
+            index = value.size() - 1;
+          }
+        }
+      } else {
+        const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                          (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
+        if (in_number && !word) {
+          in_number = false;
+        }
+        if (c >= '0' && c <= '9') {
+          in_number = true;
+        }
+      }
     }
   }
   return mask;
