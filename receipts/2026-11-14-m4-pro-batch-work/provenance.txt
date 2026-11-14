@@ -1,0 +1,27 @@
+Inspection: 2026-11-14 12:43 CET (Europe/Bratislava), before replacing venv-r2 or prefix-fix.
+
+Wheel: mlx_omarchy-0.32.4.dev202611140743+fed73df-cp314-cp314-linux_aarch64.whl
+Source: fed73dfd5052afc66866ca996deda66a215c59fe
+Wheel sha256: 44876b455b9d1b57ffbded2d3d1e86431e756f6f5000d6de4edc98ccc9f407c2
+venv-r2 mlx_omarchy dist-info direct_url.json archive_info.hash matches the above SHA256.
+Installed and wheel-archived objects compared byte-for-byte by SHA256:
+  mlx/core.cpython-314-aarch64-linux-gnu.so
+  615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc
+  mlx/lib/libmlx.so
+  efbccc6d5f22966043d85b6d8446b5730afcf3974a38bfc6cb124a055447e327
+  mlx/share/mlx-omarchy/parakeet-1/libane/libane-strict.so
+  d06222a86f3bff26aaf1cec1223ade32f27cad84b994dccb1af9cca965a7da8c
+Wheel archive mtime: 2026-11-14 08:47:12 CET.
+
+Mesa private prefix: mesa-pr275/prefix-fix
+ICD JSON: prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json
+library_path: prefix-fix/lib/libvulkan_asahi.so (absolute path in the JSON)
+Library sha256: 3cc202ce88bbf1d10534416cd170c1f7f32a7bfaeb738b6d6b8bc0dd04a2788a
+Library mtime: 2026-11-14 09:10:03 CET; build+install log finished 09:10:14 CET.
+Embedded version: Mesa 26.3.0-devel (git-55c06da699), Borealis, derived from Honeykrisp
+Source: 55c06da699fbe95776141f66a7ff676156f8d0da
+
+Each A/B header records PYBIN=venv-r2/bin/python and the above ICD path. The files were inspected
+after the run; loaded shared objects were not hashed inside each timed process. This receipt is
+not a per-process loaded-object attestation. The benchmark time window precedes this inspection;
+no wheel/Mesa install to those two locations occurred in between (build-tst installs prefix-tst).
