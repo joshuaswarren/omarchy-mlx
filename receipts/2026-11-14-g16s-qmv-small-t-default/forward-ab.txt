@@ -20,6 +20,7 @@ M 32 ms med 142.0 min 135.2
 M 64 ms med 241.8 min 239.3
 M 128 ms med 421.9 min 418.9
 ### tokens-identical check (greedy 64 tok, defON vs off)
+(this in-log check did not run; the greedy token comparison is in tokens.txt)
 -- defON --
 python: can't open file 'toktext.py': [Errno 2] No such file or directory
 -- off --
