@@ -7,20 +7,20 @@
 [doctest] doctest version is "2.4.12"
 [doctest] run with "--help" for options
 ===============================================================================
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1725:
+tests/omarchy/test_fused_chain.cpp:1725:
 TEST CASE:  token-multi q4 gemv group is per-row bit-identical to the single-row route
 
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=9 dispatches=4)
+tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=9 dispatches=4)
 
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=12 dispatches=4)
+tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=12 dispatches=4)
 
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=16 dispatches=4)
+tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=16 dispatches=4)
 
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=9 dispatches=4)
+tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=9 dispatches=4)
 
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=12 dispatches=4)
+tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=12 dispatches=4)
 
-/home/morpheus/.cache/agents/omarchy-m4/mlx-bringup/wt-pr/.work/mlx/tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=16 dispatches=4)
+tests/omarchy/test_fused_chain.cpp:1827: MESSAGE: SKIPPING cell: gemv group did not form (tokens=16 dispatches=4)
 
 ===============================================================================
 [doctest] test cases:     42 |     42 passed | 0 failed | 0 skipped
