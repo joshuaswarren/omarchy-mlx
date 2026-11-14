@@ -543,8 +543,32 @@ CapabilityReport collect_capabilities(
         bf.shaderBFloat16CooperativeMatrix == VK_TRUE;
   }
 #endif
-  // Three shapes are used, all 8x8x8 with an fp32 accumulator, subgroup
-  // scope, non-saturating: fp32, fp16 and bf16 A/B.
+  // Three same-operand 8x8x8 shapes drive the convenience booleans (fp32,
+  // fp16 and bf16 A/B, all with an fp32 accumulator, subgroup scope,
+  // non-saturating). Every advertised shape is also recorded verbatim into
+  // caps.cooperative_matrix_shapes so kernel selection can match a mixed
+  // shape (AType != BType) a boolean cannot express.
+  // Map the component/scope enums the backend's kernels can emit; any other
+  // advertised type or scope records as Other, so an exact-shape query for a
+  // float qmm route can never alias onto it.
+  auto to_coopmat_type = [](VkComponentTypeKHR t) {
+    switch (t) {
+      case VK_COMPONENT_TYPE_FLOAT16_KHR:
+        return CoopmatType::Float16;
+#ifdef VK_KHR_shader_bfloat16
+      case VK_COMPONENT_TYPE_BFLOAT16_KHR:
+        return CoopmatType::BFloat16;
+#endif
+      case VK_COMPONENT_TYPE_FLOAT32_KHR:
+        return CoopmatType::Float32;
+      default:
+        return CoopmatType::Other;
+    }
+  };
+  auto to_coopmat_scope = [](VkScopeKHR s) {
+    return s == VK_SCOPE_SUBGROUP_KHR ? CoopmatScope::Subgroup
+                                      : CoopmatScope::Other;
+  };
   if (has_coopmat_ext && it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR) {
     uint32_t n = 0;
     if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(pd, &n, nullptr) ==
@@ -554,7 +578,13 @@ CapabilityReport collect_capabilities(
           n, {VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR});
       if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(
               pd, &n, shapes.data()) == VK_SUCCESS) {
+        caps.cooperative_matrix_shapes.reserve(shapes.size());
         for (const auto& p : shapes) {
+          caps.cooperative_matrix_shapes.push_back(CoopmatShape{
+              p.MSize, p.NSize, p.KSize, to_coopmat_type(p.AType),
+              to_coopmat_type(p.BType), to_coopmat_type(p.CType),
+              to_coopmat_type(p.ResultType), to_coopmat_scope(p.scope),
+              p.saturatingAccumulation != VK_FALSE});
           if (p.MSize != 8 || p.NSize != 8 || p.KSize != 8 ||
               p.CType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
               p.ResultType != VK_COMPONENT_TYPE_FLOAT32_KHR ||

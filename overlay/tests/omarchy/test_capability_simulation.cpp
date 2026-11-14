@@ -583,6 +583,15 @@ TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   }
   Stream stream = gpu_stream();
   const auto e = expectations();
+  // The fp16 qmm prefill coopmat kernel emits a mixed fp16-A/fp32-B matmad,
+  // so it is reachable only where that exact shape is advertised. A simulated
+  // coopmat device lists the same-operand fp32 and fp16 shapes but not the
+  // mixed one, so the fp16 route falls back to the register-blocked tile - as
+  // it does on a device (AGX3B) that advertises only same-operand shapes.
+  const bool f16_coopmat_claim = e.coopmat_claim &&
+      omarchy::cooperative_matrix_advertises(
+          caps().cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
   constexpr int m = 64;
   constexpr int k = 128;
   constexpr int n = 32;
@@ -611,7 +620,7 @@ TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   array out = quantized_matmul(
       x, w_words, scales, biases, true, 64, 4, "affine", stream);
   std::string error = evaluation_error(out);
-  if (e.coopmat_claim && !coopmat_backed()) {
+  if (f16_coopmat_claim && !coopmat_backed()) {
     std::cout << "[capsim q4-prefill] profile=" << g_profile
               << " -> named refusal\n";
     expect_simulated_refusal(error, "QmmPrefillCoopmatF16");
@@ -622,7 +631,7 @@ TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   // reference: the shared qmm envelope (small operands, k=128).
   expect_close(readback_f32(stream, out), expected, 5e-2, 1e-3);
   std::cout << "[capsim q4-prefill] profile=" << g_profile << " -> "
-            << (e.coopmat_claim ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
+            << (f16_coopmat_claim ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
             << " (backed=" << coopmat_backed() << ")\n";
 }
 

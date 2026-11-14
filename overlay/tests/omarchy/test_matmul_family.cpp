@@ -4559,6 +4559,15 @@ TEST_CASE("q4g32 and q8 affine formats take the word decode and coopmat prefill 
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   const bool coopmat =
       caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u;
+  // The fp16 qmm prefill coopmat kernel emits a mixed fp16-A/fp32-B matmad,
+  // reachable only where the device advertises that exact shape; bf16 output
+  // widens activations to fp32 and tracks the plain coopmat flag. A device
+  // that lists only same-operand shapes (AGX3B) keeps the bf16 route and
+  // falls back to the tile for fp16.
+  const bool f16_coopmat = coopmat &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
   using K = omarchy::ComputeKernel;
 
   auto trace_of = [&](const std::function<void()>& call) {
@@ -4702,7 +4711,7 @@ TEST_CASE("q4g32 and q8 affine formats take the word decode and coopmat prefill 
             CHECK(max_diff(fast, expected) <= host_bound);
             CHECK(max_diff(fast, generic) <= 2.0 * host_bound);
           } else {
-            if (coopmat) {
+            if (dtype == float16 ? f16_coopmat : coopmat) {
               bool hit = false;
               for (K kernel : f.prefill) {
                 hit = hit || dispatched(trace, kernel);
@@ -5223,13 +5232,19 @@ TEST_CASE(
     return;
   }
   Stream stream = gpu_stream();
-  // On a cooperative_matrix_f32_8 device the register-block gate selects
-  // QmmPrefillCoopmatF16 (a different accumulation order), so the
-  // bitwise pin against the 16x16 tile only holds off such a device; the
-  // host bound below applies everywhere.
+  // Where the fp16 qmm prefill coopmat route is reachable the register-block
+  // gate selects QmmPrefillCoopmatF16 (a different accumulation order), so the
+  // bitwise pin against the 16x16 tile only holds where it is not; the host
+  // bound below applies everywhere. That route needs the mixed fp16-A/fp32-B
+  // 8x8x8 shape advertised, so a device listing only same-operand shapes
+  // (AGX3B) falls back to the tile and the bitwise pin holds there too.
   const auto& caps = omarchy::device(0).capabilities();
   const bool coopmat_device =
       caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  const bool f16_coopmat_device = coopmat_device &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
 
   for (auto [m, n, k, seed] : {
            std::tuple{2, 7, 64, 67u},
@@ -5299,7 +5314,7 @@ TEST_CASE(
           candidate_baseline_max,
           std::fabs(static_cast<double>(candidate_values[index]) -
               baseline_values[index]));
-      if (!coopmat_device) {
+      if (!f16_coopmat_device) {
         CHECK_EQ(candidate_values[index], baseline_values[index]);
       }
     }
@@ -5348,11 +5363,18 @@ TEST_CASE("qmm coopmat prefill matches host reference at Qwen shapes") {
   const auto& caps = omarchy::device(0).capabilities();
   const bool coopmat_device =
       caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  // The fp16 route runs QmmPrefillCoopmatF16 only where the mixed
+  // fp16-A/fp32-B 8x8x8 shape is advertised; otherwise it falls back to the
+  // register-blocked tile. Both hold the same host bound below.
+  const bool f16_coopmat_device = coopmat_device &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
   std::cout << "[provenance] cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
             << " subgroup_size=" << caps.subgroup_size
             << " -> f16 q4/g64 prefill runs "
-            << (coopmat_device ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
+            << (f16_coopmat_device ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
             << "\n";
 
   constexpr int group_size = 64;
@@ -5426,7 +5448,7 @@ TEST_CASE("qmm coopmat prefill matches host reference at Qwen shapes") {
            << " bound=" << bound);
       CHECK(max_diff <= bound);
       std::cout << "[qmm-coopmat] kernel="
-                << (coopmat_device ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
+                << (f16_coopmat_device ? "QmmPrefillCoopmatF16" : "QmmTileRbF16")
                 << " m=" << m << " n=" << n << " k=" << k
                 << " max_abs_err=" << max_diff
                 << " rel_err=" << max_diff / max_abs
@@ -5454,12 +5476,20 @@ TEST_CASE("qmm coopmat output is bit-identical across x offset alignment") {
   const auto& caps = omarchy::device(0).capabilities();
   const bool coopmat_device =
       caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  // The fp16 route takes the coopmat path only where the mixed
+  // fp16-A/fp32-B shape is advertised; elsewhere both arms take the tile and
+  // the offset-parity check is inert (still correct) rather than exercising
+  // the coopmat staging.
+  const bool f16_coopmat_device = coopmat_device &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
   std::cout << "[provenance] cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
             << " subgroup_size=" << caps.subgroup_size
             << " -> offset-parity repro "
-            << (coopmat_device ? "compares coopmat vs staged coopmat"
-                               : "is inert without coopmat support")
+            << (f16_coopmat_device ? "compares coopmat vs staged coopmat"
+                                   : "is inert without coopmat support")
             << "\n";
 
   constexpr int group_size = 64;
@@ -5533,8 +5563,8 @@ TEST_CASE("qmm coopmat output is bit-identical across x offset alignment") {
   }
   INFO("offset-parity mismatches=" << mismatched << " worst=" << worst
        << " aligned=" << aligned[worst] << " odd=" << odd[worst]
-       << (coopmat_device ? " (old code reroutes the odd arm to the tile"
-                          : ""));
+       << (f16_coopmat_device ? " (old code reroutes the odd arm to the tile"
+                              : ""));
   CHECK_EQ(mismatched, size_t{0});
 
   // Both arms also hold the coopmat host-reference bound, so the staged
