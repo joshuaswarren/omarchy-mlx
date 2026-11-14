@@ -1606,10 +1606,10 @@ std::vector<uint8_t> code_mask(const std::string& value) {
           const std::string delim = value.substr(index + 2, scan - index - 2);
           bool delim_ok = delim.size() <= 16;
           for (const char d : delim) {
-            const bool delim_char = (d >= '0' && d <= '9') ||
-                                    (d >= 'a' && d <= 'z') ||
-                                    (d >= 'A' && d <= 'Z') || d == '_';
-            if (!delim_char) {
+            const bool excluded = d == ' ' || d == '\t' || d == '\n' ||
+                                  d == '\v' || d == '\f' || d == '\r' ||
+                                  d == '(' || d == ')' || d == '\\';
+            if (excluded) {
               delim_ok = false;
             }
           }
