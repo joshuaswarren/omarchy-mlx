@@ -1723,3 +1723,19 @@ TEST_CASE("splices inside strings, chars, comments and plain defines keep workin
   spliced_comment += residual_norm_style;
   CHECK(translate(spliced_comment, 1).find("threadgroup") == std::string::npos);
 }
+
+TEST_CASE("a punctuation raw-string delimiter is a valid delimiter") {
+  // Reviewer finding on PR #427: the C++ raw-string delimiter may be
+  // any characters except space, parentheses and backslash, so the
+  // punctuation delimiter ++ is standards-valid and the parent
+  // accepts this prepended shape. Requiring identifier characters in
+  // the delimiter fell the raw string through to the plain-string
+  // path, the embedded quote opened string state, and translation
+  // died on the later helper.
+  std::string source = "#define DOC R\"++(has \" quote)++\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
