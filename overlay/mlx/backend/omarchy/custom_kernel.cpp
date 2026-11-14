@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -1420,6 +1421,50 @@ void round_bf16_type(
   replace_word(header, bfloat_name + " ", "float ");
 }
 
+// Strip MSL comments (// line and /* block */). Comments can contain
+// Metal keywords ('// One threadgroup per row' in the Qwen3.5 MoE
+// router kernel) that would trigger the final guard's substring check
+// even though they are not code. Stripping before all passes also
+// prevents the type/token replacements from corrupting comment text, and
+// keeps the delimiter scans from starting inside a comment.
+void strip_msl_comments(std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  const auto n = text.size();
+  for (size_t i = 0; i < n;) {
+    const char c = text[i];
+    // A quote opens a literal that no comment marker inside may end. A
+    // single quote after an alphanumeric is a C++14 digit separator
+    // (1'000), not a character literal.
+    const bool separator = c == '\'' && i > 0 &&
+        (std::isalnum(static_cast<unsigned char>(text[i - 1])) ||
+         text[i - 1] == '_');
+    if ((c == '"' || c == '\'') && !separator) {
+      size_t end = i + 1;
+      while (end < n && text[end] != c && text[end] != '\n') {
+        end += text[end] == '\\' ? 2 : 1;
+      }
+      end = std::min(end + 1, n);
+      out.append(text, i, end - i);
+      i = end;
+    } else if (text.compare(i, 2, "//") == 0) {
+      const auto end = text.find('\n', i);
+      i = end == std::string::npos ? n : end;
+    } else if (text.compare(i, 2, "/*") == 0) {
+      const auto end = text.find("*/", i + 2);
+      if (end == std::string::npos) {
+        out.append(text, i, n - i);
+        break;
+      }
+      i = end + 2;
+    } else {
+      out += c;
+      ++i;
+    }
+  }
+  text = std::move(out);
+}
+
 void resolve_kernel_templates(
     const std::string& source,
     size_t marker,
@@ -1439,6 +1484,7 @@ void resolve_kernel_templates(
     return;
   }
   header = source.substr(0, template_position);
+  strip_msl_comments(header);
   const std::string declarations =
       source.substr(template_position + 10, template_end - template_position - 10);
   const auto decltype_position = source.find("decltype(", marker);
@@ -2504,33 +2550,8 @@ Translation translate_msl(
   std::string body = source.substr(body_open + 1, body_close - body_open - 1);
   resolve_kernel_templates(source, marker, header, body);
   round_bf16_type(body, header, "bfloat16_t");
-  // Strip MSL comments (// line and /* block */). Comments can contain
-  // Metal keywords ('// One threadgroup per row' in the Qwen3.5 MoE
-  // router kernel) that would trigger the final guard's substring check
-  // even though they are not code. Stripping before all passes also
-  // prevents the type/token replacements from corrupting comment text.
-  {
-    size_t search = 0;
-    while (true) {
-      const auto line_start = body.find("//", search);
-      if (line_start == std::string::npos) break;
-      const auto line_end = body.find('\n', line_start);
-      const auto count = (line_end == std::string::npos)
-                             ? body.size() - line_start
-                             : line_end - line_start;
-      body.erase(line_start, count);
-      search = line_start;
-    }
-    search = 0;
-    while (true) {
-      const auto block_start = body.find("/*", search);
-      if (block_start == std::string::npos) break;
-      const auto block_end = body.find("*/", block_start + 2);
-      if (block_end == std::string::npos) break;
-      body.erase(block_start, block_end - block_start + 2);
-      search = block_start;
-    }
-  }
+  strip_msl_comments(header);
+  strip_msl_comments(body);
   specialize_threadgroup_helper_params(header, body);
   translate_header(header);
 
