@@ -30,6 +30,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "doctest/doctest.h"
@@ -176,6 +177,34 @@ TEST_CASE("set_wired_limit never exceeds expected memory bounds") {
   mlx::core::set_wired_limit(0);
   mlx::core::set_wired_limit(SIZE_MAX);
   mlx::core::set_wired_limit(0);
+}
+
+TEST_CASE("default_agx3b_cooperative_matrix turns coopmat on for M4 Pro") {
+  namespace omarchy = mlx::core::omarchy;
+  using std::string_view;
+  static const char kM4Pro[] = "apple,j616s\0apple,t6040\0apple,arm-platform";
+  static const char kM2[] = "apple,j493\0apple,t8112\0apple,arm-platform";
+  const string_view m4pro(kM4Pro, sizeof(kM4Pro) - 1);
+  const string_view m2(kM2, sizeof(kM2) - 1);
+  // Default: on for the M4 Pro only; other chips keep the driver default.
+  CHECK(string_view(omarchy::default_agx3b_cooperative_matrix(
+            nullptr, nullptr, m4pro)) == "1");
+  CHECK(omarchy::default_agx3b_cooperative_matrix(nullptr, nullptr, m2) ==
+        nullptr);
+  CHECK(omarchy::default_agx3b_cooperative_matrix(nullptr, nullptr, "") ==
+        nullptr);
+  // MLX_OMARCHY_COOPMAT=0 opts out, on any chip; other values keep it.
+  CHECK(string_view(omarchy::default_agx3b_cooperative_matrix(
+            nullptr, "0", m4pro)) == "0");
+  CHECK(string_view(omarchy::default_agx3b_cooperative_matrix(
+            nullptr, "0", m2)) == "0");
+  CHECK(string_view(omarchy::default_agx3b_cooperative_matrix(
+            nullptr, "1", m4pro)) == "1");
+  // An explicit driver variable always wins: leave the environment alone.
+  CHECK(omarchy::default_agx3b_cooperative_matrix("0", nullptr, m4pro) ==
+        nullptr);
+  CHECK(omarchy::default_agx3b_cooperative_matrix("1", "0", m4pro) ==
+        nullptr);
 }
 
 TEST_CASE("default_hk_sysmem_bytes keeps the stock heap on small hosts") {

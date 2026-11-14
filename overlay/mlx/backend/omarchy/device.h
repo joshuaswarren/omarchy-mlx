@@ -498,6 +498,21 @@ bool tape_no_reuse();
 // freed buffer instead of recycling it, for the whole process.
 bool buffer_cache_disabled();
 
+// Value an MLX process gives ASAHI_AGX3B_COOPERATIVE_MATRIX before Vulkan
+// loads, or nullptr to leave the environment alone. Honeykrisp exposes
+// the AGX3B 8x8 cooperative matrix (VK_KHR_cooperative_matrix) per chip;
+// on an M4 Pro (|dt_compatible| names apple,t6040) MLX turns it on so the
+// coopmat GEMM, attention and GDN paths run by default. An explicit
+// |explicit_value| always wins (nullptr result). |mlx_coopmat| is
+// MLX_OMARCHY_COOPMAT: "0" opts this process out (the result is "0", so
+// the driver hides the extension); any other value keeps the default.
+// Drivers without the variable ignore it. Pure; the runtime applies it in
+// configure_honeykrisp_icd().
+const char* default_agx3b_cooperative_matrix(
+    const char* explicit_value,
+    const char* mlx_coopmat,
+    std::string_view dt_compatible);
+
 // Honeykrisp GPU-memory heap default for an MLX process (HK_SYSMEM):
 // max(50% of |mem_total_bytes|, |mem_total_bytes| - 16 GiB), rounded down
 // to 1 MiB like mesa, clamped to 62 GiB (the per-process user VA window

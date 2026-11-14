@@ -223,6 +223,23 @@ void apply_default_hk_sysmem() {
   ::setenv("HK_SYSMEM", value, 0);
 }
 
+void apply_default_agx3b_cooperative_matrix() {
+  std::string compatible;
+  if (std::ifstream in("/proc/device-tree/compatible"); in) {
+    compatible.assign(std::istreambuf_iterator<char>(in),
+                      std::istreambuf_iterator<char>());
+  }
+  const char* value = default_agx3b_cooperative_matrix(
+      std::getenv("ASAHI_AGX3B_COOPERATIVE_MATRIX"),
+      std::getenv("MLX_OMARCHY_COOPMAT"),
+      compatible);
+  if (value != nullptr) {
+    // Never overwrites (checked above). A failed setenv leaves the
+    // driver default; that is not fatal.
+    ::setenv("ASAHI_AGX3B_COOPERATIVE_MATRIX", value, 0);
+  }
+}
+
 // A heap above the kernel client limit can only come from an explicit
 // HK_SYSMEM or drirc heap_memory_percent: both win over the default cap.
 // Say so once, so the allocation failure that follows has a stated cause.
@@ -241,8 +258,10 @@ HoneykrispIcdSelection configure_honeykrisp_icd() {
   // Runs before Vulkan loads: raise the Honeykrisp heap for this MLX
   // process (HK_SYSMEM) unless an explicit HK_SYSMEM or a drirc
   // heap_memory_percent already chose one. Other Vulkan applications
-  // never run this code and keep mesa's 50% heap.
+  // never run this code and keep mesa's 50% heap. The same holds for the
+  // AGX3B cooperative-matrix default below.
   apply_default_hk_sysmem();
+  apply_default_agx3b_cooperative_matrix();
   std::vector<std::string> candidates;
   for (const char* directory : {
            "/etc/vulkan/icd.d",
@@ -920,6 +939,22 @@ bool env_flag(const char* name) {
 // GiB of weights) load and decode on a 96 GB host. MemTotal <= 32 GiB
 // never beats the 50% default, so those hosts (16 GB M1 included) return
 // nullopt and keep mesa's byte-for-byte heap.
+const char* default_agx3b_cooperative_matrix(
+    const char* explicit_value,
+    const char* mlx_coopmat,
+    std::string_view dt_compatible) {
+  if (explicit_value != nullptr) {
+    return nullptr; // an explicit ASAHI_AGX3B_COOPERATIVE_MATRIX wins
+  }
+  if (mlx_coopmat != nullptr && std::string_view(mlx_coopmat) == "0") {
+    return "0";
+  }
+  if (dt_compatible.find("apple,t6040") != std::string_view::npos) {
+    return "1";
+  }
+  return nullptr;
+}
+
 std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes) {
   constexpr uint64_t kGiB = 1ull << 30;
   constexpr uint64_t kSystemReserve = 16 * kGiB;
