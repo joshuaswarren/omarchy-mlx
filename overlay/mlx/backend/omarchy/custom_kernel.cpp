@@ -1486,38 +1486,59 @@ void resolve_kernel_templates(
   }
 }
 
-// First '(' at or after `from` that sits outside // and /* */ comments.
-// Comment state is tracked from the string start: the helper-signature
-// regex is comment-blind and can match word pairs inside comment prose,
-// so `from` itself may sit inside a comment (a forward-only skip would
-// miss the marker that opened it and land on a paren in the same
-// sentence, which once sent the delimiter scan into comment text and
-// threw 'unbalanced delimiter' on balanced kernel text; v0.7.43 mel
-// frontend).
-size_t find_open_paren_outside_comments(const std::string& value, size_t from) {
-  bool in_line = false;
-  bool in_block = false;
+// One lexer pass marking every byte that is code: outside // and /* */
+// comments and outside string and character literals. The helper-signature
+// regex is comment- and string-blind: it matches plain word pairs in
+// comment prose (a comment naming a stage must not lend its words as a
+// helper name), and a quoted include path containing /* is string content,
+// not a comment opener (lexing it as one swallowed the helper that
+// followed, leaving its parameters unspecialized). Byte 1 = code, byte 0 =
+// comment or literal text. Review of the mel-frontend fix, v0.7.43.
+std::vector<uint8_t> code_mask(const std::string& value) {
+  std::vector<uint8_t> mask(value.size(), 0);
+  bool line_comment = false;
+  bool block_comment = false;
+  bool in_string = false;
+  bool in_char = false;
   for (size_t index = 0; index < value.size(); ++index) {
-    if (in_line) {
-      if (value[index] == '\n') {
-        in_line = false;
+    const char c = value[index];
+    if (line_comment) {
+      if (c == '\n') {
+        line_comment = false;
+        mask[index] = 1;
       }
-    } else if (in_block) {
+    } else if (block_comment) {
       if (value.compare(index, 2, "*/") == 0) {
-        in_block = false;
+        block_comment = false;
         ++index;
       }
+    } else if (in_string) {
+      if (c == '\\') {
+        ++index;
+      } else if (c == '"') {
+        in_string = false;
+      }
+    } else if (in_char) {
+      if (c == '\\') {
+        ++index;
+      } else if (c == '\'') {
+        in_char = false;
+      }
     } else if (value.compare(index, 2, "//") == 0) {
-      in_line = true;
+      line_comment = true;
       ++index;
     } else if (value.compare(index, 2, "/*") == 0) {
-      in_block = true;
+      block_comment = true;
       ++index;
-    } else if (value[index] == '(' && index >= from) {
-      return index;
+    } else if (c == '"') {
+      in_string = true;
+    } else if (c == '\'') {
+      in_char = true;
+    } else {
+      mask[index] = 1;
     }
   }
-  return std::string::npos;
+  return mask;
 }
 
 // Helpers in the user header may take `threadgroup T*` parameters (shared
@@ -1542,14 +1563,21 @@ void specialize_threadgroup_helper_params(
   // positions, so rescan from the start until no parameter remains.
   while (true) {
     bool erased = false;
+    const auto mask = code_mask(header);
     for (std::sregex_iterator it(
              header.begin(), header.end(), helper_signature);
          it != std::sregex_iterator();
          ++it) {
       const std::string helper = (*it)[2].str();
-      const size_t paren =
-          find_open_paren_outside_comments(header, (*it).position(0));
-      if (paren == std::string::npos) {
+      if (!mask[(*it).position(0)]) {
+        continue;
+      }
+      size_t paren = (*it).position(0);
+      while (paren < header.size() &&
+             !(mask[paren] && header[paren] == '(')) {
+        ++paren;
+      }
+      if (paren >= header.size()) {
         continue;
       }
       const size_t close = matching_delimiter(header, paren, '(', ')');
