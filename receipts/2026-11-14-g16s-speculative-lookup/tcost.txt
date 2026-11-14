@@ -1,0 +1,41 @@
+## 2026-11-14T16:34:10+01:00 mlx-community/Qwen3-8B-4bit st=8
+device Apple M4 Pro (G16S B1) SMALL_T 8
+T=1 med 29.44 ms min 26.35
+T=2 med 36.66 ms min 33.56
+T=3 med 43.64 ms min 41.45
+T=4 med 52.01 ms min 51.72
+T=5 med 76.08 ms min 74.45
+T=6 med 83.69 ms min 82.47
+T=7 med 91.64 ms min 90.67
+T=8 med 102.22 ms min 101.44
+## 2026-11-14T16:35:49+01:00 mlx-community/Qwen3-8B-4bit st=0
+device Apple M4 Pro (G16S B1) SMALL_T 0
+T=1 med 29.52 ms min 27.07
+T=2 med 176.80 ms min 169.01
+T=3 med 163.90 ms min 157.91
+T=4 med 186.60 ms min 186.27
+T=5 med 177.30 ms min 175.39
+T=6 med 168.10 ms min 166.45
+T=7 med 158.05 ms min 154.76
+T=8 med 193.18 ms min 191.79
+## 2026-11-14T16:36:22+01:00 mlx-community/Qwen3.5-4B-MLX-4bit st=8
+device Apple M4 Pro (G16S B1) SMALL_T 8
+T=1 med 22.51 ms min 22.42
+T=2 med 27.95 ms min 25.84
+T=3 med 32.42 ms min 31.70
+T=4 med 36.58 ms min 35.00
+T=5 med 55.73 ms min 49.07
+T=6 med 61.69 ms min 56.92
+T=7 med 66.17 ms min 63.77
+T=8 med 71.40 ms min 67.64
+## 2026-11-14T16:41:44+01:00 mlx-community/Qwen3.5-4B-MLX-4bit st=0
+device Apple M4 Pro (G16S B1) SMALL_T 0
+T=1 med 21.66 ms min 19.77
+T=2 med 113.50 ms min 112.11
+T=3 med 119.28 ms min 112.22
+T=4 med 106.99 ms min 106.81
+T=5 med 135.94 ms min 133.77
+T=6 med 139.33 ms min 138.41
+T=7 med 128.83 ms min 125.68
+T=8 med 135.68 ms min 133.35
+TC_DONE
