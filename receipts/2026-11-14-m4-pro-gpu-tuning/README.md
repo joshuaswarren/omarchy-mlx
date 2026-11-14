@@ -82,3 +82,13 @@ all 671 compute shaders of this build created as pipelines.
 the failure being `fused trio override plans the rope pair with the gemv route off` (one f16 ulp,
 random inputs); that case fails 1-2 times in 20 on every Mesa build tried, the system one included,
 and with either Qmm geometry, so it predates this change.
+
+## Left as they are
+
+- GDN prefill (`ab-pf.txt`, Qwen3.5-4B): `GDN_BATCH=0` and `GDN_HOIST=0` within spread;
+  `GDN_RECUR32=1` 567 -> 580 tok/s at 2k tokens (+2 %) with the same text, but that route is held
+  to a tolerance, not to bit identity, so the default is unchanged.
+- Host CPU (`ab-cpu.txt`): with the process confined to the E cores decode drops 7 % (Qwen3.5-4B)
+  and 19 % (granite-4.0-1b); the default placement already matches P-core pinning, and one P core
+  is enough. The host side of decode is visible on small models, so the scheduler placement is the
+  thing to keep.

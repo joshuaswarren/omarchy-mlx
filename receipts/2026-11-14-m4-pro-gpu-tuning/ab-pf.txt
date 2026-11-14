@@ -1,0 +1,34 @@
+# pmax 2868000
+## arm=default round=1
+# 2026-11-14T09:37:54+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 477.8 pf2k 2017 564.3 decode 128 64.88 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=batch0:MLX_OMARCHY_GDN_BATCH=0 round=1
+# 2026-11-14T09:38:05+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 507.3 pf2k 2017 567.4 decode 128 64.85 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=hoist0:MLX_OMARCHY_GDN_HOIST=0 round=1
+# 2026-11-14T09:38:15+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 490.5 pf2k 2017 564.5 decode 128 64.46 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=recur1:MLX_OMARCHY_GDN_RECUR32=1 round=1
+# 2026-11-14T09:38:25+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 514.4 pf2k 2017 580.2 decode 128 64.75 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=default round=2
+# 2026-11-14T09:38:35+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 491.9 pf2k 2017 569.1 decode 128 64.86 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=batch0:MLX_OMARCHY_GDN_BATCH=0 round=2
+# 2026-11-14T09:38:45+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 504.8 pf2k 2017 565.3 decode 128 65.10 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=hoist0:MLX_OMARCHY_GDN_HOIST=0 round=2
+# 2026-11-14T09:38:55+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 490.3 pf2k 2017 563.2 decode 128 64.80 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+## arm=recur1:MLX_OMARCHY_GDN_RECUR32=1 round=2
+# 2026-11-14T09:39:05+01:00 icd=~/.cache/agents/omarchy-m4/mesa-pr275/prefix-fix/share/vulkan/icd.d/asahi_icd.aarch64.json coop=unset wrap=none py=~/.cache/agents/omarchy-m4/mlx-bringup/venv-r2/bin/python pmax=2868000
+RESULT Qwen3.5-4B-MLX-4bit pf300 297 496.5 pf2k 2017 579.0 decode 128 64.88 peak 3.89 text_sha 8d04f5ffd6c2
+TEXT: Thinking Process:  1.  **Analyze the Request:**     *   Topic: Why the sky is blue.     *   Constraint: Exactly three sentences.  2.  **Identify Key Concepts:**
+AB_DONE
