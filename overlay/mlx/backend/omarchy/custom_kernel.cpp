@@ -1486,6 +1486,149 @@ void resolve_kernel_templates(
   }
 }
 
+// One lexer pass marking every byte that is code: outside // and /* */
+// comments and outside string and character literals. The helper-signature
+// regex is comment- and string-blind: it matches plain word pairs in
+// comment prose (a comment naming a stage must not lend its words as a
+// helper name), and a quoted include path containing /* is string content,
+// not a comment opener (lexing it as one swallowed the helper that
+// followed, leaving its parameters unspecialized). Byte 1 = code, byte 0 =
+// comment or literal text. Review of the mel-frontend fix, v0.7.43.
+std::vector<uint8_t> code_mask(const std::string& value) {
+  std::vector<uint8_t> mask(value.size(), 0);
+  bool line_comment = false;
+  bool block_comment = false;
+  bool in_string = false;
+  bool in_char = false;
+  bool in_number = false;
+  char last_byte = '\0';
+  for (size_t index = 0; index < value.size(); ++index) {
+    const char c = value[index];
+    if (line_comment) {
+      if (c == '\n') {
+        line_comment = false;
+        mask[index] = 1;
+        last_byte = '\n';
+      }
+    } else if (block_comment) {
+      if (value.compare(index, 2, "*/") == 0) {
+        block_comment = false;
+        last_byte = '/';
+        ++index;
+      }
+    } else if (in_string) {
+      if (c == '\\') {
+        ++index;
+      } else if (c == '"') {
+        in_string = false;
+        last_byte = '"';
+      }
+    } else if (in_char) {
+      if (c == '\\') {
+        ++index;
+      } else if (c == '\'') {
+        in_char = false;
+        last_byte = '\'';
+      }
+    } else if (in_number && c == '\'') {
+      mask[index] = 1;
+    } else if (value.compare(index, 2, "//") == 0) {
+      line_comment = true;
+      in_number = false;
+      last_byte = '/';
+      ++index;
+    } else if (value.compare(index, 2, "/*") == 0) {
+      block_comment = true;
+      in_number = false;
+      last_byte = '/';
+      ++index;
+    } else if (c == '"') {
+      in_string = true;
+      in_number = false;
+      last_byte = '"';
+    } else if (c == '\'') {
+      in_char = true;
+      last_byte = '\'';
+    } else if (c == '\\' && index + 1 < value.size() &&
+               value[index + 1] == '\n') {
+      mask[index] = 1;
+      mask[index + 1] = 1;
+      ++index;
+    } else {
+      mask[index] = 1;
+      const bool last_ident =
+          (last_byte >= '0' && last_byte <= '9') ||
+          (last_byte >= 'a' && last_byte <= 'z') ||
+          (last_byte >= 'A' && last_byte <= 'Z') || last_byte == '_';
+      const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
+      if (in_number && !word) {
+        in_number = false;
+      }
+      if (c >= '0' && c <= '9' && !last_ident) {
+        in_number = true;
+      }
+      if (c == 'R' && index + 1 < value.size() && value[index + 1] == '"') {
+        std::string prefix;
+        size_t start = index;
+        while (start > 0) {
+          if (value[start - 1] == '\n' && start >= 2 &&
+              value[start - 2] == '\\') {
+            start -= 2;
+            continue;
+          }
+          const char b = value[start - 1];
+          const bool ident = (b >= '0' && b <= '9') ||
+                             (b >= 'a' && b <= 'z') ||
+                             (b >= 'A' && b <= 'Z') || b == '_';
+          if (!ident) {
+            break;
+          }
+          prefix.push_back(b);
+          --start;
+        }
+        for (size_t low = 0; low * 2 < prefix.size(); ++low) {
+          const char swap = prefix[low];
+          prefix[low] = prefix[prefix.size() - 1 - low];
+          prefix[prefix.size() - 1 - low] = swap;
+        }
+        prefix.push_back('R');
+        const bool known_prefix = prefix == "R" || prefix == "uR" ||
+                                  prefix == "UR" || prefix == "LR" ||
+                                  prefix == "u8R";
+        size_t scan = index + 2;
+        if (known_prefix) {
+          while (scan < value.size() && value[scan] != '(') {
+            ++scan;
+          }
+        }
+        if (known_prefix && scan < value.size()) {
+          const std::string delim = value.substr(index + 2, scan - index - 2);
+          bool delim_ok = delim.size() <= 16;
+          for (const char d : delim) {
+            const bool excluded = d == ' ' || d == '\t' || d == '\n' ||
+                                  d == '\v' || d == '\f' || d == '\r' ||
+                                  d == '(' || d == ')' || d == '\\';
+            if (excluded) {
+              delim_ok = false;
+            }
+          }
+          if (delim_ok) {
+            const size_t close = value.find(")" + delim + "\"", scan + 1);
+            if (close != std::string::npos) {
+              index = close + delim.size() + 1;
+            } else {
+              index = value.size() - 1;
+            }
+          }
+        }
+      }
+      last_byte = c;
+    }
+  }
+  return mask;
+}
+
 // Helpers in the user header may take `threadgroup T*` parameters (shared
 // scratch passed by pointer, e.g. the msv_row_inv_rms reduction stage in
 // mlx-serve's fused residual+RMSNorm kernel). GLSL has neither pointer
@@ -1508,13 +1651,21 @@ void specialize_threadgroup_helper_params(
   // positions, so rescan from the start until no parameter remains.
   while (true) {
     bool erased = false;
+    const auto mask = code_mask(header);
     for (std::sregex_iterator it(
              header.begin(), header.end(), helper_signature);
          it != std::sregex_iterator();
          ++it) {
       const std::string helper = (*it)[2].str();
-      const size_t paren = header.find('(', (*it).position(0));
-      if (paren == std::string::npos) {
+      if (!mask[(*it).position(0)]) {
+        continue;
+      }
+      size_t paren = (*it).position(0);
+      while (paren < header.size() &&
+             !(mask[paren] && header[paren] == '(')) {
+        ++paren;
+      }
+      if (paren >= header.size()) {
         continue;
       }
       const size_t close = matching_delimiter(header, paren, '(', ')');

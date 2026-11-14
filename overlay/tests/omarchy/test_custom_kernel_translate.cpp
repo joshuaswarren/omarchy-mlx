@@ -1471,3 +1471,271 @@ for (uint p = 0; p < 65536; ++p) for (uint k = 0; k < 6; ++k) {
 })";
   CHECK(run_emitted_as_cpp(translate(source, 1), driver, "narrow") == 0);
 }
+
+TEST_CASE("a header comment with an unbalanced paren does not break the helper scan") {
+  // The helper-signature scan is comment-blind: it matches plain word pairs
+  // inside // comments and its find('(') can land on a paren inside comment
+  // prose (the fma-emulation header ships comments like these). When the
+  // delimiter scan starts mid-comment, the balancing close paren that lives
+  // in a LATER comment must still be reachable: the scan must not begin
+  // inside a comment at all. Kernel text itself is balanced.
+  const char* source =
+      "// fast path (v2). blend_bits/round_bits\n"
+      "// they differ from emulation only on odd (the GPU\n"
+      "// flushes denormals). fallback keeps the slow path\n"
+      "[[kernel]] void comment_scan1(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]]) {\n"
+      "  y[0] = in[0];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("void main()") != std::string::npos);
+}
+
+TEST_CASE("a line comment naming a stage does not steal the helper signature") {
+  // Review reproduction (PR #427): in the residual_norm_style fixture,
+  // changing only the first comment to name a stage with a paren made the
+  // helper-signature regex match the word pair inside the comment; the
+  // comment paren was skipped and the name 'stage' was paired with the
+  // next real function's parameters, refusing the kernel that base
+  // accepted. A regex match inside a comment must be skipped entirely.
+  std::string source(residual_norm_style);
+  source.replace(0, std::strlen("// One row reduction stage.\n"),
+                 "// One row reduction stage (shared scratch).\n");
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("float msv_row_inv_rms(float acc, float eps, int axis, uint") !=
+        std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a block comment naming a stage does not steal the helper signature") {
+  // Same reproduction through a block comment: the word pair inside
+  // comment prose must not become a helper name paired with the next
+  // real function's parameters.
+  std::string source(residual_norm_style);
+  source.replace(0, std::strlen("// One row reduction stage.\n"),
+                 "/* One row reduction stage (shared scratch). */\n");
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("float msv_row_inv_rms(float acc, float eps, int axis, uint") !=
+        std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a quoted include containing a comment marker stays a string") {
+  // Review reproduction (PR #427): prepending this quoted include to the
+  // unchanged residual fixture is accepted by base. Lexing the /* inside
+  // the string as a comment opener swallowed the following helper, its
+  // threadgroup parameters stayed unspecialized, and translation threw.
+  // String and character literals (escapes included) must never be
+  // scanned for comment markers; the slash-slash control accepts too.
+  std::string source = "#include \"dir/*marker.h\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string control = "#include \"dir//marker.h\"\n";
+  control += residual_norm_style;
+  auto glsl_control = translate(control, 1);
+  CHECK(glsl_control.find("threadgroup") == std::string::npos);
+}
+
+TEST_CASE("a digit separator in a define does not open a char literal") {
+  // Review reproduction (PR #427): prepending a C++14 numeric separator
+  // to the unchanged residual fixture is accepted by base. Lexing the
+  // separator apostrophe as a character-literal opener masked every
+  // following helper signature, its threadgroup parameters stayed
+  // unspecialized, and translation threw. The odd separator count
+  // 1'000 is the failing shape; 1'000'000 already passed because the
+  // second apostrophe closed the phantom literal. A real character
+  // literal must keep working.
+  std::string source = "#define COUNT 1'000\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string even = "#define COUNT 1'000'000\n";
+  even += residual_norm_style;
+  CHECK(translate(even, 1).find("threadgroup") == std::string::npos);
+  std::string literal =
+      "[[kernel]] void char_literal_probe(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint lid [[thread_position_in_threadgroup]]) {\n"
+      "  out[0] = (in[lid] == 'x') ? in[0] : in[1];\n"
+      "}\n";
+  auto glsl_literal = translate(literal, 1);
+  CHECK(glsl_literal.find("'x'") != std::string::npos);
+}
+
+TEST_CASE("a raw string with an embedded quote stays one token") {
+  // Reviewer-noted gap: the lexer has no raw-string state, so the quote
+  // inside R"tag(")tag" toggles a plain string and the unterminated
+  // remainder masks every following helper. The raw token must be
+  // scanned to its closing delimiter instead.
+  std::string source = "#define DOC R\"tag(\")tag\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("hex separators, suffixes and digit-adjacent literals keep their roles") {
+  // Separators after hex digits inside a number token stay separators:
+  // the helpers that follow each define stay visible to the scan.
+  std::string hex = "#define HEXMASK 0x1'a'f\n";
+  hex += residual_norm_style;
+  auto glsl_hex = translate(hex, 1);
+  CHECK(glsl_hex.find("threadgroup") == std::string::npos);
+  CHECK(glsl_hex.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string hex_pairs = "#define ROUTE 0xDE'AD'BEEF\n";
+  hex_pairs += residual_norm_style;
+  CHECK(translate(hex_pairs, 1).find("threadgroup") == std::string::npos);
+  std::string suffixed = "#define COUNTU 1'000u\n";
+  suffixed += residual_norm_style;
+  CHECK(translate(suffixed, 1).find("threadgroup") == std::string::npos);
+  // A digit-adjacent character literal must stay a literal: the paren
+  // or the operator ends the number before the quote opens.
+  std::string neighbors =
+      "[[kernel]] void separator_neighbors(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint lid [[thread_position_in_threadgroup]]) {\n"
+      "  out[0] = (in[lid] == '1' ? 1.0f : 0.0f) + ('2' == '2' ? 1.0f : 0.0f);\n"
+      "  out[1] = 1+'\\'' ? in[0] : in[1];\n"
+      "}\n";
+  auto glsl_neighbors = translate(neighbors, 1);
+  CHECK(glsl_neighbors.find("'1'") != std::string::npos);
+  CHECK(glsl_neighbors.find("'2'") != std::string::npos);
+  CHECK(glsl_neighbors.find("'\\''") != std::string::npos);
+}
+
+TEST_CASE("a digit ending an identifier does not start a number token") {
+  // Review reproduction (PR #427): prepending these defines to the
+  // unchanged residual fixture is accepted by base. EMPTY1 is an
+  // identifier, not a preprocessing number: treating its final digit
+  // as a number start made the next apostrophe a phantom separator,
+  // the paren reset the state, and the character literal in the
+  // second define then ran unterminated across the rest of the text,
+  // masking every helper. An identifier with a trailing digit followed
+  // by a normal helper stays visible.
+  std::string source = "#define EMPTY1\n#define DOC EMPTY1'('\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string plain = "#define EMPTY1\n";
+  plain += residual_norm_style;
+  auto glsl_plain = translate(plain, 1);
+  CHECK(glsl_plain.find("threadgroup") == std::string::npos);
+  CHECK(glsl_plain.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("an identifier ending in R before a quote stays a plain string") {
+  // Review reproduction (PR #427): prepending these defines to the
+  // unchanged residual fixture is accepted by base. STR is an
+  // identifier, so STR"hello" is an ordinary string; the lexer took
+  // the identifier's final R as a raw-string prefix, searched past
+  // the closing quote for a delimiter, found the next helper's open
+  // paren, and masked the rest of the text when the bogus terminator
+  // never came. A raw prefix must start a token: the real raw forms
+  // with R and u8R keep working, the quoted-paren control accepts,
+  // and the separator define stays a number.
+  std::string source = "#define STR\n#define DOC STR\"hello\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string quoted = "#define DOC STR\"(hello)\"\n";
+  quoted += residual_norm_style;
+  CHECK(translate(quoted, 1).find("threadgroup") == std::string::npos);
+  std::string real_raw =
+      "#define DOC2 R\"x(has \" quote ( and ) inside)x\"\n";
+  real_raw += residual_norm_style;
+  auto glsl_raw = translate(real_raw, 1);
+  CHECK(glsl_raw.find("threadgroup") == std::string::npos);
+  CHECK(glsl_raw.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+  std::string u8_raw = "#define DOC3 u8R\"(quote \" here)\"\n";
+  u8_raw += residual_norm_style;
+  CHECK(translate(u8_raw, 1).find("threadgroup") == std::string::npos);
+  std::string separator = "#define COUNT 1'000\n";
+  separator += residual_norm_style;
+  CHECK(translate(separator, 1).find("threadgroup") == std::string::npos);
+}
+
+TEST_CASE("a line splice inside an identifier keeps the identifier whole") {
+  // Review reproduction (PR #427): a backslash-newline joins tokens,
+  // so EMPTY spliced as EMPTY\<newline>1 is one identifier and
+  // EMPTY\<newline>1'(' carries a character literal. Lexing the digit
+  // across the splice as a number start made the next apostrophe a
+  // phantom separator and the paren left an unterminated literal that
+  // masked every helper. Both prepended shapes are accepted by the
+  // parent and must translate here.
+  std::string source = "#define EMPTY\\\n1\n#define DOC EMPTY\\\n1'('\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a line splice inside a raw-looking identifier stays a plain string") {
+  // Review reproduction (PR #427): ST spliced as ST\<newline>R ends in
+  // R on the far side of the splice, so ST\<newline>R"x(hello" is an
+  // identifier followed by an ordinary string. Reading the spliced R
+  // as a raw-string prefix sent the delimiter search past the string
+  // into the next helper and masked the rest of the text. The parent
+  // accepts the prepended shape and it must translate here.
+  std::string source = "#define DOC ST\\\nR\"x(hello\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("splices inside strings, chars, comments and plain defines keep working") {
+  // Controls: a spliced identifier without any quote, a string and a
+  // character literal continued across a splice by the existing
+  // escape handling, and a comment whose spliced newline ends it
+  // today. Each leaves the residual fixture helpers visible.
+  std::string spliced_id = "#define EMPTY\\\n1\n";
+  spliced_id += residual_norm_style;
+  CHECK(translate(spliced_id, 1).find("threadgroup") == std::string::npos);
+  std::string spliced_str = "#define S \"a\\\nz\"\n";
+  spliced_str += residual_norm_style;
+  CHECK(translate(spliced_str, 1).find("threadgroup") == std::string::npos);
+  std::string spliced_char = "#define Q 'a\\\n'\n";
+  spliced_char += residual_norm_style;
+  CHECK(translate(spliced_char, 1).find("threadgroup") == std::string::npos);
+  std::string spliced_comment = "// note\\\nmore\n";
+  spliced_comment += residual_norm_style;
+  CHECK(translate(spliced_comment, 1).find("threadgroup") == std::string::npos);
+}
+
+TEST_CASE("a punctuation raw-string delimiter is a valid delimiter") {
+  // Reviewer finding on PR #427: the C++ raw-string delimiter may be
+  // any characters except space, parentheses and backslash, so the
+  // punctuation delimiter ++ is standards-valid and the parent
+  // accepts this prepended shape. Requiring identifier characters in
+  // the delimiter fell the raw string through to the plain-string
+  // path, the embedded quote opened string state, and translation
+  // died on the later helper.
+  std::string source = "#define DOC R\"++(has \" quote)++\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
