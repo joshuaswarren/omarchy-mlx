@@ -1673,3 +1673,53 @@ TEST_CASE("an identifier ending in R before a quote stays a plain string") {
   separator += residual_norm_style;
   CHECK(translate(separator, 1).find("threadgroup") == std::string::npos);
 }
+
+TEST_CASE("a line splice inside an identifier keeps the identifier whole") {
+  // Review reproduction (PR #427): a backslash-newline joins tokens,
+  // so EMPTY spliced as EMPTY\<newline>1 is one identifier and
+  // EMPTY\<newline>1'(' carries a character literal. Lexing the digit
+  // across the splice as a number start made the next apostrophe a
+  // phantom separator and the paren left an unterminated literal that
+  // masked every helper. Both prepended shapes are accepted by the
+  // parent and must translate here.
+  std::string source = "#define EMPTY\\\n1\n#define DOC EMPTY\\\n1'('\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a line splice inside a raw-looking identifier stays a plain string") {
+  // Review reproduction (PR #427): ST spliced as ST\<newline>R ends in
+  // R on the far side of the splice, so ST\<newline>R"x(hello" is an
+  // identifier followed by an ordinary string. Reading the spliced R
+  // as a raw-string prefix sent the delimiter search past the string
+  // into the next helper and masked the rest of the text. The parent
+  // accepts the prepended shape and it must translate here.
+  std::string source = "#define DOC ST\\\nR\"x(hello\"\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("threadgroup") == std::string::npos);
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
+}
+
+TEST_CASE("splices inside strings, chars, comments and plain defines keep working") {
+  // Controls: a spliced identifier without any quote, a string and a
+  // character literal continued across a splice by the existing
+  // escape handling, and a comment whose spliced newline ends it
+  // today. Each leaves the residual fixture helpers visible.
+  std::string spliced_id = "#define EMPTY\\\n1\n";
+  spliced_id += residual_norm_style;
+  CHECK(translate(spliced_id, 1).find("threadgroup") == std::string::npos);
+  std::string spliced_str = "#define S \"a\\\nz\"\n";
+  spliced_str += residual_norm_style;
+  CHECK(translate(spliced_str, 1).find("threadgroup") == std::string::npos);
+  std::string spliced_char = "#define Q 'a\\\n'\n";
+  spliced_char += residual_norm_style;
+  CHECK(translate(spliced_char, 1).find("threadgroup") == std::string::npos);
+  std::string spliced_comment = "// note\\\nmore\n";
+  spliced_comment += residual_norm_style;
+  CHECK(translate(spliced_comment, 1).find("threadgroup") == std::string::npos);
+}
