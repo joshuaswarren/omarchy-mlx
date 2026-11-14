@@ -1471,3 +1471,23 @@ for (uint p = 0; p < 65536; ++p) for (uint k = 0; k < 6; ++k) {
 })";
   CHECK(run_emitted_as_cpp(translate(source, 1), driver, "narrow") == 0);
 }
+
+TEST_CASE("a header comment with an unbalanced paren does not break the helper scan") {
+  // The helper-signature scan is comment-blind: it matches plain word pairs
+  // inside // comments and its find('(') can land on a paren inside comment
+  // prose (the fma-emulation header ships comments like these). When the
+  // delimiter scan starts mid-comment, the balancing close paren that lives
+  // in a LATER comment must still be reachable: the scan must not begin
+  // inside a comment at all. Kernel text itself is balanced.
+  const char* source =
+      "// fast path (v2). blend_bits/round_bits\n"
+      "// they differ from emulation only on odd (the GPU\n"
+      "// flushes denormals). fallback keeps the slow path\n"
+      "[[kernel]] void comment_scan1(\n"
+      "    const device float* in [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]]) {\n"
+      "  y[0] = in[0];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("void main()") != std::string::npos);
+}
