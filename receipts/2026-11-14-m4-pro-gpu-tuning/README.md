@@ -72,9 +72,11 @@ hot prefill path.
 
 ## Pipeline creation
 
-`pipeline-sweep-mesa-275.txt` (24 refused) and `pipeline-sweep-mesa-fixes.txt` (7 refused, all bf16
-cooperative-matrix shaders that need `VK_KHR_shader_bfloat16` and are never created on this GPU):
-all 671 compute shaders of this build created as pipelines.
+All 671 compute shaders of this build were passed to pipeline creation; each sweep file lists
+only the refusals. With the fixes (`pipeline-sweep-mesa-fixes.txt`): 664 created, 7 refused. The 7
+are bf16 cooperative-matrix shaders that need `VK_KHR_shader_bfloat16`, which this GPU does not
+expose, so the runtime never selects them. On the #275 build (`pipeline-sweep-mesa-275.txt`): 647
+created, 24 refused.
 
 ## Tests
 
