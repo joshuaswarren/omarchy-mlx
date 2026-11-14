@@ -115,9 +115,11 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
 // context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
 // identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
-// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
-// every other chip until its paired A/B lands. The accepted overrides are
-// 2x4 and 2x16.
+// tokens identical, and 4x8 was 3.60 percent slower there — #351; on G16S,
+// the M4 Pro, three interleaved rounds of 128 tokens: granite-4.0-1b-4bit
+// 105.1 -> 120.0 tok/s, Qwen3.5-4B-MLX-4bit 60.6 -> 64.8, Qwen2.5-1.5B and
+// Qwen3-8B within noise, tokens identical), 2x4 on every other chip until
+// its paired A/B lands. The accepted overrides are 2x4 and 2x16.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -132,7 +134,8 @@ const QmmGeometry& qmm_geometry() {
     if (v.empty()) {
       const std::string& chip = omarchy::device().capabilities().device_name;
       if (chip.find("G13G") != std::string::npos ||
-          chip.find("G13C") != std::string::npos) {
+          chip.find("G13C") != std::string::npos ||
+          chip.find("G16S") != std::string::npos) {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
