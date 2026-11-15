@@ -82,8 +82,8 @@ plus Laya, and it needs a 96 GB machine.
 | M1 Ultra, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port | Data-only; h16 bring-up module |
-| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 49.3 tok/s; [runtime 59/60, known issue](docs/KNOWN-ISSUES.md#m4-pro-g16s-and-a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails): the independent-streams timing check fails, copies are byte-exact | Untested |
-| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 13.5 tok/s; [runtime 59/60, known issue](docs/KNOWN-ISSUES.md#m4-pro-g16s-and-a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails): the independent-streams timing check fails, copies are byte-exact | Untested |
+| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 49.3 tok/s; runtime 59/60 on source build `ec849019` (independent-streams ratio 0.876 against that build's 0.95 floor; main has the 0.80 Borealis floor, not re-run) | Untested |
+| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 13.5 tok/s; [runtime 59/60, known issue](docs/KNOWN-ISSUES.md#a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails): the independent-streams timing check fails against the 0.80 Borealis floor, copies are byte-exact | Untested |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
