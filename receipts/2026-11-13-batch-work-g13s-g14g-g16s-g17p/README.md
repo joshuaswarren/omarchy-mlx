@@ -2,7 +2,7 @@
 
 Date: 2026-11-13. This receipt backs the four new rows of `kBatchWorkCalibration` in `overlay/mlx/backend/omarchy/encoder.h`. Before this change all four boards took the 5000 fallback.
 
-**Tail rework (2026-11-14, see `tail/`).** The p50-only rule first picked G13S 20000 and G14G 10000, but their submission *tail* ran up near the ~78 ms stutter of issue #19 (G13S 20000: 4B p99 72.3 ms, max 86.0). The budgets are now chosen under a tail rule and the final rows are **G13S 10000, G14G 8000, G16S 10000, G17P 5000**. The p50/p95 sweep tables below are unchanged (the raw data they came from still stands); read `tail/README.md` for the p99/max tables, the new budgets and the decode A/B at the new value.
+**Tail rework (2026-11-14, see `tail/`).** The p50-only rule first picked G13S 20000 and G14G 10000, but their submission *tail* ran up near the ~78 ms stutter of issue #19 (G13S 20000: 4B p99 72.3 ms, max 86.0). The budgets are now chosen under a tail rule and this receipt's rows are **G13S 10000, G14G 8000, G16S 10000, G17P 5000**. The merged source keeps G13S 10000, G14G 8000 and G17P 5000 from here; its G16S row is 15000 from the later `receipts/2026-11-15-m4-pro-g16s-batch-work` (merged first), so the G16S data here is a record of this sweep only. GPU cores of each measured machine: G13S 16, G14G 8, G16S 20, G17P 5 (from the kernel GPU core masks); G13S and G16S also ship with fewer cores, which these rows were not measured on. The p50/p95 sweep tables below are unchanged (the raw data they came from still stands); read `tail/README.md` for the p99/max tables, the new budgets and the decode A/B at the new value.
 
 ## Rule
 

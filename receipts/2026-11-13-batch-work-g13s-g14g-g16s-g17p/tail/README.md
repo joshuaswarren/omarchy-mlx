@@ -38,18 +38,20 @@ Bold marks the chosen budget. Chosen budgets and the change from the parent PR:
 
 | Board | Parent PR | This rework | 4B p50 / p99 / max at the pick | First budget the rule rejects |
 |---|---:|---:|---|---|
-| G13S (M1 Pro) | 20000 | **10000** | 2.50 / 36.2 / 43.2 | 15000 (p99 57.4) |
+| G13S (M1 Pro) | 20000 | **10000** | 2.50 / 36.2 / 43.2 | 15000 (p50 7.18, p99 57.4) |
 | G14G (M2) | 10000 | **8000** | 3.64 / 37.9 / 47.8 | 10000 (p99 48.3) |
-| G16S (M4 Pro) | 10000 | **10000** (unchanged) | 5.40 / 26.6 / 31.3 | 15000 (p99 41.6) |
-| G17P (A18 Pro) | 5000 | **5000** (unchanged, = fallback) | 4.35 / 24.8 / 47.2 | 8000 (p99 48.9) |
+| G16S (M4 Pro) | 10000 | **10000** (unchanged) | 5.40 / 26.6 / 31.3 | 15000 (p50 8.14, p99 41.6) |
+| G17P (A18 Pro) | 5000 | **5000** (unchanged, = fallback) | 4.35 / 24.8 / 47.2 | 8000 (p50 6.56, p99 48.9) |
 
 G16S and G17P already satisfied the tail rule, so only G13S and G14G move.
 
 ## M2 re-run at cool temperature
 
 The original M2 sweep ran hot (90-99 C, passively cooled). The M2 re-run here
-(`subcap/m2r3-*.out`) started at 33 C and stayed at 36 C through the 4B sweep.
-The tail is the same within noise (4B p99: 5000 18.9, 8000 37.9, 10000 48.3,
+(`subcap/m2r3-*.out`) started cool: the hottest thermal zone read 32.9 C at the
+start of the Qwen3.8-2B sweep and 36.2 C at the start of the Qwen3-4B sweep
+(`subcap/m2r3.log`, one reading per model, taken before the sweep, none
+during it). The tail is the same within noise (4B p99: 5000 18.9, 8000 37.9, 10000 48.3,
 15000 75.1 ms), so the tail is a real property of the submission length, not a
 thermal artifact.
 
@@ -58,8 +60,11 @@ thermal artifact.
 Release wheel `v0.7.41` (`0.32.4.dev202611111431+8380f002`),
 `receipts/2026-10-09-linux-vs-macos/score_bench.py` (10 greedy generations of
 64 tokens, 5 prefills of 512, medians). Each board ran the default (5000) first,
-then `MLX_OMARCHY_BATCH_WORK=<budget>`, in one sitting (`tools/ab_bw3.sh`).
-Records in `ab/`.
+then `MLX_OMARCHY_BATCH_WORK=<budget>`, in one sitting (`../tools/ab_bw3.sh`).
+Records in `ab/`. Each arm logs the 1-minute load and the hottest thermal zone
+before it starts (`ab/ab-*.log`, millidegrees C): the M2 A/B ran at 35.6-64.3 C
+on the default arms and 71.3-78.1 C on the 8000 and 10000 arms, so the new
+budget ran warmer than its baseline, which works against it, not for it.
 
 ### M2 (G14G), new budget 8000 (`ab/ab-m2r3-*.json`)
 
@@ -92,3 +97,11 @@ Same as the parent receipt (`../README.md`): Fedora 44/45 aarch64, Linux 7.3.0
 (aurora-silicon/linux integration), Mesa 26.3.0-devel Borealis, system ICD,
 Python 3.14, mlx-lm 0.31.3 with `--patch-venv`, `schedutil` governor, no other
 GPU work on the device.
+
+## After this receipt
+
+The G16S row in the source is not this receipt's 10000. A later receipt
+(`receipts/2026-11-15-m4-pro-g16s-batch-work`, PR #454) set it to 15000 from a
+release build with DRM scheduler timestamps over all submissions, and that row
+was merged first; this PR keeps it. The G16S columns above stay as the record
+of this sweep only.
