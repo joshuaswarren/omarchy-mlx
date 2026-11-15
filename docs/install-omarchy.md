@@ -245,19 +245,27 @@ Library clamp (`MLX_OMARCHY_CPU_UCLAMP`, default on). The serve clamp above
 covers only the threads the serve starts. A caller that does not clamp, such
 as a plain Python script or `bench_decode.py` with `MLX_OMARCHY_UCLAMP_MIN=0`,
 decoded on unclamped submit threads. The wheel now sets `uclamp_min` 1024 on
-each thread that submits GPU work, once per thread, with the same unprivileged
-`sched_setattr` call, and ignores a refusal. `MLX_OMARCHY_CPU_UCLAMP=0`
-turns it off. Measured with `MLX_OMARCHY_UCLAMP_MIN=0` in both arms, so only
+the threads that submit GPU work, once per thread, with the same unprivileged
+`sched_setattr` call, and ignores a refusal. It reads the thread's clamp
+first and leaves it alone when the caller already set a floor (`util_min`
+above 0) or a cap (`util_max` below 1024), so `MLX_OMARCHY_UCLAMP_MIN=512`
+stays 512. The clamp also lands on the first thread that reaches the backend
+(for example an application's main thread at `import mlx.core`, through
+device initialization), and every thread that thread creates afterwards
+inherits it. `MLX_OMARCHY_UCLAMP_MIN=0` turns off only the serve and bench
+clamp; `MLX_OMARCHY_CPU_UCLAMP=0` turns off the library's. Measured with `MLX_OMARCHY_UCLAMP_MIN=0` in both arms, so only
 this switch differed (decode of 127 tokens, two runs per arm, digests
 identical between arms, no GPU timeouts). Each thread's `util_min` was read
 back to confirm the clamp. On an M6 Mac mini under `schedutil`, Qwen3.8-2B
 4-bit decoded at 2.88 and 2.90 tok/s with the clamp and 2.02 and 2.01 without
 (+43 %), and Qwen3-4B 4-bit at 4.46 and 4.52 against 3.45 and 3.45 (+30 %).
-On the 13-inch M1 under the `performance` governor the 2B model gained 3.8 %
-(29.52 and 29.34 against 28.41 and 28.30) and the 4B model was flat (22.92
-and 22.11 against 22.98 and 22.94). On the 14-inch M2 Max under `schedutil`
-both models were flat within run noise (2B 76.14 and 75.08 against 76.21 and
-75.23, 4B 73.59 and 72.35 against 72.43 and 72.18). The clamp matters
+On the 13-inch M1, run under the `performance` governor here (the serve-clamp
+A/B above ran it under `schedutil`), the 2B model gained 3.8 %
+(29.52 and 29.34 against 28.41 and 28.30) and the 4B model measured -1.9 % on
+the mean, within noise at two runs per arm (22.92 and 22.11 against 22.98 and
+22.94). On the 14-inch M2 Max under `schedutil` both models were flat within
+run noise (2B 76.14 and 75.08 against 76.21 and 75.23, 4B +0.9 % on the mean:
+73.59 and 72.35 against 72.43 and 72.18). The clamp matters
 where the cluster idles low between submits; it does not change results.
 
 ## Build the wheel

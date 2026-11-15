@@ -21,7 +21,8 @@ namespace mlx::core::omarchy {
 // lifts the cluster. Measured on an M6 (G18G), Qwen3.8-2B 4-bit decode with
 // HK_G18_BATCH=32: 159 -> 121 ms/token, same token hash. sched_setattr with
 // SCHED_FLAG_UTIL_CLAMP_MIN needs no privilege and applies to the calling
-// thread; threads it creates inherit it.
+// thread; threads it creates inherit it. A floor or cap the caller already
+// set on the thread is kept (read with sched_getattr first).
 //
 // MLX_OMARCHY_CPU_UCLAMP: unset or empty = on, "0" = off. Failure is ignored.
 // Linux aarch64 only; every other build is a no-op.
@@ -47,6 +48,7 @@ inline constexpr uint64_t kSchedKeepPolicy = 0x08;
 inline constexpr uint64_t kSchedKeepParams = 0x10;
 inline constexpr uint64_t kSchedUtilClampMin = 0x20;
 inline constexpr long kSchedSetattrAarch64 = 274;
+inline constexpr long kSchedGetattrAarch64 = 275;
 
 inline bool cpu_uclamp_enabled_for(const char* env) {
   return !(env != nullptr && env[0] == '0' && env[1] == '\0');
@@ -62,10 +64,18 @@ inline SchedAttr uclamp_min_attr(uint32_t util_min) {
   return a;
 }
 
+// A floor or a cap the caller set on this thread is theirs: a nonzero
+// util_min, or a util_max below the full range, is left alone.
+inline bool caller_clamp_present(const SchedAttr& cur) {
+  return cur.sched_util_min != 0 || cur.sched_util_max < 1024;
+}
+
 // |done| is the caller's once-per-thread flag; a failed attempt is not
-// retried. |sys| is sched_setattr(0, attr, 0) and returns 0 on success.
-template <class Sys>
-bool apply_cpu_uclamp_once(Sys&& sys, const char* env, bool& done) {
+// retried. |get| is sched_getattr(0, attr, size, 0) and |set| is
+// sched_setattr(0, attr, 0); each returns 0 on success. A failed read does
+// not block the write, which refuses harmlessly on a kernel without uclamp.
+template <class Get, class Set>
+bool apply_cpu_uclamp_once(Get&& get, Set&& set, const char* env, bool& done) {
   if (done) {
     return false;
   }
@@ -73,8 +83,13 @@ bool apply_cpu_uclamp_once(Sys&& sys, const char* env, bool& done) {
   if (!cpu_uclamp_enabled_for(env)) {
     return false;
   }
+  SchedAttr cur{};
+  cur.size = sizeof(SchedAttr);
+  if (get(cur) == 0 && caller_clamp_present(cur)) {
+    return false;
+  }
   SchedAttr a = uclamp_min_attr(kUclampMin);
-  return sys(a) == 0;
+  return set(a) == 0;
 }
 
 // The calling thread, once. Cheap after the first call (a thread-local load).
@@ -85,6 +100,9 @@ inline void raise_cpu_clamp_this_thread() {
     return;
   }
   apply_cpu_uclamp_once(
+      [](SchedAttr& a) {
+        return ::syscall(kSchedGetattrAarch64, 0, &a, sizeof(a), 0u);
+      },
       [](SchedAttr& a) {
         return ::syscall(kSchedSetattrAarch64, 0, &a, 0u);
       },
