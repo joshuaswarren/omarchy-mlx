@@ -56,19 +56,25 @@ def test_verify_pass_sets_and_restores_the_routes(site, monkeypatch):
     verify = contextlib.contextmanager(verify)
     monkeypatch.delenv("MLX_OMARCHY_FULL_LOGITS", raising=False)
     monkeypatch.delenv("MLX_OMARCHY_QMV_SMALL_T", raising=False)
+    monkeypatch.delenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", raising=False)
     with verify(4):
         assert os.environ["MLX_OMARCHY_FULL_LOGITS"] == "1"
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "4"
+        assert os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] == "1"
     assert "MLX_OMARCHY_FULL_LOGITS" not in os.environ
     assert "MLX_OMARCHY_QMV_SMALL_T" not in os.environ
+    assert "MLX_OMARCHY_SDPA_SPLIT_ROWS" not in os.environ
     with verify(12):
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "8"
     with verify(1):
         assert "MLX_OMARCHY_QMV_SMALL_T" not in os.environ
+        assert "MLX_OMARCHY_SDPA_SPLIT_ROWS" not in os.environ
     monkeypatch.setenv("MLX_OMARCHY_QMV_SMALL_T", "0")
     monkeypatch.setenv("MLX_OMARCHY_FULL_LOGITS", "0")
+    monkeypatch.setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", "0")
     with verify(4):
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "0"
+        assert os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] == "0"
     assert os.environ["MLX_OMARCHY_FULL_LOGITS"] == "0"
 
 

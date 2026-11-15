@@ -514,3 +514,48 @@ TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {
   }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
+
+TEST_CASE("split-K verify rows: each causal row equals the same token decoded alone, two dispatches per row") {
+  if (!compute_available()) {
+    return;
+  }
+  struct Case {
+    int heads, kv_heads, width, keys, rows;
+  };
+  for (const Case& c : {Case{32, 8, 128, 500, 2}, Case{32, 8, 128, 2048, 4}, Case{32, 8, 128, 3000, 16}, Case{16, 4, 256, 700, 3}, Case{16, 16, 128, 130, 8}}) {
+    Stream stream = gpu_stream();
+    Stored q = make_bf16(pattern(static_cast<size_t>(c.heads) * c.rows * c.width, 5, 1.0f), Shape{1, c.heads, c.rows, c.width}, stream);
+    Stored k = make_bf16(pattern(static_cast<size_t>(c.kv_heads) * c.keys * c.width, 6, 1.0f), Shape{1, c.kv_heads, c.keys, c.width}, stream);
+    Stored v = make_bf16(pattern(static_cast<size_t>(c.kv_heads) * c.keys * c.width, 7, 1.0f), Shape{1, c.kv_heads, c.keys, c.width}, stream);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(c.width));
+    setenv("MLX_OMARCHY_SDPA_DECODE_SPLIT", "1", 1);
+    setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", "1", 1);
+    uint64_t before = dispatches();
+    array rows = fast::scaled_dot_product_attention(q.x, k.x, v.x, scale, "causal", {}, std::nullopt, false, stream);
+    rows.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    uint64_t launched = dispatches() - before;
+    unsetenv("MLX_OMARCHY_SDPA_SPLIT_ROWS");
+    std::vector<float> got = flat(rows, stream);
+    INFO("heads " << c.heads << " width " << c.width << " keys " << c.keys << " rows " << c.rows);
+    if (split_device_ready()) {
+      CHECK(launched == 2u * static_cast<uint64_t>(c.rows));
+    } else {
+      printf("Skipping: split route not available on this device\n");
+      continue;
+    }
+    for (int r = 0; r < c.rows; ++r) {
+      const int visible = c.keys - c.rows + 1 + r;
+      array qr = slice(q.x, Shape{0, 0, r, 0}, Shape{1, c.heads, r + 1, c.width}, stream);
+      array kr = slice(k.x, Shape{0, 0, 0, 0}, Shape{1, c.kv_heads, visible, c.width}, stream);
+      array vr = slice(v.x, Shape{0, 0, 0, 0}, Shape{1, c.kv_heads, visible, c.width}, stream);
+      Run one = run_attention(qr, kr, vr, scale, "1", stream);
+      for (int h = 0; h < c.heads; ++h) {
+        for (int d = 0; d < c.width; ++d) {
+          REQUIRE(got[(static_cast<size_t>(h) * c.rows + r) * c.width + d] == one.out[static_cast<size_t>(h) * c.width + d]);
+        }
+      }
+    }
+  }
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}
