@@ -16601,16 +16601,26 @@ void ScaledDotProductAttention::eval_gpu(
   }
 #ifdef MLX_OMARCHY_BF16_DIRECT
   // Causal cooperative-matrix flash prefill (MatmulGap H35): scores never
-  // reach memory, QK and PV run on the 8x8x8 matrix unit. Default OFF:
-  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=1 turns it on for q_len >= 64 (A/B arms),
-  // unset or 0 keeps the composed route.
+  // reach memory, QK and PV run on the 8x8x8 matrix unit. Default ON for
+  // G16S when the device advertises the bf16 8x8 cooperative-matrix shape
+  // (receipts/2026-11-15-m4-pro-g16s-sdpa-causal-flash): Qwen3-8B-4bit
+  // pf2060 +6.2% median, ranges disjoint; pf520 and decode flat; 32-token
+  // sha identical. Other parts keep the composed default (G13C pf512
+  // missed the +2% bar, receipts/2026-10-09-causal-flash-gate3).
+  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=0 is the kill switch back to composed;
+  // =1 still forces the route on any eligible part.
   // Contract: causal, bf16, hd 128, k_len % 8 == 0, k_len >= q_len, no sinks,
   // no logsumexp, no array mask, 8-element aligned strides; anything else
   // keeps the composed route.
   {
     const char* cf_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
     const auto& cf_caps = encoder.device().capabilities();
-    if (cf_env != nullptr && std::strcmp(cf_env, "1") == 0 &&
+    const bool cf_is_g16s =
+        cf_caps.device_name.find("G16S") != std::string::npos;
+    const bool cf_forced_on = cf_env != nullptr && cf_env[0] == '1';
+    const bool cf_forced_off = cf_env != nullptr && cf_env[0] == '0';
+    const bool cf_on = cf_forced_on || (cf_is_g16s && !cf_forced_off);
+    if (cf_on &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
         cf_caps.max_compute_shared_memory_size >= 9216u &&
