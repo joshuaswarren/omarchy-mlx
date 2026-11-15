@@ -627,8 +627,8 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 // composition (16 query / 8 kv heads, width 128). Pure.
 // Wave scheduling (MLX_OMARCHY_WAVE_SCHED unset): the parts where the
 // encoder records each batch in earliest-wave order by default. G16S (Apple
-// M4 Pro): Qwen3-8B decode +1.4% on its own, +2.7% with the hk barrier
-// elision of aurora-silicon/mesa#343, tokens identical
+// M4 Pro): with aurora-silicon/mesa#353 and #343, Qwen3-8B decode +1.4%
+// (wave) and +2.7% (both), tokens identical
 // (receipts/2026-11-15-m4-pro-wave-sched). Other parts keep tape order until
 // they are measured; MLX_OMARCHY_WAVE_SCHED=1 or =0 overrides on any part.
 inline bool wave_sched_default_part(const std::string& device_name) {

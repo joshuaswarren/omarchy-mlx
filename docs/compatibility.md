@@ -990,3 +990,20 @@ A Supported row must link every applicable record.
 - Cost on M1: prefill at 512 tokens 98.35 vs 101.66 tok/s (-3.3 percent, one run per arm), decode equal. `=2` stays available. A masked prefill
   on G13 parts keeps mode 2 (the padded-batch fix above); token parity with macOS is not claimed for that case.
   Receipt: `receipts/2026-10-09-gdn-recur32-g13g-default/`.
+
+## 2026-11-15 — wave scheduling default ON for G16S (Apple M4 Pro)
+
+- Unset `MLX_OMARCHY_WAVE_SCHED` now uses `wave_sched_default_part`: on for
+  G16S, off on every other part. `=0` and `=1` still force either side.
+  Wave order is scheduling only; outputs are unchanged. The part check is
+  unit-tested. Other parts stay at tape order until they are measured.
+- Stock Borealis 26.3.0-devel (`git-05ddb00f5c`), two wheels, three
+  interleaved greedy rounds: decode is within the noise of the protocol
+  (Qwen3-8B 43.65 vs 43.20 tok/s); tokens identical on four models.
+- With aurora-silicon/mesa#353 and #343, same wheel, three rounds, mean
+  decode: Qwen3-8B 43.09 -> 43.68 (+1.4%) with wave and 44.26 (+2.7%) with
+  both, rounds disjoint from base; granite +2.8% is from #343 (wave adds
+  nothing further). Tokens identical (two prompts of 256). Prefill
+  unchanged.
+- Test battery 79/79 on the PR commit, including `omarchy_runtime_tests`
+  61/61. Receipt: `receipts/2026-11-15-m4-pro-wave-sched`.
