@@ -50,6 +50,8 @@ def test_lookup_takes_the_longest_latest_match(site):
 
 
 def test_verify_pass_sets_and_restores_the_routes(site, monkeypatch):
+    # MLX_OMARCHY_SDPA_SPLIT_ROWS is never written by the patch: unset stays unset (plain
+    # path) in and after every pass, and an explicit value stays fixed for the whole process.
     (verify,) = helpers(site, "_omarchy_verify_pass")
     import contextlib
 
@@ -60,7 +62,7 @@ def test_verify_pass_sets_and_restores_the_routes(site, monkeypatch):
     with verify(4):
         assert os.environ["MLX_OMARCHY_FULL_LOGITS"] == "1"
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "4"
-        assert os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] == "1"
+        assert "MLX_OMARCHY_SDPA_SPLIT_ROWS" not in os.environ
     assert "MLX_OMARCHY_FULL_LOGITS" not in os.environ
     assert "MLX_OMARCHY_QMV_SMALL_T" not in os.environ
     assert "MLX_OMARCHY_SDPA_SPLIT_ROWS" not in os.environ
@@ -71,11 +73,16 @@ def test_verify_pass_sets_and_restores_the_routes(site, monkeypatch):
         assert "MLX_OMARCHY_SDPA_SPLIT_ROWS" not in os.environ
     monkeypatch.setenv("MLX_OMARCHY_QMV_SMALL_T", "0")
     monkeypatch.setenv("MLX_OMARCHY_FULL_LOGITS", "0")
-    monkeypatch.setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", "0")
+    assert os.environ["MLX_OMARCHY_FULL_LOGITS"] == "0"
+    for fixed in ("0", "1"):
+        monkeypatch.setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", fixed)
+        for rows in (1, 4, 12):
+            with verify(rows):
+                assert os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] == fixed
+            assert os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] == fixed
+    monkeypatch.setenv("MLX_OMARCHY_QMV_SMALL_T", "0")
     with verify(4):
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "0"
-        assert os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] == "0"
-    assert os.environ["MLX_OMARCHY_FULL_LOGITS"] == "0"
 
 
 TOY = r"""

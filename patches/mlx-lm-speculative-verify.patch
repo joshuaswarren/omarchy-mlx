@@ -1,6 +1,6 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -679,10 +679,69 @@
+@@ -679,10 +679,66 @@
          n += 1
  
  
@@ -9,21 +9,18 @@
 +# short pass (num_draft + 1 rows), and MLX_OMARCHY_QMV_SMALL_T sends its 4-bit
 +# linears to the batch-shared GEMV, whose rows are built to match the single-
 +# token decode kernel; the ids can still differ from plain decode (docs/kernel-flags.md).
-+# MLX_OMARCHY_SDPA_SPLIT_ROWS runs each row of the verify attention through the
-+# one-token split-K pair, which matches the single-token kernel up to float32
-+# summation order; the default rows route costs more per row as the context grows and
-+# at about 2500 keys made prompt lookup slower than plain decode. All three
-+# variables are read live, so the pass is evaluated inside the block. A value
-+# already set in the environment is left as it is.
++# MLX_OMARCHY_SDPA_SPLIT_ROWS is not written here: unset stays unset (the plain rows
++# route) and an explicit value stays fixed for the whole process. Switching it every
++# pass is a lead, not a proven cause, for the open #452 timeouts (all seen with it unset).
++# The other two variables are read live, so the pass is evaluated inside the block.
++# A value already set in the environment is left as it is.
 +@contextlib.contextmanager
 +def _omarchy_verify_pass(rows):
-+    keys = ("MLX_OMARCHY_FULL_LOGITS", "MLX_OMARCHY_QMV_SMALL_T", "MLX_OMARCHY_SDPA_SPLIT_ROWS")
++    keys = ("MLX_OMARCHY_FULL_LOGITS", "MLX_OMARCHY_QMV_SMALL_T")
 +    saved = {k: os.environ.get(k) for k in keys}
 +    os.environ["MLX_OMARCHY_FULL_LOGITS"] = "1"
 +    if saved["MLX_OMARCHY_QMV_SMALL_T"] is None and rows > 1:
 +        os.environ["MLX_OMARCHY_QMV_SMALL_T"] = str(min(rows, 8))
-+    if saved["MLX_OMARCHY_SDPA_SPLIT_ROWS"] is None and rows > 1:
-+        os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] = "1"
 +    try:
 +        yield
 +    finally:
@@ -71,7 +68,7 @@
      *,
      num_draft_tokens: int = 2,
      max_tokens: int = 256,
-@@ -693,6 +752,9 @@
+@@ -693,6 +749,9 @@
      kv_bits: Optional[int] = None,
      kv_group_size: int = 64,
      quantized_kv_start: int = 0,
@@ -81,7 +78,7 @@
  ) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
      """
      A generator producing token ids based on the given prompt from the model.
-@@ -700,7 +762,10 @@
+@@ -700,7 +759,10 @@
      Args:
          prompt (mx.array): The input prompt.
          model (nn.Module): The model to use for generation.
@@ -93,7 +90,7 @@
          num_draft_tokens (int, optional): The number of draft tokens for
            speculative decoding. Default: ``2``.
          max_tokens (int): The maximum number of tokens. Use``-1`` for an infinite
-@@ -711,13 +776,20 @@
+@@ -711,13 +773,20 @@
            A list of functions that take tokens and logits and return the processed
            logits. Default: ``None``.
          prompt_cache (List[Any], optional): A pre-computed prompt cache. Note, if
@@ -115,7 +112,7 @@
  
      Yields:
          Tuple[mx.array, mx.array, bool]: One token, a vector of log probabilities,
-@@ -726,20 +798,20 @@
+@@ -726,20 +795,20 @@
  
      y = prompt.astype(mx.uint32)
      prev_tokens = None
@@ -142,7 +139,7 @@
  
      sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
  
-@@ -795,13 +867,24 @@
+@@ -795,13 +864,24 @@
              mx.clear_cache()
          return y
  
@@ -169,7 +166,7 @@
          ys = []
          for _ in range(num_draft):
              y, _ = _step(draft_model, draft_cache, y)
-@@ -810,22 +893,57 @@
+@@ -810,22 +890,57 @@
          return mx.concatenate(ys)
  
      with mx.stream(generation_stream):
@@ -231,7 +228,7 @@
              draft_tokens = draft_tokens.tolist()
              tokens = tokens.tolist()
              n = 0
-@@ -835,32 +953,59 @@
+@@ -835,32 +950,59 @@
                      break
                  n += 1
                  ntoks += 1
@@ -294,7 +291,7 @@
  
  
  def stream_generate(
-@@ -907,7 +1052,19 @@
+@@ -907,7 +1049,19 @@
  
      kwargs["max_tokens"] = max_tokens
  
