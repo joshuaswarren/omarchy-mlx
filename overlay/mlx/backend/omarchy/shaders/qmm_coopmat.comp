@@ -109,8 +109,19 @@
 #define SUBGROUP_ROW_BLOCKS 2u
 #elif TILE_ROWS == 16
 #define SUBGROUP_ROW_BLOCKS 1u
+#elif TILE_ROWS == 64
+// Two subgroups each own 32 rows (4 blocks), or SG4: four subgroups
+// (128 threads) each own 16 rows (2 blocks) so the 64-row tile keeps
+// the shipped 32-row per-thread accumulator footprint. W is dequantized
+// once and reused across twice the rows; every output keeps its
+// ascending-k chain.
+#ifdef SG4
+#define SUBGROUP_ROW_BLOCKS 2u
 #else
-#error "TILE_ROWS must be 32 or 16"
+#define SUBGROUP_ROW_BLOCKS 4u
+#endif
+#else
+#error "TILE_ROWS must be 64, 32 or 16"
 #endif
 
 #define ROW_BLOCKS (TILE_ROWS / 8u)
@@ -118,10 +129,33 @@
 const uint TILE_M = TILE_ROWS;
 const uint TILE_N = 32u;
 const uint CHUNK_K = 64u;
-const uint STEP_K = 16u;
+// STEP_K_VAL widens the k step (32 or 64) so one dequant + barrier
+// feeds more 8-wide matmads. The per-output k chain is unchanged
+// (same 8-wide mma order). Direct-load q4g64 FullN twins only.
+#ifdef STEP_K_VAL
+#if defined(X_BF16) || defined(CHUNK_DEQ) || defined(TWO_N)
+#error "STEP_K_VAL applies to the direct-load q4g64 FullN route only"
+#endif
+#if QBITS != 4 || QGROUP != 64
+#error "STEP_K_VAL is a 4-bit group-64 experiment"
+#endif
+#if STEP_K_VAL != 32 && STEP_K_VAL != 64
+#error "STEP_K_VAL must be 32 or 64"
+#endif
+#define STEP_K STEP_K_VAL
+#else
+#define STEP_K 16
+#endif
 const uint MAT = 8u;
 
+#ifdef SG4
+#if TILE_ROWS != 64
+#error "SG4 is the 64-row 128-lane workgroup"
+#endif
+layout(local_size_x = 128) in;
+#else
 layout(local_size_x = 64) in;
+#endif
 
 #ifdef X_BF16
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
@@ -192,6 +226,13 @@ uint16_t out_store(float value) {
 #define OUT_STORE(value) out_store(value)
 #else
 #define OUT_STORE(value) float16_t(value)
+#endif
+// Integer 0-15 (and 0-255) is exact in f32. 0x4B000000 is 2^23; OR-ing
+// the nibble and subtracting 2^23 is bit-identical to float(nibble).
+#ifdef CHEAP_DEQ
+#define NIB_F32(n) (uintBitsToFloat(0x4B000000u | (n)) - 8388608.0)
+#else
+#define NIB_F32(n) float(n)
 #endif
 
 layout(push_constant) uniform Params {
@@ -305,21 +346,21 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       uint packed = input_w.values[w_row + k_base / 8u + g_wpart];
       uint w_base = step * STEP_K * QMM_W_STRIDE +
           8u * g_wpart * QMM_W_STRIDE + g_wcol;
-      w_s[w_base + 0u * QMM_W_STRIDE] = scale * float(packed & 0xFu) + bias;
+      w_s[w_base + 0u * QMM_W_STRIDE] = scale * NIB_F32(packed & 0xFu) + bias;
       w_s[w_base + 1u * QMM_W_STRIDE] =
-          scale * float((packed >> 4u) & 0xFu) + bias;
+          scale * NIB_F32((packed >> 4u) & 0xFu) + bias;
       w_s[w_base + 2u * QMM_W_STRIDE] =
-          scale * float((packed >> 8u) & 0xFu) + bias;
+          scale * NIB_F32((packed >> 8u) & 0xFu) + bias;
       w_s[w_base + 3u * QMM_W_STRIDE] =
-          scale * float((packed >> 12u) & 0xFu) + bias;
+          scale * NIB_F32((packed >> 12u) & 0xFu) + bias;
       w_s[w_base + 4u * QMM_W_STRIDE] =
-          scale * float((packed >> 16u) & 0xFu) + bias;
+          scale * NIB_F32((packed >> 16u) & 0xFu) + bias;
       w_s[w_base + 5u * QMM_W_STRIDE] =
-          scale * float((packed >> 20u) & 0xFu) + bias;
+          scale * NIB_F32((packed >> 20u) & 0xFu) + bias;
       w_s[w_base + 6u * QMM_W_STRIDE] =
-          scale * float((packed >> 24u) & 0xFu) + bias;
+          scale * NIB_F32((packed >> 24u) & 0xFu) + bias;
       w_s[w_base + 7u * QMM_W_STRIDE] =
-          scale * float(packed >> 28u) + bias;
+          scale * NIB_F32(packed >> 28u) + bias;
     }
     barrier();
     for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
@@ -372,40 +413,85 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       uint packed_hi = column_ok
           ? input_w.values[w_row + k_base / 4u + 2u * g_wpart + 1u] : 0u;
       uint w_base = 8u * g_wpart * QMM_W_STRIDE + g_wcol;
-      w_s[w_base + 0u * QMM_W_STRIDE] = scale * float(packed & 0xFFu) + bias;
+      w_s[w_base + 0u * QMM_W_STRIDE] = scale * NIB_F32(packed & 0xFFu) + bias;
       w_s[w_base + 1u * QMM_W_STRIDE] =
-          scale * float((packed >> 8u) & 0xFFu) + bias;
+          scale * NIB_F32((packed >> 8u) & 0xFFu) + bias;
       w_s[w_base + 2u * QMM_W_STRIDE] =
-          scale * float((packed >> 16u) & 0xFFu) + bias;
-      w_s[w_base + 3u * QMM_W_STRIDE] = scale * float(packed >> 24u) + bias;
+          scale * NIB_F32((packed >> 16u) & 0xFFu) + bias;
+      w_s[w_base + 3u * QMM_W_STRIDE] = scale * NIB_F32(packed >> 24u) + bias;
       w_s[w_base + 4u * QMM_W_STRIDE] =
-          scale * float(packed_hi & 0xFFu) + bias;
+          scale * NIB_F32(packed_hi & 0xFFu) + bias;
       w_s[w_base + 5u * QMM_W_STRIDE] =
-          scale * float((packed_hi >> 8u) & 0xFFu) + bias;
+          scale * NIB_F32((packed_hi >> 8u) & 0xFFu) + bias;
       w_s[w_base + 6u * QMM_W_STRIDE] =
-          scale * float((packed_hi >> 16u) & 0xFFu) + bias;
+          scale * NIB_F32((packed_hi >> 16u) & 0xFFu) + bias;
       w_s[w_base + 7u * QMM_W_STRIDE] =
-          scale * float(packed_hi >> 24u) + bias;
+          scale * NIB_F32(packed_hi >> 24u) + bias;
 #else
-      // One packed word per lane covers the 16x32 weight tile.
-      uint packed = column_ok
-          ? input_w.values[w_row + k_base / 8u + g_wpart] : 0u;
-      uint w_base = 8u * g_wpart * QMM_W_STRIDE + g_wcol;
-      w_s[w_base + 0u * QMM_W_STRIDE] = scale * float(packed & 0xFu) + bias;
-      w_s[w_base + 1u * QMM_W_STRIDE] =
-          scale * float((packed >> 4u) & 0xFu) + bias;
-      w_s[w_base + 2u * QMM_W_STRIDE] =
-          scale * float((packed >> 8u) & 0xFu) + bias;
-      w_s[w_base + 3u * QMM_W_STRIDE] =
-          scale * float((packed >> 12u) & 0xFu) + bias;
-      w_s[w_base + 4u * QMM_W_STRIDE] =
-          scale * float((packed >> 16u) & 0xFu) + bias;
-      w_s[w_base + 5u * QMM_W_STRIDE] =
-          scale * float((packed >> 20u) & 0xFu) + bias;
-      w_s[w_base + 6u * QMM_W_STRIDE] =
-          scale * float((packed >> 24u) & 0xFu) + bias;
-      w_s[w_base + 7u * QMM_W_STRIDE] =
-          scale * float(packed >> 28u) + bias;
+      // STEP_K/16 packed words per lane cover the STEP_K x 32 weight
+      // tile (one word at the shipped STEP_K=16: word == g_wpart).
+#ifdef SG4
+#if STEP_K == 16
+      {
+        // 128 lanes: each lane dequantizes four nibbles of one word.
+        uint word = g_wpart >> 1u;
+        uint nib_base = 4u * (g_wpart & 1u);
+        uint packed = column_ok
+            ? input_w.values[w_row + k_base / 8u + word] : 0u;
+        for (uint n = 0u; n < 4u; ++n) {
+          uint nib = nib_base + n;
+          w_s[(8u * word + nib) * QMM_W_STRIDE + g_wcol] =
+              scale * NIB_F32((packed >> (4u * nib)) & 0xFu) + bias;
+        }
+      }
+#else
+      // 128 lanes, four 32-lane parts: one packed word per part covers
+      // 32 K; a second iteration covers 64 K.
+      for (uint wi = 0u; wi < STEP_K / 32u; ++wi) {
+        uint word = g_wpart + 4u * wi;
+        uint packed = column_ok
+            ? input_w.values[w_row + k_base / 8u + word] : 0u;
+        uint w_base = 8u * word * QMM_W_STRIDE + g_wcol;
+        w_s[w_base + 0u * QMM_W_STRIDE] = scale * NIB_F32(packed & 0xFu) + bias;
+        w_s[w_base + 1u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 4u) & 0xFu) + bias;
+        w_s[w_base + 2u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 8u) & 0xFu) + bias;
+        w_s[w_base + 3u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 12u) & 0xFu) + bias;
+        w_s[w_base + 4u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 16u) & 0xFu) + bias;
+        w_s[w_base + 5u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 20u) & 0xFu) + bias;
+        w_s[w_base + 6u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 24u) & 0xFu) + bias;
+        w_s[w_base + 7u * QMM_W_STRIDE] =
+            scale * NIB_F32(packed >> 28u) + bias;
+      }
+#endif
+#else
+      for (uint wi = 0u; wi < STEP_K / 16u; ++wi) {
+        uint word = g_wpart + 2u * wi;
+        uint packed = column_ok
+            ? input_w.values[w_row + k_base / 8u + word] : 0u;
+        uint w_base = 8u * word * QMM_W_STRIDE + g_wcol;
+        w_s[w_base + 0u * QMM_W_STRIDE] = scale * NIB_F32(packed & 0xFu) + bias;
+        w_s[w_base + 1u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 4u) & 0xFu) + bias;
+        w_s[w_base + 2u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 8u) & 0xFu) + bias;
+        w_s[w_base + 3u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 12u) & 0xFu) + bias;
+        w_s[w_base + 4u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 16u) & 0xFu) + bias;
+        w_s[w_base + 5u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 20u) & 0xFu) + bias;
+        w_s[w_base + 6u * QMM_W_STRIDE] =
+            scale * NIB_F32((packed >> 24u) & 0xFu) + bias;
+        w_s[w_base + 7u * QMM_W_STRIDE] =
+            scale * NIB_F32(packed >> 28u) + bias;
+      }
+#endif
 #endif
 #ifdef X_BF16
       // X_WORDS half-word loads per lane cover the TILE_ROWS x 16 x tile.
@@ -499,8 +585,13 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
     }
     barrier();
     if (column_ok) {
+#ifdef SG4
+      for (uint pass = 0u; pass < 2u; ++pass) {
+        uint r = 2u * g_wpart + pass;
+#else
       for (uint pass = 0u; pass < 4u; ++pass) {
         uint r = 4u * g_wpart + pass;
+#endif
         uint row = row_base + rb * MAT + r;
         if (row < params.matrix_m) {
 #ifdef X_BF16
@@ -581,38 +672,38 @@ void qmm_tile_two(uint tile_row, uint tile_col, uint b) {
       uint w_base = 8u * g_wpart * TILE_N + g_wcol;
       {
         uint packed = input_w.values[w_row0 + k_base / 8u + g_wpart];
-        w_s[w_base + 0u * TILE_N] = scale0 * float(packed & 0xFu) + bias0;
+        w_s[w_base + 0u * TILE_N] = scale0 * NIB_F32(packed & 0xFu) + bias0;
         w_s[w_base + 1u * TILE_N] =
-            scale0 * float((packed >> 4u) & 0xFu) + bias0;
+            scale0 * NIB_F32((packed >> 4u) & 0xFu) + bias0;
         w_s[w_base + 2u * TILE_N] =
-            scale0 * float((packed >> 8u) & 0xFu) + bias0;
+            scale0 * NIB_F32((packed >> 8u) & 0xFu) + bias0;
         w_s[w_base + 3u * TILE_N] =
-            scale0 * float((packed >> 12u) & 0xFu) + bias0;
+            scale0 * NIB_F32((packed >> 12u) & 0xFu) + bias0;
         w_s[w_base + 4u * TILE_N] =
-            scale0 * float((packed >> 16u) & 0xFu) + bias0;
+            scale0 * NIB_F32((packed >> 16u) & 0xFu) + bias0;
         w_s[w_base + 5u * TILE_N] =
-            scale0 * float((packed >> 20u) & 0xFu) + bias0;
+            scale0 * NIB_F32((packed >> 20u) & 0xFu) + bias0;
         w_s[w_base + 6u * TILE_N] =
-            scale0 * float((packed >> 24u) & 0xFu) + bias0;
-        w_s[w_base + 7u * TILE_N] = scale0 * float(packed >> 28u) + bias0;
+            scale0 * NIB_F32((packed >> 24u) & 0xFu) + bias0;
+        w_s[w_base + 7u * TILE_N] = scale0 * NIB_F32(packed >> 28u) + bias0;
       }
       {
         uint packed = input_w.values[w_row1 + k_base / 8u + g_wpart];
-        w_s2[w_base + 0u * TILE_N] = scale1 * float(packed & 0xFu) + bias1;
+        w_s2[w_base + 0u * TILE_N] = scale1 * NIB_F32(packed & 0xFu) + bias1;
         w_s2[w_base + 1u * TILE_N] =
-            scale1 * float((packed >> 4u) & 0xFu) + bias1;
+            scale1 * NIB_F32((packed >> 4u) & 0xFu) + bias1;
         w_s2[w_base + 2u * TILE_N] =
-            scale1 * float((packed >> 8u) & 0xFu) + bias1;
+            scale1 * NIB_F32((packed >> 8u) & 0xFu) + bias1;
         w_s2[w_base + 3u * TILE_N] =
-            scale1 * float((packed >> 12u) & 0xFu) + bias1;
+            scale1 * NIB_F32((packed >> 12u) & 0xFu) + bias1;
         w_s2[w_base + 4u * TILE_N] =
-            scale1 * float((packed >> 16u) & 0xFu) + bias1;
+            scale1 * NIB_F32((packed >> 16u) & 0xFu) + bias1;
         w_s2[w_base + 5u * TILE_N] =
-            scale1 * float((packed >> 20u) & 0xFu) + bias1;
+            scale1 * NIB_F32((packed >> 20u) & 0xFu) + bias1;
         w_s2[w_base + 6u * TILE_N] =
-            scale1 * float((packed >> 24u) & 0xFu) + bias1;
+            scale1 * NIB_F32((packed >> 24u) & 0xFu) + bias1;
         w_s2[w_base + 7u * TILE_N] =
-            scale1 * float(packed >> 28u) + bias1;
+            scale1 * NIB_F32(packed >> 28u) + bias1;
       }
       barrier();
 
