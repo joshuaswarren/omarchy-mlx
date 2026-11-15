@@ -279,7 +279,8 @@ bool gemv_token_multi_enabled(const Device& device);
 // MLX_OMARCHY_FUSED_GEMV.
 bool fused_trio_enabled(const Device& device);
 
-// Validates a planned (query, key) RoPE pair against the FastTrioRopePairF16
+// Validates a planned (query, key) RoPE pair against the
+// FastTrioRopePairF16/FastTrioRopePairBF16
 // rope-pair contract, allocates the outputs, prepares the keys-side
 // producer-direct KV window when one is planned, and records the ONE
 // dispatch that rotates both tensors with the near-copied fast_rope

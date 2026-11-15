@@ -9632,8 +9632,14 @@ bool dispatch_rope_pair(
     const Stream& stream) {
   auto& encoder = get_command_encoder(stream);
   const auto& caps = encoder.device().capabilities();
+  array& q_node = nodes[0];
+  array& k_node = nodes[1];
+  // bf16 storage rides the int16-typed block (shader_int16), f16 the
+  // float16 block; the 8-binding limit is dtype-independent.
+  const bool bf16 = q_node.dtype() == bfloat16;
   if (encoder.device().compute().binding_limit() < 8 ||
-      !caps.shader_float16 || !caps.storage_buffer_16bit_access) {
+      !caps.storage_buffer_16bit_access ||
+      (bf16 ? !caps.shader_int16 : !caps.shader_float16)) {
     return false;
   }
   static int trio_refuse_trace = 0;
@@ -9647,8 +9653,6 @@ bool dispatch_rope_pair(
     }
     return false;
   };
-  array& q_node = nodes[0];
-  array& k_node = nodes[1];
   const auto& rope =
       static_cast<const mlx::core::fast::RoPE&>(q_node.primitive());
   const auto& rope_k =
@@ -9767,9 +9771,11 @@ bool dispatch_rope_pair(
     }
     return refuse("partner input not settled");
   }
-  if (q_node.dtype() != float16 || k_node.dtype() != float16 ||
-      q_in.dtype() != float16 || k_in.dtype() != float16) {
-    return refuse("dtype not f16");
+  const Dtype pair_dtype = q_node.dtype();
+  if (k_node.dtype() != pair_dtype || q_in.dtype() != pair_dtype ||
+      k_in.dtype() != pair_dtype ||
+      (pair_dtype != float16 && pair_dtype != bfloat16)) {
+    return refuse("dtype not f16/bf16");
   }
   if (rope.state() != rope_k.state() || k_node.inputs().size() != 2) {
     return refuse("rope state mismatch");
@@ -9908,7 +9914,7 @@ bool dispatch_rope_pair(
     auto& window = *kv_window;
     if (window.node.data_shared_ptr() != nullptr ||
         window.base.data_shared_ptr() == nullptr ||
-        window.base.dtype() != float16 ||
+        (window.base.dtype() != float16 && window.base.dtype() != bfloat16) ||
         !window.base.flags().row_contiguous ||
         window.base.size() != window.base.data_size() ||
         window.base.offset() % window.base.itemsize() != 0 ||
@@ -9968,7 +9974,8 @@ bool dispatch_rope_pair(
       wo_filler,
       binding(offset)};
   encoder.dispatch_compute(
-      ComputeKernel::FastTrioRopePairF16,
+      bf16 ? ComputeKernel::FastTrioRopePairBF16
+           : ComputeKernel::FastTrioRopePairF16,
       bindings,
       params,
       compute_dispatch_group_count(params.count));

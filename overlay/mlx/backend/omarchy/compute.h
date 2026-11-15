@@ -653,6 +653,7 @@ enum class ComputeKernel : uint16_t {
   // decode tok/s on Honeykrisp. Append-only profile ids.
   FastTrioNormF16,
   FastTrioRopePairF16,
+  FastTrioRopePairBF16,
   FastTrioSwigluF16,
   // Symmetric-int8 matmul with runtime-quantized activations
   // (shaders/int8_matmul.comp); fast::Int8Matmul. Append-only profile id.

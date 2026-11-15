@@ -1738,15 +1738,16 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
   }
   // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
-  // scalar offset input, one stream, float16 storage, identical rope
+  // scalar offset input, one stream, float16 OR bfloat16 storage (both
+  // members of a pair must share the dtype; a mixed pair is refused at
+  // runtime and un-planned), identical rope
   // state (dims, traditional, base, scale, forward; no freqs), and no
   // passthrough tail (dims == last-axis extent) fuse into ONE
-  // FastTrioRopePairF16 rope-pair dispatch when the first member evaluates.
+  // FastTrioRopePairF16/FastTrioRopePairBF16 rope-pair dispatch when the
+  // first member evaluates.
   // The keys side keeps any planned producer-direct KV window; the
   // query side must not be one. Any runtime refusal un-plans the pair
   // and both nodes take the ordinary RoPE path unchanged.
-  // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
-  // not by this f16-only rope-pair plan.)
   // Per node: MLX_OMARCHY_FUSED_TRIO for the device that executes it,
   // independent of MLX_OMARCHY_FUSED_GEMV.
   {
@@ -1768,7 +1769,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         trace.rej_node_offset += 1;
         continue;
       }
-      if (node.dtype() != float16) {
+      if (node.dtype() != float16 && node.dtype() != bfloat16) {
         trace.rej_node_dtype += 1;
         continue;
       }

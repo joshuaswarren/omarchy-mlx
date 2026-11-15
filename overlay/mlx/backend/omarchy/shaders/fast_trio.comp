@@ -38,7 +38,9 @@
 // decode epilogue ops stay one file without touching qmm_vec.comp.
 //
 // Honeykrisp contract notes carried over unchanged: float16 rides the
-// typed 16-bit storage block (the proven form for this dtype); every
+// typed 16-bit storage block (the proven form for this dtype) and the
+// bf16 rope-pair mode rides the same block backed by uint16_t with the
+// swiglu.comp RNE bf16_store; every
 // output element is written exactly once by exactly one invocation, with
 // per-element stores only (no read-modify-write of a shared 32-bit word
 // anywhere, which is why the swiglu mode stores four scalars instead of
@@ -48,10 +50,32 @@
 #ifdef USE_FP16
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#elif defined(USE_BF16) && defined(TRIO_ROPE_PAIR)
+// bf16 rides the RoPE pair mode only; the norm and swiglu modes keep the
+// float16 decode path (their eager compositions round to float16).
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #else
 #error "fast_trio.comp is built for the float16 decode path only"
 #endif
 #include "omarchy_half.h"
+
+#ifdef USE_BF16
+#define STORAGE_T uint16_t
+#define STORE_VALUE(v) bf16_store(v)
+// RNE float32->bf16, NaN quieted - the same rounding the bf16 cast and
+// elementwise kernels apply (the swiglu.comp form).
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#else
+#define STORAGE_T float16_t
+#define STORE_VALUE(v) float16_t(v)
+#endif
 
 #if !defined(TRIO_NORM) && !defined(TRIO_ROPE_PAIR) && !defined(TRIO_SWIGLU)
 #error "define exactly one of TRIO_NORM, TRIO_ROPE_PAIR, TRIO_SWIGLU"
@@ -60,25 +84,25 @@
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer InQGate {
-  float16_t values[];
+  STORAGE_T values[];
 } in_q_gate;
 #ifdef TRIO_NORM
 layout(set = 0, binding = 1, std430) readonly buffer WeightUp {
-  float16_t values[];
+  STORAGE_T values[];
 } weight_up;
 layout(set = 0, binding = 3, std430) writeonly buffer OutQ {
-  float16_t values[];
+  STORAGE_T values[];
 } out_q;
 #endif
 #ifdef TRIO_ROPE_PAIR
 layout(set = 0, binding = 2, std430) readonly buffer InK {
-  float16_t values[];
+  STORAGE_T values[];
 } in_k;
 layout(set = 0, binding = 3, std430) writeonly buffer OutQ {
-  float16_t values[];
+  STORAGE_T values[];
 } out_q;
 layout(set = 0, binding = 4, std430) writeonly buffer OutK {
-  float16_t values[];
+  STORAGE_T values[];
 } out_k;
 layout(set = 0, binding = 7, std430) readonly buffer Offsets {
   int values[];
@@ -86,16 +110,16 @@ layout(set = 0, binding = 7, std430) readonly buffer Offsets {
 #endif
 #ifdef TRIO_SWIGLU
 layout(set = 0, binding = 1, std430) readonly buffer WeightUp {
-  float16_t values[];
+  STORAGE_T values[];
 } weight_up;
 layout(set = 0, binding = 4, std430) writeonly buffer SwigluOut {
-  float16_t values[];
+  STORAGE_T values[];
 } swiglu_out;
 layout(set = 0, binding = 5, std430) writeonly buffer SigmoidOut {
-  float16_t values[];
+  STORAGE_T values[];
 } sigmoid_out;
 layout(set = 0, binding = 6, std430) writeonly buffer SiluOut {
-  float16_t values[];
+  STORAGE_T values[];
 } silu_out;
 #endif
 
@@ -130,6 +154,27 @@ shared float block_values[256];
 #endif
 
 #ifdef TRIO_ROPE_PAIR
+#ifdef USE_BF16
+float rope_round(float value) {
+  // The eager bf16 RoPE composition rounds every intermediate to bf16
+  // with the same RNE cast the standalone bf16 kernel applies.
+  return uintBitsToFloat(uint(bf16_store(value)) << 16u);
+}
+
+float rope_load(uint abs_index, bool q_side) {
+  uint bits = q_side ? uint(in_q_gate.values[abs_index])
+                     : uint(in_k.values[abs_index]);
+  return uintBitsToFloat(bits << 16u);
+}
+
+void rope_store(uint abs_index, float value, bool q_side) {
+  if (q_side) {
+    out_q.values[abs_index] = bf16_store(value);
+  } else {
+    out_k.values[abs_index] = bf16_store(value);
+  }
+}
+#else
 float rope_round(float value) {
   // The eager RoPE composition stores every intermediate at storage
   // precision; reproduce that rounding exactly like fast_rope.comp.
@@ -148,6 +193,7 @@ void rope_store(uint abs_index, float value, bool q_side) {
     out_k.values[abs_index] = float16_t(value);
   }
 }
+#endif
 
 // One side of the RoPE pair: near-copy of the fast_rope.comp forward,
 // scalar-offset, no-freqs, non-passthrough branch (traditional and
