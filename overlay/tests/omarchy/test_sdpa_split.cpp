@@ -395,11 +395,11 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 9000, m1, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 500, "", 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 8, 1, 9000, m1max, 0, 8192, 256));
-  // Unset: pass 1 launches one workgroup per key-value head and 128-key block; the variant is on while that count is at most 16 on G13G and 64 on G13C.
+  // Unset: pass 1 launches one workgroup per key-value head and 128-key block; the variant is on while that count is at most 16 on G13G, 64 on G13C and 68 on G14C.
   // The limit is one block wide: 128 keys are one block, 129 are two.
   CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1) == 16);
   CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1max) == 64);
-  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m2max) == 0);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m2max) == 68);
   CHECK(omarchy::sdpa_split_pv_wide_max_workgroups("") == 0);
   struct Edge { uint32_t kv_heads; uint32_t last_on; };
   // G13G (16 workgroups): 1 head 2048 keys, 2 heads 1024 (the Qwen3.8-2B), 3 heads 640, 4 heads 512 (the Qwen3.8-9B), 8 heads 256.
@@ -412,10 +412,14 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
     CHECK(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m1max, 0, 8192, 256));
     CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m1max, 0, 8192, 256));
   }
+  // G14C (68 workgroups): 1 head 8704 keys, 2 heads 4352 (the 2B), 3 heads 2816, 4 heads 2176 (the 9B at 2048 context), 8 heads 1024.
+  for (Edge e : {Edge{1, 8704}, Edge{2, 4352}, Edge{3, 2816}, Edge{4, 2176}, Edge{8, 1024}}) {
+    CHECK(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on, m2max, 0, 8192, 256));
+    CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, e.kv_heads, -1, e.last_on + 1, m2max, 0, 8192, 256));
+  }
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 320, m1max, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 4097, m1max, 0, 8192, 256));  // the explicit flag still selects it past the limit
-  // G14C and unknown parts have no width-256 default yet; no heads or no keys must not pass on a count of zero.
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m2max, 0, 8192, 256));
+  // Unknown parts have no width-256 default; no heads or no keys must not pass on a count of zero.
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "", 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256));
