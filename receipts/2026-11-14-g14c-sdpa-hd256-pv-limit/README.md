@@ -20,6 +20,10 @@ Method: `receipts/2026-11-12-sdpa-hd256-kv-heads-budget`. The count is key-value
 
 The edge is one block wide at 1 key-value head (68 wins, 69 loses, eight consecutive counts 68 to 75 sort once). At 4 key-value heads the variant wins at 64 and 68. At 2 key-value heads the op rows win at 64 and lose at 76 (no op row at 68); the model rows add wins at 34 and 66 workgroups. The 2 and 4 head edges lie between 68 or 66 and 76.
 
+## 16-inch M1 Max (G13C) check (`logs/run-s13-g13c.log`)
+
+Same op rows on a 16-inch M1 Max (G13C, limit 64 already in main), same wheel. The variant wins at 32 and 64 workgroups (+19.1 to +31.9 percent at 1, 2 and 4 key-value heads) and loses from 65 (-7.8 to -18.6 percent, 65 to 128 workgroups). The existing limit of 64 stands; this change does not touch it. The host cut the start of the 2 key-value head row at 64 workgroups in the log; its gain (+23.3 percent) is still readable.
+
 ## Float64 gate (`logs/run-f64.log`)
 
 bf16 q, k and v, 8 shapes (8/2 heads at 512 to 4096 keys, 16/4 at 2048 and 4096, 4/1 at 4096), score sigma 0.5 and 2.0, each arm against a numpy float64 reference computed from the same inputs. The max abs error of the variant equals the error of the stock pass 1 in all 16 rows (0.00006 to 0.0039, the bf16 output rounding). The two arms differ by at most one bf16 ULP (0.00098 at 2176 keys, sigma 2.0).
