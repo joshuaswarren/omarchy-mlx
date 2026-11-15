@@ -1116,6 +1116,10 @@ enum class ComputeKernel : uint16_t {
   // Value-phase variant of the width-256 split-K pass 1, four query heads per key-value head (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4
   // -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Appended to keep profile kernel ids stable.
   SdpaDecodeSplitP1VR4BF16Hd256,
+  // 4-bit group-128 decode GEMV: the word-format fast path built with
+  // QGROUP=128 (constant-shift unpack, scale/bias stride K/128). Appended to
+  // keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16G128,
   Count,
 };
 
