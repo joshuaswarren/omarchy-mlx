@@ -573,12 +573,15 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
 }
 
 // The fused GatedDelta conv + delta + gated norm op (fast::gdn_conv_delta_update with the gated norm folded in, the MLX_OMARCHY_GDN_CONV_DELTA value 2)
-// runs by default on the 13-inch (Apple M1, G13G) only: the 2B decode there measured +0.51 percent (5 of 5 pairs faster, identical tokens, dispatches per
-// token 251 to 215, 5 pairs x 128 tokens at ctx 512; receipts on the 13-inch ~/scratch/w7x-decode-gap/results/fusion-ab-jwm1-w7q-epilogue2.out). The 16-inch
-// (G13C) and the 14-inch (G14C) are unmeasured, so they keep the stock route until their own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value
-// overrides this everywhere.
+// runs by default on the 13-inch (Apple M1, G13G) and the 14-inch (Apple M2 Max, G14C). The 13-inch 2B decode measured +0.51 percent (5 of 5 pairs faster,
+// identical tokens, dispatches per token 251 to 215, 5 pairs x 128 tokens at ctx 512).
+// The 14-inch (receipts/2026-11-14-g14c-gdn-conv-delta, ABBA, 128 tokens, identical tokens in every pair): Qwen3.8-2B +2.00 percent at ctx 512 and +1.22 at
+// ctx 2048; Qwen3.8-9B -0.08 (flat) and -0.14 (0.03 ms per token; both flag arms slower than both default arms: a small steady loss, not noise). The 2B gain is
+// larger and one rule covers both models.
+// The 16-inch (G13C) is unmeasured, so it keeps the stock route until its own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this
+// everywhere.
 inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13G") != std::string::npos;
+  return device_name.find("G13G") != std::string::npos || device_name.find("G14C") != std::string::npos;
 }
 
 // The one resolver for the fused GatedDelta conv + delta op's mode: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated
@@ -607,6 +610,15 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// The fused f16 decode SDPA kernel (sdpa_decode_native*.comp) uses no cooperative matrix, but its gate has always required one,
+// and the M1/M2 parts keep that gate until their own numbers exist. On G16S (Apple M4 Pro, Borealis, no cooperative matrix) the
+// gate is 32-wide subgroups with basic, arithmetic and shuffle operations, a 1024-lane workgroup and the shared stream; there the
+// fused kernel measured 586 -> 177 microseconds per call at 1100 keys and 1872 -> 308 at 4096 keys against the three-dispatch
+// composition (16 query / 8 kv heads, width 128). Pure.
+inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
+  return device_name.find("G16S") != std::string::npos;
+}
+
 // Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.
 // 0 means the fused kernel stays the default. The route costs 79 to 90 microseconds per call up to 512 keys (two dispatches) and 89 to 113 at 1024 keys, and it wins by more as the cache grows,
 // so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent
@@ -615,11 +627,18 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 //   G13C (Apple M1 Max): 320 keys (chain 107.3 against 82.5, independent 84.0 against 78.2);
 //   G14C (Apple M2 Max): 320 keys with the value-phase pass 1 (chain 89.7 against 64.3; in the independent shape the fused kernel is 2.6 microseconds faster, 55.6 against 58.2, receipts/2026-10-24-sdpa-split-pv); the plain pass 1 first won at 448 keys (chain 127.2 against 86.8, independent 79.4 against 78.6), and at 320 keys it still wins the chain (89.7 against 85.5).
 // Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated: +21.9 percent (G13G), +19.5 percent (G13C), +12.8 percent (G14C). An unmeasured part keeps the
-// fused kernel. Pure.
+// fused kernel.
+// The same sweep (receipts/2026-11-13-sdpa-split-g13s-g14g, chain and independent microseconds per call, fused against split):
+//   G13S (Apple M1 Pro): 192 keys (128: chain 55.6 against 96.4; 192: chain 114.4 against 91.2, independent 117.2 against 90.6);
+//   G14G (Apple M2): 192 keys (128: chain 86.7 against 88.1; 192: chain 154.8 against 89.2, independent 153.7 against 88.3).
+// Qwen3-4B 4-bit decode at a 443-token prompt, 128 generated: +28.2 percent (G13S, 32.4 to 41.5 tokens per second), +20.0 percent (G14G, 17.6 to 21.1),
+// tokens identical. Pure.
 inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G13G") != std::string::npos) return 128;
   if (device_name.find("G13C") != std::string::npos) return 320;
   if (device_name.find("G14C") != std::string::npos) return 320;
+  if (device_name.find("G13S") != std::string::npos) return 192;
+  if (device_name.find("G14G") != std::string::npos) return 192;
   return 0;
 }
 
@@ -664,16 +683,26 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
 //
-// Per-chip default (width 256, decode measured with the 2B full-attention layers, receipts fusion-ab-jwm1-w7q-sdpa-pv256* on the 13-inch):
-//   G13G (Apple M1): on up to 768 keys. Measured decode change by context: +1.94 and +1.26 percent at 512 keys (two rows, 10 of 10 pairs faster),
-//     +1.43 at 640, +1.63 at 768 (5 of 5 faster each), +0.91 unresolved at 896 (2 of 5 slower), -1.18 at 1024, -2.09 at 2048, -2.75 at 4096.
-//   G13C, G14C and every other part: no default yet (the width-128 variant's default is measured; the width-256 one is not).
-inline uint32_t sdpa_split_pv_wide_max_keys(const std::string& device_name) {
-  if (device_name.find("G13G") != std::string::npos) return 768;
-  return 0;
+// Per-chip default: pass 1 launches one workgroup per key-value head and 128-key block, and the variant wins while that count is at most a per-chip limit and
+// loses above it: 16 on G13G and 64 on G13C, two workgroups per GPU core (8 and 32 cores). The limit is the measured rule, not a fit: every op row (random bf16, one
+// decode query, forced flag, ABBA blocks) sorts that way at 1, 2, 3, 4 and 8 key-value heads, and it is one block wide (1 key-value head on G13G: +26.68 percent at
+// 2048 keys, 16 workgroups, then -6.91 at 2049, 17; on G13C: +22.48 at 8192 keys, 64, then -5.62 at 8193, 65). A decode step at context N attends N + 1 keys, so the
+// model's own call crosses a block boundary one token early; measured in that call: Qwen3.8-2B (2 key-value heads) on G13C +28.42 percent at 3073 keys (50
+// workgroups) and -7.06 at 4097 (66), Qwen3.8-9B (4 key-value heads) +30.99 at 1537 (52) and -7.78 at 2049 (68), on G13G the 2B +29.57 at 769 (14) and -8.19 at 1025 (18),
+// the 9B +30.62 at 385 (16) and -13.95 at 769 (28). Decode rows and the full table are in receipts/2026-11-12-sdpa-hd256-kv-heads-budget. The count assumes 128-key blocks,
+// which is what these parts run (the 64-key block route is off by default there).
+//   G14C (M2 Max): 68. Op rows on the M2 Max (receipts/2026-11-14-g14c-sdpa-hd256-pv-limit) win +19 to +29 percent from 32 workgroups up to 68 and lose -10 to -16 percent
+//   from 69 up. The edge is one block wide at 1 key-value head (+19.03 percent at 8704 keys, 68 workgroups, then -12.79 at 8832, 69); 4 key-value heads win at 64 and 68, 2 key-value
+//   heads win at 64 (and 34 and 66 in the model rows) and both lose at 76, the first count tried above 68. The 68 is not two workgroups per core; it is the measured edge. Models: Qwen3.8-2B +3.4 percent at 512 and +4.66 at 2048 context, Qwen3.8-9B +1.57 and +1.47.
+//   Every other part: no default (the width-128 variant's default is measured; the width-256 one is not).
+inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) return 16u;
+  if (device_name.find("G13C") != std::string::npos) return 64u;
+  if (device_name.find("G14C") != std::string::npos) return 68u;
+  return 0u;
 }
 
-inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_t k_len, const std::string& device_name,
+inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, int pv_env, uint32_t k_len, const std::string& device_name,
                                uint32_t v_offset, int64_t v_head_stride, int64_t v_key_stride) {
   if (!(head_dim == 256 && group == 4u && v_offset % 8u == 0u && v_head_stride % 8 == 0 && v_key_stride % 8 == 0)) {
     return false;
@@ -681,9 +710,10 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, int pv_env, uint32_
   if (pv_env > 0) {
     return true;
   }
-  if (pv_env != 0) {  // unset: the per-chip default, measured only where the decode boundary above says so
-    uint32_t max_keys = sdpa_split_pv_wide_max_keys(device_name);
-    return max_keys != 0 && k_len <= max_keys;
+  if (pv_env != 0) {  // unset: the per-chip workgroup limit
+    uint64_t workgroups = static_cast<uint64_t>(kv_heads) * ((static_cast<uint64_t>(k_len) + 127u) / 128u);
+    uint32_t limit = sdpa_split_pv_wide_max_workgroups(device_name);
+    return workgroups != 0 && workgroups <= limit;  // no heads or no keys never selects it; a part with limit 0 never does either
   }
   return false;  // "0"
 }

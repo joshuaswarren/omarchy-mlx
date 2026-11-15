@@ -4078,7 +4078,8 @@ static int decode_path_override(const char* name) {
 // Short-pass GEMV route for 4-bit group-64 qmm (MLX_OMARCHY_QMV_SMALL_T, read
 // live): the largest pass length T whose [1, T, K] bf16 x runs as batch-shared
 // decode GEMV (one dispatch per block of 4 rows) instead of the coopmat prefill
-// tile. The cap is 4 on every part but G13C, where it is 8 (qmv_small_t_device_cap):
+// tile. The cap is 4 on every part but G13C and G16S, where it is 8
+// (qmv_small_t_device_cap):
 // above 4 a second GEMV block costs more than the tile on G13G (PR #296). The
 // request is clamped to 8 here and to the part's cap at the call site. Unset,
 // empty or 0 keeps the shipped route. Each row is
@@ -4100,7 +4101,9 @@ static int qmv_small_t_max_rows() {
 static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
   if (requested_max < 2) return 0;
   const std::string& name = encoder.device().capabilities().device_name;
-  int cap = (name.find("G13C") != std::string::npos) ? 8 : 4;
+  const bool wide = name.find("G13C") != std::string::npos ||
+      name.find("G16S") != std::string::npos;
+  int cap = wide ? 8 : 4;
   return std::min(requested_max, cap);
 }
 
@@ -9241,7 +9244,7 @@ bool dispatch_quantized_gemv_group(
     }
     const int n = w.shape(0);
     if (n <= 0 || w.shape(1) != k / 8 || scales.shape(0) != n ||
-        scales.shape(1) != k / 64 || node.size() != static_cast<size_t>(n) ||
+        scales.shape(1) != k / 64 || node.size() != static_cast<size_t>(rows) * static_cast<size_t>(n) ||
         !whole_dense(w, w.size()) || !whole_dense(scales, scales.size()) ||
         !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
         !input_ready(scales, stream) || !input_ready(biases, stream)) {
@@ -9253,19 +9256,17 @@ bool dispatch_quantized_gemv_group(
     if (members[i].epilogue) {
       const array& add = *members[i].epilogue;
       const array& addend = *members[i].addend;
-      // Token route: the epilogue spans every token row; the addend is
-      // either the full (rows, n) residual or the row-broadcast (n)
-      // bias vector (the shader takes the row stride from in_strides).
-      size_t addend_expected =
-          token_route && addend.size() != node.size()
-          ? static_cast<size_t>(rows) * node.size()
-          : node.size();
-      if (add.dtype() != dtype ||
-          add.size() != static_cast<size_t>(rows) * node.size() ||
+      // node.size() is rows * n. Token route: the epilogue spans every
+      // token row; the addend is either the full (rows, n) residual or
+      // the row-broadcast (n) bias vector (the shader takes the row
+      // stride from in_strides).
+      const size_t row_size = static_cast<size_t>(n);
+      const bool broadcast_addend =
+          token_route && addend.size() == row_size;
+      size_t addend_expected = broadcast_addend ? row_size : node.size();
+      if (add.dtype() != dtype || add.size() != node.size() ||
           add.primitive().stream() != stream || addend.dtype() != dtype ||
-          (addend.size() != node.size() &&
-           addend.size() !=
-               static_cast<size_t>(rows) * node.size()) ||
+          (addend.size() != node.size() && !broadcast_addend) ||
           !whole_dense(addend, addend_expected) ||
           !input_ready(addend, stream)) {
         return false;
@@ -13004,9 +13005,9 @@ void GatedDeltaUpdate::eval_gpu(
   // MLX_OMARCHY_GDN_GQA_DECODE=0 restores the expansion.
   static const bool gdn_gqa_decode =
       decode_path_override("MLX_OMARCHY_GDN_GQA_DECODE") != 0;
-  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read once per process); the untiled prefetch
+  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read live, so a test can flip it between routes); the untiled prefetch
   // kernel needs the state offsets to be multiples of 4 (checked again at dispatch).
-  static const bool gdn_pf_env =
+  const bool gdn_pf_env =
       decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   const bool f32_gqa_route = decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32;
   // The f32-A_log route (Qwen3.5-9B) with Hk != Hv: the untiled prefetch kernel with native GQA
@@ -14930,7 +14931,7 @@ void GdnConvDeltaUpdate::eval_gpu(
   const bool bf16a_untiled_default =
       decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
       omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
-  static const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
+  const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
   const bool dense_inputs = [&] {
     for (const auto& x : inputs) {
@@ -16018,13 +16019,22 @@ void ScaledDotProductAttention::eval_gpu(
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
   constexpr uint32_t kDecodeSharedBytes =
       (32u * 32u + 2u * 128u + 128u * 32u) * sizeof(float);
-  const bool decode_subgroup_ready = decode_caps.cooperative_matrix_f32_8 &&
-      decode_caps.subgroup_size == 32u &&
-      decode_caps.max_compute_work_group_invocations >= 1024u &&
-      decode_caps.max_compute_work_group_size[0] >= 1024u &&
-      decode_caps.max_compute_shared_memory_size >= kDecodeSharedBytes &&
-      (decode_caps.subgroup_operations & kDecodeSubgroupFeatures) ==
-          kDecodeSubgroupFeatures;
+  // The f16 arm needs 32-wide subgroups with basic, arithmetic and shuffle
+  // operations, a 1024-lane workgroup and the shared stream above. The
+  // kernel does not use the cooperative matrix, but the gate keeps
+  // requiring one except on the parts sdpa_decode_f16_without_coopmat_part
+  // names (G16S, where it was measured), so no other part changes route.
+  auto decode_subgroup_gate = [&](const omarchy::CapabilityReport& c) {
+    return (c.cooperative_matrix_f32_8 ||
+            omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&
+        c.subgroup_size == 32u &&
+        c.max_compute_work_group_invocations >= 1024u &&
+        c.max_compute_work_group_size[0] >= 1024u &&
+        c.max_compute_shared_memory_size >= kDecodeSharedBytes &&
+        (c.subgroup_operations & kDecodeSubgroupFeatures) ==
+            kDecodeSubgroupFeatures;
+  };
+  const bool decode_subgroup_ready = decode_subgroup_gate(decode_caps);
   // The composition-exact bf16 arm uses no subgroup operations at all - its
   // per-thread work and barriers need only the 256-thread workgroup and the
   // static shared the arm declares (29,952 bytes at query width 64, 30,720
@@ -16112,6 +16122,11 @@ void ScaledDotProductAttention::eval_gpu(
       do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
       head_dim == 128 && v_dim == head_dim && k_len >= q_len &&
       k_len <= kDecodeBf16StreamKeys;
+  // Verify rows on the split-K route (bf16, causal, batch 1, q_len 2..16, width 128 or 256): one pass-1 and pass-2 pair per row over that row's key
+  // prefix, so each row is bit-equal to the same token decoded alone on the split route. Opt-in: MLX_OMARCHY_SDPA_SPLIT_ROWS, any non-empty value
+  // other than "0". Needs the split route itself to be engaged (MLX_OMARCHY_SDPA_DECODE_SPLIT and the per-chip key threshold).
+  const bool split_rows_route = decode_bf16_probe && do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
+      k_len >= q_len && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_ROWS") > 0;
   // Batched decode (q_len 1, bf16, one-pass): workgroup z walks the batch
   // with per-row base offsets; each row runs the single-row arithmetic, so
   // B > 1 stays bit-identical to the composed route it replaces.
@@ -16140,7 +16155,7 @@ void ScaledDotProductAttention::eval_gpu(
     if (split_wanted && split_device_ready &&
         (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
         q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
-        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && q_len == 1 &&
+        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && (q_len == 1 || split_rows_route) &&
         (head_dim == 128 || head_dim == 256) && v_dim == head_dim && k_len > 0 && 1048577 > k_len &&
         (split_group == 1u || split_group == 2u || split_group == 4u || split_group == 8u) &&
         q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
@@ -16176,15 +16191,9 @@ void ScaledDotProductAttention::eval_gpu(
         const int bk64_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK64");
         const bool bk64 = pv && split_group == 4u && (bk64_env > 0 || (bk64_env < 0 && omarchy::sdpa_split_bk64_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_block_keys = bk64 ? 64u : 128u;
-        const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + split_block_keys - 1u) / split_block_keys;
-        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * static_cast<uint64_t>(head_dim + 2);
-        array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
-        scratch.set_data(allocate_omarchy(scratch.nbytes()));
-        encoder.add_temporary(scratch);
-        std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
         // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
         // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
-        const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, pv_env, static_cast<uint32_t>(k_len),
+        const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, static_cast<uint32_t>(kv_heads), pv_env, static_cast<uint32_t>(k_len),
                                                          decode_caps.device_name, split_params.aux_offset, v.strides()[1], v.strides()[2]);
         omarchy::ComputeKernel split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
         if (split_wide) {
@@ -16203,12 +16212,30 @@ void ScaledDotProductAttention::eval_gpu(
         if (bk64) {
           split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
         }
-        encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
-        std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
-        encoder.dispatch_compute(
-            split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
-                       : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128,
-            split_pass2, split_params, split_params.matrix_m);
+        const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
+        const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
+            : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
+        const uint32_t split_q_offset = split_params.lhs_offset;
+        const uint32_t split_out_offset = split_params.output_offset;
+        const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
+        const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
+        split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
+        // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
+        for (uint32_t row = 0; row < split_rows; ++row) {
+          const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
+          const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
+          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 2);
+          array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
+          scratch.set_data(allocate_omarchy(scratch.nbytes()));
+          encoder.add_temporary(scratch);
+          split_params.matrix_k = row_k;
+          split_params.lhs_offset = split_q_offset + row * split_q_row;
+          split_params.output_offset = split_out_offset + row * split_out_row;
+          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+          std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+          encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+        }
         return;
       }
     }
@@ -16309,14 +16336,18 @@ void ScaledDotProductAttention::eval_gpu(
     params.in_strides[3] = checked_u32(v.strides()[3], tag, out);
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(q), binding(k), binding(v), binding(out)};
+    // The bf16 arm uses neither the cooperative matrix nor subgroup
+    // operations; only the f16 arm depends on the gate above.
+    if (!decode_bf16) {
       omarchy::capsim::require_backed(
           encoder.device(),
           decode_caps,
           decode_subgroup_ready,
           decode_kernel_name(),
-          "cooperative_matrix_fp32_8x8x8+workgroup_limits+"
-          "shared_memory_limit_bytes",
-          encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
+          "cooperative_matrix_fp32_8x8x8+subgroup32_basic_arithmetic_shuffle+"
+          "workgroup_limits+shared_memory_limit_bytes",
+          decode_subgroup_gate(encoder.device().hardware_capabilities()));
+    }
     if (params.flags != 0u) {
       // Native-shape per-block two-pass (f16 only; bf16 always one-pass).
       // The fused kernel keeps one workgroup per head, so its walk runs
@@ -16441,8 +16472,16 @@ void ScaledDotProductAttention::eval_gpu(
       static_cast<uint64_t>(batch) * heads * q_len * k_len;
   const bool score_exceeds_heap_budget = flash_caps.total_memory > 0 &&
       flash_score_elements > flash_caps.total_memory / (4u * sizeof(float));
+  // The composed route binds its whole score matrix: f32 words, or bf16
+  // words under MLX_OMARCHY_SDPA_BF16_FAST. Past the device's storage
+  // binding range (2 GiB - 1 on Borealis) the dispatch is refused, so such
+  // a shape belongs to the flash kernel, which never materializes scores.
+  const uint64_t score_item_bytes = bf16_fast ? 2u : 4u;
+  const bool score_binding_too_large = flash_caps.max_storage_buffer_range > 0 &&
+      flash_score_elements * score_item_bytes > flash_caps.max_storage_buffer_range;
   const bool flash_wants =
-      flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
+      flash_score_elements > (1ull << 30) || score_binding_too_large ||
+      score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
   // Route precedence: the pin and MIN_L are explicit flash overrides
@@ -16524,10 +16563,39 @@ void ScaledDotProductAttention::eval_gpu(
     params.v_batchstride = checked_u32(v.strides()[0], tag, out);
     std::array<omarchy::ComputeBinding, 4> flash_bindings{
         binding(q), binding(k), binding(v), binding(out)};
+    // A capability simulation can route a shape here (the score-binding
+    // and heap checks read the simulated limits); the kernel itself needs
+    // the hardware's workgroup and shared memory.
+    {
+      const auto& hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          flash_caps,
+          flash_route_ready,
+          "SdpaPrefillFlashBF16Hd128",
+          "workgroup_limits+shared_memory_limit_bytes",
+          hw.max_compute_work_group_size[0] >= 256u &&
+              hw.max_compute_work_group_invocations >= 256u &&
+              hw.max_compute_shared_memory_size >= 28928u);
+    }
     constexpr int kFlashRowsPerTile = 32;
     const int q_tiles = (q_len + kFlashRowsPerTile - 1) / kFlashRowsPerTile;
     // One q tile per dispatch: all heads ride the same dispatch, the
     // firmware timer stays ~5-12 ms per dispatch at full shape.
+    //
+    // The dispatches of one primitive would otherwise share a single
+    // submission, and the work-group budget of the evaluator cannot see
+    // them: a tile dispatch is only `heads` groups but each group walks the
+    // whole key range. A device without a cooperative-matrix flash arm runs
+    // this kernel at about 50 GMAC/s, so a 16384-token prefill of 8 heads
+    // (550 GMAC) is one ~11 s submission, past the kernel's per-job GPU
+    // timeout. Close the submission whenever the tiles recorded since the
+    // last commit reach kFlashSubmitMacs multiply-accumulates (about 80 ms
+    // at that rate). Scheduling only: results are unchanged.
+    constexpr double kFlashSubmitMacs = 4.0e9;
+    const double tile_macs = 2.0 * kFlashRowsPerTile * static_cast<double>(k_len) *
+        128.0 * static_cast<double>(heads) * static_cast<double>(batch);
+    double open_macs = 0.0;
     for (int tile = 0; tile < q_tiles; ++tile) {
       params.dims = checked_u32(tile, tag, out);
       encoder.dispatch_compute(
@@ -16537,21 +16605,39 @@ void ScaledDotProductAttention::eval_gpu(
           1u,
           static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
+      open_macs += tile_macs;
+      // commit() is not valid while a compiled tape records (see
+      // dispatch_qmm_tile): the tiles then stay in one submission.
+      if (!encoder.in_tape_recording && open_macs >= kFlashSubmitMacs &&
+          tile + 1 < q_tiles) {
+        encoder.commit();
+        open_macs = 0.0;
+      }
     }
     return;
   }
 #ifdef MLX_OMARCHY_BF16_DIRECT
   // Causal cooperative-matrix flash prefill (MatmulGap H35): scores never
-  // reach memory, QK and PV run on the 8x8x8 matrix unit. Default OFF:
-  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=1 turns it on for q_len >= 64 (A/B arms),
-  // unset or 0 keeps the composed route.
+  // reach memory, QK and PV run on the 8x8x8 matrix unit. Default ON for
+  // G16S when the device advertises the bf16 8x8 cooperative-matrix shape
+  // (receipts/2026-11-15-m4-pro-g16s-sdpa-causal-flash): Qwen3-8B-4bit
+  // pf2060 +6.2% median, ranges disjoint; pf520 and decode flat; 32-token
+  // sha identical. Other parts keep the composed default (G13C pf512
+  // missed the +2% bar, receipts/2026-10-09-causal-flash-gate3).
+  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=0 is the kill switch back to composed;
+  // =1 still forces the route on any eligible part.
   // Contract: causal, bf16, hd 128, k_len % 8 == 0, k_len >= q_len, no sinks,
   // no logsumexp, no array mask, 8-element aligned strides; anything else
   // keeps the composed route.
   {
     const char* cf_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
     const auto& cf_caps = encoder.device().capabilities();
-    if (cf_env != nullptr && std::strcmp(cf_env, "1") == 0 &&
+    const bool cf_is_g16s =
+        cf_caps.device_name.find("G16S") != std::string::npos;
+    const bool cf_forced_on = cf_env != nullptr && cf_env[0] == '1';
+    const bool cf_forced_off = cf_env != nullptr && cf_env[0] == '0';
+    const bool cf_on = cf_forced_on || (cf_is_g16s && !cf_forced_off);
+    if (cf_on &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
         cf_caps.max_compute_shared_memory_size >= 9216u &&

@@ -103,6 +103,7 @@ def main():
     dispatches = []
     joins = []
     submits = []
+    empty_subs = set()
     lineno = 0
     with open(args.profile, "r", encoding="utf-8") as f:
         for line in f:
@@ -125,6 +126,8 @@ def main():
                 joins.append(rec)
             elif kind == "s":
                 submits.append(rec)
+            elif kind == "q" and rec.get("close") == 0:
+                empty_subs.add(rec["s"])
             elif kind == "end":
                 end_rec = rec
 
@@ -135,6 +138,14 @@ def main():
         if not isinstance(meta.get(field), (int, float)):
             print(f"malformed meta: {field} missing or not numeric",
                   file=sys.stderr)
+            sys.exit(2)
+    # A q record with close=0 is a submit that carried no command buffer, so
+    # no dispatch can belong to it: such a capture mislabels its records.
+    for d in dispatches:
+        if d["s"] in empty_subs:
+            print(f"invalid capture: dispatch attributed to submission "
+                  f"{d['s']}, but submission {d['s']} closed no command "
+                  f"buffer (q.close=0)", file=sys.stderr)
             sys.exit(2)
 
     names = {}

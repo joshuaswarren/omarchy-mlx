@@ -27,6 +27,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <dlfcn.h>
 #include <stdexcept>
 #include <vector>
 
@@ -62,10 +63,17 @@ TEST_CASE("ring links; nccl and jaccl do not; init is the singleton") {
   CHECK_FALSE(distributed::is_available("nccl"));
   CHECK_FALSE(distributed::is_available("jaccl"));
   // mpi.cpp is also compiled under MLX_BUILD_CPU, but availability is
-  // runtime dlopen("libmpi.so") (mpi.cpp MPIWrapper). This box has no
-  // OpenMPI; if this check ever fails, a libmpi appeared on the host and
-  // the mpi rows of the contract must be re-derived.
-  CHECK_FALSE(distributed::is_available("mpi"));
+  // runtime dlopen("libmpi.so") (mpi.cpp MPIWrapper). It is a property
+  // of the host, so the contract is: no loadable libmpi means
+  // unavailable; with one installed the query must still answer without
+  // throwing and must not make init() leave the singleton.
+  void* libmpi = dlopen("libmpi.so", RTLD_NOW | RTLD_LOCAL);
+  if (libmpi == nullptr) {
+    CHECK_FALSE(distributed::is_available("mpi"));
+  } else {
+    CHECK_NOTHROW((void)distributed::is_available("mpi"));
+    dlclose(libmpi);
+  }
   auto group = distributed::init();
   CHECK_EQ(group.size(), 1);
   CHECK_EQ(group.rank(), 0);

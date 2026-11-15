@@ -842,7 +842,10 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
           : repeat(v, c.heads / c.kv_heads, 1, stream);
       auto ref = fp64_reference(q, kw, vw, stream, true);
 
-      unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+      // Pin composed with =0: G16S now defaults the flash route when the
+      // env is unset, and this case has to compare the two arms, not
+      // flash against itself.
+      setenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH", "0", 1);
       const uint64_t composed_dispatches = dispatches_for(
           [&] { return sdpa_causal(q, k, v, stream); }, stream);
       std::vector<float> composed =
@@ -1067,4 +1070,45 @@ TEST_CASE("chunked causal prefill pins two score sets, not a pair per chunk") {
       distinct,
       " distinct bytes; one score and prob pair per chunk would allocate ",
       every_pair);
+}
+
+// The flash loop closes its submission every 4e9 multiply-accumulates so a
+// long prefill stays under the per-job GPU timeout. commit() is not valid
+// while a compiled tape records, so with the encoder in tape recording the
+// tiles must stay in one submission, and the result must not change.
+TEST_CASE("flash submission splits stay out of a recording tape") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "1", 1);
+  // 64 q tiles of 2 x 32 x 2048 x 128 x 8 MACs (1.3e8 each): eager splits
+  // the dispatches into three submissions.
+  constexpr int heads = 8;
+  constexpr int length = 2048;
+  array q = make_bf16({1, heads, length, kHd}, 41u, stream);
+  array k = make_bf16({1, heads, length, kHd}, 42u, stream);
+  array v = make_bf16({1, heads, length, kHd}, 43u, stream);
+  auto& encoder = omarchy::get_command_encoder(stream);
+
+  auto run = [&](bool tape) {
+    encoder.synchronize();
+    const uint64_t before =
+        omarchy::trace::counters().commit_calls_with_work.load(std::memory_order_relaxed);
+    array out = sdpa(q, k, v, stream);
+    encoder.in_tape_recording = tape;
+    out.eval();
+    encoder.in_tape_recording = false;
+    const uint64_t commits =
+        omarchy::trace::counters().commit_calls_with_work.load(std::memory_order_relaxed) -
+        before;
+    return std::make_pair(flat(out, stream), commits);
+  };
+  const auto eager = run(false);
+  const auto taped = run(true);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  MESSAGE("eager commits ", eager.second, ", taped commits ", taped.second);
+  CHECK(eager.second >= taped.second + 2);
+  REQUIRE(eager.first.size() == taped.first.size());
+  CHECK(std::memcmp(eager.first.data(), taped.first.data(),
+                    eager.first.size() * sizeof(float)) == 0);
 }

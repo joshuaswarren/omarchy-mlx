@@ -1,0 +1,42 @@
+PREFLIGHT host=jwm2-linux boot=7ff1f87d-cca0-4de6-9e24-197c32b9416d load=0.64
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p1 20:02:22
+default {"decode_tps": 68.65, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.17ms p99=0.72ms max=1.35ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 100000 p1 20:02:54
+100000 {"decode_tps": 69.21, "submits_per_step": 2.087, "probe": "submit-latency: n=359 p50=0.17ms p99=0.72ms max=1.47ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p2 20:03:26
+default {"decode_tps": 68.9, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.14ms p99=0.91ms max=1.09ms mean=0.21ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 100000 p2 20:03:58
+100000 {"decode_tps": 69.41, "submits_per_step": 2.087, "probe": "submit-latency: n=359 p50=0.17ms p99=0.67ms max=1.26ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p3 20:04:30
+default {"decode_tps": 67.99, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.17ms p99=0.79ms max=2.39ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 100000 p3 20:05:01
+100000 {"decode_tps": 68.06, "submits_per_step": 2.087, "probe": "submit-latency: n=359 p50=0.16ms p99=0.92ms max=1.33ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p4 20:05:33
+default {"decode_tps": 68.02, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.16ms p99=0.70ms max=1.14ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 100000 p4 20:06:05
+100000 {"decode_tps": 68.3, "submits_per_step": 2.087, "probe": "submit-latency: n=359 p50=0.18ms p99=0.69ms max=0.81ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p1 20:06:37
+default {"decode_tps": 108.0, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.17ms p99=0.67ms max=0.68ms mean=0.21ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 100000 p1 20:07:06
+100000 {"decode_tps": 109.32, "submits_per_step": 1.048, "probe": "submit-latency: n=359 p50=0.17ms p99=0.67ms max=0.70ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p2 20:07:35
+default {"decode_tps": 108.25, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.65ms max=0.67ms mean=0.21ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 100000 p2 20:08:04
+100000 {"decode_tps": 108.78, "submits_per_step": 1.048, "probe": "submit-latency: n=359 p50=0.17ms p99=0.78ms max=0.85ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit default p3 20:08:33
+default {"decode_tps": 107.44, "submits_per_step": 2.112, "probe": "submit-latency: n=359 p50=0.16ms p99=0.74ms max=1.03ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--SiddhJagani--Qwen3.8-2B-mlx-4Bit 100000 p3 20:09:02
+100000 {"decode_tps": 106.48, "submits_per_step": 1.048, "probe": "submit-latency: n=359 p50=0.17ms p99=0.72ms max=0.86ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p1 20:09:31
+default {"decode_tps": 37.7, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.18ms p99=0.96ms max=1.15ms mean=0.27ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 100000 p1 20:10:12
+100000 {"decode_tps": 38.33, "submits_per_step": 2.108, "probe": "submit-latency: n=359 p50=0.19ms p99=1.16ms max=1.55ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p2 20:10:53
+default {"decode_tps": 38.02, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.19ms p99=1.16ms max=1.69ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 100000 p2 20:11:34
+100000 {"decode_tps": 38.69, "submits_per_step": 2.108, "probe": "submit-latency: n=359 p50=0.19ms p99=1.31ms max=1.77ms mean=0.28ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit default p3 20:12:14
+default {"decode_tps": 37.98, "submits_per_step": 5.245, "probe": "submit-latency: n=359 p50=0.18ms p99=1.29ms max=1.80ms mean=0.27ms over2x(>33.3ms)=0/359"}
+== models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit 100000 p3 20:12:55
+100000 {"decode_tps": 38.31, "submits_per_step": 2.108, "probe": "submit-latency: n=359 p50=0.20ms p99=1.04ms max=1.93ms mean=0.28ms over2x(>33.3ms)=0/359"}
+BATCHWORK100K_DONE

@@ -7,6 +7,7 @@
 // real sources promote to complex with a zero imaginary part. Byte stores use
 // commuting atomic lane insertion so adjacent invocations cannot lose writes.
 #version 460
+#extension GL_GOOGLE_include_directive : require
 
 #if SRC_W == 2 || DST_W == 2
 #extension GL_EXT_shader_16bit_storage : require
@@ -15,6 +16,7 @@
 #if SRC_W == 8 || DST_W == 8
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #endif
+#include "omarchy_half.h"
 
 #define CODE_BOOL 0u
 #define CODE_U8 1u
@@ -207,7 +209,7 @@ void main() {
 #if DST_W == 2
       uint bits = floatBitsToUint(real_value);
       uint encoded = DST_CODE == CODE_F16
-          ? (packHalf2x16(vec2(real_value, 0.0)) & 0xFFFFu)
+          ? omarchy_f16_bits_rne(real_value)
           : (isnan(real_value)
                 ? ((bits >> 16u) | 0x40u)
                 : ((bits + 0x7FFFu + ((bits >> 16u) & 1u)) >> 16u));

@@ -1,0 +1,26 @@
+PREFLIGHT host=jwm2-linux boot=7ff1f87d-cca0-4de6-9e24-197c32b9416d load=0.69
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p1 19:52:33
+default {"decode_tps": 67.83, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.17ms p99=0.75ms max=1.34ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p1 19:53:05
+80000 {"decode_tps": 68.37, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.18ms p99=0.75ms max=1.01ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p2 19:53:37
+default {"decode_tps": 68.82, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.16ms p99=0.74ms max=1.30ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p2 19:54:09
+80000 {"decode_tps": 69.1, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.17ms p99=1.16ms max=2.20ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p3 19:54:41
+default {"decode_tps": 68.72, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.16ms p99=0.72ms max=1.14ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p3 19:55:12
+80000 {"decode_tps": 69.04, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.16ms p99=0.73ms max=1.29ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p4 19:55:44
+default {"decode_tps": 67.92, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.16ms p99=0.76ms max=1.23ms mean=0.22ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p4 19:56:16
+80000 {"decode_tps": 68.48, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.16ms p99=0.93ms max=1.05ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p5 19:56:48
+default {"decode_tps": 67.61, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.16ms p99=0.98ms max=1.12ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p5 19:57:20
+80000 {"decode_tps": 68.47, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.17ms p99=0.71ms max=2.33ms mean=0.23ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit default p6 19:57:52
+default {"decode_tps": 68.4, "submits_per_step": 3.185, "probe": "submit-latency: n=359 p50=0.18ms p99=0.78ms max=1.16ms mean=0.24ms over2x(>33.3ms)=0/359"}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit 80000 p6 19:58:24
+80000 {"decode_tps": 69.24, "submits_per_step": 2.11, "probe": "submit-latency: n=359 p50=0.16ms p99=0.69ms max=1.08ms mean=0.22ms over2x(>33.3ms)=0/359"}
+BATCHWORK4B80K_DONE

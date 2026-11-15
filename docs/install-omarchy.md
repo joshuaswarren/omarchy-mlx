@@ -138,7 +138,9 @@ bounds each submission to an estimated GPU cost. The open batch is submitted
 once its summed dispatch work-group counts reach the budget. The default is
 a per-board table (`receipts/2026-10-02-submission-cap-19`,
 `receipts/2026-10-12-submission-cap-calibration`,
-`receipts/2026-10-20-g13g-batch-work-8000`): per-group GPU cost
+`receipts/2026-10-20-g13g-batch-work-8000`,
+`receipts/2026-11-13-g18g-batch-work`,
+`receipts/2026-11-15-m4-pro-g16s-batch-work`): per-group GPU cost
 differs by an order of magnitude across the M1 family, so one global count
 cannot land every chip in the 2-6 ms band. A 4B decode step then splits
 into ~2-6 ms submissions. A single dispatch larger than the budget still
@@ -147,11 +149,17 @@ node and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap
 (headless boxes). Boards with no calibrated row take 5000 (shortest
 submissions measured to stay in the band). The 13-inch M1 row is 8000: on
 that board 8000 gives p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B) and
-decodes 2.4 % faster than 5000. Scheduling only: every submission
+decodes 2.4 % faster than 5000. The M4 Pro (G16S) row is 15000: with its 2x4 decode
+Qmm geometry, 5000 split a Qwen3-8B token into about 48 submissions. 15000 decodes 8 to
+18 % faster on three models with identical greedy ids, and its release-build submission
+tail (DRM scheduler timestamps) matches 5000: Qwen3-4B p99 27.8 ms against 27.2 ms, no
+submission near 78 ms (`receipts/2026-11-15-m4-pro-g16s-batch-work`). Scheduling only: every submission
 already waits on the stream's previous completion. Splitting preserves
 order, and results are bit-identical (greedy ids digests identical in every
 A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max
-at the default: a 4B decode step drops from p50 20.9 ms to 5.6 ms per
+at 40000 (the table value before 2026-11-13; the G14C row is now 100000,
+`receipts/2026-11-13-g14c-batch-work`: decode +0.5 % on 4B, +0.9 % on 2B, +1.4 %
+on 9B against 40000): a 4B decode step drops from p50 20.9 ms to 5.6 ms per
 submission (decode tok/s −0.15 %). The 9B drops from 49.6 ms to 4.4 ms
 (+6 % decode).
 Honest limit: frame pacing was not measured on a real logged-in compositor.

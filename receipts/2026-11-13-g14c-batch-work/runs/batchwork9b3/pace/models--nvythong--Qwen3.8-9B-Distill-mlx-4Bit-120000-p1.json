@@ -1,0 +1,8 @@
+{
+ "mx": "0.32.4.dev202611131122+nocpu.pr328dtc",
+ "decode_tps": 38.69,
+ "n": 600,
+ "submits_per_step": 2.09,
+ "ids_sha": "d42ce1f36bd8d244",
+ "probe": "submit-latency: n=359 p50=0.19ms p99=1.19ms max=1.67ms mean=0.27ms over2x(>33.3ms)=0/359"
+}
