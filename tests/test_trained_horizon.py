@@ -6,6 +6,9 @@ import io
 import json
 import unittest
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
 from mlx_omarchy_serve import _mlxlm_server as shim
 
@@ -38,6 +41,14 @@ class TrainedHorizonTests(unittest.TestCase):
         with contextlib.redirect_stderr(buffer):
             gen._tokenize(None, None, args)  # 15 total, inside 100
         self.assertEqual(buffer.getvalue(), "")
+
+    def test_the_fit_table_surfaces_each_entry_horizon(self):
+        from mlx_omarchy_serve import export_fit_table
+        table = export_fit_table.build_fit_table(None)
+        by_id = {row["id"]: row for row in table["models"]}
+        self.assertIn("trained_tokens", next(iter(by_id.values())))  # the horizon is a column
+        self.assertEqual(by_id["qwen3.8-27b-4bit"]["trained_tokens"], 262144)  # from the model config
+        self.assertIsNone(by_id["laya-mlx"]["trained_tokens"])  # unreachable source ships as unknown
 
     def test_every_bundled_entry_states_its_trained_window_even_when_unknown(self):
         bundled = json.loads(Path(shim.__file__).with_name("catalog.json").read_text())

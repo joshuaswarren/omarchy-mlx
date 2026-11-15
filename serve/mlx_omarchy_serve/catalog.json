@@ -23,7 +23,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 19,
@@ -96,7 +96,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 35,
@@ -154,7 +154,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 64,
@@ -216,7 +216,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 11,
@@ -293,7 +293,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 84,
@@ -389,7 +389,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 46,
@@ -451,7 +451,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 18,
@@ -513,7 +513,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 19,
@@ -575,7 +575,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 34,
@@ -717,7 +717,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 7,
@@ -846,7 +846,7 @@
       },
       "context": {
         "max_tokens": 262144,
-        "trained_tokens": null
+        "trained_tokens": 262144
       },
       "capability": {
         "min_mem_gib": 3,
@@ -977,7 +977,7 @@
       },
       "context": {
         "max_tokens": 131072,
-        "trained_tokens": null
+        "trained_tokens": 131072
       },
       "capability": {
         "min_mem_gib": 6,

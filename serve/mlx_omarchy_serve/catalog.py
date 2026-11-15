@@ -280,7 +280,10 @@ def validate_catalog(obj) -> None:
             _check_int(mem["peak_estimate_bytes"], f"{where}.memory.peak_estimate_bytes", 1, 2**48)
 
         ctx = entry["context"]
-        _check_keys(ctx, ("max_tokens", "trained_tokens"), f"{where}.context")
+        # trained_tokens is optional on disk (a pre-469 cache or custom catalog predates it) and
+        # normalized to unknown-in-memory, so no reader ever sees the key missing (issue 470).
+        _check_keys(ctx, ("max_tokens",), f"{where}.context", optional=("trained_tokens",))
+        ctx.setdefault("trained_tokens", None)
         if ctx["max_tokens"] is not None:
             _check_int(ctx["max_tokens"], f"{where}.context.max_tokens", MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
         # The trained horizon is the model's own, independent of the admitted window (minefield 55/61):
