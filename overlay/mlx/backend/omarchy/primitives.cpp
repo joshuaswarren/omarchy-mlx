@@ -16122,6 +16122,11 @@ void ScaledDotProductAttention::eval_gpu(
       do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
       head_dim == 128 && v_dim == head_dim && k_len >= q_len &&
       k_len <= kDecodeBf16StreamKeys;
+  // Verify rows on the split-K route (bf16, causal, batch 1, q_len 2..16, width 128 or 256): one pass-1 and pass-2 pair per row over that row's key
+  // prefix, so each row is bit-equal to the same token decoded alone on the split route. Opt-in: MLX_OMARCHY_SDPA_SPLIT_ROWS, any non-empty value
+  // other than "0". Needs the split route itself to be engaged (MLX_OMARCHY_SDPA_DECODE_SPLIT and the per-chip key threshold).
+  const bool split_rows_route = decode_bf16_probe && do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
+      k_len >= q_len && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_ROWS") > 0;
   // Batched decode (q_len 1, bf16, one-pass): workgroup z walks the batch
   // with per-row base offsets; each row runs the single-row arithmetic, so
   // B > 1 stays bit-identical to the composed route it replaces.
@@ -16150,7 +16155,7 @@ void ScaledDotProductAttention::eval_gpu(
     if (split_wanted && split_device_ready &&
         (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
         q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
-        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && q_len == 1 &&
+        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && (q_len == 1 || split_rows_route) &&
         (head_dim == 128 || head_dim == 256) && v_dim == head_dim && k_len > 0 && 1048577 > k_len &&
         (split_group == 1u || split_group == 2u || split_group == 4u || split_group == 8u) &&
         q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
@@ -16186,12 +16191,6 @@ void ScaledDotProductAttention::eval_gpu(
         const int bk64_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK64");
         const bool bk64 = pv && split_group == 4u && (bk64_env > 0 || (bk64_env < 0 && omarchy::sdpa_split_bk64_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_block_keys = bk64 ? 64u : 128u;
-        const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + split_block_keys - 1u) / split_block_keys;
-        const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * static_cast<uint64_t>(head_dim + 2);
-        array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
-        scratch.set_data(allocate_omarchy(scratch.nbytes()));
-        encoder.add_temporary(scratch);
-        std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
         // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
         // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
         const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, static_cast<uint32_t>(kv_heads), pv_env, static_cast<uint32_t>(k_len),
@@ -16213,12 +16212,30 @@ void ScaledDotProductAttention::eval_gpu(
         if (bk64) {
           split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
         }
-        encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
-        std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
-        encoder.dispatch_compute(
-            split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
-                       : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128,
-            split_pass2, split_params, split_params.matrix_m);
+        const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
+        const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
+            : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
+        const uint32_t split_q_offset = split_params.lhs_offset;
+        const uint32_t split_out_offset = split_params.output_offset;
+        const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
+        const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
+        split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
+        // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
+        for (uint32_t row = 0; row < split_rows; ++row) {
+          const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
+          const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
+          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 2);
+          array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
+          scratch.set_data(allocate_omarchy(scratch.nbytes()));
+          encoder.add_temporary(scratch);
+          split_params.matrix_k = row_k;
+          split_params.lhs_offset = split_q_offset + row * split_q_row;
+          split_params.output_offset = split_out_offset + row * split_out_row;
+          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+          std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+          encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+        }
         return;
       }
     }

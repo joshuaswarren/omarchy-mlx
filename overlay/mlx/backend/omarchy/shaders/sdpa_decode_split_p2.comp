@@ -66,6 +66,7 @@ void main() {
   uint head = gl_WorkGroupID.x;
   uint nblocks = (params.matrix_k + BK - 1u) / BK;
   uint base = head * nblocks * (D + 2u);
+  uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
   float global_max = uintBitsToFloat(0xff800000u);
   for (uint b = 0u; b < nblocks; ++b) {
     float m = scratch_data.values[base + b * (D + 2u)];
@@ -82,7 +83,7 @@ void main() {
     denominator += scratch_data.values[at + 1u] * w;
     acc += scratch_data.values[at + 2u + t] * w;
   }
-  output_data.values[params.output_offset + head * D + t] = bf16_store(acc / denominator);
+  output_data.values[params.output_offset + head * out_head + t] = bf16_store(acc / denominator);
 #else
   float denominator = 0.0;
   float acc[DPT];
@@ -98,7 +99,7 @@ void main() {
     }
   }
   for (uint d = 0u; d < DPT; ++d) {
-    output_data.values[params.output_offset + head * D + d * 128u + t] = bf16_store(acc[d] / denominator);
+    output_data.values[params.output_offset + head * out_head + d * 128u + t] = bf16_store(acc[d] / denominator);
   }
 #endif
 }
