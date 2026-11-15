@@ -715,6 +715,20 @@ TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
     }
     array full = matmul(a, b, stream);
     array head = matmul(slice(a, {0, 0, 0}, {3, 16, c.k}, stream), b, stream);
+    INFO("m=" << c.m << " k=" << c.k << " n=" << c.n
+              << " aT=" << c.a_transposed << " bT=" << c.b_transposed);
+    // Each product is the last dispatch of its own evaluation, so the
+    // kernel it ran is readable right after eval. Without these two
+    // checks the bit comparison also passes when the new route is never
+    // taken (both sides would run MatmulF32).
+    eval(full);
+    omarchy::get_command_encoder(stream).synchronize();
+    CHECK_EQ(omarchy::trace::counters().last_dispatched_kernel.load(),
+             static_cast<int64_t>(omarchy::ComputeKernel::MatmulRbF32));
+    eval(head);
+    omarchy::get_command_encoder(stream).synchronize();
+    CHECK_EQ(omarchy::trace::counters().last_dispatched_kernel.load(),
+             static_cast<int64_t>(omarchy::ComputeKernel::MatmulF32));
     auto full_bits = bits(full);
     auto head_bits = bits(head);
     size_t mismatches = 0;
@@ -726,8 +740,6 @@ TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
         }
       }
     }
-    INFO("m=" << c.m << " k=" << c.k << " n=" << c.n
-              << " aT=" << c.a_transposed << " bT=" << c.b_transposed);
     CHECK_EQ(mismatches, 0u);
     // Host reference over every row, so a shared wrong answer cannot
     // pass both kernels.
@@ -754,6 +766,65 @@ TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
     }
     CHECK_LT(max_err, 1e-3f);
   }
+}
+
+TEST_CASE("f32 addmm at 32 or more rows keeps its bias off the register-blocked tile") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u) {
+    skip("cooperative_matrix_f32_8 present; f32 takes the cooperative-matrix routes");
+    return;
+  }
+  Stream stream = gpu_stream();
+  // matmul_rb.comp never reads input_c, so the MatmulRbF32 gate must
+  // exclude products with a bias (!use_c). An f32 addmm at m >= 32 with a
+  // non-zero bias and alpha, beta != 1 must stay on MatmulF32 and match
+  // the host reference; dropping the gate would lose the 2 * c term.
+  const int batches = 2;
+  const int m = 40;
+  const int k = 72;
+  const int n = 48;
+  std::vector<float> av(batches * m * k);
+  std::vector<float> bv(batches * k * n);
+  std::vector<float> cv(batches * n);
+  for (size_t i = 0; i < av.size(); ++i) {
+    av[i] = std::sin(0.11f * static_cast<float>(i)) * 0.5f;
+  }
+  for (size_t i = 0; i < bv.size(); ++i) {
+    bv[i] = std::cos(0.23f * static_cast<float>(i)) * 0.5f;
+  }
+  for (size_t i = 0; i < cv.size(); ++i) {
+    cv[i] = 0.25f + static_cast<float>(i % 7) / 8.0f;
+  }
+  array a(av.begin(), Shape{batches, m, k}, float32);
+  array b(bv.begin(), Shape{batches, k, n}, float32);
+  array c(cv.begin(), Shape{batches, 1, n}, float32);
+  array out = addmm(c, a, b, 0.5f, 2.0f, stream);
+  eval(out);
+  omarchy::get_command_encoder(stream).synchronize();
+  CHECK_EQ(omarchy::trace::counters().last_dispatched_kernel.load(),
+           static_cast<int64_t>(omarchy::ComputeKernel::MatmulF32));
+  const float* got = out.data<float>();
+  float max_err = 0.0f;
+  for (int batch = 0; batch < batches; ++batch) {
+    for (int row = 0; row < m; ++row) {
+      for (int col = 0; col < n; ++col) {
+        double sum = 0.0;
+        for (int inner = 0; inner < k; ++inner) {
+          sum += static_cast<double>(av[(batch * m + row) * k + inner]) *
+              bv[(batch * k + inner) * n + col];
+        }
+        const double expected = 0.5 * sum + 2.0 * cv[batch * n + col];
+        max_err = std::max(
+            max_err,
+            static_cast<float>(std::abs(
+                got[(batch * m + row) * n + col] - expected)));
+      }
+    }
+  }
+  CHECK_LT(max_err, 1e-4f);
 }
 
 TEST_CASE("direct matmul route: first matching row wins, else the shipped route") {
