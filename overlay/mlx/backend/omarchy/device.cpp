@@ -237,12 +237,8 @@ void note_heap_above_kernel_limit(size_t heap_bytes) {
   });
 }
 
-HoneykrispIcdSelection configure_honeykrisp_icd() {
-  // Runs before Vulkan loads: raise the Honeykrisp heap for this MLX
-  // process (HK_SYSMEM) unless an explicit HK_SYSMEM or a drirc
-  // heap_memory_percent already chose one. Other Vulkan applications
-  // never run this code and keep mesa's 50% heap.
-  apply_default_hk_sysmem();
+// ICD JSON files in the system search directories, in search order.
+std::vector<std::string> system_icd_candidates() {
   std::vector<std::string> candidates;
   for (const char* directory : {
            "/etc/vulkan/icd.d",
@@ -256,6 +252,16 @@ HoneykrispIcdSelection configure_honeykrisp_icd() {
       }
     }
   }
+  return candidates;
+}
+
+HoneykrispIcdSelection configure_honeykrisp_icd() {
+  // Runs before Vulkan loads: raise the Honeykrisp heap for this MLX
+  // process (HK_SYSMEM) unless an explicit HK_SYSMEM or a drirc
+  // heap_memory_percent already chose one. Other Vulkan applications
+  // never run this code and keep mesa's 50% heap.
+  apply_default_hk_sysmem();
+  const std::vector<std::string> candidates = system_icd_candidates();
   const char* driver_files = std::getenv("VK_DRIVER_FILES");
   const char* icd_filenames = std::getenv("VK_ICD_FILENAMES");
   HoneykrispIcdSelection selection;
@@ -326,6 +332,12 @@ struct Runtime {
   bool ready{false};
   bool probed{false};
   bool allow_non_apple{false};
+  // Set when init_impl ended because the selected ICD enumerated no supported
+  // device (not on a refusal such as a SHA mismatch): the only failure that
+  // falls back to the system ICD.
+  bool no_supported_device{false};
+  // Second attempt: icd_selection already names the system ICD.
+  bool icd_retry{false};
   int preferred_device_index{-1};
   HoneykrispIcdSelection icd_selection;
   std::string icd_path;
@@ -340,6 +352,32 @@ struct Runtime {
       return ready;
     }
     probed = true;
+    // The packaged recipe ICD targets M1/M2; a newer chip it cannot serve may
+    // still work on the system driver (init_with_icd_fallback).
+    const auto result = init_with_icd_fallback(
+        icd_selection,
+        no_supported_device,
+        icd_retry,
+        error,
+        system_icd_candidates(),
+        [&] { return try_init(); },
+        [](const std::string& path) {
+          return ::setenv("VK_DRIVER_FILES", path.c_str(), 1) == 0 &&
+              ::setenv("VK_ICD_FILENAMES", path.c_str(), 1) == 0;
+        });
+    if (result.ok && !result.fallback_path.empty()) {
+      std::fprintf(
+          stderr,
+          "[omarchy] the packaged Honeykrisp ICD (%s) found no supported"
+          " device; using the system ICD %s.\n",
+          result.packaged_path.c_str(),
+          result.fallback_path.c_str());
+    }
+    return result.ok;
+  }
+
+  bool try_init() {
+    no_supported_device = false;
     try {
       return init_impl();
     } catch (const std::exception& ex) {
@@ -586,10 +624,13 @@ bool Runtime::init_impl() {
   // Capability simulation resolves once per process. An unknown
   // MLX_OMARCHY_CAPS_SIM name throws here and lands in |error|: the
   // backend refuses to start rather than silently running real caps.
+  // The notices below print on the first attempt only: an ICD retry runs this
+  // function a second time.
+  const bool first_attempt = !icd_retry;
   const std::string sim_profile = capsim::requested_profile();
   const capsim::SimulationProfile* sim =
       sim_profile.empty() ? nullptr : capsim::find(sim_profile);
-  if (sim) {
+  if (sim && first_attempt) {
     std::fprintf(
         stderr,
         "[omarchy] CAPABILITY SIMULATION ACTIVE: profile '%s'"
@@ -609,7 +650,7 @@ bool Runtime::init_impl() {
   // flag on every malloc and free.
   g_no_buffer_cache.store(
       env_flag("MLX_OMARCHY_NO_BUFFER_CACHE"), std::memory_order_relaxed);
-  if (g_no_buffer_cache.load(std::memory_order_relaxed)) {
+  if (first_attempt && g_no_buffer_cache.load(std::memory_order_relaxed)) {
     std::fprintf(
         stderr,
         "[omarchy] MLX_OMARCHY_NO_BUFFER_CACHE active (diagnostics only,"
@@ -618,7 +659,9 @@ bool Runtime::init_impl() {
   }
 
   try {
-    icd_selection = configure_honeykrisp_icd();
+    if (!icd_retry) {
+      icd_selection = configure_honeykrisp_icd();
+    }
     icd_path = icd_selection.path;
     resolve_expected_sha_policy(icd_selection, expected_sha, expected_sha_source);
   } catch (const std::runtime_error&) {
@@ -660,7 +703,24 @@ bool Runtime::init_impl() {
   app.apiVersion = kVulkan13;
   VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
   ici.pApplicationInfo = &app;
-  VKX_CHECK(it.CreateInstance(&ici, nullptr, &instance));
+  const VkResult created = it.CreateInstance(&ici, nullptr, &instance);
+  if (instance_failure_is_no_driver(static_cast<int>(created))) {
+    // No ICD loaded at all (for example the packaged driver library is
+    // missing): the same "no supported device" outcome as an empty
+    // enumeration, so a packaged ICD falls back to the system one.
+    instance = VK_NULL_HANDLE;
+    no_supported_device = true;
+    error =
+        "[omarchy] the Vulkan loader found no usable driver"
+        " (vkCreateInstance returned VK_ERROR_INCOMPATIBLE_DRIVER)."
+        " Is the Mesa Honeykrisp driver installed?";
+    return false;
+  }
+  if (created != VK_SUCCESS) {
+    throw std::runtime_error(
+        std::string("[omarchy] it.CreateInstance(&ici, nullptr, &instance) failed with ") +
+        vk::result_string(created));
+  }
 
   it.EnumeratePhysicalDevices =
       reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
@@ -710,6 +770,9 @@ bool Runtime::init_impl() {
     error =
         "[omarchy] no Vulkan physical devices found."
         " Is the Mesa Honeykrisp driver installed?";
+    no_supported_device = true;
+    it.DestroyInstance(instance, nullptr);
+    instance = VK_NULL_HANDLE;
     return false;
   }
   std::vector<VkPhysicalDevice> pds(count);
@@ -868,6 +931,7 @@ bool Runtime::init_impl() {
     error = first_refusal.empty()
         ? "[omarchy] no qualifying Vulkan 1.3 device found."
         : first_refusal;
+    no_supported_device = true;
     it.DestroyInstance(instance, nullptr);
     instance = VK_NULL_HANDLE;
     return false;

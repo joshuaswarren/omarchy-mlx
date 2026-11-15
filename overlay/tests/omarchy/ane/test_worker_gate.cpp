@@ -424,6 +424,136 @@ TEST_CASE("an explicit user ICD override beats the packaged ICD") {
   std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("a packaged ICD that finds no supported device falls back to the system ICD") {
+  using namespace mlx::core::omarchy;
+  const std::string packaged = "/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json";
+  const std::vector<std::string> candidates{
+      "/usr/share/vulkan/icd.d/lvp_icd.json",
+      "/usr/share/vulkan/icd.d/asahi_icd.json"};
+  // Packaged ICD selected: the retry target is the first system Honeykrisp ICD.
+  CHECK(system_icd_fallback(candidates, {packaged, true, false}) == candidates[1]);
+  // Never second-guess an explicit user choice, and never retry the system ICD
+  // with itself.
+  CHECK(system_icd_fallback(candidates, {"/tmp/mine-asahi_icd.json", false, true}).empty());
+  CHECK(system_icd_fallback(candidates, {candidates[1], false, false}).empty());
+  // Two system Honeykrisp ICDs: a selection that is not the packaged one
+  // (the system search picked it) never falls back to the other one.
+  const std::vector<std::string> two{
+      "/etc/vulkan/icd.d/asahi_icd.json",
+      "/usr/share/vulkan/icd.d/asahi_icd.json"};
+  CHECK(system_icd_fallback(two, {two[0], false, false}).empty());
+  CHECK(system_icd_fallback(two, {two[1], false, false}).empty());
+  CHECK(system_icd_fallback(two, {packaged, true, false}) == two[0]);
+  // No system Honeykrisp ICD installed: nothing to retry with.
+  CHECK(system_icd_fallback({candidates[0]}, {packaged, true, false}).empty());
+  // The packaged file itself is not a fallback even when it sits in a search dir.
+  CHECK(system_icd_fallback({packaged}, {packaged, true, false}).empty());
+}
+
+TEST_CASE("only an incompatible driver at instance creation counts as no usable driver") {
+  using namespace mlx::core::omarchy;
+  // VK_ERROR_INCOMPATIBLE_DRIVER (-9): the loader found no ICD it could load,
+  // as with a packaged manifest whose library is missing. The system ICD may
+  // still work. Every other creation failure is a real error.
+  CHECK(instance_failure_is_no_driver(-9));
+  CHECK_FALSE(instance_failure_is_no_driver(0));   // VK_SUCCESS
+  CHECK_FALSE(instance_failure_is_no_driver(-1));  // VK_ERROR_OUT_OF_HOST_MEMORY
+  CHECK_FALSE(instance_failure_is_no_driver(-3));  // VK_ERROR_INITIALIZATION_FAILED
+  CHECK_FALSE(instance_failure_is_no_driver(-6));  // VK_ERROR_LAYER_NOT_PRESENT
+  CHECK_FALSE(instance_failure_is_no_driver(-7));  // VK_ERROR_EXTENSION_NOT_PRESENT
+}
+
+TEST_CASE("the init retry runs once, only on no supported device, and re-points the loader") {
+  using namespace mlx::core::omarchy;
+  static const std::string packaged = "/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json";
+  static const std::string system_icd = "/usr/share/vulkan/icd.d/asahi_icd.json";
+  static const std::vector<std::string> candidates{system_icd};
+
+  struct Stub {
+    HoneykrispIcdSelection selection{packaged, true, false};
+    bool no_device{false};
+    bool retry{false};
+    std::string error;
+    int attempts{0};
+    std::vector<std::string> set_to;
+    std::vector<std::string> attempt_on;  // ICD in force at each attempt
+    // outcome of attempt 1 and 2: 0 ok, 1 no supported device, 2 other refusal
+    int outcome[2]{0, 0};
+    bool set_ok{true};
+    IcdFallbackResult run() {
+      return init_with_icd_fallback(
+          selection, no_device, retry, error, candidates,
+          [&] {
+            attempt_on.push_back(selection.path);
+            const int o = outcome[attempts < 2 ? attempts : 1];
+            ++attempts;
+            no_device = (o == 1);
+            error = o == 0 ? "" : (o == 1 ? "no device" : "refused");
+            return o == 0;
+          },
+          [&](const std::string& path) { set_to.push_back(path); return set_ok; });
+    }
+  };
+
+  SUBCASE("first attempt succeeds: no retry, loader untouched") {
+    Stub s;
+    const auto r = s.run();
+    CHECK(r.ok);
+    CHECK(r.fallback_path.empty());
+    CHECK(s.attempts == 1);
+    CHECK(s.set_to.empty());
+    CHECK_FALSE(s.retry);
+  }
+  SUBCASE("no supported device: one retry on the system ICD, loader re-pointed") {
+    Stub s;
+    s.outcome[0] = 1;
+    const auto r = s.run();
+    CHECK(r.ok);
+    CHECK(r.fallback_path == system_icd);
+    CHECK(r.packaged_path == packaged);
+    CHECK(s.attempts == 2);
+    CHECK(s.set_to == std::vector<std::string>{system_icd});
+    CHECK(s.attempt_on == std::vector<std::string>{packaged, system_icd});
+    CHECK(s.retry);
+    CHECK_FALSE(s.selection.packaged);
+    CHECK_FALSE(s.selection.user_override);
+  }
+  SUBCASE("a refusal other than no supported device does not retry") {
+    Stub s;
+    s.outcome[0] = 2;
+    const auto r = s.run();
+    CHECK_FALSE(r.ok);
+    CHECK(s.attempts == 1);
+    CHECK(s.set_to.empty());
+    CHECK(s.error == "refused");
+  }
+  SUBCASE("a failed retry reports both reasons and does not try a third time") {
+    Stub s;
+    s.outcome[0] = 1;
+    s.outcome[1] = 1;
+    const auto r = s.run();
+    CHECK_FALSE(r.ok);
+    CHECK(s.attempts == 2);
+    CHECK(s.error.find("no device") == 0);
+    CHECK(s.error.find(system_icd) != std::string::npos);
+  }
+  SUBCASE("an explicit override never retries") {
+    Stub s;
+    s.selection = {"/tmp/mine-asahi_icd.json", false, true};
+    s.outcome[0] = 1;
+    CHECK_FALSE(s.run().ok);
+    CHECK(s.attempts == 1);
+    CHECK(s.set_to.empty());
+  }
+  SUBCASE("the loader variables cannot be set: no second attempt") {
+    Stub s;
+    s.outcome[0] = 1;
+    s.set_ok = false;
+    CHECK_FALSE(s.run().ok);
+    CHECK(s.attempts == 1);
+  }
+}
+
 TEST_CASE("the packaged mesa-git-sha file supplies the expected SHA") {
   using namespace mlx::core::omarchy;
   const auto prefix = std::filesystem::temp_directory_path() /

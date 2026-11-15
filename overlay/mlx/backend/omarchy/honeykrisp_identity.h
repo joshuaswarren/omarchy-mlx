@@ -143,6 +143,82 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
                            apple_m3_m4_chip_note());
 }
 
+// The system Honeykrisp ICD to retry with when the packaged recipe ICD
+// enumerates no supported device (the packaged Mesa targets M1/M2; a newer
+// chip may only be served by the system driver). Empty when the packaged
+// ICD was not the one selected (an explicit override is never second-guessed)
+// or when no other Honeykrisp ICD is installed.
+inline std::string system_icd_fallback(
+    const std::vector<std::string>& candidates,
+    const HoneykrispIcdSelection& selection) {
+  if (!selection.packaged || selection.user_override) {
+    return {};
+  }
+  for (const auto& candidate : candidates) {
+    if (candidate != selection.path && is_honeykrisp_icd(candidate)) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
+// vkCreateInstance failed because the loader found no ICD it could load
+// (VK_ERROR_INCOMPATIBLE_DRIVER, -9): a missing or broken packaged driver
+// library. Takes the raw VkResult so the header needs no Vulkan include.
+inline bool instance_failure_is_no_driver(int vk_result) {
+  return vk_result == -9;
+}
+
+struct IcdFallbackResult {
+  bool ok{false};
+  // Set only when the system ICD was tried: the ICD that found no device.
+  std::string packaged_path;
+  // Set only when the system ICD was tried: the one the retry used.
+  std::string fallback_path;
+};
+
+// Device-discovery policy around one attempt (Runtime::init): run |attempt|;
+// when it fails because the selected packaged ICD enumerated no supported
+// device (|no_supported_device|, set by the attempt), point the loader at the
+// system ICD with |set_icd| and attempt once more. |selection|, |icd_retry|
+// and |error| are updated for the second attempt; a failed retry leaves an
+// error that carries both reasons. Never retries an override, a refusal, or
+// a second time.
+template <class Attempt, class SetIcd>
+IcdFallbackResult init_with_icd_fallback(
+    HoneykrispIcdSelection& selection,
+    bool& no_supported_device,
+    bool& icd_retry,
+    std::string& error,
+    const std::vector<std::string>& candidates,
+    Attempt attempt,
+    SetIcd set_icd) {
+  IcdFallbackResult result;
+  if (attempt()) {
+    result.ok = true;
+    return result;
+  }
+  const std::string fallback =
+      no_supported_device ? system_icd_fallback(candidates, selection) : std::string();
+  if (fallback.empty()) {
+    return result;
+  }
+  const std::string packaged_error = error;
+  result.packaged_path = selection.path;
+  selection = HoneykrispIcdSelection{fallback, false, false};
+  icd_retry = true;
+  if (!set_icd(fallback)) {
+    return result;
+  }
+  if (attempt()) {
+    result.ok = true;
+    result.fallback_path = fallback;
+    return result;
+  }
+  error = packaged_error + " The system ICD " + fallback + " was tried next: " + error;
+  return result;
+}
+
 inline std::string resolve_honeykrisp_icd(
     const std::vector<std::string>& candidates,
     const char* user_files) {
