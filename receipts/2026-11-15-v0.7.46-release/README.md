@@ -2,7 +2,7 @@
 
 [Joshua's agent]
 
-Tag `v0.7.46` points at `44873d15989b57d30bbaad89d4f9aabb42e9774e` (the pin recorded in the gate logs). `RELEASE-NOTES.md` is the published body. The release was drafted first, every gate ran against the draft's assets, and it was published only after all of them passed (published 2026-11-15 20:17 UTC). The M5 Max check of #460 had not run when it was published; the notes say so.
+Tag `v0.7.46` points at `44873d15989b57d30bbaad89d4f9aabb42e9774e` (the pin recorded in the gate logs). `RELEASE-NOTES.md` is the published body. The release was drafted first, every gate ran against the draft's assets, and it was published only after all of them passed (published 2026-11-15 20:17 UTC). The check of #460 on an M5 had not run when it was published; the notes say so, and the result is under "After publishing, and not covered" below.
 
 ## Assets (SHA256SUMS of the release)
 
@@ -34,7 +34,7 @@ g7c-ane-worker-verify_RC=1 19:08:09
 g13-gdn-maskless_build_RC=1 19:08:32
 ```
 
-g7b, g7c and g13 failed with "no space left on device": the 3 GB `/tmp` tmpfs on that host was full of leftovers from the v0.7.45 gate runs and the first pass. Nothing in the product caused it. Space was freed, a free-space check on `/tmp` was added to the rows' preflight, and the failed gates were rerun as new rows. The gate scripts were not changed.
+g7b, g7c and g13 failed on a full 3 GB `/tmp` tmpfs on that host (leftovers from the v0.7.45 gate runs and the first pass). Only g7c's output shows the error ("Cannot write: No space left on device", while unpacking the vendored wheels). The g7b and g13 first-run logs were overwritten by their reruns (same log file names), so for those two the cause is inferred: they failed rc 1 within minutes of g7c on the same full `/tmp`, and passed unchanged after space was freed. Nothing in the product caused it. Space was freed and the failed gates were rerun as new queue rows. The rows' queue preflight (not `gates-batch.sh`, and not in this repo) got a check that `/tmp` has at least 1.5 GB free (`df -k /tmp` available column >= 1500000); the gate scripts were not changed.
 
 Reruns:
 
@@ -50,13 +50,13 @@ g1-clean-install_RC=0 20:15:03
 g9-speak-queue_RC=0 20:15:15
 ```
 
-- g9 failed twice before passing, both times because of the order I queued it, not the product. The first try (19:56:45, rc 1) found no wheel: the first g7c run had failed and deleted its private home. The second (20:10:21, rc 1) failed on `ModuleNotFoundError` for the assistant package: the gate imports it from the private home that install.sh fills, and g7c deletes and rebuilds that home with a venv only. The third try ran g1 first, which rebuilds the home; g9 then passed. A g1 try before that (20:12:31, rc 2) refused because the home path existed; it was moved aside. The order rule is: g9 runs after g1, not after g7c.
+- g9 failed twice before passing, both times because of the order I queued it, not the product. The first try (19:56:45, rc 1) found no wheel: the first g7c run had failed and deleted its private home. The second (20:10:21, rc 1) failed on `ModuleNotFoundError: No module named 'mlx_omarchy_assistant'` raised by the driver `scripts/release-gates/g9-speak-queue-driver.py`: it imports the assistant package from the private home that install.sh fills, and g7c deletes and rebuilds that home with a venv only. That traceback was in `g9-speak-queue.log` of the gate run; the passing rerun overwrote that file and I did not keep a copy, so this receipt holds only the rc 1 line (`results/gates-j2g9.out`) and the later pass after g1. The third try ran g1 first, which rebuilds the home; g9 then passed. A g1 try before that (20:12:31, rc 2) refused because the home path existed; it was moved aside. The order rule is: g9 runs after g1, not after g7c.
 - g13 and g15 build from the wheel's build tree, which exists only on the host that built the aarch64 wheel (the 13-inch M1). No gate ran on the 14-inch M2 Max, the 16-inch M1 Max or an M5 for this release.
 - Pinned decode on the uploaded aarch64 wheel, Qwen3.8-2B 4-bit, greedy, seed 0, 128 tokens requested: generated-ids digest `sha256:775bf034e185c8f9` in 5 of 5 runs; 28.54, 28.51, 28.57, 28.66, 28.67 tok/s, median 28.57. Identity check only; no older wheel was run on the same bench.
 
-## Not covered
+## After publishing, and not covered
 
-- #460 on an M5 Max: a single-script check (installed wheel as control, then the v0.7.46 vendored wheels in a private venv, the same matmul twice) is queued for the first Linux boot on that machine. Its verdict will be added here or in a follow-up receipt. If it shows a hang, a crash or a wrong device, the fix has to go into the packaged Mesa and the notes' claim about the M5 case will be corrected.
+- #460 on an M5: checked after publishing, 2026-11-15 14:29 to 14:30 CST, by the lane that owns that machine, with the stepwise card (not the single script, which was tested only with stubbed commands). The control (installed omarchy-mlx 0.7.40-3, no environment variables) failed: "refusing CPU tensor fallback in a release build ... no Vulkan physical devices found"; `vulkaninfo` on the packaged ICD found no GPU. The v0.7.46 vendored wheels in a private venv (tar sha256 and wheel version 0.32.4.dev202611151824+44873d15 checked) printed the `[omarchy]` line saying the packaged ICD found no supported device and the system ICD is used, then `Device(gpu, 0)` and `134217728.0`; the repeat run printed the same. One venv command in the card (`mlx-omarchy-info`) does not exist in the venv and printed an error. Whole output: the lane inbox message of that run (not in this repo); one machine, one boot, two runs.
 - The pacman package route is untouched: the packager's 24 h hold applies and no package was built.
 
 ## Known issue carried forward
