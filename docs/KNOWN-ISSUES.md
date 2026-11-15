@@ -61,7 +61,8 @@ On a MacBook Pro 16-inch with the M4 Pro (`Apple M4 Pro (G16S B1)`,
 failing case of `omarchy_runtime_tests` (59/60). The rerun printed
 `iters=400 serialized_median=0.0497847s concurrent_median=0.0568427s
 ratio=0.875833`, against the 0.95 floor. The first run on the same
-build failed the same case; its ratio was not kept. Both destination
+build also failed one case (59/60); its log does not name the case or
+keep the ratio. Both destination
 buffers still verify byte-for-byte (the two `memcmp` checks pass), so
 this is a timing loss, not a correctness failure. The device exposes 8
 compute queues and the test interleaves both streams on one `VkQueue`.

@@ -21,7 +21,7 @@ Release v0.7.41, wheel `mlx_omarchy-0.32.4.dev202611111431+8380f002-cp314-cp314-
 
 ## Correctness probes
 
-`scripts/collect_deep.py --skip profile --out ...` at tag v0.7.41, with nothing submitted. `collector/` has the correctness, benchmark and environment sections.
+`scripts/collect_deep.py --skip profile --out ...` at tag v0.7.41, with nothing submitted. `collector/` has the correctness, benchmark and environment sections. The A18 Pro environment section records `MESA_LOADER_DRIVER_OVERRIDE=zink`, set in that machine's desktop session. It picks the OpenGL (Gallium) driver for the Mesa loader and does not select a Vulkan ICD, so it does not change which Vulkan driver the runs used; the Vulkan device in them is `Apple A18 Pro (G17P B1)` (`suite/a18pro.txt`).
 
 | Chip | Probe ops | Matmul fp32 1024, median ms (TFLOPS) |
 |---|---|---|
