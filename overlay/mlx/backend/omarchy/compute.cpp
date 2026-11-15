@@ -689,6 +689,7 @@
 #include "matmul_direct_bf16_nt_k4s8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
+#include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -2024,6 +2025,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           sdpa_prefill_flash_causal_coopmat_bf16_qchunk8,
           sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_size};
+    case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2:
+      return {
+          sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2,
+          sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -2033,6 +2038,7 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::MatmulDirectBF16NtK4S8:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8:
+    case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
