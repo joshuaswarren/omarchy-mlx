@@ -68,7 +68,7 @@ only so the name matches. The driver is unchanged.
 
 The backend admits a device if its vendor id is `0x106b`, or its device
 name contains `honeykrisp`, or its driver id is Mesa Honeykrisp or Aurora
-Borealis, or its device name starts with `Apple M` (Aurora's packaged Mesa
+Borealis, or its device name starts with `Apple M` and a digit (Aurora's packaged Mesa
 names Apple GPUs that way, for example `Apple M5 Max (G17C B1)`, and may
 report a driver id the build does not list). It also
 needs Vulkan 1.3 or newer (1.4 is fine). Otherwise it refuses with
@@ -83,7 +83,7 @@ If it refuses, you have two options:
 - For a clean admit, add your device name to the admission test in
   `device.cpp` (the condition that reads `apple || honeykrisp_name ||
   honeykrisp_driver || apple_chip_name`). Use the `deviceName` string from step 1 exactly.
-  This repository admits only the `Apple M` prefix and does not guess any other name.
+  This repository admits only the `Apple M<digit>` prefix and does not guess any other name.
 
 ## 5. Collect a table row
 

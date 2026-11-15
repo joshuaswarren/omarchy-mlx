@@ -1086,15 +1086,16 @@ DeviceSupport classify_physical_device(
   // macros; never guard them with #ifdef. Apple vendor 0x106b stays as an
   // alternate signal for Apple GPUs on other driver builds. Aurora's packaged
   // Mesa names the device "Apple M<n> ... (G<..>)" under Mesa's vendor id and
-  // may report a driver id this list does not carry (the M5 Max was refused
-  // that way), so the chip name is a third signal. It needs the "Apple M"
-  // prefix, not a substring: a non-Apple device is still refused.
+  // may report a driver id this list does not carry, so the chip name is a
+  // third signal. It needs the prefix "Apple M" plus a digit, not a substring:
+  // a non-Apple device ("Apple Metal ...") is still refused.
   bool apple = props.vendorID == kAppleVendorId;
   bool honeykrisp_name =
       contains_case_insensitive(props.deviceName, "honeykrisp");
   bool honeykrisp_driver = driver_id == kMesaHoneykrispDriverId ||
       driver_id == kAuroraBorealisDriverId;
-  bool apple_chip_name = std::strncmp(props.deviceName, "Apple M", 7) == 0;
+  bool apple_chip_name = std::strncmp(props.deviceName, "Apple M", 7) == 0 &&
+      std::isdigit(static_cast<unsigned char>(props.deviceName[7]));
 
   if (apple || honeykrisp_name || honeykrisp_driver || apple_chip_name) {
     s.supported = true;
