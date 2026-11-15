@@ -9,6 +9,7 @@ preserves the honest Linux message and the darwin branch.
 """
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from unittest import mock
@@ -108,6 +109,37 @@ def test_enforcer_patch_keeps_darwin_branch():
     assert "+import platform" in patch         # Linux branch added platform import
     assert "logger.info" in patch             # Linux adds an INFO; darwin warning untouched
     assert "logger.warning" not in patch      # the darwin warning is preserved by omission, not re-added
+
+
+# ---------- serve cache limit (#435) ----------
+def _set_cache_limit_guards(path: Path) -> list[list[str]]:
+    """The enclosing if-tests of every mx.set_cache_limit call in a file."""
+    out: list[list[str]] = []
+
+    def walk(node: ast.AST, tests: list[str]) -> None:
+        if isinstance(node, ast.If):
+            for n in node.body:
+                walk(n, tests + [ast.unparse(node.test)])
+            for n in node.orelse:
+                walk(n, tests)
+            return
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "mx.set_cache_limit":
+            out.append(tests)
+        for n in ast.iter_child_nodes(node):
+            walk(n, tests)
+
+    walk(ast.parse(path.read_text()), [])
+    return out
+
+
+def test_serve_raises_cache_limit_only_on_metal():
+    # A RAM-sized cache fills the omarchy Vulkan heap (#435); only the Metal
+    # #300 guard may raise it.
+    for rel in ("omlx/cli.py", "omlx/server.py"):
+        guards = _set_cache_limit_guards(OMLX_SRC / rel)
+        assert guards, rel
+        for tests in guards:
+            assert any("mx.metal.is_available()" in t for t in tests), rel
 
 
 # ---------- scanner ----------

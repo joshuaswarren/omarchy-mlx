@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import unittest
+import unittest.mock
 from pathlib import Path
 
 try:
@@ -81,6 +81,8 @@ class ParakeetCliTest(unittest.TestCase):
 class ParakeetDependencyProbeTest(unittest.TestCase):
     """The transcribe dependency probe: message, self-heal, import closure."""
 
+
+
     @classmethod
     def setUpClass(cls):
         import importlib.util
@@ -90,6 +92,56 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
         )
         cls.mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.mod)
+
+    def test_transcribe_deps_include_the_mlx_wheel(self):
+        """g7d: the transcribe path does `import mlx.core as mx`, so the
+        probe must require mlx.core. A system python that has numpy and
+        protobuf but no mlx must still miss deps, so the CLI re-execs
+        into the install venv instead of failing mid-run with an import
+        traceback. Fails on the old two-entry tuple."""
+        self.assertIn("mlx.core", self.mod._TRANSCRIBE_DEPS)
+
+    def test_probe_reports_mlx_missing_when_only_it_is_absent(self):
+        """Simulate exactly the g7d host: numpy and protobuf import fine,
+        mlx.core absent. The real `_missing_runtime_deps` (unpatched
+        tuple) must report the mlx entry, so the CLI re-execs into the
+        install venv instead of failing mid-run. Failure mode this
+        guards: patching `_TRANSCRIBE_DEPS` in the test would pass even
+        on the old code, so the tuple stays untouched here."""
+        import importlib
+
+        real_import = importlib.import_module
+
+        def fake_import(name, *args, **kwargs):
+            if name == "mlx.core":
+                raise ImportError("No module named 'mlx.core'")
+            if name == "mlx":
+                # A bare top-level mlx without mlx.core (partial
+                # install): the old "mlx" probe passes on this host
+                # while the new "mlx.core" probe still refuses.
+                return real_import("sys")
+            return real_import(name, *args, **kwargs)
+
+        with unittest.mock.patch.object(
+            importlib, "import_module", side_effect=fake_import,
+        ), unittest.mock.patch.dict(
+            self.mod.__dict__, {"importlib": importlib},
+        ):
+            missing = self.mod._missing_runtime_deps()
+            self.assertTrue(
+                any(part.startswith("mlx") for part in missing),
+                f"probe missed mlx on a mlx-less host: {missing}",
+            )
+            self.assertIn("mlx", self.mod._missing_deps_message(missing))
+
+
+
+    def test_mlx_pip_name_is_the_shipped_wheel(self):
+        """The repair line for the mlx entry must name this repo's wheel
+        (scripts/build-wheel.sh builds mlx_omarchy), not PyPI mlx."""
+        message = self.mod._missing_deps_message(["mlx.core"])
+        self.assertIn("mlx_omarchy", message)
+        self.assertNotIn("pip install mlx ", f"{message} ")
 
     def test_missing_deps_message_names_pip_line_and_interpreter(self):
         message = self.mod._missing_deps_message(["numpy", "google.protobuf"])

@@ -22,6 +22,7 @@ never promote an unqualified pair.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -104,7 +105,7 @@ def admissible_context(chat_entry: dict, *, other_bytes: int, preference: str,
     reserve = desktop_reserve(available)
 
     def fits(tokens: int) -> bool:
-        total = budget.estimate_required(memory, tokens).total
+        total = chat_estimate(chat_entry, tokens).total
         return total + other_bytes + reserved_bytes + reserve <= available
 
     def largest_fitting(upper: int) -> int | None:
@@ -121,7 +122,7 @@ def admissible_context(chat_entry: dict, *, other_bytes: int, preference: str,
 
     memory_bound = largest_fitting(catalog.MAX_CONTEXT_TOKENS)
     if memory_bound is None:
-        need = budget.estimate_required(memory, catalog.MIN_CONTEXT_TOKENS).total
+        need = chat_estimate(chat_entry, catalog.MIN_CONTEXT_TOKENS).total
         raise PairError(
             "memory: even a minimum context does not fit "
             f"(need {need} bytes for chat + {other_bytes} for the rest of the "
@@ -493,6 +494,24 @@ def _boot_id() -> str | None:
 
 
 # ------------------------------------------------------------------ workers
+
+def chat_estimate(chat_entry: dict, tokens: int) -> budget.Estimate:
+    """What the chat worker needs at `tokens`. _chat_worker_argv launches mlx-lm with the
+    prefill chunk serve_cli.server_argv pins, so its scratch is part of the estimate (issue
+    #240); every admission, reservation and claim of the chat worker goes through here.
+    Above the default context, an entry that names a measured worker peak
+    (extension.backend_context_peak_bytes, taken at its qualified limit) needs at least that peak:
+    the scratch formula alone read 7.7 GiB where the 4B worker peaked at 16.9 GiB."""
+    estimate = budget.estimate_required(
+        chat_entry["memory"], tokens,
+        budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, tokens))
+    peak = _opt_int((chat_entry.get("extension") or {}).get("backend_context_peak_bytes"),
+                    "backend_context_peak_bytes")
+    if peak is None or tokens <= budget.DEFAULT_CONTEXT_TOKENS or peak <= estimate.total:
+        return estimate
+    return dataclasses.replace(estimate, workspace=peak - estimate.weights - estimate.kv,
+                               peak_override=True, total=peak)
+
 
 def _chat_worker_argv(spec: managed.WorkerSpec) -> list[str]:
     return serve_cli.server_argv("mlx-lm", None, spec.model_dir,
@@ -1192,7 +1211,7 @@ class PairManager:
                     f"memory changed since setup: the prepared context {context} "
                     f"no longer fits (admissible {sizing['context_tokens']}, "
                     f"binding {sizing['binding']}); re-run setup")
-            chat_bytes = budget.estimate_required(chat["memory"], context).total
+            chat_bytes = chat_estimate(chat, context).total
             items = [(chat["id"], chat_bytes, f"pair {pair['id']} chat"),
                      (decision["id"], decision_bytes, f"pair {pair['id']} decisions")]
             if prepared["voice_bytes"]:
@@ -1432,8 +1451,8 @@ class PairManager:
                 return {"ok": False, "changed": False,
                         "reason": sizing["binding"], "limits": sizing["limits"],
                         "context_tokens": current, "requested": required_tokens}
-            new_bytes = budget.estimate_required(chat["memory"], required_tokens).total
-            current_bytes = budget.estimate_required(chat["memory"], current).total
+            new_bytes = chat_estimate(chat, required_tokens).total
+            current_bytes = chat_estimate(chat, current).total
             record = self._records[chat["id"]]
             log_path = (self.home / "assistant" / "logs"
                         / f"{prepared['pair_id']}-chat.log")
@@ -1451,8 +1470,7 @@ class PairManager:
                                           tokens, 0)
                 payload = {"name": chat["id"],
                            "claim_token": record["claim_token"],
-                           "bytes": budget.estimate_required(
-                               chat["memory"], tokens).total,
+                           "bytes": chat_estimate(chat, tokens).total,
                            "pair_id": prepared["pair_id"]}
                 return managed.spawn_claiming_worker(
                     _chat_worker_argv(spec), payload,

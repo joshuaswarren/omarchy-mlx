@@ -167,17 +167,17 @@ and date:
 - **2026-11-08 perf rerun**, the 11 kernels of the 2026-10-08 tail that
   the inventoried twelve do not cover (`kda_glue_pre/post` and the nine
   `cbq_*`), M1 (T8103), wheel `0.32.4.dev202611071357+d04e8da83`, same
-  sha-pinned harness. `kda_glue_post` moved from COMPILE-FAIL to WRONG
-  (it compiles and runs; 53 of 12288 elements disagree with the reference
-  and the cause is not yet identified). `kda_glue_pre` compiled and ran
+  sha-pinned harness. `kda_glue_post` moved from COMPILE-FAIL to WRONG then
+  (it compiles and runs; 53 of 12288 elements disagreed with the reference
+  and the cause was found on 2026-11-13, see below). `kda_glue_pre` compiled and ran
   on the 2026-11-08 confirmation rerun
   (wheel `0.32.4.dev202611081835+d04e8da83`, carrying the translator fix
   of 944c5f0e2: the chained-cast collapse now stays balanced and the
   alias rewrites match only the callee position and adjacent cast spans),
-  and it is WRONG (13 of 12288 elements disagree, maxdiff 0.0164835; the
+  and it was WRONG then (13 of 12288 elements disagree, maxdiff 0.0164835; the
   translator still drops the intermediate bf16 rounding of
   literal-bfloat16 locals, the same class of gap as `kda_glue_post`'s
-  53-element disagreement). The same rerun reproduced the twelve
+  53-element disagreement; both rows PASS since 2026-11-13, see the table below). The same rerun reproduced the twelve
   inventoried rows' table values exactly, so the fix changed no passing
   kernel's numerics. The nine
   `cbq_*` rows refuse exactly as before, by design.
@@ -205,13 +205,13 @@ and date:
 | `cbq_gather_mm_glu` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) — proves unsupported bit-reinterpret casts are rejected, not mis-translated: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
 | `cbq_grad_d` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) — proves the guard rejects raw device-pointer indexing before wrong addressing can be emitted: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
 | `cbq_grad_x` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) — proves the guard rejects raw device-pointer indexing before wrong addressing can be emitted: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `kda_glue_pre` | WRONG | 13/12288 outputs bad, maxdiff 0.0164835 (worst element: got 2.71875, want 2.6875, a bf16 rounding gap at the literal-bfloat16 locals the translator still promotes without rounding): it compiles and runs now (2026-11-08 morning: COMPILE-FAIL, constructor-call syntax error, fixed by 944c5f0e2) | `d04e8da83`+944c5f0e2 | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `kda_glue_post` | WRONG | 53/12288 outputs bad, maxdiff 0.0155039 (worst absolute element: got -0.7734375, want -0.78515625, a 3-ulp bf16 gap): it compiles and runs, but it disagrees with the reference on 53 elements and the cause is not yet identified (2026-10-08: COMPILE-FAIL, nested C-casts; 2026-11-08 confirmation rerun: unchanged) | `d04e8da83`+944c5f0e2 | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `kda_glue_pre` | PASS | maxdiff 3.75977e-07 on the gate output, q, k, v and the conv states bit-exact (13/12288 q elements were off by up to 2 bf16 ulp before: the translator treated the literal `bfloat16_t` type as plain float, so casts, initializers and reassignments skipped the bf16 rounding Metal applies and only the output store rounded; on the 13-inch M1 (G13G) dump, device q matched a model that rounds only at the store on 12288 of 12288 elements and the Metal-faithful model on 5533 of 12288) | [receipt](../receipts/2026-11-13-kda-glue-literal-bf16/README.md) | M1 Max (G13C) | Linux 7.1.12 | 2026-11-13 |
+| `kda_glue_post` | PASS | exact, maxdiff 0 (53/12288 outputs were off by up to 3 bf16 ulp before; same cause as `kda_glue_pre`, fixed by the same change; the cause of this row was inferred from the `kda_glue_pre` dump, the row itself went from 53 bad to exact on rerun) | [receipt](../receipts/2026-11-13-kda-glue-literal-bf16/README.md) | M1 Max (G13C) | Linux 7.1.12 | 2026-11-13 |
 | `moe_route_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_pair_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 
-**Counts: 15 PASS / 2 WRONG / 0 COMPILE-FAIL / 9 REFUSED = 26**
+**Counts: 17 PASS / 0 WRONG / 0 COMPILE-FAIL / 9 REFUSED = 26** (the two `kda_glue` rows were rerun on the M1 Max (G13C) on 2026-11-13 with the literal-bfloat16 rounding fix; the other 24 rows reproduce the 2026-11-13 pre-fix rerun on the same chip line for line)
 
 `maxdiff` is the runner's worst relative error against the reference. `0` is
 an exact integer or bit match. `1e+308` is the runner's sentinel for equal

@@ -1,0 +1,24 @@
+{
+ "label": "m2-default",
+ "model": "Qwen3-4B-Instruct-2507-4bit",
+ "prompt_tokens": 443,
+ "gen_tokens": 128,
+ "decode_tok_s": [
+  17.45,
+  17.56
+ ],
+ "decode_median": 17.51,
+ "prefill_tok_s": [
+  79.3,
+  79.2
+ ],
+ "tokens_sha": [
+  "9e20669f96a7c584",
+  "9e20669f96a7c584"
+ ],
+ "env": {
+  "MLX_OMARCHY_BATCH_WORK": "10000"
+ },
+ "mlx": "0.32.4.dev202611111431+8380f002",
+ "load1_end": 0.91259765625
+}
