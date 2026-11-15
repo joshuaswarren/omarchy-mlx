@@ -1942,6 +1942,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_batch4_bf16,
           qmm_vec_q4_word_subgroup_batch4_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8BF16:
+      return {
+          qmm_vec_q4_word_subgroup_rows8_bf16,
+          qmm_vec_q4_word_subgroup_rows8_bf16_size};
     case ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16:
       return {
           gated_delta_prefill_recur32_masked_bf16,
