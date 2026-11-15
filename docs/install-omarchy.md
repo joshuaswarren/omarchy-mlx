@@ -139,6 +139,7 @@ once its summed dispatch work-group counts reach the budget. The default is
 a per-board table (`receipts/2026-10-02-submission-cap-19`,
 `receipts/2026-10-12-submission-cap-calibration`,
 `receipts/2026-10-20-g13g-batch-work-8000`,
+`receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p`,
 `receipts/2026-11-13-g18g-batch-work`,
 `receipts/2026-11-15-m4-pro-g16s-batch-work`): per-group GPU cost
 differs by an order of magnitude across the M1 family, so one global count
@@ -147,9 +148,27 @@ into ~2-6 ms submissions. A single dispatch larger than the budget still
 runs whole. Splitting happens between dispatches. Copies/fills ride the
 node and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap
 (headless boxes). Boards with no calibrated row take 5000 (shortest
-submissions measured to stay in the band). The 13-inch M1 row is 8000: on
+submissions measured to stay in the band). The M1 Pro (G13S), M2 (G14G)
+and A18 Pro (G17P) rows
+(`receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p`) are each the largest
+swept budget that keeps the Qwen3-4B submission p50 in the 2-6 ms band and
+its p99 at or under ~40 ms, half the ~78 ms stutter threshold, so the tail
+stays clear of a desktop hitch and not only the median does. The older rows
+were picked on p50 before that rule, and the M4 Pro row has its own tail
+data (below). The 13-inch M1 row is 8000: on
 that board 8000 gives p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B) and
-decodes 2.4 % faster than 5000. The M4 Pro (G16S) row is 15000: with its 2x4 decode
+decodes 2.4 % faster than 5000. The M1 Pro row is 10000, the M2 row 8000
+and the A18 Pro row 5000 (= the fallback). On the M1 Pro, 10000 against
+the old 5000 default decodes Qwen3.8-2B at 71.7 tok/s against 61.0 and
+Qwen3-4B at 37.5 against 31.1, with the same tokens, at 4B submission p99
+36.2 ms and max 43.2 ms (a 20000 pick reached p99 72.3 ms, max 86.0, at
+the stutter). On the M2, 8000 decodes +2.7 % on both models at 4B
+submission p99 37.9 ms (10000 reached 48.3 ms). These three rows were
+measured with the system Borealis Mesa (be147e3625 on the M1 Pro and M2,
+c208afc352 on the A18 Pro) on a 16-core M1 Pro, an 8-core M2 and the
+5-core A18 Pro. Per-group cost depends on the driver and the core count, so
+another driver build or a smaller part of the same board can land
+elsewhere in the band. The M4 Pro (G16S) row is 15000: with its 2x4 decode
 Qmm geometry, 5000 split a Qwen3-8B token into about 48 submissions. 15000 decodes 8 to
 18 % faster on three models with identical greedy ids, and its release-build submission
 tail (DRM scheduler timestamps) matches 5000: Qwen3-4B p99 27.8 ms against 27.2 ms, no

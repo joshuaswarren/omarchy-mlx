@@ -1,0 +1,44 @@
+
+=== budget=5000 ===
+stdout: decode_tps=21.471 over 64 tokens (2.98s wall)
+
+budget=5000: n=1434 p50=1.269 ms p95=1.561 ms p99=14.633 ms max=28.654 ms mean=1.587 ms
+  decode_tps=21.471 over 64 tokens (2.98s wall)
+
+=== budget=8000 ===
+stdout: decode_tps=21.836 over 64 tokens (2.93s wall)
+
+budget=8000: n=1002 p50=1.948 ms p95=2.173 ms p99=29.066 ms max=35.992 ms mean=2.310 ms
+  decode_tps=21.836 over 64 tokens (2.93s wall)
+
+=== budget=10000 ===
+stdout: decode_tps=23.128 over 64 tokens (2.77s wall)
+
+budget=10000: n=788 p50=2.499 ms p95=2.706 ms p99=36.207 ms max=43.224 ms mean=2.866 ms
+  decode_tps=23.128 over 64 tokens (2.77s wall)
+
+=== budget=15000 ===
+stdout: decode_tps=24.060 over 64 tokens (2.66s wall)
+
+budget=15000: n=573 p50=3.709 ms p95=3.967 ms p99=57.424 ms max=60.761 ms mean=3.925 ms
+  decode_tps=24.060 over 64 tokens (2.66s wall)
+
+=== budget=20000 ===
+stdout: decode_tps=24.285 over 64 tokens (2.64s wall)
+
+budget=20000: n=431 p50=4.696 ms p95=5.358 ms p99=72.313 ms max=86.030 ms mean=5.219 ms
+  decode_tps=24.285 over 64 tokens (2.64s wall)
+
+=== budget=40000 ===
+stdout: decode_tps=24.993 over 64 tokens (2.56s wall)
+
+budget=40000: n=219 p50=9.312 ms p95=9.557 ms p99=108.008 ms max=157.933 ms mean=10.238 ms
+  decode_tps=24.993 over 64 tokens (2.56s wall)
+
+=== summary ===
+budget=5000: n=1434 p50=1.27 p95=1.56 p99=14.63 max=28.65 ms
+budget=8000: n=1002 p50=1.95 p95=2.17 p99=29.07 max=35.99 ms
+budget=10000: n=788 p50=2.50 p95=2.71 p99=36.21 max=43.22 ms
+budget=15000: n=573 p50=3.71 p95=3.97 p99=57.42 max=60.76 ms
+budget=20000: n=431 p50=4.70 p95=5.36 p99=72.31 max=86.03 ms
+budget=40000: n=219 p50=9.31 p95=9.56 p99=108.01 max=157.93 ms

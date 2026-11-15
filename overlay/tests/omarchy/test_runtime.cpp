@@ -784,6 +784,22 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 8000);
 
+  // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (tail/ rework): the
+  // largest swept budget that keeps the Qwen3-4B submission p50 at or under
+  // 6 ms AND the p99 at or under ~40 ms (half the ~78 ms #19 stutter) on
+  // each board. G13S lands 10000 (p99 36.2 ms; 20000 reached p99 72.3 ms),
+  // G14G 8000 (p99 37.9 ms; 10000 reached 48.3 ms) and G17P keeps 5000
+  // (= fallback; 8000 reached p99 48.9 ms). The names are the deviceName
+  // strings the Borealis driver reports. The G13S row replaces the old
+  // uncalibrated 0 placeholder.
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S C0)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 (G14G B0)") == 8000);
+  CHECK(omarchy::calibrated_batch_work("Apple A18 Pro (G17P B1)") == 5000);
+
+  // The M2 base row does not shadow the M2 Max row, nor the reverse.
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 100000);
+
   // The G18G row (M6) resolves to its own calibrated budget, not the
   // 5000 fallback: without the row the M6 split every decode step into
   // 12 (2B) and 20 (4B) submissions, against 2 and 3 with the row.
@@ -797,10 +813,6 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // tail to 49.7 ms and 30000 the 8B tail to 94.6 ms.
   CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
   CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
-
-  // The uncalibrated M1 Pro row stays at 0: no guessed number for the
-  // reporter's board (G13S, t6000).
-  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 0);
 
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
