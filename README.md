@@ -88,6 +88,8 @@ stack named in its receipt. On an M3 or M4 Mac, run the tester kit,
 `bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
 to send us the numbers and ANE state that only real silicon gives. On an M4 that runs Linux the kit runs the collector only, and the ANE is not supported there yet. The beta path for M4 on Linux, with its steps and what is not measured, is in [docs/m4-linux.md](docs/m4-linux.md).
 
+**M5 users: use the edge channel for now.** The M5 is not in the table above and has no receipt in this repo yet. The Omarchy rc and stable channels still carry omarchy-mlx 0.7.28, which cannot use an M5 GPU (it accepts only the stock Honeykrisp driver id; the Aurora driver id the M5 reports was added in v0.7.39). Edge carries 0.7.40-3, which ran on an M5 Max GPU in a lab run with the system driver. Switch back when rc and stable move.
+
 The ANE is separate hardware from the GPU. It has its own driver and its
 own tested state. Chip-by-chip ANE status, including what each untested
 chip needs, lives in the [chip coverage
