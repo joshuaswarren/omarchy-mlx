@@ -11,6 +11,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -29,6 +30,8 @@ constexpr size_t kPageSize = 4096;
 // offloaded Qwen3-30B-A3B ran out of the Honeykrisp heap (50% of RAM).
 constexpr size_t kBinThreshold = 1u << 20;
 constexpr size_t kSubBinsPerOctave = 8;
+// How long an OOM retry waits for freed memory to come back (see malloc).
+constexpr auto kOomRetryWindow = std::chrono::seconds(5);
 
 size_t round_size(size_t size) {
   if (size <= kPageSize) {
@@ -227,15 +230,22 @@ Buffer VulkanAllocator::malloc(size_t size) {
   VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   mai.allocationSize = reqs.size;
   mai.memoryTypeIndex = type_index;
-  VkResult alloc_result = VK_SUCCESS;
-  if (consume_test_oom()) {
-    alloc_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-  } else {
-    alloc_result =
-        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
-  }
-  if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-      alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+  // Freed device memory reaches the kernel late: the driver parks freed
+  // BOs in its own cache for up to 2 s, and the kernel returns their pages
+  // after that. On the 13-inch M1 (#435) the retry right after the cache
+  // release still failed with 2.5 GB live on a 7.7 GB heap. So the retry
+  // waits for that memory, with a deadline, before it reports OOM.
+  auto allocate = [&] {
+    return consume_test_oom()
+        ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+        : dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+  };
+  auto out_of_memory = [](VkResult r) {
+    return r == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+        r == VK_ERROR_OUT_OF_HOST_MEMORY;
+  };
+  VkResult alloc_result = allocate();
+  if (out_of_memory(alloc_result)) {
     // Freed buffers of submitted batches wait in the quarantine; they hold
     // heap bytes that neither active_memory_ nor the cache count. The
     // drain's release pass stops one generation short of the newest
@@ -260,8 +270,19 @@ Buffer VulkanAllocator::malloc(size_t size) {
       std::unique_lock rl(mutex_);
       buffer_cache_.clear();
     }
-    alloc_result =
-        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+    alloc_result = allocate();
+    const auto deadline = std::chrono::steady_clock::now() + kOomRetryWindow;
+    auto pause = std::chrono::milliseconds(5);
+    while (out_of_memory(alloc_result) &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(pause);
+      pause = std::min(pause * 2, std::chrono::milliseconds(250));
+      {
+        std::unique_lock rl(mutex_);
+        buffer_cache_.clear();
+      }
+      alloc_result = allocate();
+    }
   }
   if (alloc_result != VK_SUCCESS) {
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
