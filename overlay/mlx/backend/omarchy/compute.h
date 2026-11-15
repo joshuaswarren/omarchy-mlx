@@ -1120,6 +1120,10 @@ enum class ComputeKernel : uint16_t {
   // -DQ_CHUNK=8): eight 8-wide Q panels stay live and are reused across the
   // four key-blocks of a tile. Appended to keep profile kernel ids stable.
   SdpaCausalFlashCoopmatBF16Qchunk8,
+  // Env-gated KV_HEADS=2 twin of the Q_CHUNK=8 causal flash kernel (not a
+  // default): two GQA query heads share each K/V tile. Appended to keep
+  // profile kernel ids stable.
+  SdpaCausalFlashCoopmatBF16Qchunk8Heads2,
   Count,
 };
 

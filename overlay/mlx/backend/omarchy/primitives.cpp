@@ -16698,13 +16698,25 @@ void ScaledDotProductAttention::eval_gpu(
       if (cf_is_g16s && !qchunk_off) {
         cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8;
       }
+      // Env-gated K/V amortization. Not a default.
+      // MLX_OMARCHY_SDPA_FLASH_KV=heads2
+      uint32_t cf_grid_y = static_cast<uint32_t>(heads);
+      const char* kv_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_KV");
+      if (kv_env != nullptr && std::strcmp(kv_env, "heads2") == 0 &&
+          !qchunk_off && repeats >= 2 && (repeats % 2 == 0) &&
+          (heads % 2 == 0)) {
+        params.lhs_gap = checked_u32(heads, tag, out);
+        cf_grid_y = static_cast<uint32_t>(heads / 2);
+        cf_kernel =
+            omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2;
+      }
       encoder.dispatch_compute(
           cf_kernel,
           cf_bindings,
           params,
           (static_cast<uint32_t>(q_len) + kCausalFlashWgRows - 1u) /
               kCausalFlashWgRows,
-          static_cast<uint32_t>(heads),
+          cf_grid_y,
           static_cast<uint32_t>(batch));
       return;
     }
