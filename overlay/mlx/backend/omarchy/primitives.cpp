@@ -9253,19 +9253,17 @@ bool dispatch_quantized_gemv_group(
     if (members[i].epilogue) {
       const array& add = *members[i].epilogue;
       const array& addend = *members[i].addend;
-      // Token route: the epilogue spans every token row; the addend is
-      // either the full (rows, n) residual or the row-broadcast (n)
-      // bias vector (the shader takes the row stride from in_strides).
-      size_t addend_expected =
-          token_route && addend.size() != node.size()
-          ? static_cast<size_t>(rows) * node.size()
-          : node.size();
-      if (add.dtype() != dtype ||
-          add.size() != static_cast<size_t>(rows) * node.size() ||
+      // node.size() is rows * n. Token route: the epilogue spans every
+      // token row; the addend is either the full (rows, n) residual or
+      // the row-broadcast (n) bias vector (the shader takes the row
+      // stride from in_strides).
+      const size_t row_size = static_cast<size_t>(n);
+      const bool broadcast_addend =
+          token_route && addend.size() == row_size;
+      size_t addend_expected = broadcast_addend ? row_size : node.size();
+      if (add.dtype() != dtype || add.size() != node.size() ||
           add.primitive().stream() != stream || addend.dtype() != dtype ||
-          (addend.size() != node.size() &&
-           addend.size() !=
-               static_cast<size_t>(rows) * node.size()) ||
+          (addend.size() != node.size() && !broadcast_addend) ||
           !whole_dense(addend, addend_expected) ||
           !input_ready(addend, stream)) {
         return false;
