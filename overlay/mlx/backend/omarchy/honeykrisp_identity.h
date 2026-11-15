@@ -143,6 +143,25 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
                            apple_m3_m4_chip_note());
 }
 
+// The system Honeykrisp ICD to retry with when the packaged recipe ICD
+// enumerates no supported device (the packaged Mesa targets M1/M2; a newer
+// chip may only be served by the system driver). Empty when the packaged
+// ICD was not the one selected (an explicit override is never second-guessed)
+// or when no other Honeykrisp ICD is installed.
+inline std::string system_icd_fallback(
+    const std::vector<std::string>& candidates,
+    const HoneykrispIcdSelection& selection) {
+  if (!selection.packaged || selection.user_override) {
+    return {};
+  }
+  for (const auto& candidate : candidates) {
+    if (candidate != selection.path && is_honeykrisp_icd(candidate)) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
 inline std::string resolve_honeykrisp_icd(
     const std::vector<std::string>& candidates,
     const char* user_files) {

@@ -424,6 +424,24 @@ TEST_CASE("an explicit user ICD override beats the packaged ICD") {
   std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("a packaged ICD that finds no supported device falls back to the system ICD") {
+  using namespace mlx::core::omarchy;
+  const std::string packaged = "/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json";
+  const std::vector<std::string> candidates{
+      "/usr/share/vulkan/icd.d/lvp_icd.json",
+      "/usr/share/vulkan/icd.d/asahi_icd.json"};
+  // Packaged ICD selected: the retry target is the first system Honeykrisp ICD.
+  CHECK(system_icd_fallback(candidates, {packaged, true, false}) == candidates[1]);
+  // Never second-guess an explicit user choice, and never retry the system ICD
+  // with itself.
+  CHECK(system_icd_fallback(candidates, {"/tmp/mine-asahi_icd.json", false, true}).empty());
+  CHECK(system_icd_fallback(candidates, {candidates[1], false, false}).empty());
+  // No system Honeykrisp ICD installed: nothing to retry with.
+  CHECK(system_icd_fallback({candidates[0]}, {packaged, true, false}).empty());
+  // The packaged file itself is not a fallback even when it sits in a search dir.
+  CHECK(system_icd_fallback({packaged}, {packaged, true, false}).empty());
+}
+
 TEST_CASE("the packaged mesa-git-sha file supplies the expected SHA") {
   using namespace mlx::core::omarchy;
   const auto prefix = std::filesystem::temp_directory_path() /

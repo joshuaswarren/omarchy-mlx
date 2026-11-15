@@ -354,6 +354,16 @@ therefore still resolves. The packaged file
    Without the package, that is usually the system Mesa driver. No
    packaged SHA applies.
 
+When case 2 selected the packaged ICD and it enumerates no supported
+device, the backend destroys that Vulkan instance and retries once with the
+first Honeykrisp ICD JSON of the system search (case 3), setting both
+variables to it (`icd_source` `search`) and printing one `[omarchy]` line to
+stderr that names both ICDs. The packaged Mesa targets M1/M2, so a newer
+chip it cannot serve can still run on the system driver. An override (case 1)
+never falls back, a refusal other than "no supported device" (for example a
+packaged SHA mismatch) does not retry, and when the retry also finds no
+device the error carries both reasons.
+
 In cases 2 and 3 this process sets both `VK_DRIVER_FILES` and
 `VK_ICD_FILENAMES` to the selected path. An override leaves those variables
 as the caller set them.
