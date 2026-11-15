@@ -1,16 +1,30 @@
 diff --git a/omlx/cli.py b/omlx/cli.py
-index a40b7e0d..e6e8d361 100644
+index 5bbd466..4a85213 100644
 --- a/omlx/cli.py
 +++ b/omlx/cli.py
-@@ -437,7 +437,10 @@ def serve_command(args):
-         # with mx.synchronize()). See issue #300.
+@@ -459,7 +459,10 @@ def serve_command(args):
          import mlx.core as mx
  
--        total_mem = mx.device_info().get("memory_size", 0)
-+        # omarchy (Linux/Vulkan) device_info exposes "total_memory"; Metal
-+        # exposes "memory_size". Same unified-RAM semantic, both honest.
-+        info = mx.device_info()
-+        total_mem = int(info.get("memory_size") or info.get("total_memory") or 0)
-         if total_mem > 0:
+         total_mem = mx.device_info().get("memory_size", 0)
+-        if total_mem > 0:
++        # omarchy-mlx: the allocator holds freed buffers until their GPU fence
++        # signals, so the #300 panic cannot happen; a cache as big as RAM fills
++        # the Vulkan heap instead (omarchy-mlx #435). Keep the backend default.
++        if total_mem > 0 and mx.metal.is_available():
              mx.set_cache_limit(total_mem)
  
+         # Initialize server
+diff --git a/omlx/server.py b/omlx/server.py
+index 7890370..0546bd1 100644
+--- a/omlx/server.py
++++ b/omlx/server.py
+@@ -9211,7 +9211,8 @@ model and sampling defaults are managed via the admin page.
+     import mlx.core as mx
+ 
+     total_mem = mx.device_info().get("memory_size", 0)
+-    if total_mem > 0:
++    # omarchy-mlx: see cli.py; a RAM-sized cache fills the Vulkan heap (#435).
++    if total_mem > 0 and mx.metal.is_available():
+         mx.set_cache_limit(total_mem)
+ 
+     # Initialize server
