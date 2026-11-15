@@ -8,7 +8,7 @@ All three qualification gates are `untested`. `recommended` is `false`. The entr
 - `model.safetensors` is 5,146,800,534 bytes. Its SHA-256 `932b8271...` equals the Hugging Face LFS digest and the file downloaded on the test machine.
 - All 10 files of the snapshot are listed with size and SHA-256 (5,179,241,512 bytes in total).
 - License `gemma` (Gemma terms of use, from the pinned model card). Not Apache.
-- `kv_bytes_per_token` is 16384: four full-attention layers own a cache (the last 18 of 42 layers share earlier caches), 2 KV heads, 512 global head dim, bf16. The 20 owning sliding-attention layers keep a fixed 512-token window of about 42 MB.
+- `kv_bytes_per_token` is 16384: four full-attention layers own a cache (the last 18 of 42 layers share earlier caches), 2 KV heads, 512 global head dim, bf16. The 20 owning sliding-attention layers keep a fixed 512-token window of about 21 MB.
 - `plan gemma-4-e4b-it-4bit --context 4096 --offline`: weights 4.79 GiB, KV 0.06 GiB, model requirement 6.72 GiB, verdict FITS.
 
 ## Run on the 13-inch M1 (15 GB, Mesa 26.3.0-devel 439dc032d7, omarchy-mlx 0.7.40)

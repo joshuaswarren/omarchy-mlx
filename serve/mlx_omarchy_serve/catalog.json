@@ -807,7 +807,7 @@
         "source_base_revision": "fee6332c1abaafb77f6f9624236c63aa2f1d0187",
         "min_mem_gib_basis": "ceil(weights_bytes * 1.25 / 2^30); static weights floor, not a measured peak",
         "scope": "Not run through the catalog qualification gates. Loaded with mlx_lm and served on a 13-inch M1 MacBook Pro under Omarchy: see the receipt in the pull request.",
-        "kv_basis": "16384 B/token = 2 (K+V) x 4 full-attention layers that own a cache (layers 5, 11, 17 and 23 of the first 24; the last 18 of 42 layers share earlier caches) x 2 KV heads x 512 global_head_dim x 2 bytes (bf16), from the pinned config. The 20 owning sliding-attention layers keep a fixed 512-token window (about 42 MB), not counted per token.",
+        "kv_basis": "16384 B/token = 2 (K+V) x 4 full-attention layers that own a cache (layers 5, 11, 17 and 23 of the first 24; the last 18 of 42 layers share earlier caches) x 2 KV heads x 512 global_head_dim x 2 bytes (bf16), from the pinned config. The 20 owning sliding-attention layers keep a fixed 512-token window (about 21 MB), not counted per token.",
         "license_source": "Hugging Face model card (README.md) and API cardData.license at this pinned revision (Gemma terms of use); public and ungated.",
         "files": [
           {"path": ".gitattributes", "size_bytes": 1570, "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"},
