@@ -656,6 +656,7 @@ enum class ComputeKernel : uint16_t {
   FastTrioRopePairF16,
   FastTrioRopePairBF16,
   FastTrioSwigluF16,
+  FastTrioSwigluBF16,
   // Symmetric-int8 matmul with runtime-quantized activations
   // (shaders/int8_matmul.comp); fast::Int8Matmul. Append-only profile id.
   Int8MatmulOp,

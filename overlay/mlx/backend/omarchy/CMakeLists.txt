@@ -645,6 +645,7 @@ omarchy_shader(fast_trio_norm_bf16 shaders/fast_trio.comp -DUSE_BF16=1 -DTRIO_NO
 omarchy_shader(fast_trio_rope_pair_f16 shaders/fast_trio.comp -DUSE_FP16=1 -DTRIO_ROPE_PAIR=1)
 omarchy_shader(fast_trio_rope_pair_bf16 shaders/fast_trio.comp -DUSE_BF16=1 -DTRIO_ROPE_PAIR=1)
 omarchy_shader(fast_trio_swiglu_f16 shaders/fast_trio.comp -DUSE_FP16=1 -DTRIO_SWIGLU=1)
+omarchy_shader(fast_trio_swiglu_bf16 shaders/fast_trio.comp -DUSE_BF16=1 -DTRIO_SWIGLU=1)
 omarchy_shader(qmm_tile_bf16 shaders/qmm_tile.comp -DUSE_BF16=1)
 omarchy_shader(dequant_f32 shaders/dequant.comp)
 omarchy_shader(dequant_f16 shaders/dequant.comp -DUSE_FP16=1)

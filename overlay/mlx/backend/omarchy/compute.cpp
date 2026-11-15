@@ -456,6 +456,7 @@
 #include "fast_trio_norm_f16.h"
 #include "fast_trio_norm_bf16.h"
 #include "fast_trio_rope_pair_bf16.h"
+#include "fast_trio_swiglu_bf16.h"
 #include "fast_trio_rope_pair_f16.h"
 #include "fast_trio_swiglu_f16.h"
 #include "int8_matmul.h"
@@ -1773,6 +1774,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_trio_rope_pair_bf16, fast_trio_rope_pair_bf16_size};
     case ComputeKernel::FastTrioSwigluF16:
       return {fast_trio_swiglu_f16, fast_trio_swiglu_f16_size};
+    case ComputeKernel::FastTrioSwigluBF16:
+      return {fast_trio_swiglu_bf16, fast_trio_swiglu_bf16_size};
     case ComputeKernel::Int8MatmulOp:
       return {int8_matmul, int8_matmul_size};
     case ComputeKernel::Int8MatmulNaiveOp:

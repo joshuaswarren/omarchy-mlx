@@ -556,11 +556,14 @@ void dispatch_chain(
     params.operation = chain.leaf_offsets[leaves->first];
     params.lhs_size = chain.leaf_offsets[leaves->second];
     params.rhs_size = materialize_nodes ? 1u : 0u;
-    if (out.dtype() == float16 && fused_trio_enabled(encoder.device())) {
+    if (out.dtype() != float32 && fused_trio_enabled(encoder.device())) {
       // The trio pipeline keeps the same near-copied swiglu arithmetic
       // on the shared decode pipeline; out rides binding 4 and the
       // materialized intermediates bindings 5/6 (the fast_trio.comp
-      // slot map). The ComputeParams swiglu mapping is unchanged.
+      // slot map). The ComputeParams swiglu mapping is unchanged. The
+      // bf16 body rounds intermediates with the swiglu.comp bf16 RNE
+      // round trip instead of packHalf2x16; every rounding site and
+      // the store contract match the standalone bf16 swiglu kernel.
       std::array<ComputeBinding, 7> trio_bindings{
           binding(chain.leaves[leaves->first]),
           binding(chain.leaves[leaves->second]),
@@ -570,7 +573,8 @@ void dispatch_chain(
           binding(materialize_nodes ? chain.node_arrays[0] : out),
           binding(materialize_nodes ? chain.node_arrays[1] : out)};
       encoder.dispatch_compute(
-          ComputeKernel::FastTrioSwigluF16,
+          out.dtype() == float16 ? ComputeKernel::FastTrioSwigluF16
+                                 : ComputeKernel::FastTrioSwigluBF16,
           trio_bindings,
           params,
           compute_dispatch_group_count(chain.count / 4u));

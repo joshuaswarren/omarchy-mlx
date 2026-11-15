@@ -272,11 +272,22 @@ void rope_side(
 #endif // TRIO_ROPE_PAIR
 
 #ifdef TRIO_SWIGLU
+#ifdef USE_BF16
+vec4 round4(vec4 v) {
+  // swiglu.comp bf16 rounding: one RNE bf16 round trip, identical bits.
+  return vec4(
+      uintBitsToFloat(uint(bf16_store(v.x)) << 16u),
+      uintBitsToFloat(uint(bf16_store(v.y)) << 16u),
+      uintBitsToFloat(uint(bf16_store(v.z)) << 16u),
+      uintBitsToFloat(uint(bf16_store(v.w)) << 16u));
+}
+#else
 vec4 round4(vec4 v) {
   // swiglu.comp rounding: round-to-nearest-even conversion, identical bits.
   return vec4(omarchy_round_f16(v.x), omarchy_round_f16(v.y),
               omarchy_round_f16(v.z), omarchy_round_f16(v.w));
 }
+#endif
 #endif
 
 #ifdef TRIO_NORM
@@ -383,32 +394,32 @@ void main() {
     uint u = params.lhs_size + index * 4u;
     uint o = index * 4u;
     vec4 gate = vec4(
-        float(in_q_gate.values[g]),
-        float(in_q_gate.values[g + 1u]),
-        float(in_q_gate.values[g + 2u]),
-        float(in_q_gate.values[g + 3u]));
+        LOAD_VALUE(in_q_gate.values[g]),
+        LOAD_VALUE(in_q_gate.values[g + 1u]),
+        LOAD_VALUE(in_q_gate.values[g + 2u]),
+        LOAD_VALUE(in_q_gate.values[g + 3u]));
     vec4 up = vec4(
-        float(weight_up.values[u]),
-        float(weight_up.values[u + 1u]),
-        float(weight_up.values[u + 2u]),
-        float(weight_up.values[u + 3u]));
+        LOAD_VALUE(weight_up.values[u]),
+        LOAD_VALUE(weight_up.values[u + 1u]),
+        LOAD_VALUE(weight_up.values[u + 2u]),
+        LOAD_VALUE(weight_up.values[u + 3u]));
     vec4 sig = round4(1.0 / (1.0 + exp(-gate)));
     vec4 silu = round4(gate * sig);
     vec4 value = round4(silu * up);
     if (params.rhs_size != 0u) {
-      sigmoid_out.values[o] = float16_t(sig.x);
-      sigmoid_out.values[o + 1u] = float16_t(sig.y);
-      sigmoid_out.values[o + 2u] = float16_t(sig.z);
-      sigmoid_out.values[o + 3u] = float16_t(sig.w);
-      silu_out.values[o] = float16_t(silu.x);
-      silu_out.values[o + 1u] = float16_t(silu.y);
-      silu_out.values[o + 2u] = float16_t(silu.z);
-      silu_out.values[o + 3u] = float16_t(silu.w);
+      sigmoid_out.values[o] = STORE_VALUE(sig.x);
+      sigmoid_out.values[o + 1u] = STORE_VALUE(sig.y);
+      sigmoid_out.values[o + 2u] = STORE_VALUE(sig.z);
+      sigmoid_out.values[o + 3u] = STORE_VALUE(sig.w);
+      silu_out.values[o] = STORE_VALUE(silu.x);
+      silu_out.values[o + 1u] = STORE_VALUE(silu.y);
+      silu_out.values[o + 2u] = STORE_VALUE(silu.z);
+      silu_out.values[o + 3u] = STORE_VALUE(silu.w);
     }
-    swiglu_out.values[o] = float16_t(value.x);
-    swiglu_out.values[o + 1u] = float16_t(value.y);
-    swiglu_out.values[o + 2u] = float16_t(value.z);
-    swiglu_out.values[o + 3u] = float16_t(value.w);
+    swiglu_out.values[o] = STORE_VALUE(value.x);
+    swiglu_out.values[o + 1u] = STORE_VALUE(value.y);
+    swiglu_out.values[o + 2u] = STORE_VALUE(value.z);
+    swiglu_out.values[o + 3u] = STORE_VALUE(value.w);
     if (vec_count - index <= stride) {
       break;
     }
