@@ -113,3 +113,24 @@ The demo video is 2:47, unedited. It runs from the one-line install to
 a streamed answer on an M1.
 
 [demo](https://github.com/user-attachments/assets/7b2326f0-4679-4784-9622-e403b99be853)
+
+## Fedora with the Borealis driver
+
+The M1 Pro, M2, M4 Pro and A18 Pro rows run the release wheel on Fedora
+44 and 45 (aarch64) with aurora's Mesa Borealis Vulkan driver and Linux
+7.3. The system driver is used as is. Its ICD file,
+`asahi_icd.aarch64.json`, passes the ICD check, and the backend admits
+its driver ID (35). Do not install `omarchy-mlx-vulkan`, and leave
+`VK_DRIVER_FILES` and `MLX_OMARCHY_ALLOW_NON_APPLE` unset.
+
+Fedora 45 ships Python 3.15 as `python3`, and the wheel is `cp314`
+only. The wheel also needs the Fortran runtime:
+
+```bash
+sudo dnf install python3.14 libgfortran
+```
+
+Then follow [From a release wheel](#from-a-release-wheel).
+`~/.venvs/mlx/bin/python -c "import mlx.core as mx; print(mx.default_device())"`
+prints `Device(gpu, 0)`. Results:
+[receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md).

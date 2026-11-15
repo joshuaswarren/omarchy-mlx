@@ -1,0 +1,31 @@
+mlx-omarchy-info
+  device:            Apple M1 Pro (G13S C0)
+  driver:            Borealis
+  driver info:       Mesa 26.3.0-devel (git-be147e3625), Borealis, derived from Honeykrisp
+  driver SHA:        be147e3625
+  ICD:               /usr/share/vulkan/icd.d/asahi_icd.aarch64.json
+  ICD source:        search
+  expected SHA:      
+  expected SHA from: none (record only)
+  api version:       1.4.363
+  vendor:device id:  0x10005:0x0
+  queue family:      0 (1 queues)
+  total memory:      7655 MiB (device-local heap)
+  unified memory:    yes
+  host coherent:     yes
+  timeline semaphore:yes
+  shader float16:    yes
+  shader int16:      yes
+  16-bit storage:    yes
+  max compute shm:   32768 B
+  max wg invocations:1024
+  storage buffer bindings (per stage / per set): 1048576 / 1048576
+  ane fdt node:      yes
+  ane compatible:    apple,t6000-ane
+  ane accel0:        yes
+  ane module:        yes
+  ane available:     yes
+  coreml frontend:   no
+  coreml command:    no
+  coreml cache:      ~/.cache/mlx-omarchy/coreml
+  coreml cache ents: 0 (absent)

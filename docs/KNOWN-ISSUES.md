@@ -53,6 +53,14 @@ every driver except NVIDIA proprietary. The test still prints its
 ratio for every run, so a per-driver floor can be set from
 collected numbers. AMD (RADV) is untested.
 
+## A18 Pro (G17P) on Borealis: the independent-streams timing floor fails
+
+The runtime case `independent streams measure against the serialized sum` takes its floor from the driver: 0.80 on the Borealis driver (driver id 35, since #439) and 0.95 for every other driver. The 2026-11-13 receipt measured source build `ec849019`, which had the 0.95 floor for every driver, so its M4 Pro and A18 Pro rows show 59/60 against 0.95.
+
+M4 Pro (G16S): on `ec849019` the case failed with `iters=400 serialized_median=0.0497847s concurrent_median=0.0568427s ratio=0.875833` (Mesa 26.3.0-devel Borealis `c208afc352`, Linux 7.3). That ratio clears the 0.80 floor on main, so this is not a known issue of main on the M4 Pro. The suite has not been re-run on a current build, so 59/60 is the result of the measured build only. Both destination buffers verified byte-for-byte on that run.
+
+The MacBook Neo with the A18 Pro (`Apple A18 Pro (G17P B1)`, 5-core GPU), on the same Borealis build `c208afc352`, fails the same case and only that case (59/60). The ratios are below 0.80 as well, so the case still fails against the Borealis floor: 0.437 in the full suite (400 iterations) and 0.442, 0.384 and 0.388 in three runs of that case alone (153 to 156 iterations). The interleaved run takes 2.3 to 2.6 times as long as the serialized one, which is below the 0.5 a global serialization lock would give, so interleaving two streams costs more than queueing them one after the other on this device. Both copies still verify byte-for-byte. The device exposes 8 compute queues and the test interleaves both streams on one `VkQueue`. The cause is not known. Logs are in `receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/suite/`.
+
 ## Sum over a long row: row-reduce route, on by default
 
 A float32, float16 or bfloat16 Sum over a row-contiguous suffix of at least 256 elements runs one 256-wide workgroup per output row with a fixed shared-memory tree (`shaders/reduce_row.comp`). `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels, which gave one invocation a whole row. Max and Min are not affected.

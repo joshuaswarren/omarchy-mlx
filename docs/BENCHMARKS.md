@@ -111,6 +111,19 @@ Driver for the base M1 rows: the Honeykrisp driver from the packaged `omarchy-ml
 
 Rows are re-measured as the lab scoreboard runs; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
 
+## Results on the M1 Pro, M2, M4 Pro and A18 Pro
+
+Linux only, measured 2026-11-13 with the v0.7.41 release wheel on Fedora 44/45, Linux 7.3 and aurora's Mesa 26.3.0-devel Borealis driver (system ICD). Same `score_bench.py` and prompts as the tables above: decode is the median of 10 greedy generations of 64 tokens, prefill the median of 5 runs of one 512-token prompt. The CPU governor was schedutil and the submission budget the release default (5000 on these boards). Tokens per second:
+
+| Machine | Qwen3.8-2B decode | Qwen3.8-2B prefill 512 | Qwen3-4B-Instruct-2507 decode | Qwen3-4B-Instruct-2507 prefill 512 |
+|---|---:|---:|---:|---:|
+| MacBook Pro 16-inch, M1 Pro, 16-core GPU, 16 GB | 61.63 | 279.96 | 31.55 | 133.89 |
+| MacBook Air 13-inch, M2, 8-core GPU, 8 GB | 38.69 | 168.38 | 19.44 | 78.75 |
+| MacBook Pro 16-inch, M4 Pro, 20-core GPU, 24 GB | 105.55 | 512.57 | 49.27 | 239.57 |
+| MacBook Neo, A18 Pro, 5-core GPU, 8 GB | 33.29 | 108.78 | 13.50 | 44.14 |
+
+The MacBook Neo is passively cooled. Its SoC read 96 C before the Qwen3-4B run, and its Qwen3.8-2B decode samples range from 30.8 to 37.8. Raw JSON and the stack of each machine: `receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/`.
+
 ## Rows on the newer driver
 
 These rows ran on the newer patched driver, Mesa git `69bde15340` (the installed package library), measured on 2026-10-11. The wheel is main at `e57cb301` for every row. The reference is the private ICD at Mesa git `6543eeb7df7`, called v3 below. Nothing in this section compares with macOS.
