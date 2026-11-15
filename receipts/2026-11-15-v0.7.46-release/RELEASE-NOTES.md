@@ -26,4 +26,4 @@ Release gates ran against the draft assets (tag at 44873d15, wheel `mlx_omarchy-
 - Speak-queue gate (g9): pass.
 - GDN maskless build and run (g13), trig build and run (g15): pass.
 
-Three gate batches stopped on a full 3 GB `/tmp` (no space left on device) on the first try and were rerun as new rows once space was freed; no gate was skipped or edited. The M5 fallback itself (#460) is covered by the unit tests and by the 13-inch M1 checks above; a run on an M5 Max is separate and not part of these results.
+Three gate batches stopped on a full 3 GB `/tmp` (no space left on device) on the first try and were rerun as new rows once space was freed; no gate was skipped or edited. The M5 fallback (#460) was checked on an M5 after the gates, not as part of them: with the installed 0.7.40-3 package and no environment variables, `import mlx.core` failed with "no Vulkan physical devices found"; with the v0.7.46 vendored wheels in a private venv it printed the `[omarchy]` fallback line and ran a 512x512 matmul on `Device(gpu, 0)`, twice with the same result. The pacman package route is not covered.
