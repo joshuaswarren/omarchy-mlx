@@ -294,6 +294,13 @@ class BasePairTest(unittest.TestCase):
 
 # ---------------------------------------------------------------- catalog pairs
 
+def chat_total(memory, tokens):
+    """What a pair admits for its chat worker: the worker is launched with the prefill chunk
+    serve_cli.server_argv pins (--prefill-step-size), so the estimate carries that chunk's scratch."""
+    step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, tokens)
+    return budget.estimate_required(memory, tokens, step).total
+
+
 class CatalogPairSchemaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -998,11 +1005,11 @@ class ContextSizingTests(unittest.TestCase):
         # byte-exact and is exposed in limits["memory"]
         ctx = self.sizing(7 * GiB)
         mem_bound = ctx["limits"]["memory"]
-        est = budget.estimate_required(self.chat["memory"], mem_bound)
+        est = chat_total(self.chat["memory"], mem_bound)
         reserve = max(budget.SAFETY_RESERVE_BYTES, int(0.10 * 7 * GiB))
-        self.assertLessEqual(est.total + self.other_bytes + reserve, 7 * GiB)
-        one_more = budget.estimate_required(self.chat["memory"], mem_bound + 1)
-        self.assertGreater(one_more.total + self.other_bytes + reserve, 7 * GiB)
+        self.assertLessEqual(est + self.other_bytes + reserve, 7 * GiB)
+        one_more = chat_total(self.chat["memory"], mem_bound + 1)
+        self.assertGreater(one_more + self.other_bytes + reserve, 7 * GiB)
         # chosen context is bound by the default-admission cap, not by memory
         self.assertEqual(ctx["context_tokens"], budget.DEFAULT_CONTEXT_TOKENS)
         self.assertEqual(ctx["binding"], "backend")
@@ -1248,7 +1255,7 @@ class PairManagerTests(BasePairTest):
         # invent a "tiered" growth story. With the dev smoke override the
         # memory difference is visible.
         small = self.manager.setup("everyday", approve_download=False,
-                                   preference="balanced", available_bytes=8 * GiB)
+                                   preference="balanced", available_bytes=10 * GiB)  # 8 GiB no longer holds 4096 once prefill scratch counts
         self.manager = pairs.PairManager(self.home)
         large = self.manager.setup("everyday", approve_download=False,
                                    preference="balanced", available_bytes=64 * GiB)
@@ -1480,9 +1487,8 @@ class PairManagerTests(BasePairTest):
         held = budget.load_reservations(self.home)
         self.assertGreater(
             held[CHAT_SMALL_ID]["bytes"],
-            budget.estimate_required(
-                self.manager.catalog_models[CHAT_SMALL_ID]["memory"],
-                before["context_tokens"]).total)
+            chat_total(self.manager.catalog_models[CHAT_SMALL_ID]["memory"],
+                       before["context_tokens"]))
         self.assertEqual(self.manager._children["decision"].popen.pid, decision_pid)
         self.assertNotEqual(self.manager._children["chat"].popen.pid, old_chat_pid)
 
@@ -1600,7 +1606,7 @@ class PairManagerTests(BasePairTest):
         self.addCleanup(self.manager.stop)
         chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
         current = self.manager._context_tokens
-        current_bytes = budget.estimate_required(chat_memory, current).total
+        current_bytes = chat_total(chat_memory, current)
         old_chat = self.manager._children["chat"]
         with mock.patch.object(managed, "terminate", return_value=False):
             result = self.manager.ensure_context(current + 8192)
@@ -1624,7 +1630,7 @@ class PairManagerTests(BasePairTest):
         self.addCleanup(self.manager.stop)
         chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
         current = self.manager._context_tokens
-        current_bytes = budget.estimate_required(chat_memory, current).total
+        current_bytes = chat_total(chat_memory, current)
         old_chat = self.manager._children["chat"]
         decision_pid = self.manager._children["decision"].popen.pid
         events = []

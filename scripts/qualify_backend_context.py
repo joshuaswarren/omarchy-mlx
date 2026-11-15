@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -74,6 +75,45 @@ def mem_available_kb():
             return int(line.split()[1])
 
 
+def proc_kb(pid, *keys):
+    found = {}
+    try:
+        for line in open(f"/proc/{pid}/status"):
+            name = line.split(":")[0]
+            if name in keys:
+                found[name] = int(line.split()[1])
+    except OSError:
+        pass
+    return found
+
+
+def prefill_step(pid):
+    """The --prefill-step-size the worker was really launched with (None if the flag is absent)."""
+    try:
+        argv = open(f"/proc/{pid}/cmdline", "rb").read().decode().split("\0")
+    except OSError:
+        return None
+    return int(argv[argv.index("--prefill-step-size") + 1]) if "--prefill-step-size" in argv else None
+
+
+class Sampler(threading.Thread):
+    """Every 0.5 s: lowest MemAvailable seen and the highest RssAnon / RssFile / RssShmem of the chat worker."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.pid = None
+        self.min_available_kb = mem_available_kb()
+        self.peak = {}
+        self.stop_event = threading.Event()
+
+    def run(self):
+        while not self.stop_event.wait(0.5):
+            self.min_available_kb = min(self.min_available_kb, mem_available_kb())
+            if self.pid:
+                for key, value in proc_kb(self.pid, "RssAnon", "RssFile", "RssShmem", "VmHWM").items():
+                    self.peak[key] = max(self.peak.get(key, 0), value)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--home", required=True)
@@ -86,16 +126,23 @@ def main():
 
     manager = PairManager(args.home)
     receipt = {"pair": args.pair, "tokens": args.tokens, "steps": {}}
+    sampler = Sampler()
+    sampler.start()
+    receipt["mem_available_kb_baseline"] = mem_available_kb()  # before any worker of this run
     try:
         manager.adopt_saved(args.pair)
         manager.start()
         receipt["context_before"] = manager.status().get("context_tokens")
-        receipt["mem_available_kb_before"] = mem_available_kb()
+        receipt["mem_available_kb_at_4096"] = mem_available_kb()
         receipt["ensure_context"] = manager.ensure_context(args.tokens)
         status = manager.status()
         url = status["chat_url"]
         receipt["context_after"] = status.get("context_tokens")
         pid = worker_pid(int(url.rsplit(":", 1)[1].split("/")[0]))
+        sampler.pid = pid
+        receipt["prefill_step_size"] = prefill_step(pid)
+        receipt["mem_available_kb_idle_at_cap"] = mem_available_kb()
+        receipt["worker_idle_kb"] = proc_kb(pid, "RssAnon", "RssFile", "RssShmem")
         per = per_sentence_tokens(url)
         receipt["tokens_per_sentence"] = round(per, 2)
 
@@ -117,6 +164,15 @@ def main():
             "reply": (reply["choices"][0]["message"].get("content") or "")[:80] if status_code == 200 else reply}
         receipt["worker_peak_rss_kb"] = rss_hwm_kb(pid) if pid else None
         receipt["mem_available_kb_after"] = mem_available_kb()
+        receipt["pair_peak_footprint_kb"] = receipt["mem_available_kb_baseline"] - sampler.min_available_kb
+        receipt["worker_peak_kb"] = dict(sampler.peak)
+        from mlx_omarchy_serve import budget
+        chat = {m["id"]: m for m in manager.catalog["models"]}[manager.status()["chat_model"]]
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, args.tokens)
+        receipt["estimate_bytes"] = {
+            "no_prefill": budget.estimate_required(chat["memory"], args.tokens).total,
+            "with_step": budget.estimate_required(chat["memory"], args.tokens, step).total,
+            "step": step}
 
         status_code, reply, seconds = post(url, {"messages": [{"role": "user", "content": filler(int(args.tokens / per) + 200)}],
                                                  "max_tokens": 30}, 900)
@@ -124,6 +180,7 @@ def main():
         status_code, reply, seconds = post(url, {"messages": [{"role": "user", "content": "Say ok."}], "max_tokens": 8}, 120)
         receipt["steps"]["alive_after_refusal"] = {"http": status_code}
     finally:
+        sampler.stop_event.set()
         manager.stop()
     steps = receipt["steps"]
     receipt["pass"] = bool(receipt.get("ensure_context", {}).get("ok")
