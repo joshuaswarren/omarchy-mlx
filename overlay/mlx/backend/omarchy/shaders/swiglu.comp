@@ -1,6 +1,5 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
-#include "omarchy_half.h"
 
 // Four-wide SwiGLU: the fused_chain.comp program
 //   r0 = sigmoid(gate); r1 = gate * r0; out = r1 * up
@@ -23,6 +22,7 @@
 #define STORAGE_VEC f16vec4
 #define LOAD_VEC(x) vec4(x)
 #define STORE_VEC(v) f16vec4(v)
+#include "omarchy_half.h"
 float round_intermediate(float f) {
   return omarchy_round_f16(f);
 }

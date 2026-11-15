@@ -8,7 +8,6 @@
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
-#include "omarchy_half.h"
 
 #ifdef USE_FP16
 #extension GL_EXT_shader_16bit_storage : require
@@ -41,6 +40,7 @@ uint16_t bf16_store(float value) {
 #define STORE_VALUE(f) STORAGE_TYPE(f)
 #define ROUND_INTERMEDIATE(f) (f)
 #endif
+#include "omarchy_half.h"
 
 layout(local_size_x = 256) in;
 

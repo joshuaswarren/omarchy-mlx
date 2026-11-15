@@ -2,7 +2,6 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "omarchy_trig.h"
-#include "omarchy_half.h"
 
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
@@ -52,6 +51,7 @@
 #else
 #error "fast_trio.comp is built for the float16 decode path only"
 #endif
+#include "omarchy_half.h"
 
 #if !defined(TRIO_NORM) && !defined(TRIO_ROPE_PAIR) && !defined(TRIO_SWIGLU)
 #error "define exactly one of TRIO_NORM, TRIO_ROPE_PAIR, TRIO_SWIGLU"

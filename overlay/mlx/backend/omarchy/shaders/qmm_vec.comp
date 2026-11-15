@@ -1,6 +1,5 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
-#include "omarchy_half.h"
 
 // Fused matrix-vector path for QuantizedMatmul when x is a single row:
 // out[1, n] = x[1, k] @ dequant(w) with w packed uint32 words holding
@@ -80,6 +79,7 @@ uint16_t bf16_store(float value) {
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
+#include "omarchy_half.h"
 #if defined(FP_MODE) && defined(QMM_VEC_Q4_WORD)
 #error "QMM_VEC_Q4_WORD applies to affine quantization only"
 #endif
