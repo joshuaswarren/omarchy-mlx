@@ -323,6 +323,25 @@ class CatalogPairSchemaTests(unittest.TestCase):
             self.assertNotIn("extension", pair, pair["id"])
 
 
+    def test_a_backend_context_limit_names_a_receipt_that_exists(self):
+        # "reported, never inferred": a limit with no run behind it is refused
+        for entry in self.bundled["models"]:
+            extension = entry.get("extension") or {}
+            if extension.get("backend_context_qualified_tokens") is None:
+                continue
+            with self.subTest(model=entry["id"]):
+                receipt = extension.get("backend_context_receipt")
+                self.assertTrue(receipt)
+                self.assertTrue((Path(__file__).resolve().parents[1] / receipt).is_file())
+
+    def test_compact_chat_model_admits_an_omp_sized_prompt(self):
+        # omp sends about 5.7k prompt tokens; the 4096 default refused it with HTTP 404
+        chat = {m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"]
+        ctx = pairs.admissible_context(chat, other_bytes=0, preference="balanced",
+                                       available_bytes=64 * GiB)
+        self.assertGreaterEqual(ctx["context_tokens"], 16384)
+        self.assertTrue(ctx["backend_context_qualified"])
+
     def test_bundled_chat_models_pin_revision_hashes_and_license(self):
         models = {entry["id"]: entry for entry in self.bundled["models"]}
         expected = {
