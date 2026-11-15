@@ -65,6 +65,25 @@ doctest_discover_tests(omarchy_m2v_route_tests)
 add_test(NAME omarchy_m2v_route_tests
          COMMAND omarchy_m2v_route_tests)
 
+# cooperative-matrix shape selector: pure C++, no GPU, no Vulkan, no mlx
+# linkage. coopmat_select.cpp is deliberately free of all three.
+add_executable(omarchy_coopmat_select_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_coopmat_select.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/coopmat_select.cpp)
+target_link_libraries(omarchy_coopmat_select_tests PRIVATE doctest)
+target_include_directories(
+    omarchy_coopmat_select_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+target_compile_options(omarchy_coopmat_select_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_coopmat_select_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_coopmat_select_tests)
+add_test(NAME omarchy_coopmat_select_tests
+         COMMAND omarchy_coopmat_select_tests)
+
 # Dependency tracker: header-only, pure C++, no GPU and no mlx linkage.
 add_executable(omarchy_dep_tracker_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_dep_tracker.cpp)
