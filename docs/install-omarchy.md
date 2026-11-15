@@ -112,7 +112,10 @@ when it has no RAW/WAW/WAR overlap with any earlier node. Ranges are exact
 byte ranges. The read/write split comes from SPIR-V reflection. Hazards stay
 ordered exactly as in tape order, so outputs are unchanged. Hazard-free
 nodes run concurrently. They no longer serialize behind barriers their
-tape neighbors induced. Requires gated barriers. Off by default.
+tape neighbors induced. Requires gated barriers. On by default on the
+Apple M4 Pro (G16S): Qwen3-8B decode +1.4%, and +2.7% with the Mesa barrier
+elision of aurora-silicon/mesa#343, tokens identical. Off by default on other
+parts. `MLX_OMARCHY_WAVE_SCHED=0` restores tape order on the M4 Pro.
 
 Submit batching is scheduling only, and results are bit-identical. The open
 batch is submitted at 4096 nodes or at the byte budget.

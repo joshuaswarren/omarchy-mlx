@@ -107,17 +107,21 @@ std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
 }
 
 bool CommandEncoder::wave_sched() {
-  // MLX_OMARCHY_WAVE_SCHED (docs/install-omarchy.md): default off. When on
-  // (and only with gated barriers — wave mode rides the same SPIR-V access
-  // reflection and tracker), dispatch/copy/fill nodes buffer at arrival
+  // MLX_OMARCHY_WAVE_SCHED (docs/install-omarchy.md): unset means the
+  // per-part default (wave_sched_default_part, device.h), 1 forces it on and
+  // 0 off. When on (and only with gated barriers — wave mode rides the same
+  // SPIR-V access reflection and tracker), dispatch/copy/fill nodes buffer at arrival
   // and submit() records the batch in greedy earliest-wave order with one
   // full dependency barrier between waves. Reordering is numerics-inert:
   // a node's inputs are final once its hazard sources complete, and every
   // hazard source of a node sits in a strictly earlier wave.
   static const bool on = []() {
     const char* e = std::getenv("MLX_OMARCHY_WAVE_SCHED");
-    return e != nullptr && env_flag("MLX_OMARCHY_WAVE_SCHED") &&
-        gated_barriers();
+    const bool want = e != nullptr
+        ? env_flag("MLX_OMARCHY_WAVE_SCHED")
+        : wave_sched_default_part(
+              omarchy::device().capabilities().device_name);
+    return want && gated_barriers();
   }();
   return on;
 }

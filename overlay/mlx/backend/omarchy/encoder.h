@@ -529,7 +529,7 @@ class MLX_API CommandEncoder {
   // the unconditional path provides.
   static bool gated_barriers();
 
-  // Wave scheduling (MLX_OMARCHY_WAVE_SCHED, default off; requires gated
+  // Wave scheduling (MLX_OMARCHY_WAVE_SCHED, per-part default; requires gated
   // barriers). Arrival-ordered nodes buffered by the open batch instead
   // of recording straight into the command buffer; submit() records them
   // in wave_levels() order with one full dependency barrier between
