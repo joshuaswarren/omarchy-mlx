@@ -609,6 +609,21 @@ omarchy_shader(qmm_coopmat_m16_x32_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOU
 omarchy_shader(qmm_coopmat_x32_fn_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DQBITS=8 -DQGROUP=32)
 omarchy_shader(qmm_coopmat_m16_x32_fn_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DQBITS=8 -DQGROUP=32)
 omarchy_shader(qmm_coopmat_x32_fn_g4_pad_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1 -DQBITS=8 -DQGROUP=32)
+# Dequant:matmad ratio experiments (env-gated, default unchanged).
+# STEP_K=32|64, TILE_ROWS=64, SG4 (128-lane 64-row), CHEAP_DEQ (bit-identical
+# nibble->f32). All are X_F32 FullN G4+LdsPad twins of the landed default.
+set(_QDQ_BASE shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad_cheap ${_QDQ_BASE} -DCHEAP_DEQ=1)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad_k32 ${_QDQ_BASE} -DSTEP_K_VAL=32)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad_k32_cheap ${_QDQ_BASE} -DSTEP_K_VAL=32 -DCHEAP_DEQ=1)
+omarchy_shader(qmm_coopmat_m64_x32_fn_g4_pad ${_QDQ_BASE} -DTILE_ROWS=64)
+omarchy_shader(qmm_coopmat_m64_x32_fn_g4_pad_cheap ${_QDQ_BASE} -DTILE_ROWS=64 -DCHEAP_DEQ=1)
+omarchy_shader(qmm_coopmat_m64_x32_fn_g4_pad_k32 ${_QDQ_BASE} -DTILE_ROWS=64 -DSTEP_K_VAL=32)
+omarchy_shader(qmm_coopmat_m64_x32_fn_g4_pad_k32_cheap ${_QDQ_BASE} -DTILE_ROWS=64 -DSTEP_K_VAL=32 -DCHEAP_DEQ=1)
+omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1)
+omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_cheap ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DCHEAP_DEQ=1)
+omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_k32 ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DSTEP_K_VAL=32)
+omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DSTEP_K_VAL=32 -DCHEAP_DEQ=1)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
 omarchy_shader(qmm_fma_bf16 shaders/qmm_fma.comp -DUSE_BF16=1)

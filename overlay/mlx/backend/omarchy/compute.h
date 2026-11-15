@@ -1123,6 +1123,21 @@ enum class ComputeKernel : uint16_t {
   // Value-phase variant of the width-256 split-K pass 1, four query heads per key-value head (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4
   // -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Appended to keep profile kernel ids stable.
   SdpaDecodeSplitP1VR4BF16Hd256,
+  // Dequant:matmad ratio twins of the landed 32-row G4+LdsPad qmm
+  // prefill route (STEP_K=32, TILE_ROWS=64, SG4, CHEAP_DEQ). Opt-in via
+  // MLX_OMARCHY_QMM_COOPMAT_STEPK, MLX_OMARCHY_QMM_COOPMAT_ROWS,
+  // MLX_OMARCHY_QMM_CHEAP_DEQ. Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmatBF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatBF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadK32Cheap,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPad,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadK32Cheap,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPad,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap,
   Count,
 };
 
