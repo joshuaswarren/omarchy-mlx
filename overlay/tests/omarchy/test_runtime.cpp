@@ -980,8 +980,8 @@ TEST_CASE("get/set cache_limit round-trips and exposes the default") {
     return;
   }
   auto& alloc = omarchy::allocator();
-  // Default cache limit is non-zero (the constructor wires it to the
-  // working-set ceiling, 0.95 * total_memory on Honeykrisp).
+  // Default cache limit is non-zero (the constructor sets it to a quarter
+  // of the gc ceiling, default_cache_limit).
   CHECK(alloc.get_cache_limit() > 0);
   const size_t prev = alloc.get_cache_limit();
   CHECK(alloc.set_cache_limit(64u << 20) == prev);
