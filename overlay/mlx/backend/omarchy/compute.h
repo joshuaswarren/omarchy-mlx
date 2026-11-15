@@ -652,6 +652,7 @@ enum class ComputeKernel : uint16_t {
   // pipeline; a single mode-switched megashader measurably regressed
   // decode tok/s on Honeykrisp. Append-only profile ids.
   FastTrioNormF16,
+  FastTrioNormBF16,
   FastTrioRopePairF16,
   FastTrioRopePairBF16,
   FastTrioSwigluF16,

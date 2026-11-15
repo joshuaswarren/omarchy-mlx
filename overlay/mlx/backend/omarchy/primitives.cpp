@@ -14661,11 +14661,14 @@ void RMSNorm::eval_gpu(
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(w), binding(out)};
   omarchy::ComputeKernel kernel;
-  if (out.dtype() == float16 &&
+  if ((out.dtype() == float16 || out.dtype() == bfloat16) &&
       omarchy::fused_trio_enabled(encoder.device())) {
     // Trio pipeline: the near-copied RMS row body on the shared decode
-    // pipeline (params.matrix_n 0 is the norm mode).
-    kernel = omarchy::ComputeKernel::FastTrioNormF16;
+    // pipeline (params.matrix_n 0 is the norm mode). The bf16 body
+    // keeps the float32 reduction and rounds once at the store, the
+    // same contract as fast_norm.comp's bf16 form.
+    kernel = out.dtype() == float16 ? omarchy::ComputeKernel::FastTrioNormF16
+                                    : omarchy::ComputeKernel::FastTrioNormBF16;
   } else {
     kernel = select_float_kernel(
         out.dtype(),

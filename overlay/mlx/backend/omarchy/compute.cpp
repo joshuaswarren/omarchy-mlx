@@ -454,6 +454,7 @@
 #include "silu_f16.h"
 #include "silu_bf16.h"
 #include "fast_trio_norm_f16.h"
+#include "fast_trio_norm_bf16.h"
 #include "fast_trio_rope_pair_bf16.h"
 #include "fast_trio_rope_pair_f16.h"
 #include "fast_trio_swiglu_f16.h"
@@ -1764,6 +1765,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_f32_coopmat_pv, matmul_f32_coopmat_pv_size};
     case ComputeKernel::FastTrioNormF16:
       return {fast_trio_norm_f16, fast_trio_norm_f16_size};
+    case ComputeKernel::FastTrioNormBF16:
+      return {fast_trio_norm_bf16, fast_trio_norm_bf16_size};
     case ComputeKernel::FastTrioRopePairF16:
       return {fast_trio_rope_pair_f16, fast_trio_rope_pair_f16_size};
     case ComputeKernel::FastTrioRopePairBF16:

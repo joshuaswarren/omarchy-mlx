@@ -50,9 +50,11 @@
 #ifdef USE_FP16
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
-#elif defined(USE_BF16) && defined(TRIO_ROPE_PAIR)
-// bf16 rides the RoPE pair mode only; the norm and swiglu modes keep the
-// float16 decode path (their eager compositions round to float16).
+#elif defined(USE_BF16)
+// bf16 rides the same near-copied bodies as float16: every mode's
+// standalone bf16 kernel (fast_rope.comp, fast_norm.comp, swiglu.comp)
+// applies the same swiglu.comp RNE bf16_store at the same rounding
+// sites, so the stored bits match the unfused path.
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #else
@@ -63,6 +65,7 @@
 #ifdef USE_BF16
 #define STORAGE_T uint16_t
 #define STORE_VALUE(v) bf16_store(v)
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
 // RNE float32->bf16, NaN quieted - the same rounding the bf16 cast and
 // elementwise kernels apply (the swiglu.comp form).
 uint16_t bf16_store(float value) {
@@ -75,6 +78,7 @@ uint16_t bf16_store(float value) {
 #else
 #define STORAGE_T float16_t
 #define STORE_VALUE(v) float16_t(v)
+#define LOAD_VALUE(x) float(x)
 #endif
 
 #if !defined(TRIO_NORM) && !defined(TRIO_ROPE_PAIR) && !defined(TRIO_SWIGLU)
@@ -290,7 +294,7 @@ void main() {
 
     float local_sq = 0.0;
     for (uint index = thread; index < row_length; index += threads) {
-      float value = float(in_q_gate.values[start + index]);
+      float value = LOAD_VALUE(in_q_gate.values[start + index]);
       local_sq += value * value;
     }
     block_values[thread] = local_sq;
@@ -306,14 +310,14 @@ void main() {
     float norm = inversesqrt(mean_square + eps);
 
     for (uint index = thread; index < row_length; index += threads) {
-      float value = float(in_q_gate.values[start + index]);
+      float value = LOAD_VALUE(in_q_gate.values[start + index]);
       float weight =
           (params.lhs_size == 1u)
-              ? float(weight_up.values[params.rhs_offset])
-              : float(weight_up.values[params.rhs_offset + index]);
+              ? LOAD_VALUE(weight_up.values[params.rhs_offset])
+              : LOAD_VALUE(weight_up.values[params.rhs_offset + index]);
       float result = value * norm * weight;
       out_q.values[params.output_offset + row * row_length + index] =
-          float16_t(result);
+          STORE_VALUE(result);
     }
     barrier();
   }

@@ -36,6 +36,16 @@ target_link_options(omarchy_rope_pair_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_rope_pair_tests)
 add_test(NAME omarchy_rope_pair_tests COMMAND omarchy_rope_pair_tests)
 
+add_executable(omarchy_trio_norm_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_trio_norm.cpp)
+target_link_libraries(omarchy_trio_norm_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_trio_norm_tests PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_trio_norm_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_trio_norm_tests)
+add_test(NAME omarchy_trio_norm_tests COMMAND omarchy_trio_norm_tests)
+
+
 add_executable(omarchy_custom_kernel_translate_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_custom_kernel_translate.cpp
                ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/custom_kernel.cpp
