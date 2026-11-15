@@ -383,6 +383,11 @@ TEST_CASE("default allocator limits never sit below what the heap can hold") {
   auto& alloc = omarchy::allocator();
   CHECK(alloc.get_memory_limit() >= alloc.get_gc_limit());
   CHECK(alloc.batch_limit() <= alloc.get_memory_limit());
+  // The reuse cache must sit below the gc ceiling (#435: a cache allowed
+  // the whole heap grew to 5 GB next to 2.4 GB active and failed
+  // GEM_CREATE at 7.7 GB on the 13-inch M1, as freed memory reaches the
+  // kernel late).
+  CHECK(alloc.get_cache_limit() < alloc.get_gc_limit());
 }
 
 int main(int argc, char** argv) {

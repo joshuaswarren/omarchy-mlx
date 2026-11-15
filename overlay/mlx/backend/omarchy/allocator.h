@@ -75,6 +75,17 @@ inline size_t default_gc_limit(size_t heap_bytes) {
   return heap_bytes > 0 ? heap_bytes : (size_t{1} << 32);
 }
 
+// The reuse cache holds a quarter of the heap. Freed device memory leaves
+// the GEM total late (#435: 4.4 GB of a released cache still counted one
+// 256-token chunk later), so a cache allowed to grow to the whole heap
+// left no room for the next allocation: on the 13-inch M1, a 4096-token
+// prefill grew the cache to 5 GB next to 2.4 GB active and failed
+// GEM_CREATE at 7.7 GB. The cap bounds only freed buffers, never active
+// ones, so a model that fits the heap still never trims on every malloc.
+inline size_t default_cache_limit(size_t heap_bytes) {
+  return default_gc_limit(heap_bytes) / 4;
+}
+
 inline size_t default_batch_limit(size_t memory_limit, size_t heap_bytes) {
   const size_t base =
       heap_bytes > 0 ? (heap_bytes / 100) * 90 : (size_t{1} << 32);

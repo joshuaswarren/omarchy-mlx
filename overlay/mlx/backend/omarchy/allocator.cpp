@@ -128,12 +128,8 @@ VulkanAllocator::VulkanAllocator()
   // the ceiling is the whole host-visible heap: a ceiling below the
   // resident weights of a model that fits the heap makes every malloc
   // release cached buffers.
-  // cache_limit_ matches it; a single number drives both the malloc gate
-  // and the free-side pool cap, so changing one or the other never gets
-  // them out of sync.
-  size_t ceiling = default_gc_limit(total);
-  gc_limit_ = ceiling;
-  cache_limit_ = ceiling;
+  gc_limit_ = default_gc_limit(total);
+  cache_limit_ = default_cache_limit(total);
 }
 
 Buffer VulkanAllocator::malloc(size_t size) {
@@ -180,9 +176,8 @@ Buffer VulkanAllocator::malloc(size_t size) {
   // the driver. This is the A20 fix — without it, KV-cache growth across
   // decode steps adds a fresh size class per step and the cache keeps
   // every prior class around, climbing into the Honeykrisp heap until
-  // vkAllocateMemory returns OOM. The ceiling is set to the whole
-  // total_memory in the constructor and is shared with `cache_limit_`,
-  // so the free-side cap and the malloc-side gate can never disagree.
+  // vkAllocateMemory returns OOM. The ceiling is the whole total_memory;
+  // the free-side cap (`cache_limit_`) sits below it.
   // Quarantined buffers still hold their device memory, so they count
   // against the ceiling like active and cached bytes do.
   if (const size_t held = active_memory_ + quarantine_bytes_ +
