@@ -842,7 +842,10 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
           : repeat(v, c.heads / c.kv_heads, 1, stream);
       auto ref = fp64_reference(q, kw, vw, stream, true);
 
-      unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+      // Pin composed with =0: G16S now defaults the flash route when the
+      // env is unset, and this case has to compare the two arms, not
+      // flash against itself.
+      setenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH", "0", 1);
       const uint64_t composed_dispatches = dispatches_for(
           [&] { return sdpa_causal(q, k, v, stream); }, stream);
       std::vector<float> composed =
