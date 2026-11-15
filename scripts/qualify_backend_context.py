@@ -6,7 +6,8 @@ Adopts the saved pair lock, starts the pair, grows the chat worker with ensure_c
 chat worker: an omp-shaped one (long system prompt + 52 tool schemas), a needle near the cap, and
 one over the cap that must be refused with the budget reason. Writes a JSON receipt.
 
-Run with MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1 MLX_OMARCHY_OFFLINE=1 and PYTHONPATH at the serve tree.
+The caller sets the pair dev-qualification flag (pairs.PAIR_DEV_QUALIFICATION_ENV), MLX_OMARCHY_OFFLINE=1 and
+PYTHONPATH at the serve tree; this script never sets the flag itself and refuses to run without it.
 Usage: qualify_backend_context.py --home DIR --pair compact --tokens 16384 --out receipt.json
 """
 import argparse
@@ -122,7 +123,10 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--margin", type=int, default=512)
     args = parser.parse_args()
-    from mlx_omarchy_assistant.pairs import PairManager
+    from mlx_omarchy_assistant.pairs import PAIR_DEV_QUALIFICATION_ENV, PairManager
+
+    if os.environ.get(PAIR_DEV_QUALIFICATION_ENV) != "1":
+        sys.exit(f"{PAIR_DEV_QUALIFICATION_ENV} must be set by the caller: the catalog cap is what this run lifts")
 
     manager = PairManager(args.home)
     receipt = {"pair": args.pair, "tokens": args.tokens, "steps": {}}
