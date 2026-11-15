@@ -75,6 +75,7 @@ def _model_row(entry: dict) -> dict:
         "repo": entry["repo"],
         "revision": entry["revision"],
         "recommended": entry["recommended"],
+        "trained_tokens": entry["context"]["trained_tokens"],  # the horizon: null means unknown, said out loud
         "generation_status": entry["qualification"]["generation"]["status"],
         "quant": None if quant is None else {
             "bits": quant["bits"], "mode": quant["mode"], "group_size": quant["group_size"],

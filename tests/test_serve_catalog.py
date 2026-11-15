@@ -401,5 +401,13 @@ class RefreshTests(unittest.TestCase):
 
 
 
+
+class TrainedKeyOptional(unittest.TestCase):
+    def test_an_old_catalog_without_trained_tokens_validates_and_reads_unknown(self):
+        old = entry()
+        del old["context"]["trained_tokens"]  # a pre-469 cache or custom catalog
+        catalog.validate_catalog(catalog_of(old))
+        self.assertIsNone(old["context"]["trained_tokens"])  # unknown, normalized to null in place
+
 if __name__ == "__main__":
     unittest.main()
