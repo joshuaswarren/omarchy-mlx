@@ -688,9 +688,9 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 // workgroups) and -7.06 at 4097 (66), Qwen3.8-9B (4 key-value heads) +30.99 at 1537 (52) and -7.78 at 2049 (68), on G13G the 2B +29.57 at 769 (14) and -8.19 at 1025 (18),
 // the 9B +30.62 at 385 (16) and -13.95 at 769 (28). Decode rows and the full table are in receipts/2026-11-12-sdpa-hd256-kv-heads-budget. The count assumes 128-key blocks,
 // which is what these parts run (the 64-key block route is off by default there).
-//   G14C (M2 Max): 68. Op rows on the M2 Max (receipts/2026-11-14-g14c-sdpa-hd256-pv-limit) win +19 to +29 percent from 32 workgroups up to 68 and lose -11 to -16 percent
-//   from 69 up. The edge is one block wide at 1 key-value head (+19.03 percent at 8704 keys, 68 workgroups, then -12.79 at 8832, 69); 2 and 4 key-value heads win at 64 and 68
-//   and lose at 76, the first count tried above 68. The 68 is not two workgroups per core; it is the measured edge. Models: Qwen3.8-2B +3.4 percent at 512 and +4.66 at 2048 context, Qwen3.8-9B +1.57 and +1.47.
+//   G14C (M2 Max): 68. Op rows on the M2 Max (receipts/2026-11-14-g14c-sdpa-hd256-pv-limit) win +19 to +29 percent from 32 workgroups up to 68 and lose -10 to -16 percent
+//   from 69 up. The edge is one block wide at 1 key-value head (+19.03 percent at 8704 keys, 68 workgroups, then -12.79 at 8832, 69); 4 key-value heads win at 64 and 68, 2 key-value
+//   heads win at 64 (and 34 and 66 in the model rows) and both lose at 76, the first count tried above 68. The 68 is not two workgroups per core; it is the measured edge. Models: Qwen3.8-2B +3.4 percent at 512 and +4.66 at 2048 context, Qwen3.8-9B +1.57 and +1.47.
 //   Every other part: no default (the width-128 variant's default is measured; the width-256 one is not).
 inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name) {
   if (device_name.find("G13G") != std::string::npos) return 16u;

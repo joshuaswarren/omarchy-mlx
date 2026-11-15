@@ -18,11 +18,11 @@ Method: `receipts/2026-11-12-sdpa-hd256-kv-heads-budget`. The count is key-value
 | 76 | 2 / 4 | 4864 / 2432 | -13.88 / -15.55 percent |
 | 96 to 122 | 1 / 2 / 4 | 6144 to 12288 | -10.11 to -15.41 percent |
 
-The edge is one block wide at 1 key-value head (68 wins, 69 loses, eight consecutive counts 68 to 75 sort once). At 2 and 4 key-value heads the edge lies between the last win (68) and the first loss tried (76).
+The edge is one block wide at 1 key-value head (68 wins, 69 loses, eight consecutive counts 68 to 75 sort once). At 4 key-value heads the variant wins at 64 and 68. At 2 key-value heads the op rows win at 64 and lose at 76 (no op row at 68); the model rows add wins at 34 and 66 workgroups. The 2 and 4 head edges lie between 68 or 66 and 76.
 
 ## Float64 gate (`logs/run-f64.log`)
 
-bf16 q, k and v, 8 shapes (8/2 heads at 512 to 4096 keys, 16/4 at 2048 and 4096, 4/1 at 4096), score sigma 0.5 and 2.0, each arm against a numpy float64 reference computed from the same inputs. The max abs error of the variant equals the error of the stock pass 1 in all 16 rows (0.00006 to 0.0039, the bf16 output rounding). The two arms differ by at most one bf16 ULP (0.00098 at 2176 keys, sigma 2.0, value near 1).
+bf16 q, k and v, 8 shapes (8/2 heads at 512 to 4096 keys, 16/4 at 2048 and 4096, 4/1 at 4096), score sigma 0.5 and 2.0, each arm against a numpy float64 reference computed from the same inputs. The max abs error of the variant equals the error of the stock pass 1 in all 16 rows (0.00006 to 0.0039, the bf16 output rounding). The two arms differ by at most one bf16 ULP (0.00098 at 2176 keys, sigma 2.0).
 
 ## Model rows (4-bit weights, bfloat16 activations, 128 decoded tokens, ABBA)
 
