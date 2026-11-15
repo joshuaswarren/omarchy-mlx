@@ -755,6 +755,13 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
         omarchy::batch_work_fallback());
 
+  // The G16S row (M4 Pro) takes 15000 (receipts/2026-11-15-m4-pro-g16s-batch-work):
+  // the largest swept budget whose submission tail stays at the 5000 level
+  // (Qwen3-4B p99 27.8 ms, Qwen3-8B max 54.7 ms); 20000 raised the 4B
+  // tail to 49.7 ms and 30000 the 8B tail to 94.6 ms.
+  CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
+  CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
+
   // The uncalibrated M1 Pro row stays at 0: no guessed number for the
   // reporter's board (G13S, t6000).
   CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 0);
@@ -793,6 +800,7 @@ TEST_CASE("work budget resolves per device name, not per process") {
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
   CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale

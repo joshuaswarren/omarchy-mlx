@@ -134,12 +134,13 @@ inline int batch_node_budget() {
 // receipts/2026-10-02-submission-cap-19 (G14C) and
 // receipts/2026-10-12-submission-cap-calibration (G13C, G13G) and
 // receipts/2026-11-13-g18g-batch-work (G18G) and
+// receipts/2026-11-15-m4-pro-g16s-batch-work (G16S) and
 // receipts/2026-11-13-g14c-batch-work (G14C 100000: GPU time per
 // submission p50 3.9 ms, p99 6.3 ms, max 8.6 ms, queue interval p50 4.2 ms; 0 frames over 33.3 ms
 // beside decode, not tested on a real compositor). Board
 // codes key the rows like the direct-matmul routes above
 // (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
-// G14C M2 Max, G18G M6. A single dispatch whose group count alone exceeds the
+// G14C M2 Max, G16S M4 Pro, G18G M6. A single dispatch whose group count alone exceeds the
 // budget still runs whole: splitting happens between dispatches. Copies
 // and fills are not counted; the node and byte budgets keep those
 // batches bounded. MLX_OMARCHY_BATCH_WORK=<groups> overrides the table;
@@ -160,6 +161,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
     {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
+    {"G16S", 15000},  // M4 Pro, Borealis Mesa 05ddb00f5c, 2x4 decode Qmm geometry: decode +13.1% (Qwen3-4B), +7.7% (Qwen3-8B), +17.7% (granite-4.0-1b) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B p50 2.5 ms decode, p99 27.8 ms and max 28.5 ms over all submissions (5000: 27.2 / 28.0), Qwen3-8B max 54.7 ms (5000: 54.2); 30000 reached 94.6 ms (receipts/2026-11-15-m4-pro-g16s-batch-work)
     {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
