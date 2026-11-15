@@ -90,8 +90,9 @@ class TranscribeRefusal(RuntimeError):
     """The installed runtime cannot or must not run; the reason is named."""
 
 
-_TRANSCRIBE_DEPS = ("numpy", "google.protobuf")
-_PIP_NAMES = {"numpy": "numpy", "google.protobuf": "protobuf"}
+_TRANSCRIBE_DEPS = ("numpy", "google.protobuf", "mlx.core")
+_PIP_NAMES = {"numpy": "numpy", "google.protobuf": "protobuf",
+              "mlx.core": "mlx_omarchy"}
 _REEXEC_GUARD = "MLX_OMARCHY_PARAKEET_REEXEC"
 _SYSTEM_VENV_PYTHON = Path("/usr/lib/omarchy-mlx/venv/bin/python")
 
