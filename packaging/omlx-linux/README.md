@@ -74,7 +74,7 @@ layer handles "what honest value does this helper return when
 Metal APIs are absent?". Patches:
 
 - `patches/0001-linux-hardware-proc-meminfo.patch`
-- `patches/0002-linux-cli-cache-limit-total-memory.patch` — `omlx serve`
+- `patches/0002-linux-serve-cache-limit-metal-only.patch` — `omlx serve`
   raises the MLX cache limit to total memory only on Metal (the #300 panic
   guard). On omarchy the allocator quarantines freed buffers until their
   fence signals, and a RAM-sized cache fills the Vulkan heap (#435), so the
