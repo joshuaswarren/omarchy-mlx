@@ -6992,3 +6992,118 @@ TEST_CASE("bf16 linear-layer matmul takes the FMA kernel over the cooperative ma
     CHECK(max_err <= bound);
   }
 }
+
+TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  bool sg32 = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u;
+  if (!sg32) {
+    skip("small-row route needs subgroup_size==32+ARITHMETIC.");
+    return;
+  }
+  Stream stream = gpu_stream();
+  Stream cpu = default_stream(Device::cpu);
+  std::mt19937 rng(892);
+  std::uniform_real_distribution<float> frac(-1.0f, 1.0f);
+  for (int m : {2, 3, 4}) {
+    // K stays a multiple of 64 (quantize requirement) and of 8 (row-base
+    // alignment); 320 takes the hashed-word path, 2048 the wide path.
+    for (int k : {320, 2048}) {
+      for (int n : {513, 5120}) {
+        // Random bf16 activation and fp weights; quantize the weights on
+        // the CPU stream exactly as the mlx pipeline does.
+        std::vector<float> x_values(static_cast<size_t>(m) * k);
+        for (float& v : x_values) {
+          v = frac(rng);
+        }
+        std::vector<float> matrix(static_cast<size_t>(n) * k);
+        for (float& v : matrix) {
+          v = frac(rng);
+        }
+        array x = astype(
+            array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
+        array w_fp = array(matrix.begin(), Shape{n, k}, float32);
+        auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+        array scales = astype(parts[1], bfloat16, stream);
+        array biases = astype(parts[2], bfloat16, stream);
+        eval(x, parts[0], scales, biases);
+        // Reference: one single-row dispatch per row (the m == 1 GEMV
+        // path), gathered on the host.
+        std::vector<float> want(static_cast<size_t>(m) * n);
+        for (int r = 0; r < m; ++r) {
+          array xr = slice(x, {r, 0}, Shape{r + 1, k}, Shape{1, 1}, stream);
+          array out_r = quantized_matmul(
+              xr, parts[0], scales, biases, true, 64, 4, "affine", stream);
+          std::vector<float> row =
+              readback_f32(stream, astype(out_r, float32, stream));
+          REQUIRE(row.size() == static_cast<size_t>(n));
+          std::memcpy(
+              want.data() + static_cast<size_t>(r) * n,
+              row.data(),
+              static_cast<size_t>(n) * sizeof(float));
+        }
+        // Candidate: one [m, K] dispatch through the small-row route.
+        setenv("MLX_OMARCHY_QMM_ROWS", "1", 1);
+        array out = quantized_matmul(
+            x, parts[0], scales, biases, true, 64, 4, "affine", stream);
+        REQUIRE(evaluation_error(out).empty());
+        const int64_t kernel =
+            omarchy::trace::counters().last_dispatched_kernel.load();
+        unsetenv("MLX_OMARCHY_QMM_ROWS");
+        CHECK(
+            kernel ==
+            static_cast<int64_t>(
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16));
+        std::vector<float> got =
+            readback_f32(stream, astype(out, float32, stream));
+        REQUIRE(got.size() == want.size());
+        for (size_t i = 0; i < got.size(); ++i) {
+          INFO(
+              "m " << m << " k " << k << " n " << n << " output " << i
+                   << " want " << want[i] << " got " << got[i]);
+          CHECK(got[i] == want[i]);
+        }
+        // Gate: with the route off, the same shape must not take Rows8.
+        setenv("MLX_OMARCHY_QMM_ROWS", "0", 1);
+        array out_off = quantized_matmul(
+            x, parts[0], scales, biases, true, 64, 4, "affine", stream);
+        REQUIRE(evaluation_error(out_off).empty());
+        const int64_t kernel_off =
+            omarchy::trace::counters().last_dispatched_kernel.load();
+        unsetenv("MLX_OMARCHY_QMM_ROWS");
+        CHECK(
+            kernel_off !=
+            static_cast<int64_t>(
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16));
+      }
+    }
+  }
+  // Narrowed gate: m = 8 with the route on must NOT take Rows8 (the
+  // scalar-FMA row chain loses to the coopmat tile there); it takes the
+  // tile path instead.
+  {
+    const int m = 8, k = 2048, n = 5120;
+    std::vector<float> x_values(static_cast<size_t>(m) * k, 0.25f);
+    std::vector<float> matrix(static_cast<size_t>(n) * k, 0.125f);
+    array x = astype(
+        array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
+    array w_fp = array(matrix.begin(), Shape{n, k}, float32);
+    auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+    array scales = astype(parts[1], bfloat16, stream);
+    array biases = astype(parts[2], bfloat16, stream);
+    setenv("MLX_OMARCHY_QMM_ROWS", "1", 1);
+    array out_wide = quantized_matmul(
+        x, parts[0], scales, biases, true, 64, 4, "affine", stream);
+    REQUIRE(evaluation_error(out_wide).empty());
+    const int64_t kernel_wide =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    unsetenv("MLX_OMARCHY_QMM_ROWS");
+    CHECK(
+        kernel_wide !=
+        static_cast<int64_t>(
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16));
+  }
+}
