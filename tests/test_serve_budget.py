@@ -1,12 +1,13 @@
 """Serve budget: estimate math, context admission, reservations, fit check."""
 
 import contextlib
-import unittest.mock
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -309,6 +310,60 @@ class AdmissionTests(unittest.TestCase):
             budget.set_reservation("", 5)
         with self.assertRaises(budget.BudgetError):
             budget.set_reservation("x", -1)
+
+    def _seed(self, home, name, identity):
+        """Write a reservation entry with an explicit process identity."""
+        budget.set_reservation(name, int(6.7 * GiB), "SIGKILLed serve",
+                               home, owner=budget.generate_owner(),
+                               identity=identity)
+
+    def test_dead_identity_reservation_does_not_block_admission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self._seed(home, "stale", {"pid": 999999, "starttime": 1})
+            with unittest.mock.patch.object(budget, "mem_available",
+                                            lambda: int(16 * GiB)):
+                fits = budget.admit(int(11 * GiB), home)
+                self.assertTrue(fits.fits, json.dumps(fits.lines))
+
+    def test_live_identity_reservation_still_blocks_admission(self):
+        ident = budget.proc_identity(os.getpid())
+        self.assertIsNotNone(ident)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self._seed(home, "live", ident)
+            with unittest.mock.patch.object(budget, "mem_available",
+                                            lambda: int(16 * GiB)):
+                self.assertFalse(budget.admit(int(11 * GiB), home).fits)
+
+    def test_legacy_entry_without_identity_still_blocks_admission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            budget.set_reservation("manual", int(6.7 * GiB), "declared", home)
+            with unittest.mock.patch.object(budget, "mem_available",
+                                            lambda: int(16 * GiB)):
+                self.assertFalse(budget.admit(int(11 * GiB), home).fits)
+
+    def test_unreserve_clears_dead_identity_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self._seed(home, "stale", {"pid": 999999, "starttime": 1})
+            self.assertTrue(budget.clear_reservation("stale", home))
+            self.assertEqual(budget.load_reservations(home), {})
+
+    def test_unreserve_still_refuses_live_owner(self):
+        ident = budget.proc_identity(os.getpid())
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self._seed(home, "live", ident)
+            with self.assertRaises(budget.BudgetError):
+                budget.clear_reservation("live", home)
+
+    def test_identity_dead(self):
+        self.assertTrue(budget.identity_dead({"pid": 999999, "starttime": 1}))
+        self.assertFalse(budget.identity_dead(None))
+        self.assertFalse(budget.identity_dead("garbage"))
+        self.assertFalse(budget.identity_dead(budget.proc_identity(os.getpid())))
 
 
 class DiskTests(unittest.TestCase):
