@@ -16188,8 +16188,17 @@ void ScaledDotProductAttention::eval_gpu(
         const uint32_t split_block_keys = bk64 ? 64u : 128u;
         const uint32_t split_blocks = (static_cast<uint32_t>(k_len) + split_block_keys - 1u) / split_block_keys;
         const uint64_t scratch_floats = static_cast<uint64_t>(heads) * split_blocks * static_cast<uint64_t>(head_dim + 2);
-        array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
+        // MLX_OMARCHY_SDPA_SPLIT_FOLD (any non-empty value other than "0"): pass 2 runs inside pass 1. The workgroup that takes the last ticket of its
+        // key-value head folds the blocks (sdpa_decode_split_p1v*.comp -DFOLD), one dispatch instead of two. The tickets are the key-value head count
+        // of uints after the scratch floats, zeroed here on the host before any dispatch that uses them is recorded. Value-phase variants, width 128,
+        // four query heads per key-value head only.
+        const bool split_fold = pv && !split_wide && split_group == 4u && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_FOLD") > 0;
+        const uint64_t scratch_words = scratch_floats + (split_fold ? static_cast<uint64_t>(kv_heads) : 0u);
+        array scratch(Shape{static_cast<int>(scratch_words)}, float32, nullptr, {});
         scratch.set_data(allocate_omarchy(scratch.nbytes()));
+        if (split_fold) {
+          std::memset(scratch.data<float>() + scratch_floats, 0, static_cast<size_t>(kv_heads) * sizeof(float));
+        }
         encoder.add_temporary(scratch);
         std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
         // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
@@ -16212,6 +16221,13 @@ void ScaledDotProductAttention::eval_gpu(
         }
         if (bk64) {
           split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
+        }
+        if (split_fold) {
+          std::array<omarchy::ComputeBinding, 5> fold_bindings{binding(q), binding(k), binding(v), binding(scratch), binding(out)};
+          encoder.dispatch_compute(
+              bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitFoldP1VBk64R4BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitFoldP1VR4BF16Hd128,
+              fold_bindings, split_params, split_params.matrix_n, split_blocks);
+          return;
         }
         encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, split_blocks);
         std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
