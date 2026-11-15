@@ -37,7 +37,7 @@ def entry(**overrides):
         "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
         "memory": {"weights_bytes": 8 * 1024**3, "kv_bytes_per_token": 1024,
                    "peak_estimate_bytes": None},
-        "context": {"max_tokens": 8192},
+        "context": {"max_tokens": 8192, "trained_tokens": 32768},
         "capability": {"arch": ["t8103"], "min_mem_gib": None},
         "qualification": {
             "generation": {"status": "qualified", "receipt": "receipts/x.md",
@@ -114,8 +114,8 @@ class ValidateTests(unittest.TestCase):
             "bad affine group": entry(quant={"bits": 4, "group_size": 16, "mode": "affine"}),
             "zero weights": entry(memory={"weights_bytes": 0}),
             "negative kv": entry(memory={"kv_bytes_per_token": -1}),
-            "context too small": entry(context={"max_tokens": 8}),
-            "context too large": entry(context={"max_tokens": catalog.MAX_CONTEXT_TOKENS + 1}),
+            "trained not an int": entry(context={"max_tokens": 8192, "trained_tokens": "32k"}),
+            "context too large": entry(context={"max_tokens": catalog.MAX_CONTEXT_TOKENS + 1, "trained_tokens": None}),
             "unknown arch": entry(capability={"arch": ["m3"], "min_mem_gib": None}),
             "gen qualified without receipt": entry(qualification={
                 "generation": {"status": "qualified", "receipt": None, "date": "2026-09-20"},

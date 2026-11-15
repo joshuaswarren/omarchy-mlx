@@ -57,7 +57,7 @@ def model_entry(entry_id, repo, weights, kv_per_token, kind="chat",
         "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
         "memory": {"weights_bytes": weights, "kv_bytes_per_token": kv_per_token,
                    "peak_estimate_bytes": None},
-        "context": {"max_tokens": max_tokens},
+        "context": {"max_tokens": max_tokens, "trained_tokens": None},  # unknown, said out loud
         "capability": {"arch": None, "min_mem_gib": None},
         "qualification": {
             "generation": {"status": gen, "receipt": "r.md" if gen == "qualified" else None,
