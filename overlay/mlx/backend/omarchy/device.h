@@ -573,12 +573,13 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
 }
 
 // The fused GatedDelta conv + delta + gated norm op (fast::gdn_conv_delta_update with the gated norm folded in, the MLX_OMARCHY_GDN_CONV_DELTA value 2)
-// runs by default on the 13-inch (Apple M1, G13G) only: the 2B decode there measured +0.51 percent (5 of 5 pairs faster, identical tokens, dispatches per
-// token 251 to 215, 5 pairs x 128 tokens at ctx 512; receipts on the 13-inch ~/scratch/w7x-decode-gap/results/fusion-ab-jwm1-w7q-epilogue2.out). The 16-inch
-// (G13C) and the 14-inch (G14C) are unmeasured, so they keep the stock route until their own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value
-// overrides this everywhere.
+// runs by default on the 13-inch (Apple M1, G13G) and the 14-inch (Apple M2 Max, G14C). The 13-inch 2B decode measured +0.51 percent (5 of 5 pairs faster,
+// identical tokens, dispatches per token 251 to 215, 5 pairs x 128 tokens at ctx 512; receipts on the 13-inch ~/scratch/w7x-decode-gap/results/fusion-ab-jwm1-w7q-epilogue2.out).
+// The 14-inch (receipts/2026-11-14-g14c-gdn-conv-delta, ABBA, 128 tokens, identical tokens in every pair): Qwen3.8-2B +2.00 percent at ctx 512 and +1.22 at
+// ctx 2048, Qwen3.8-9B -0.08 and -0.14 (flat: the arms agree within their 0.2 percent spread). The 16-inch (G13C) is unmeasured, so it keeps the stock
+// route until its own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this everywhere.
 inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13G") != std::string::npos;
+  return device_name.find("G13G") != std::string::npos || device_name.find("G14C") != std::string::npos;
 }
 
 // The one resolver for the fused GatedDelta conv + delta op's mode: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated

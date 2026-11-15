@@ -231,20 +231,21 @@ TEST_CASE("the conv + delta + gated norm step is one dispatch where the sequence
   CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the sequence into one dispatch");
 }
 
-TEST_CASE("the GDN conv + delta default is the 13-inch only, and the ABI resolves the mode") {
-  // The per-chip default: the fused conv + delta + gated norm route runs by default on the 13-inch (Apple M1, G13G) only.
+TEST_CASE("the GDN conv + delta default is the 13-inch and the 14-inch, and the ABI resolves the mode") {
+  // The per-chip default: the fused conv + delta + gated norm route runs by default on the 13-inch (Apple M1, G13G) and the 14-inch (Apple M2 Max, G14C).
   CHECK(omarchy::gdn_conv_delta_norm_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gdn_conv_delta_norm_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part(""));
   // The single resolver, host-only (it takes the device name, so every part is observable on any machine): an explicit flag value wins over the
-  // per-chip default, "0" and anything else read as the stock route, and UNSET follows the default: 2 on G13G, 0 elsewhere.
+  // per-chip default, "0" and anything else read as the stock route, and UNSET follows the default: 2 on G13G and G14C, 0 elsewhere.
   const std::string m1 = "Apple M1 (G13G B1)";
   const std::string m1max = "Apple M1 Max (G13C C0)";
+  const std::string m2max = "Apple M2 Max (G14C B1)";
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
+  CHECK(omarchy::gdn_conv_delta_resolved_mode(m2max) == 2);
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m1max) == 0);
-  CHECK(omarchy::gdn_conv_delta_resolved_mode("Apple M2 Max (G14C B1)") == 0);
   CHECK(omarchy::gdn_conv_delta_resolved_mode("") == 0);
   setenv("MLX_OMARCHY_GDN_CONV_DELTA", "", 1);  // an empty value counts as unset
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
