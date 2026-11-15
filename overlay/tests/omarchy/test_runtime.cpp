@@ -49,6 +49,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/honeykrisp_identity.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
@@ -3099,6 +3100,177 @@ TEST_CASE("CPU PD hold: default on for G13 parts other than G13C, env overrides"
   CHECK(cpu_pd_hold_enabled_for("1", "Apple M1 Max (G13C C0)"));
   CHECK(cpu_pd_hold_enabled_for("on", "Apple M2 (G14G B1)"));
 }
+
+TEST_CASE("CPU uclamp: on unless MLX_OMARCHY_CPU_UCLAMP is 0") {
+  using mlx::core::omarchy::cpu_uclamp_enabled_for;
+  CHECK(cpu_uclamp_enabled_for(nullptr));
+  CHECK(cpu_uclamp_enabled_for(""));
+  CHECK(cpu_uclamp_enabled_for("1"));
+  CHECK(cpu_uclamp_enabled_for("00"));
+  CHECK_FALSE(cpu_uclamp_enabled_for("0"));
+}
+
+TEST_CASE("CPU uclamp: sched_attr keeps policy and sets only the floor") {
+  using namespace mlx::core::omarchy;
+  SchedAttr a = uclamp_min_attr(1024);
+  CHECK(sizeof(a) == 56);
+  CHECK(a.size == 56);
+  CHECK(a.sched_flags == (0x08u | 0x10u | 0x20u));
+  CHECK(a.sched_util_min == 1024);
+  CHECK(a.sched_util_max == 1024);
+  CHECK(a.sched_policy == 0);
+  CHECK(a.sched_nice == 0);
+  CHECK(a.sched_priority == 0);
+  CHECK(a.sched_runtime == 0);
+  CHECK(a.sched_deadline == 0);
+  CHECK(a.sched_period == 0);
+  // Field offsets are the kernel ABI.
+  CHECK(offsetof(SchedAttr, sched_flags) == 8);
+  CHECK(offsetof(SchedAttr, sched_util_min) == 48);
+  CHECK(offsetof(SchedAttr, sched_util_max) == 52);
+}
+
+// sched_getattr that reports a plain thread: no floor, no cap.
+static long uclamp_default_get(mlx::core::omarchy::SchedAttr& a) {
+  a.sched_util_min = 0;
+  a.sched_util_max = 1024;
+  return 0;
+}
+
+TEST_CASE("CPU uclamp: applied once per thread, failure ignored and not retried") {
+  using namespace mlx::core::omarchy;
+  int calls = 0;
+  uint32_t seen_min = 0;
+  auto ok = [&](SchedAttr& a) {
+    ++calls;
+    seen_min = a.sched_util_min;
+    return 0L;
+  };
+  bool done = false;
+  CHECK(apply_cpu_uclamp_once(uclamp_default_get, ok, nullptr, done));
+  CHECK(calls == 1);
+  CHECK(seen_min == 1024);
+  CHECK_FALSE(apply_cpu_uclamp_once(uclamp_default_get, ok, nullptr, done));
+  CHECK(calls == 1);
+
+  // The syscall refuses (old kernel, no CONFIG_UCLAMP_TASK): no throw, one try.
+  int fails = 0;
+  auto refuse = [&](SchedAttr&) {
+    ++fails;
+    return -1L;
+  };
+  bool done2 = false;
+  CHECK_FALSE(apply_cpu_uclamp_once(uclamp_default_get, refuse, nullptr, done2));
+  CHECK_FALSE(apply_cpu_uclamp_once(uclamp_default_get, refuse, nullptr, done2));
+  CHECK(fails == 1);
+
+  // Opted out: the syscall is never made.
+  bool done3 = false;
+  CHECK_FALSE(apply_cpu_uclamp_once(uclamp_default_get, ok, "0", done3));
+  CHECK(calls == 1);
+}
+
+TEST_CASE("CPU uclamp: a floor or cap the caller already set is kept") {
+  using namespace mlx::core::omarchy;
+  int sets = 0;
+  auto set = [&](SchedAttr&) {
+    ++sets;
+    return 0L;
+  };
+  auto get_floor = [](SchedAttr& a) {
+    a.sched_util_min = 512;
+    a.sched_util_max = 1024;
+    return 0L;
+  };
+  bool d1 = false;
+  CHECK_FALSE(apply_cpu_uclamp_once(get_floor, set, nullptr, d1));
+  CHECK(sets == 0);
+
+  auto get_cap = [](SchedAttr& a) {
+    a.sched_util_min = 0;
+    a.sched_util_max = 512;
+    return 0L;
+  };
+  bool d2 = false;
+  CHECK_FALSE(apply_cpu_uclamp_once(get_cap, set, nullptr, d2));
+  CHECK(sets == 0);
+
+  // A caller that asked for the full range explicitly is not a caller clamp.
+  auto get_full = [](SchedAttr& a) {
+    a.sched_util_min = 0;
+    a.sched_util_max = 1024;
+    return 0L;
+  };
+  bool d3 = false;
+  CHECK(apply_cpu_uclamp_once(get_full, set, nullptr, d3));
+  CHECK(sets == 1);
+
+  // The read fails: the write is still tried (it refuses harmlessly).
+  auto get_fail = [](SchedAttr&) { return -1L; };
+  bool d4 = false;
+  CHECK(apply_cpu_uclamp_once(get_fail, set, nullptr, d4));
+  CHECK(sets == 2);
+}
+
+TEST_CASE("CPU uclamp: aarch64 syscall numbers") {
+  using namespace mlx::core::omarchy;
+  CHECK(kSchedSetattrAarch64 == 274);
+  CHECK(kSchedGetattrAarch64 == 275);
+}
+
+#if defined(__linux__) && defined(__aarch64__)
+// The real syscalls, on a fresh thread so no other test's clamp is inherited.
+// Skipped when the kernel has no uclamp (the floor never reads back).
+static bool uclamp_read_min(uint32_t& out) {
+  mlx::core::omarchy::SchedAttr a{};
+  a.size = sizeof(a);
+  if (::syscall(mlx::core::omarchy::kSchedGetattrAarch64, 0, &a, sizeof(a), 0u) != 0) {
+    return false;
+  }
+  out = a.sched_util_min;
+  return true;
+}
+
+static bool uclamp_preset_min(uint32_t v) {
+  auto a = mlx::core::omarchy::uclamp_min_attr(v);
+  return ::syscall(mlx::core::omarchy::kSchedSetattrAarch64, 0, &a, 0u) == 0;
+}
+
+TEST_CASE("CPU uclamp: real syscalls set the floor and keep a caller's floor") {
+  if (std::getenv("MLX_OMARCHY_CPU_UCLAMP") != nullptr) {
+    skip("MLX_OMARCHY_CPU_UCLAMP is set.");
+    return;
+  }
+  uint32_t plain = 0, kept = 0, via_init = 0;
+  bool plain_ok = false, preset_ok = false, kept_ok = false, init_ok = false;
+  std::thread([&] {
+    mlx::core::omarchy::raise_cpu_clamp_this_thread();
+    plain_ok = uclamp_read_min(plain);
+  }).join();
+  std::thread([&] {
+    preset_ok = uclamp_preset_min(512);
+    mlx::core::omarchy::raise_cpu_clamp_this_thread();
+    kept_ok = uclamp_read_min(kept);
+  }).join();
+  std::thread([&] {
+    gpu::is_available();
+    init_ok = uclamp_read_min(via_init);
+  }).join();
+  CHECK(plain_ok);
+  if (plain_ok && plain == 0) {
+    skip("the kernel has no uclamp.");
+    return;
+  }
+  CHECK(plain == 1024);
+  if (preset_ok) {
+    CHECK(kept_ok);
+    CHECK(kept == 512);
+  }
+  // Runtime::init() raises the clamp of the thread that first reaches it.
+  CHECK(init_ok);
+  CHECK(via_init == 1024);
+}
+#endif
 
 TEST_CASE("recycled block is not rewritten by the previous owner in flight") {
   if (!gpu::is_available()) {

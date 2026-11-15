@@ -11,6 +11,7 @@
 
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/gpu_profiler.h"
@@ -1080,6 +1081,8 @@ void CommandEncoder::wait_outstanding_submissions() {
 }
 
 void CommandEncoder::submit() {
+  // The submitting thread may predate Runtime::init (the MLX stream thread).
+  raise_cpu_clamp_this_thread();
   auto& dt = vk::device_table();
   if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr, "[rtmod] SUBMIT-ENTER tid=%lu\n", (unsigned long)syscall(SYS_gettid));
