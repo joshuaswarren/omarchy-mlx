@@ -933,7 +933,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
   CHECK(alloc.set_wired_limit(0) == (1u << 30));
 
   const size_t saved_limit = alloc.get_memory_limit();
-  alloc.set_cache_limit(64u << 20);
+  const size_t saved_cache = alloc.set_cache_limit(64u << 20);
   alloc.clear_cache();
   const size_t before = alloc.get_active_memory();
 
@@ -970,6 +970,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
 
   alloc.clear_cache();
   alloc.set_memory_limit(saved_limit);
+  alloc.set_cache_limit(saved_cache);
   CHECK(alloc.set_wired_limit(0) == (64ull << 30));
   CHECK(alloc.get_active_memory() == before);
 }
@@ -989,6 +990,36 @@ TEST_CASE("get/set cache_limit round-trips and exposes the default") {
   // Restore the prior value.
   alloc.set_cache_limit(prev);
   CHECK(alloc.get_cache_limit() == prev);
+}
+
+TEST_CASE("freed buffers past the cache limit go back to the driver (#435)") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  const size_t cap = 6u << 20;
+  const size_t saved_cache = alloc.set_cache_limit(cap);
+  alloc.clear_cache();
+  const size_t before = alloc.get_active_memory();
+
+  // Five distinct size classes (1..5 MiB, 15 MiB in total), as KV growth
+  // makes: only what fits under the cap stays cached.
+  std::vector<omarchy::VulkanBuffer*> bufs;
+  for (size_t mib = 1; mib <= 5; ++mib) {
+    bufs.push_back(
+        static_cast<omarchy::VulkanBuffer*>(alloc.malloc(mib << 20).ptr()));
+    REQUIRE(bufs.back() != nullptr);
+  }
+  for (auto* buf : bufs) {
+    alloc.free(allocator::Buffer{buf});
+  }
+  CHECK(alloc.get_cache_memory() > 0);
+  CHECK(alloc.get_cache_memory() <= cap);
+  CHECK(alloc.get_active_memory() == before);
+
+  alloc.clear_cache();
+  alloc.set_cache_limit(saved_cache);
 }
 
 TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
