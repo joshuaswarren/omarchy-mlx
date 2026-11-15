@@ -74,7 +74,11 @@ layer handles "what honest value does this helper return when
 Metal APIs are absent?". Patches:
 
 - `patches/0001-linux-hardware-proc-meminfo.patch`
-- `patches/0002-linux-cli-cache-limit-total-memory.patch`
+- `patches/0002-linux-serve-cache-limit-metal-only.patch` — `omlx serve`
+  raises the MLX cache limit to total memory only on Metal (the #300 panic
+  guard). On omarchy the allocator quarantines freed buffers until their
+  fence signals, and a RAM-sized cache fills the Vulkan heap (#435), so the
+  backend's own limit (a quarter of the heap) stays.
 - `patches/0003-linux-enforcer-no-wired-limit-log.patch`
 - `patches/0006-omlx-q35-decode-conv-fuse.patch` — GDN decode fast route
   for the oMLX MTP model. The server's own `qwen35_model.py` routes every

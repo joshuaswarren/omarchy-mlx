@@ -125,12 +125,8 @@ VulkanAllocator::VulkanAllocator()
   // the ceiling is the whole host-visible heap: a ceiling below the
   // resident weights of a model that fits the heap makes every malloc
   // release cached buffers.
-  // cache_limit_ matches it; a single number drives both the malloc gate
-  // and the free-side pool cap, so changing one or the other never gets
-  // them out of sync.
-  size_t ceiling = default_gc_limit(total);
-  gc_limit_ = ceiling;
-  cache_limit_ = ceiling;
+  gc_limit_ = default_gc_limit(total);
+  cache_limit_ = default_cache_limit(total);
 }
 
 Buffer VulkanAllocator::malloc(size_t size) {
@@ -177,12 +173,14 @@ Buffer VulkanAllocator::malloc(size_t size) {
   // the driver. This is the A20 fix — without it, KV-cache growth across
   // decode steps adds a fresh size class per step and the cache keeps
   // every prior class around, climbing into the Honeykrisp heap until
-  // vkAllocateMemory returns OOM. The ceiling is set to the whole
-  // total_memory in the constructor and is shared with `cache_limit_`,
-  // so the free-side cap and the malloc-side gate can never disagree.
-  if (active_memory_ + buffer_cache_.cache_size() + size > gc_limit_) {
-    buffer_cache_.release_cached_buffers(
-        active_memory_ + buffer_cache_.cache_size() + size - gc_limit_);
+  // vkAllocateMemory returns OOM. The ceiling is the whole total_memory;
+  // the free-side cap (`cache_limit_`) sits below it.
+  // Quarantined buffers still hold their device memory, so they count
+  // against the ceiling like active and cached bytes do.
+  if (const size_t held = active_memory_ + quarantine_bytes_ +
+          buffer_cache_.cache_size() + size;
+      held > gc_limit_) {
+    buffer_cache_.release_cached_buffers(held - gc_limit_);
   }
   lk.unlock();
 
@@ -263,10 +261,15 @@ Buffer VulkanAllocator::malloc(size_t size) {
   if (alloc_result != VK_SUCCESS) {
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
     delete buf;
+    lk.lock();
+    const std::string held = "active=" + std::to_string(active_memory_) +
+        " quarantined=" + std::to_string(quarantine_bytes_);
+    lk.unlock();
     throw std::runtime_error(
         "[omarchy] vkAllocateMemory failed: " +
-        std::string(vk::result_string(alloc_result)) +
-        " (request=" + std::to_string(size) + " bytes; cache released)");
+        std::string(vk::result_string(alloc_result)) + " (request=" +
+        std::to_string(size) + " bytes; " + held +
+        " bytes; cache released)");
   }
   VKX_CHECK(
       dt.BindBufferMemory(device().handle(), buf->buffer, buf->memory, 0));
@@ -324,6 +327,7 @@ void VulkanAllocator::free(Buffer buffer) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
       }
+      quarantine_bytes_ += sz;
       quarantine_.push_back(buf);
       return;
     }
@@ -374,6 +378,7 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
     }
     buf->completion = 0;
     size_t sz = buf->size;
+    quarantine_bytes_ -= sz;
     if (sz > 0 && !tape_no_reuse() && !buffer_cache_disabled() &&
         buffer_cache_.cache_size() + sz <= cache_limit_) {
       if (poison_freed()) {
