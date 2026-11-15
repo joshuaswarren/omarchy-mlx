@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path('<HOME>/scratch/w9c-m2-profile-run2-20261114')
 IN = ROOT / 'inputs-g14b'
 PY = ROOT / 'venv-m6bf/bin/python'
-ICD = '<HOME>/scratch/w9c-mesa-main/asahi_icd.main.json'
+ICD = os.environ['VK_ICD_FILENAMES']
 ENV = {'HOME': '<HOME>', 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'PYTHONNOUSERSITE': '1', 'VK_DRIVER_FILES': ICD,
        'MLX_OMARCHY_BATCH_WORK': '100000'}
 CONFIGS = [(4, 1, 128 * w) for w in (68, 69, 70, 71, 72, 73, 74, 75)]

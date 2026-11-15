@@ -2,7 +2,7 @@
 
 Date: 2026-11-14. Part: Apple M2 Max (G14C), Mesa main ICD, wheel from main 6bf610a155, `MLX_OMARCHY_BATCH_WORK=100000`.
 Rule changed: `sdpa_split_pv_wide_max_workgroups` in `overlay/mlx/backend/omarchy/device.h` returns 68 for G14C (it returned 0, so the width-256 value-phase pass 1 never ran by default there).
-Method: `receipts/2026-11-12-sdpa-hd256-kv-heads-budget`. The count is key-value heads times 128-key blocks. Raw logs are in `logs/`, the scripts that made them in `scripts/` (the lab home directory is written `<HOME>`; set it before a rerun). A kernel-log line (`GPU-TIMEOUTS after=0 delta=0`) is appended into some log lines by the host; it is not part of a row.
+Method: `receipts/2026-11-12-sdpa-hd256-kv-heads-budget`. The count is key-value heads times 128-key blocks. Raw logs are in `logs/`, the scripts that made them in `scripts/` (the lab home directory is written `<HOME>`; set it before a rerun, and set `VK_ICD_FILENAMES` to the Mesa main Vulkan manifest the scripts read). A kernel-log line (`GPU-TIMEOUTS after=0 delta=0`) is appended into some log lines by the host; it is not part of a row.
 
 ## Op rows (`logs/run-g14.log`, `logs/run-g14b.log`)
 
@@ -24,7 +24,7 @@ The edge is one block wide at 1 key-value head (68 wins, 69 loses, eight consecu
 
 bf16 q, k and v, 8 shapes (8/2 heads at 512 to 4096 keys, 16/4 at 2048 and 4096, 4/1 at 4096), score sigma 0.5 and 2.0, each arm against a numpy float64 reference computed from the same inputs. The max abs error of the variant equals the error of the stock pass 1 in all 16 rows (0.00006 to 0.0039, the bf16 output rounding). The two arms differ by at most one bf16 ULP (0.00098 at 2176 keys, sigma 2.0).
 
-## Model rows (4-bit weights, bfloat16 activations, 128 decoded tokens, ABBA)
+## Model rows (4-bit weights, bfloat16 activations, 128 decoded tokens, ABBA, 2 runs per arm)
 
 | model | context | key-value heads x blocks | default (stock) | variant | change | ids |
 |---|---|---|---|---|---|---|

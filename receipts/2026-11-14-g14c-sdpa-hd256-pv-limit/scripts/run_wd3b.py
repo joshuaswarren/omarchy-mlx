@@ -1,4 +1,4 @@
-"""Qwen3-4B-4bit cast to f16, decode ABBA: MLX_OMARCHY_FUSED_TRIO default (on) vs 0. One process per arm."""
+"""Qwen3.8-9B and Qwen3.8-2B 4-bit, decode ABBA (2 runs per arm): MLX_OMARCHY_SDPA_SPLIT_PV default (unset) against 1. One process per arm."""
 import json
 import os
 import subprocess
@@ -11,7 +11,7 @@ OUT = ROOT / 'output-wd3b'
 PYD = ROOT / 'venv-m6bf/bin/python'
 PYN = ROOT / 'venv-m6bf/bin/python'
 MODELS = (('9b', '<HOME>/.cache/huggingface/hub/models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit/snapshots/e827c31fbd588828f43180a87ab34415a6d8a4bf'), ('2b', '<HOME>/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381'))
-ICD = '<HOME>/scratch/w9c-mesa-main/asahi_icd.main.json'
+ICD = os.environ['VK_ICD_FILENAMES']
 ENV = {'HOME': '<HOME>', 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'PYTHONNOUSERSITE': '1',
        'HF_HOME': '<HOME>/.cache/huggingface', 'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',
        'TOKENIZERS_PARALLELISM': 'false', 'VK_DRIVER_FILES': ICD, 'MLX_OMARCHY_BATCH_WORK': '100000'}
