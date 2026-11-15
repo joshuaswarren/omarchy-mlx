@@ -38,6 +38,13 @@ Neither device lists `VK_KHR_cooperative_matrix`. The wheel and test binary were
 
 At 256 and 512 one call is under 1.5 ms and is dominated by submission time, and the two runs of one arm differ by up to 3x. Those rows are in the logs and are not used here.
 
+## Scope beyond plain f32 matmul
+
+- **Devices with the f32 cooperative matrix.** The two new test cases skip there, but `MatmulRbF32` still runs on them: an f32 product the cooperative-matrix gates decline (for example an odd `n`, `k % 8 != 0`, or an odd `m` with a column-major lhs) used to take the 16x16 tile and now takes the 64x64 tile.
+- **f32 causal attention without the cooperative matrix.** The composed f32 attention path at `q_len >= 32` (causal scores and PV matmuls) used to run the 16x16 tile, which ignores the causal skip flags. It now takes `MatmulRbF32` with flags 8 and 16, as the f16 tile and the f32 cooperative-matrix route already do: score tiles past the causal bound are not written (the causal softmax and the lse kernel do not read them), and the PV matmul skips all-zero probability k tiles. The output is the same except where a skipped V row holds Inf or NaN. This receipt does not include an f32 run of `test_sdpa_causal_ragged`, `test_sdpa_norm_regression` or `test_sdpa_prefill_flash` on a device without the cooperative matrix; that run is still owed.
+
+Two later test cases close the gaps the bit comparison leaves. "register-blocked f32 matmul matches the 16x16 tile bit for bit" now also reads the last dispatched kernel and checks the full product ran `MatmulRbF32` and the 16-row slice ran `MatmulF32`, so it fails if the route is never taken. "f32 addmm at 32 or more rows keeps its bias off the register-blocked tile" runs an f32 `addmm` at m = 40 with a non-zero bias, alpha 0.5 and beta 2, checks it ran `MatmulF32`, and compares it with a float64 host reference, so dropping the `!use_c` gate (the f32 tile never reads the bias) fails it. Neither has run on hardware yet.
+
 The change touches only f32 matmuls with at least 32 rows and no bias. The 4-bit and bf16 decode and prefill paths of the LLMs in `receipts/` do not dispatch them, so no tokens-per-second change is claimed.
 
 ## Files
