@@ -162,6 +162,56 @@ inline std::string system_icd_fallback(
   return {};
 }
 
+struct IcdFallbackResult {
+  bool ok{false};
+  // Set only when the system ICD was tried: the ICD that found no device.
+  std::string packaged_path;
+  // Set only when the system ICD was tried: the one the retry used.
+  std::string fallback_path;
+};
+
+// Device-discovery policy around one attempt (Runtime::init): run |attempt|;
+// when it fails because the selected packaged ICD enumerated no supported
+// device (|no_supported_device|, set by the attempt), point the loader at the
+// system ICD with |set_icd| and attempt once more. |selection|, |icd_retry|
+// and |error| are updated for the second attempt; a failed retry leaves an
+// error that carries both reasons. Never retries an override, a refusal, or
+// a second time.
+template <class Attempt, class SetIcd>
+IcdFallbackResult init_with_icd_fallback(
+    HoneykrispIcdSelection& selection,
+    bool& no_supported_device,
+    bool& icd_retry,
+    std::string& error,
+    const std::vector<std::string>& candidates,
+    Attempt attempt,
+    SetIcd set_icd) {
+  IcdFallbackResult result;
+  if (attempt()) {
+    result.ok = true;
+    return result;
+  }
+  const std::string fallback =
+      no_supported_device ? system_icd_fallback(candidates, selection) : std::string();
+  if (fallback.empty()) {
+    return result;
+  }
+  const std::string packaged_error = error;
+  result.packaged_path = selection.path;
+  selection = HoneykrispIcdSelection{fallback, false, false};
+  icd_retry = true;
+  if (!set_icd(fallback)) {
+    return result;
+  }
+  if (attempt()) {
+    result.ok = true;
+    result.fallback_path = fallback;
+    return result;
+  }
+  error = packaged_error + " The system ICD " + fallback + " was tried next: " + error;
+  return result;
+}
+
 inline std::string resolve_honeykrisp_icd(
     const std::vector<std::string>& candidates,
     const char* user_files) {

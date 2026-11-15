@@ -352,36 +352,28 @@ struct Runtime {
       return ready;
     }
     probed = true;
-    if (try_init()) {
-      return true;
-    }
     // The packaged recipe ICD targets M1/M2; a newer chip it cannot serve may
-    // still work on the system driver. Retry once, with the system ICD.
-    const std::string fallback =
-        no_supported_device ? system_icd_fallback(system_icd_candidates(), icd_selection)
-                            : std::string();
-    if (fallback.empty()) {
-      return false;
-    }
-    const std::string packaged_error = error;
-    const std::string packaged_path = icd_selection.path;
-    icd_selection = HoneykrispIcdSelection{fallback, false, false};
-    icd_retry = true;
-    if (::setenv("VK_DRIVER_FILES", fallback.c_str(), 1) != 0 ||
-        ::setenv("VK_ICD_FILENAMES", fallback.c_str(), 1) != 0) {
-      return false;
-    }
-    if (try_init()) {
+    // still work on the system driver (init_with_icd_fallback).
+    const auto result = init_with_icd_fallback(
+        icd_selection,
+        no_supported_device,
+        icd_retry,
+        error,
+        system_icd_candidates(),
+        [&] { return try_init(); },
+        [](const std::string& path) {
+          return ::setenv("VK_DRIVER_FILES", path.c_str(), 1) == 0 &&
+              ::setenv("VK_ICD_FILENAMES", path.c_str(), 1) == 0;
+        });
+    if (result.ok && !result.fallback_path.empty()) {
       std::fprintf(
           stderr,
           "[omarchy] the packaged Honeykrisp ICD (%s) found no supported"
           " device; using the system ICD %s.\n",
-          packaged_path.c_str(),
-          fallback.c_str());
-      return true;
+          result.packaged_path.c_str(),
+          result.fallback_path.c_str());
     }
-    error = packaged_error + " The system ICD " + fallback + " was tried next: " + error;
-    return false;
+    return result.ok;
   }
 
   bool try_init() {
@@ -632,10 +624,13 @@ bool Runtime::init_impl() {
   // Capability simulation resolves once per process. An unknown
   // MLX_OMARCHY_CAPS_SIM name throws here and lands in |error|: the
   // backend refuses to start rather than silently running real caps.
+  // The notices below print on the first attempt only: an ICD retry runs this
+  // function a second time.
+  const bool first_attempt = !icd_retry;
   const std::string sim_profile = capsim::requested_profile();
   const capsim::SimulationProfile* sim =
       sim_profile.empty() ? nullptr : capsim::find(sim_profile);
-  if (sim) {
+  if (sim && first_attempt) {
     std::fprintf(
         stderr,
         "[omarchy] CAPABILITY SIMULATION ACTIVE: profile '%s'"
@@ -655,7 +650,7 @@ bool Runtime::init_impl() {
   // flag on every malloc and free.
   g_no_buffer_cache.store(
       env_flag("MLX_OMARCHY_NO_BUFFER_CACHE"), std::memory_order_relaxed);
-  if (g_no_buffer_cache.load(std::memory_order_relaxed)) {
+  if (first_attempt && g_no_buffer_cache.load(std::memory_order_relaxed)) {
     std::fprintf(
         stderr,
         "[omarchy] MLX_OMARCHY_NO_BUFFER_CACHE active (diagnostics only,"
