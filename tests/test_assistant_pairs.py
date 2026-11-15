@@ -341,6 +341,24 @@ class CatalogPairSchemaTests(unittest.TestCase):
                 self.assertTrue(receipt)
                 self.assertTrue((Path(__file__).resolve().parents[1] / receipt).is_file())
 
+    def test_compact_limit_is_not_admitted_where_the_measured_peak_does_not_fit(self):
+        # The qualification run measured the chat worker's peak (VmHWM 17,698,560 kB = 16.9 GiB)
+        # at 16384 tokens; the estimate alone says 7.7 GiB. A 16 GiB machine must stay at the
+        # default, a 24 GiB one may take 16384.
+        chat = {m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"]
+        decision = 3 * GiB // 2  # decision worker, assumed for the sizing
+        small = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                         available_bytes=16 * GiB)
+        self.assertLessEqual(small["context_tokens"], budget.DEFAULT_CONTEXT_TOKENS)
+        self.assertEqual(small["binding"], "memory")
+        large = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                         available_bytes=24 * GiB)
+        self.assertEqual(large["context_tokens"], 16384)
+        # the claim a worker makes at 16384 is the measured peak, not the 7.7 GiB estimate
+        self.assertGreaterEqual(pairs.chat_estimate(chat, 16384).total, 17_698_560 * 1024)
+        # and the default context keeps the plain estimate
+        self.assertLess(pairs.chat_estimate(chat, 4096).total, 6 * GiB)
+
     def test_compact_chat_model_admits_an_omp_sized_prompt(self):
         # omp sends about 5.7k prompt tokens; the 4096 default refused it with HTTP 404
         chat = {m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"]
