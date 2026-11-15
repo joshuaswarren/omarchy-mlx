@@ -14661,8 +14661,10 @@ void RMSNorm::eval_gpu(
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(w), binding(out)};
   omarchy::ComputeKernel kernel;
+  const bool apple_bf16_norm = out.dtype() == bfloat16 &&
+      apple_norm_enabled(encoder.device(), row_length, x.size() / row_length);
   if ((out.dtype() == float16 || out.dtype() == bfloat16) &&
-      omarchy::fused_trio_enabled(encoder.device())) {
+      !apple_bf16_norm && omarchy::fused_trio_enabled(encoder.device())) {
     // Trio pipeline: the near-copied RMS row body on the shared decode
     // pipeline (params.matrix_n 0 is the norm mode). The bf16 body
     // keeps the float32 reduction and rounds once at the store, the
@@ -14675,9 +14677,7 @@ void RMSNorm::eval_gpu(
         omarchy::ComputeKernel::FastRmsNormF32,
         omarchy::ComputeKernel::FastRmsNormF16,
         omarchy::ComputeKernel::FastRmsNormBF16);
-    if (out.dtype() == bfloat16 &&
-        apple_norm_enabled(
-            encoder.device(), row_length, x.size() / row_length)) {
+    if (apple_bf16_norm) {
       kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
     }
   }
