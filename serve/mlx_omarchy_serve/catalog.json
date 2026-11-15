@@ -778,6 +778,51 @@
         ]
       },
       "serve": {"backend": "mlx-lm", "module": null}
+    },
+    {
+      "id": "gemma-4-e4b-it-4bit",
+      "repo": "mlx-community/gemma-4-e4b-it-4bit",
+      "revision": "475b9088d29754a3379866cf5aeb6b41acd313c2",
+      "kind": "chat",
+      "priority": 12,
+      "recommended": false,
+      "license": "gemma",
+      "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
+      "memory": {"weights_bytes": 5146800534, "kv_bytes_per_token": 16384, "peak_estimate_bytes": null},
+      "context": {"max_tokens": 131072},
+      "capability": {"min_mem_gib": 6, "arch": null},
+      "qualification": {
+        "generation": {"status": "untested", "receipt": null, "date": null},
+        "http": {"status": "untested", "receipt": null, "date": null},
+        "managed": {"status": "untested", "receipt": null, "date": null}
+      },
+      "availability": {"size_bytes": 5179241512, "refreshed_at": "2026-11-15T17:55:00Z"},
+      "family": "gemma-4-e4b",
+      "extension": {
+        "model_type": "gemma4",
+        "multimodal": true,
+        "variant": "4bit",
+        "model_architecture": "Gemma4ForConditionalGeneration",
+        "source_base_repo": "google/gemma-4-E4B-it",
+        "source_base_revision": "fee6332c1abaafb77f6f9624236c63aa2f1d0187",
+        "min_mem_gib_basis": "ceil(weights_bytes * 1.25 / 2^30); static weights floor, not a measured peak",
+        "scope": "Not run through the catalog qualification gates. Loaded with mlx_lm and served on a 13-inch M1 MacBook Pro under Omarchy: see the receipt in the pull request.",
+        "kv_basis": "16384 B/token = 2 (K+V) x 4 full-attention layers that own a cache (layers 5, 11, 17 and 23 of the first 24; the last 18 of 42 layers share earlier caches) x 2 KV heads x 512 global_head_dim x 2 bytes (bf16), from the pinned config. The 20 owning sliding-attention layers keep a fixed 512-token window (about 42 MB), not counted per token.",
+        "license_source": "Hugging Face model card (README.md) and API cardData.license at this pinned revision (Gemma terms of use); public and ungated.",
+        "files": [
+          {"path": ".gitattributes", "size_bytes": 1570, "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"},
+          {"path": "README.md", "size_bytes": 593, "sha256": "8e9717df49219943b8992eeccecd8050535318d34fffbbaeaac924ed01f27155"},
+          {"path": "chat_template.jinja", "size_bytes": 17336, "sha256": "2f1b4d75d067bae3fe44e676721c7f077d243bc007156cb9c2f8b5836613d082"},
+          {"path": "config.json", "size_bytes": 6628, "sha256": "780ccb3a514a5f1ced161d383f948fc22eca9b84b752ca19494f625bd9bad7a6"},
+          {"path": "generation_config.json", "size_bytes": 208, "sha256": "d4226bbe3117d2d253ba4609720ba82c6c4ce4627a9a6ae05387c78983ac03de"},
+          {"path": "model.safetensors", "size_bytes": 5146800534, "sha256": "932b8271fc3fe65adcc78b96c10c6268bbfb13e8f67d1358727c0d6ee97e1eff"},
+          {"path": "model.safetensors.index.json", "size_bytes": 240961, "sha256": "f8accac59ee7efe87e0c298c854610b262c3cadd477407503147c71209ff0093"},
+          {"path": "processor_config.json", "size_bytes": 1316, "sha256": "de3e580aebdc98272d4c4547daffe6525fcbae18a83a0e0bcf0d7444d4ee6f37"},
+          {"path": "tokenizer.json", "size_bytes": 32169626, "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"},
+          {"path": "tokenizer_config.json", "size_bytes": 2740, "sha256": "080d9e1aff284e2f6043889cd05367966f7c7b80e025fbc0b06745e218158656"}
+        ]
+      },
+      "serve": {"backend": "mlx-lm", "module": null}
     }
   ],
   "pairs": [
