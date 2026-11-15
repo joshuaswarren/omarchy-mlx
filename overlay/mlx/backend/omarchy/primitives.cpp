@@ -16684,8 +16684,22 @@ void ScaledDotProductAttention::eval_gpu(
       params.v_batchstride = checked_u32(v.strides()[0], tag, out);
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
+      // Q_CHUNK=8 is the G16S default: eight Q panels stay live and are
+      // reused across the four key-blocks of a tile. Isolated L=2048/8192
+      // /16384 was -8.0/-8.6/-10.0%; e2e Qwen3-8B-4bit pf8010 +1.25%
+      // disjoint, pf16004 +3.14% disjoint, pf2060/pf4006 overlap. Tokens
+      // identical. MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the 16-panel
+      // kernel. Other parts keep that kernel (unmeasured).
+      // receipts/2026-11-15-m4-pro-g16s-sdpa-flash-qchunk8
+      omarchy::ComputeKernel cf_kernel =
+          omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16;
+      const char* qchunk_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
+      const bool qchunk_off = qchunk_env != nullptr && qchunk_env[0] == '0';
+      if (cf_is_g16s && !qchunk_off) {
+        cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8;
+      }
       encoder.dispatch_compute(
-          omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16,
+          cf_kernel,
           cf_bindings,
           params,
           (static_cast<uint32_t>(q_len) + kCausalFlashWgRows - 1u) /
