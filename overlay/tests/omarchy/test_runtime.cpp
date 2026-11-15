@@ -712,6 +712,7 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
          {"Pineapple M5 Max (G17C B1)",
           "NVIDIA GeForce RTX 4090 (Apple M5 emulation)",
           "Apple Display",
+          "Apple Metal Device",  // "Apple M" alone is not a chip name
           "llvmpipe (LLVM 19.1.0, 256 bits)"}) {
       auto s = classify(
           name,
