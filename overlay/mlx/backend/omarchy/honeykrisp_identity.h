@@ -162,6 +162,13 @@ inline std::string system_icd_fallback(
   return {};
 }
 
+// vkCreateInstance failed because the loader found no ICD it could load
+// (VK_ERROR_INCOMPATIBLE_DRIVER, -9): a missing or broken packaged driver
+// library. Takes the raw VkResult so the header needs no Vulkan include.
+inline bool instance_failure_is_no_driver(int vk_result) {
+  return vk_result == -9;
+}
+
 struct IcdFallbackResult {
   bool ok{false};
   // Set only when the system ICD was tried: the ICD that found no device.

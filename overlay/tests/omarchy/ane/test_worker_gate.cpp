@@ -450,6 +450,19 @@ TEST_CASE("a packaged ICD that finds no supported device falls back to the syste
   CHECK(system_icd_fallback({packaged}, {packaged, true, false}).empty());
 }
 
+TEST_CASE("only an incompatible driver at instance creation counts as no usable driver") {
+  using namespace mlx::core::omarchy;
+  // VK_ERROR_INCOMPATIBLE_DRIVER (-9): the loader found no ICD it could load,
+  // as with a packaged manifest whose library is missing. The system ICD may
+  // still work. Every other creation failure is a real error.
+  CHECK(instance_failure_is_no_driver(-9));
+  CHECK_FALSE(instance_failure_is_no_driver(0));   // VK_SUCCESS
+  CHECK_FALSE(instance_failure_is_no_driver(-1));  // VK_ERROR_OUT_OF_HOST_MEMORY
+  CHECK_FALSE(instance_failure_is_no_driver(-3));  // VK_ERROR_INITIALIZATION_FAILED
+  CHECK_FALSE(instance_failure_is_no_driver(-6));  // VK_ERROR_LAYER_NOT_PRESENT
+  CHECK_FALSE(instance_failure_is_no_driver(-7));  // VK_ERROR_EXTENSION_NOT_PRESENT
+}
+
 TEST_CASE("the init retry runs once, only on no supported device, and re-points the loader") {
   using namespace mlx::core::omarchy;
   static const std::string packaged = "/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json";

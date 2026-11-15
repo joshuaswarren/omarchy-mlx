@@ -703,7 +703,24 @@ bool Runtime::init_impl() {
   app.apiVersion = kVulkan13;
   VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
   ici.pApplicationInfo = &app;
-  VKX_CHECK(it.CreateInstance(&ici, nullptr, &instance));
+  const VkResult created = it.CreateInstance(&ici, nullptr, &instance);
+  if (instance_failure_is_no_driver(static_cast<int>(created))) {
+    // No ICD loaded at all (for example the packaged driver library is
+    // missing): the same "no supported device" outcome as an empty
+    // enumeration, so a packaged ICD falls back to the system one.
+    instance = VK_NULL_HANDLE;
+    no_supported_device = true;
+    error =
+        "[omarchy] the Vulkan loader found no usable driver"
+        " (vkCreateInstance returned VK_ERROR_INCOMPATIBLE_DRIVER)."
+        " Is the Mesa Honeykrisp driver installed?";
+    return false;
+  }
+  if (created != VK_SUCCESS) {
+    throw std::runtime_error(
+        std::string("[omarchy] it.CreateInstance(&ici, nullptr, &instance) failed with ") +
+        vk::result_string(created));
+  }
 
   it.EnumeratePhysicalDevices =
       reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(

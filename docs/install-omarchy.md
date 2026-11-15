@@ -355,7 +355,9 @@ therefore still resolves. The packaged file
    packaged SHA applies.
 
 When case 2 selected the packaged ICD and it enumerates no supported
-device, the backend destroys that Vulkan instance and retries once with the
+device, or the loader cannot load it at all (`vkCreateInstance` returns
+`VK_ERROR_INCOMPATIBLE_DRIVER`, for example a missing driver library), the
+backend destroys that Vulkan instance and retries once with the
 first Honeykrisp ICD JSON of the system search (case 3), setting both
 variables to it (`icd_source` `search`) and printing one `[omarchy]` line to
 stderr that names both ICDs. The packaged Mesa targets M1/M2, so a newer
