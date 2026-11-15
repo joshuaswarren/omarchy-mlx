@@ -8577,6 +8577,25 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         (encoder.device().hardware_capabilities().subgroup_size == 32u &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+    // 4-bit group-128 decode GEMV: the shipped word-format fast path only
+    // covers group 64/32, so group-128 fell to the generic affine vec
+    // kernel (runtime shift/mask unpack), ~6x slower (18 vs ~110 GB/s on
+    // G16S). Route it to the same constant-shift word kernel built with
+    // QGROUP=128 (scale/bias stride K/128); bindings and params are the
+    // group-64 path's.
+    if (subgroup_ready && transpose_ && bits_ == 4 && group_size_ == 128 &&
+        out.dtype() == bfloat16 && w.ndim() == 2 && scales.ndim() == 2 &&
+        biases.ndim() == 2 && params.matrix_k % 128u == 0u &&
+        n_groups_qmm_vec <= omarchy::kMaxComputeGroupCountX) {
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16G128,
+          bindings,
+          params,
+          n_groups_qmm_vec,
+          1u,
+          1u);
+      return;
+    }
     // Eligibility was computed before dense normalization because the packed
     // f16 input view also requires a 16-byte-aligned x row.
     auto vec_kernel = subgroup_ready
