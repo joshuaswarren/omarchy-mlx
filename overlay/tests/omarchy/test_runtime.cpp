@@ -690,6 +690,40 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
     CHECK_FALSE(s.non_apple_dev);
   }
 
+  SUBCASE("M5 Max under Aurora's packaged Mesa is supported by device name") {
+    // The packaged Mesa on the M5 Max names the device "Apple M5 Max (G17C B1)"
+    // under Mesa's vendor id; the driver id it reports is not one this build
+    // lists, so the Apple chip name is the signal (the guard refused it with
+    // "is not an Apple GPU running Omarchy Honeykrisp").
+    constexpr int32_t unlisted_driver_id = 9999;
+    auto s = classify(
+        "Apple M5 Max (G17C B1)",
+        0x10005,
+        VK_MAKE_API_VERSION(0, 1, 4, 0),
+        unlisted_driver_id,
+        false);
+    CHECK(s.supported);
+    CHECK_FALSE(s.non_apple_dev);
+  }
+
+  SUBCASE("a name that only contains Apple, or a non-Apple device, is still refused") {
+    constexpr int32_t unlisted_driver_id = 9999;
+    for (const char* name :
+         {"Pineapple M5 Max (G17C B1)",
+          "NVIDIA GeForce RTX 4090 (Apple M5 emulation)",
+          "Apple Display",
+          "llvmpipe (LLVM 19.1.0, 256 bits)"}) {
+      auto s = classify(
+          name,
+          0x10005,
+          VK_MAKE_API_VERSION(0, 1, 4, 0),
+          unlisted_driver_id,
+          false);
+      CHECK_FALSE(s.supported);
+      CHECK(s.reason.find("not an Apple GPU") != std::string::npos);
+    }
+  }
+
   SUBCASE("Apple vendor remains an alternate signal") {
     auto s = classify(
         "Apple M1 (G13G B1)",
