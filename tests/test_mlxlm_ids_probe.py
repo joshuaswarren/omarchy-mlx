@@ -112,7 +112,7 @@ class IdsProbeTests(unittest.TestCase):
                  unittest.mock.patch.object(_mlxlm_server, "check_pinned",
                                             lambda m: "0.31.3"), \
                  unittest.mock.patch.object(_mlxlm_server, "install",
-                                            lambda m, l: calls.append("install")), \
+                                            lambda m, l, trained=None: calls.append("install")), \
                  unittest.mock.patch.object(_mlxlm_server, "install_ids_probe",
                                             lambda m: calls.append("ids_probe")):
                 _mlxlm_server.main()
@@ -132,7 +132,7 @@ class IdsProbeTests(unittest.TestCase):
                  unittest.mock.patch.object(_mlxlm_server, "check_pinned",
                                             lambda m: "0.31.3"), \
                  unittest.mock.patch.object(_mlxlm_server, "install",
-                                            lambda m, l: calls.append("install")), \
+                                            lambda m, l, trained=None: calls.append("install")), \
                  unittest.mock.patch.object(_mlxlm_server, "install_ids_probe",
                                             lambda m: calls.append("ids_probe")):
                 _mlxlm_server.main()

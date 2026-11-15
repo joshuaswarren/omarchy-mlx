@@ -62,7 +62,7 @@ CATALOG = {
         "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
         "memory": {"weights_bytes": 1 * 1024**3, "kv_bytes_per_token": 1024,
                    "peak_estimate_bytes": None},
-        "context": {"max_tokens": 1024},
+        "context": {"max_tokens": 1024, "trained_tokens": None},
         "capability": {"arch": None, "min_mem_gib": None},
         "qualification": {
             "generation": {"status": "qualified", "receipt": "r", "date": "2026-09-20"},

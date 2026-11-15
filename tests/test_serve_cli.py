@@ -39,7 +39,7 @@ def fixture_entry(**over):
         "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
         "memory": {"weights_bytes": int(4.0 * GiB), "kv_bytes_per_token": 64 * 1024,
                    "peak_estimate_bytes": None},
-        "context": {"max_tokens": 8192},
+        "context": {"max_tokens": 8192, "trained_tokens": None},
         "capability": {"arch": None, "min_mem_gib": None},
         "qualification": {
             "generation": {"status": "qualified", "receipt": "r.md", "date": "2026-09-20"},
@@ -342,7 +342,7 @@ class PlanTests(CliTestBase):
             priority=4,
             memory={"weights_bytes": int(2 * GiB), "kv_bytes_per_token": None,
                     "peak_estimate_bytes": None},
-            context={"max_tokens": None}))
+            context={"max_tokens": None, "trained_tokens": None}))
         code, _, err = self.run_cli(["plan", "no-kv-facts", "--context", "8192"])
         self.assertEqual(code, 2)
         self.assertIn("KV-per-token unknown", err)
@@ -371,7 +371,7 @@ class PlanTests(CliTestBase):
             priority=5,
             memory={"weights_bytes": int(2 * GiB), "kv_bytes_per_token": None,
                     "peak_estimate_bytes": None},
-            context={"max_tokens": None}))
+            context={"max_tokens": None, "trained_tokens": None}))
         code, _, err = self.run_cli(
             ["plan", "no-kv-cache", "--context", "2048",
              "--prompt-cache-size", "1"])
@@ -385,7 +385,7 @@ class PlanTests(CliTestBase):
             repo="mlx-community/Laya", kind="decisions",
             recommended=False,
             serve={"backend": "module", "module": "mlx_omarchy_laya.server"},
-            context={"max_tokens": 1024}))
+            context={"max_tokens": 1024, "trained_tokens": None}))
         model_dir = Path(self.tmp.name) / "laya-ckpt"
         model_dir.mkdir(exist_ok=True)
         with unittest.mock.patch.object(
@@ -445,7 +445,7 @@ class ModulePreflightTests(CliTestBase):
             id="fake-decisions", repo="mlx-community/Fake-Raw",
             kind="decisions", recommended=False,
             serve={"backend": "module", "module": "fake_laya.server"},
-            context={"max_tokens": 1024}))
+            context={"max_tokens": 1024, "trained_tokens": None}))
         self.addCleanup(FIXTURE["models"].pop)
         self.raw_dir = Path(self.tmp.name) / "raw-upstream"
         self.raw_dir.mkdir(exist_ok=True)

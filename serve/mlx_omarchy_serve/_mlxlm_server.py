@@ -37,6 +37,7 @@ except ImportError:
     pass
 
 LIMIT_ENV = "MLX_OMARCHY_SERVE_CONTEXT_LIMIT"
+TRAINED_ENV = "MLX_OMARCHY_SERVE_TRAINED_CONTEXT"  # optional: the model's trained horizon, warn-only
 UNPINNED_ENV = "MLX_OMARCHY_ALLOW_UNPINNED_MLXLM"
 SUPPORTED_MLXLM_VERSIONS = ("0.31.3",)
 
@@ -86,7 +87,7 @@ def _ttft_trace(event: str, **fields) -> None:
     print("[ttft] " + json.dumps(fields), flush=True)
 
 
-def install(server_module, limit: int) -> None:
+def install(server_module, limit: int, trained: int | None = None) -> None:
     generator = server_module.ResponseGenerator
     original = getattr(generator, "_tokenize", None)
     if not callable(original):
@@ -126,6 +127,12 @@ def install(server_module, limit: int) -> None:
                 f"the cap boundary, got {max_tokens!r}"
             )
         total = len(prompt) + max_tokens
+        if trained is not None and total > trained:
+            # Minefield 55/61: past the trained horizon quality degrades with no error;
+            # the admitted window is a memory bound, not a quality bound, so this warns.
+            print(f"warning: this request runs {total} tokens past the model's trained "
+                  f"window of {trained}; quality beyond the horizon is not guaranteed",
+                  file=sys.stderr, flush=True)
         if total > limit:
             raise ValueError(
                 f"request rejected: prompt ({len(prompt)} tokens) + max_tokens "
@@ -575,7 +582,18 @@ def main() -> None:
         print(f"error: mlx_lm is not installed ({exc})", file=sys.stderr)
         raise SystemExit(3)
     check_pinned(server_module)
-    install(server_module, limit)
+    raw_trained = os.environ.get(TRAINED_ENV, "").strip()
+    trained = None
+    if raw_trained:
+        try:
+            trained = int(raw_trained)
+        except ValueError:
+            print(f"error: {TRAINED_ENV} must be an integer, got {raw_trained!r}", file=sys.stderr)
+            raise SystemExit(3)
+        if trained <= 0:
+            print(f"error: {TRAINED_ENV} must be positive", file=sys.stderr)
+            raise SystemExit(3)
+    install(server_module, limit, trained=trained)
     gate = None
     if getattr(server_module, "BatchGenerator", None) is not None and getattr(server_module, "_run_http_server", None) is not None:
         gate = YieldGate()

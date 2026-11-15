@@ -55,7 +55,7 @@ def seed_entry(entry_id="m1", repo="org/repo", revision=None, **over):
         "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
         "memory": {"weights_bytes": 1000, "kv_bytes_per_token": None,
                    "peak_estimate_bytes": None},
-        "context": {"max_tokens": 4096},
+        "context": {"max_tokens": 4096, "trained_tokens": None},
         "capability": {"arch": None, "min_mem_gib": 1},
         "qualification": {
             "generation": {"status": "untested", "receipt": None, "date": None},
@@ -545,7 +545,7 @@ class CliWorkerMemoryGateTests(unittest.TestCase):
                           memory={"weights_bytes": 2 ** 40,
                                   "kv_bytes_per_token": None,
                                   "peak_estimate_bytes": None},
-                          context={"max_tokens": 4096})
+                          context={"max_tokens": 4096, "trained_tokens": None})
         (fixture / "catalog.json").write_text(json.dumps(seed_catalog(huge)),
                                               encoding="utf-8")
         script = (

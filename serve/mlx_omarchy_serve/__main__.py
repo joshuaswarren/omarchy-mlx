@@ -1002,6 +1002,9 @@ def cmd_serve(args, cat, home) -> int:
     child_env = dict(os.environ)
     if backend == "mlx-lm":
         child_env[cap_shim.LIMIT_ENV] = str(context)
+        trained = ((resolved.entry or {}).get("context") or {}).get("trained_tokens")
+        if isinstance(trained, int):
+            child_env[cap_shim.TRAINED_ENV] = str(trained)  # the trained horizon: warn-only, never a refusal
         status = mlxlm_patch_status()
         if status:
             print(status, flush=True)

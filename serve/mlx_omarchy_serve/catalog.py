@@ -280,9 +280,14 @@ def validate_catalog(obj) -> None:
             _check_int(mem["peak_estimate_bytes"], f"{where}.memory.peak_estimate_bytes", 1, 2**48)
 
         ctx = entry["context"]
-        _check_keys(ctx, ("max_tokens",), f"{where}.context")
+        _check_keys(ctx, ("max_tokens", "trained_tokens"), f"{where}.context")
         if ctx["max_tokens"] is not None:
             _check_int(ctx["max_tokens"], f"{where}.context.max_tokens", MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
+        # The trained horizon is the model's own, independent of the admitted window (minefield 55/61):
+        # unknown is null, never an inheritance of max_tokens.
+        if ctx["trained_tokens"] is not None:
+            _check_int(ctx["trained_tokens"], f"{where}.context.trained_tokens",
+                       MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
 
         cap = entry["capability"]
         _check_keys(cap, ("arch", "min_mem_gib"), f"{where}.capability")
