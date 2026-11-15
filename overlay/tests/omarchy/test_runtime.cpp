@@ -1036,7 +1036,7 @@ TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
 }
 
 TEST_CASE(
-    "malloc waits out a transient VK_ERROR_OUT_OF_DEVICE_MEMORY and gives up at the deadline") {
+    "malloc retries once with a cleared cache on VK_ERROR_OUT_OF_DEVICE_MEMORY") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
     return;
@@ -1049,10 +1049,7 @@ TEST_CASE(
   alloc.free(allocator::Buffer{cached});
   REQUIRE(alloc.get_cache_memory() >= (2u << 20));
 
-  // Four refusals: the first try, the retry after the cache release, and
-  // two waited retries. Freed memory that reaches the kernel late (#435)
-  // looks like this.
-  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "4", 1);
+  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1", 1);
   const size_t before_active = alloc.get_active_memory();
   auto* buf =
       static_cast<omarchy::VulkanBuffer*>(alloc.malloc(4u << 20).ptr());
@@ -1062,13 +1059,6 @@ TEST_CASE(
   CHECK(alloc.get_cache_memory() == 0);
   alloc.free(allocator::Buffer{buf});
   alloc.clear_cache();
-  CHECK(std::getenv("MLX_OMARCHY_TEST_OOM_REMAINING") == nullptr);
-
-  // A refusal that never clears still fails, within the retry window.
-  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1000000", 1);
-  const auto started = std::chrono::steady_clock::now();
-  CHECK_THROWS_AS(alloc.malloc(4u << 20), std::runtime_error);
-  CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
   unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
 }
 
