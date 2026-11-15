@@ -1,0 +1,4 @@
+5fb9acd0246866381cf8c5c354c6db1019f6498eec4ccb4f5edcc71ffeacb2db  mlx-community--Qwen3.5-4B-MLX-4bit model.safetensors
+f2d29621aab300336ad645567ff38c42aac755513006ef4e8a579cf7ef5256d8  mlx-community--Qwen3-8B-4bit model.safetensors
+392e8d466d56100ada00eb82031fb854297fc9e389b7d303eba3af114e87bce2  mlx-community--Qwen3-0.6B-4bit model.safetensors
+f5a0d9dd3efa73510542a8023d610ff26be2b4b020d181cfc4bedaa1fcc5dd9e  mlx-community--Qwen3.5-0.8B-MLX-4bit model.safetensors

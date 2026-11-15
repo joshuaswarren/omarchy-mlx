@@ -690,6 +690,40 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
     CHECK_FALSE(s.non_apple_dev);
   }
 
+  SUBCASE("M5 Max under Aurora's packaged Mesa is supported by device name") {
+    // The packaged Mesa on the M5 Max names the device "Apple M5 Max (G17C B1)"
+    // under Mesa's vendor id; the driver id it reports is not one this build
+    // lists, so the Apple chip name is the signal (the guard refused it with
+    // "is not an Apple GPU running Omarchy Honeykrisp").
+    constexpr int32_t unlisted_driver_id = 9999;
+    auto s = classify(
+        "Apple M5 Max (G17C B1)",
+        0x10005,
+        VK_MAKE_API_VERSION(0, 1, 4, 0),
+        unlisted_driver_id,
+        false);
+    CHECK(s.supported);
+    CHECK_FALSE(s.non_apple_dev);
+  }
+
+  SUBCASE("a name that only contains Apple, or a non-Apple device, is still refused") {
+    constexpr int32_t unlisted_driver_id = 9999;
+    for (const char* name :
+         {"Pineapple M5 Max (G17C B1)",
+          "NVIDIA GeForce RTX 4090 (Apple M5 emulation)",
+          "Apple Display",
+          "llvmpipe (LLVM 19.1.0, 256 bits)"}) {
+      auto s = classify(
+          name,
+          0x10005,
+          VK_MAKE_API_VERSION(0, 1, 4, 0),
+          unlisted_driver_id,
+          false);
+      CHECK_FALSE(s.supported);
+      CHECK(s.reason.find("not an Apple GPU") != std::string::npos);
+    }
+  }
+
   SUBCASE("Apple vendor remains an alternate signal") {
     auto s = classify(
         "Apple M1 (G13G B1)",
@@ -736,8 +770,8 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
 }
 
 TEST_CASE("submission-cap default resolves per calibrated board") {
-  // The G14C row ships calibrated (receipts/2026-10-02-submission-cap-19).
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 40000);
+  // The G14C row ships calibrated (receipts/2026-11-13-g14c-batch-work).
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 100000);
 
   // The G13C/G13G rows carry the measured values from
   // receipts/2026-10-12-submission-cap-calibration and
@@ -752,16 +786,31 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // largest swept budget that keeps the Qwen3-4B submission p50 at or under
   // 6 ms AND the p99 at or under ~40 ms (half the ~78 ms #19 stutter) on
   // each board. G13S lands 10000 (p99 36.2 ms; 20000 reached p99 72.3 ms),
-  // G14G 8000 (p99 37.9 ms; 10000 reached 48.3 ms). G16S keeps 10000 (p99
-  // 26.6 ms) and G17P keeps 5000 (= fallback) under this stricter rule. The
-  // names are the deviceName strings the Borealis driver reports.
+  // G14G 8000 (p99 37.9 ms; 10000 reached 48.3 ms) and G17P keeps 5000
+  // (= fallback; 8000 reached p99 48.9 ms). The names are the deviceName
+  // strings the Borealis driver reports. The G13S row replaces the old
+  // uncalibrated 0 placeholder.
   CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S C0)") == 10000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 10000);
   CHECK(omarchy::calibrated_batch_work("Apple M2 (G14G B0)") == 8000);
-  CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 10000);
   CHECK(omarchy::calibrated_batch_work("Apple A18 Pro (G17P B1)") == 5000);
 
   // The M2 base row does not shadow the M2 Max row, nor the reverse.
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 40000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 100000);
+
+  // The G18G row (M6) resolves to its own calibrated budget, not the
+  // 5000 fallback: without the row the M6 split every decode step into
+  // 12 (2B) and 20 (4B) submissions, against 2 and 3 with the row.
+  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
+        omarchy::batch_work_fallback());
+
+  // The G16S row (M4 Pro) takes 15000 (receipts/2026-11-15-m4-pro-g16s-batch-work):
+  // the largest swept budget whose submission tail stays at the 5000 level
+  // (Qwen3-4B p99 27.8 ms, Qwen3-8B max 54.7 ms); 20000 raised the 4B
+  // tail to 49.7 ms and 30000 the 8B tail to 94.6 ms.
+  CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
+  CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
 
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
@@ -774,10 +823,11 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
 
   // Every calibrated row must sit between the off switch and the old
   // global default: a calibrated value above 40000 would loosen the
-  // shipped cap on that board without a receipt saying why.
+  // shipped cap on that board without a receipt saying why. G14C is the
+  // one row above it (receipts/2026-11-13-g14c-batch-work).
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= 40000);
+      CHECK(row.budget <= (row.board == "G14C" ? 100000 : 40000));
     }
   }
 }
@@ -795,11 +845,13 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
+  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
   // 40000 or 8000 here.
-  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 100000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
@@ -935,7 +987,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
   CHECK(alloc.set_wired_limit(0) == (1u << 30));
 
   const size_t saved_limit = alloc.get_memory_limit();
-  alloc.set_cache_limit(64u << 20);
+  const size_t saved_cache = alloc.set_cache_limit(64u << 20);
   alloc.clear_cache();
   const size_t before = alloc.get_active_memory();
 
@@ -972,6 +1024,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
 
   alloc.clear_cache();
   alloc.set_memory_limit(saved_limit);
+  alloc.set_cache_limit(saved_cache);
   CHECK(alloc.set_wired_limit(0) == (64ull << 30));
   CHECK(alloc.get_active_memory() == before);
 }
@@ -982,8 +1035,8 @@ TEST_CASE("get/set cache_limit round-trips and exposes the default") {
     return;
   }
   auto& alloc = omarchy::allocator();
-  // Default cache limit is non-zero (the constructor wires it to the
-  // working-set ceiling, 0.95 * total_memory on Honeykrisp).
+  // Default cache limit is non-zero (the constructor sets it to a quarter
+  // of the gc ceiling, default_cache_limit).
   CHECK(alloc.get_cache_limit() > 0);
   const size_t prev = alloc.get_cache_limit();
   CHECK(alloc.set_cache_limit(64u << 20) == prev);
@@ -991,6 +1044,36 @@ TEST_CASE("get/set cache_limit round-trips and exposes the default") {
   // Restore the prior value.
   alloc.set_cache_limit(prev);
   CHECK(alloc.get_cache_limit() == prev);
+}
+
+TEST_CASE("freed buffers past the cache limit go back to the driver (#435)") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  const size_t cap = 6u << 20;
+  const size_t saved_cache = alloc.set_cache_limit(cap);
+  alloc.clear_cache();
+  const size_t before = alloc.get_active_memory();
+
+  // Five distinct size classes (1..5 MiB, 15 MiB in total), as KV growth
+  // makes: only what fits under the cap stays cached.
+  std::vector<omarchy::VulkanBuffer*> bufs;
+  for (size_t mib = 1; mib <= 5; ++mib) {
+    bufs.push_back(
+        static_cast<omarchy::VulkanBuffer*>(alloc.malloc(mib << 20).ptr()));
+    REQUIRE(bufs.back() != nullptr);
+  }
+  for (auto* buf : bufs) {
+    alloc.free(allocator::Buffer{buf});
+  }
+  CHECK(alloc.get_cache_memory() > 0);
+  CHECK(alloc.get_cache_memory() <= cap);
+  CHECK(alloc.get_active_memory() == before);
+
+  alloc.clear_cache();
+  alloc.set_cache_limit(saved_cache);
 }
 
 TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
@@ -1256,6 +1339,64 @@ TEST_CASE(
   CHECK(alloc.get_cache_memory() >= cache_before + kBytes);
   alloc.free(allocator::Buffer{replacement});
   alloc.free(dst);
+}
+
+TEST_CASE("the working-set ceiling counts quarantined buffers") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s = new_stream(Device::gpu);
+  auto& encoder = omarchy::get_command_encoder(s);
+  const size_t saved_gc = alloc.get_gc_limit();
+  alloc.clear_cache();
+
+  alloc.free(alloc.malloc(1u << 20));
+  REQUIRE(alloc.get_cache_memory() == (1u << 20));
+
+  // A buffer recorded by the open batch and then freed waits in the
+  // quarantine: its device memory stays committed to this client.
+  constexpr size_t kQuarantined = 16u << 20;
+  auto src = alloc.malloc(kQuarantined);
+  auto dst = alloc.malloc(4096);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  array src_view(
+      Shape{static_cast<int>(kQuarantined / sizeof(float))},
+      float32,
+      nullptr,
+      {});
+  src_view.set_data(
+      allocator::Buffer{src_buf},
+      src_view.size(),
+      src_view.strides(),
+      src_view.flags(),
+      0,
+      [](allocator::Buffer) {});
+  encoder.add_temporary(src_view);
+  encoder.copy_buffer(
+      src_buf->buffer,
+      static_cast<omarchy::VulkanBuffer*>(dst.ptr())->buffer,
+      4096);
+  alloc.free(src);
+  REQUIRE(alloc.has_quarantined());
+  REQUIRE(alloc.get_cache_memory() == (1u << 20));
+
+  // active + cache + request fits the ceiling with 8 MiB to spare; the
+  // 16 MiB quarantine does not, so the malloc must release the cache.
+  constexpr size_t kRequest = 4u << 20;
+  alloc.set_gc_limit(
+      alloc.get_active_memory() + alloc.get_cache_memory() + kRequest +
+      (8u << 20));
+  auto fresh = alloc.malloc(kRequest);
+  alloc.set_gc_limit(saved_gc);
+  CHECK(alloc.get_cache_memory() == 0);
+
+  encoder.commit();
+  encoder.synchronize();
+  alloc.free(fresh);
+  alloc.free(dst);
+  alloc.clear_cache();
 }
 
 TEST_CASE("re-recorded buffers stay quarantined until completion") {
@@ -2352,8 +2493,15 @@ TEST_CASE("independent streams measure against the serialized sum") {
   // proprietary; the test still prints its ratio for every run so a
   // per-driver floor can be set from collected numbers. See
   // docs/KNOWN-ISSUES.md.
+  // Borealis on the M4 Pro (G16S) measures 0.83-0.93 over repeated runs of
+  // this case (the same binary on the M1/Honeykrisp device measures 1.0 and
+  // above), with every copy byte-for-byte correct; its floor is 0.80, which a
+  // global serialization lock would still fall well below.
+  const double floor =
+      dev.capabilities().driver_id == omarchy::kAuroraBorealisDriverId ? 0.80
+                                                                       : 0.95;
   if (dev.capabilities().driver_id != VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-    CHECK(ratio > 0.95);
+    CHECK(ratio > floor);
   }
   CHECK(std::memcmp(y1->data, x1->data, kBytes) == 0);
   CHECK(std::memcmp(y2->data, x2->data, kBytes) == 0);

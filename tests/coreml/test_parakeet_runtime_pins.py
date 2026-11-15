@@ -152,6 +152,59 @@ def _load_cli_module():
     spec.loader.exec_module(module)
     return module
 
+def _prepare_ane_capability_check(module, monkeypatch) -> None:
+    monkeypatch.setattr(module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(module.platform, "machine", lambda: "aarch64")
+    monkeypatch.setenv("MLX_OMARCHY_ACCEL_DEV", "/dev/null")
+    monkeypatch.delenv("MLX_OMARCHY_ANE_DEVICE", raising=False)
+
+
+def test_capability_check_accepts_t6021_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module()
+    modules_dir = tmp_path / "module"
+    (modules_dir / "ane_t6021").mkdir(parents=True)
+    _prepare_ane_capability_check(module, monkeypatch)
+
+    module._check_ane_capability(modules_dir)
+
+
+def test_capability_check_accepts_ane_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module()
+    modules_dir = tmp_path / "module"
+    (modules_dir / "ane").mkdir(parents=True)
+    _prepare_ane_capability_check(module, monkeypatch)
+
+    module._check_ane_capability(modules_dir)
+
+
+def test_capability_check_refuses_when_no_ane_module_is_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module()
+    modules_dir = tmp_path / "module"
+    modules_dir.mkdir()
+    _prepare_ane_capability_check(module, monkeypatch)
+
+    with pytest.raises(module.TranscribeRefusal, match="no ANE kernel module"):
+        module._check_ane_capability(modules_dir)
+
+
+def test_capability_check_ignores_non_directory_module_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module()
+    modules_dir = tmp_path / "module"
+    modules_dir.mkdir()
+    (modules_dir / "ane_t6021").touch()
+    _prepare_ane_capability_check(module, monkeypatch)
+
+    with pytest.raises(module.TranscribeRefusal, match="no ANE kernel module"):
+        module._check_ane_capability(modules_dir)
+
 
 def _write_share(tmp_path: Path, libane: bytes) -> Path:
     """A minimal share tree with a one-asset pin, for tamper cases."""

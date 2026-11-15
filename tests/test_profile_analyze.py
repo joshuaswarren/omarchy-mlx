@@ -192,6 +192,39 @@ class MalformedInputTests(unittest.TestCase):
         r = run_analyzer(Path("/nonexistent/profile.jsonl"))
         self.assertNotEqual(r.returncode, 0)
 
+    def test_dispatches_on_empty_submission_exit_2(self):
+        # Real M2 capture shape: submission 6 closed the buffer, then an
+        # empty submit 7 (close=0) took the slot and the flush tagged the
+        # buffer's dispatch with 7.
+        bad = PROFILE[:1] + [
+            {"k": "d", "s": 7, "e": 5, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 300, "t1": 400, "b": []},
+            {"k": "q", "s": 6, "close": 900, "queue_t0": 910,
+             "queue_t1": 950},
+            {"k": "s", "s": 6, "dur": 50, "t": 960},
+            {"k": "q", "s": 7, "close": 0, "queue_t0": 980,
+             "queue_t1": 990},
+            {"k": "s", "s": 7, "dur": 20, "t": 995},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, bad)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("submission 7 closed no command buffer", r.stderr)
+
+    def test_empty_submission_without_dispatches_is_valid(self):
+        ok = PROFILE + [
+            {"k": "q", "s": 3, "close": 14000, "queue_t0": 14100,
+             "queue_t1": 14900},
+            {"k": "q", "s": 5, "close": 0, "queue_t0": 16000,
+             "queue_t1": 16100},
+            {"k": "s", "s": 5, "dur": 20, "t": 16200},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, ok)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

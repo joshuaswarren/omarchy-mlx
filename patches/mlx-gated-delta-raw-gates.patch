@@ -49,7 +49,7 @@
 +  int Dk = q.shape(3);
 +  int Hv = v.shape(2);
 +  int Dv = v.shape(3);
-+  static const bool gdn_state_f32_optout =
++  const bool gdn_state_f32_optout =
 +      std::getenv("MLX_OMARCHY_GDN_STATE_F32") != nullptr &&
 +      std::getenv("MLX_OMARCHY_GDN_STATE_F32")[0] == '1';
 +  auto state_dtype = initial_state.has_value()

@@ -1,0 +1,6 @@
+{
+ "eval_ms_median": 98.92,
+ "eval_ms_max": 100.98,
+ "n_evals": 51,
+ "probe": "submit-latency: n=359 p50=0.44ms p99=1.01ms max=1.13ms mean=0.48ms over2x(>33.3ms)=0/359"
+}

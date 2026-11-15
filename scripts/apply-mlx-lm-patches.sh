@@ -84,6 +84,7 @@ SERIES_PATCHES=(
   mlx-lm-last-logits-qwen3.patch
   mlx-lm-prefill-step-memory.patch
   mlx-lm-kv-presize.patch
+  mlx-lm-speculative-verify.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -324,6 +325,18 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
 # bit-identical. Prefill keeps the compiled function. Kill switch
 # MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-eager-swiglu.py" "$VENV"
+# Speculative decoding (generate.py): every verify pass runs with full logits (the
+# last-logits patches above trim a cached forward to one row, which broke the
+# draft-model path) and with the short-pass GEMV route, whose rows match the
+# single-token decode kernel, so greedy output equals plain greedy decode.
+# Recurrent layers (Qwen3.5 GDN) roll back by replaying the accepted tokens, and
+# no draft model means prompt lookup (MLX_OMARCHY_PROMPT_LOOKUP=K in
+# stream_generate). 0.31.3 series only; the 0.32 line keeps upstream behavior.
+if [[ "$SERIES" == "patches" ]]; then
+  apply mlx-lm-speculative-verify.patch
+else
+  echo "speculative-verify: 0.31.3 series only; skipped on $SERIES"
+fi
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
