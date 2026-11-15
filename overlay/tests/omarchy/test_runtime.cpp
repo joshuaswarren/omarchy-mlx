@@ -933,7 +933,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
   CHECK(alloc.set_wired_limit(0) == (1u << 30));
 
   const size_t saved_limit = alloc.get_memory_limit();
-  alloc.set_cache_limit(64u << 20);
+  const size_t saved_cache = alloc.set_cache_limit(64u << 20);
   alloc.clear_cache();
   const size_t before = alloc.get_active_memory();
 
@@ -970,6 +970,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
 
   alloc.clear_cache();
   alloc.set_memory_limit(saved_limit);
+  alloc.set_cache_limit(saved_cache);
   CHECK(alloc.set_wired_limit(0) == (64ull << 30));
   CHECK(alloc.get_active_memory() == before);
 }
@@ -980,8 +981,8 @@ TEST_CASE("get/set cache_limit round-trips and exposes the default") {
     return;
   }
   auto& alloc = omarchy::allocator();
-  // Default cache limit is non-zero (the constructor wires it to the
-  // working-set ceiling, 0.95 * total_memory on Honeykrisp).
+  // Default cache limit is non-zero (the constructor sets it to a quarter
+  // of the gc ceiling, default_cache_limit).
   CHECK(alloc.get_cache_limit() > 0);
   const size_t prev = alloc.get_cache_limit();
   CHECK(alloc.set_cache_limit(64u << 20) == prev);
@@ -989,6 +990,36 @@ TEST_CASE("get/set cache_limit round-trips and exposes the default") {
   // Restore the prior value.
   alloc.set_cache_limit(prev);
   CHECK(alloc.get_cache_limit() == prev);
+}
+
+TEST_CASE("freed buffers past the cache limit go back to the driver (#435)") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  const size_t cap = 6u << 20;
+  const size_t saved_cache = alloc.set_cache_limit(cap);
+  alloc.clear_cache();
+  const size_t before = alloc.get_active_memory();
+
+  // Five distinct size classes (1..5 MiB, 15 MiB in total), as KV growth
+  // makes: only what fits under the cap stays cached.
+  std::vector<omarchy::VulkanBuffer*> bufs;
+  for (size_t mib = 1; mib <= 5; ++mib) {
+    bufs.push_back(
+        static_cast<omarchy::VulkanBuffer*>(alloc.malloc(mib << 20).ptr()));
+    REQUIRE(bufs.back() != nullptr);
+  }
+  for (auto* buf : bufs) {
+    alloc.free(allocator::Buffer{buf});
+  }
+  CHECK(alloc.get_cache_memory() > 0);
+  CHECK(alloc.get_cache_memory() <= cap);
+  CHECK(alloc.get_active_memory() == before);
+
+  alloc.clear_cache();
+  alloc.set_cache_limit(saved_cache);
 }
 
 TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
@@ -1254,6 +1285,64 @@ TEST_CASE(
   CHECK(alloc.get_cache_memory() >= cache_before + kBytes);
   alloc.free(allocator::Buffer{replacement});
   alloc.free(dst);
+}
+
+TEST_CASE("the working-set ceiling counts quarantined buffers") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s = new_stream(Device::gpu);
+  auto& encoder = omarchy::get_command_encoder(s);
+  const size_t saved_gc = alloc.get_gc_limit();
+  alloc.clear_cache();
+
+  alloc.free(alloc.malloc(1u << 20));
+  REQUIRE(alloc.get_cache_memory() == (1u << 20));
+
+  // A buffer recorded by the open batch and then freed waits in the
+  // quarantine: its device memory stays committed to this client.
+  constexpr size_t kQuarantined = 16u << 20;
+  auto src = alloc.malloc(kQuarantined);
+  auto dst = alloc.malloc(4096);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  array src_view(
+      Shape{static_cast<int>(kQuarantined / sizeof(float))},
+      float32,
+      nullptr,
+      {});
+  src_view.set_data(
+      allocator::Buffer{src_buf},
+      src_view.size(),
+      src_view.strides(),
+      src_view.flags(),
+      0,
+      [](allocator::Buffer) {});
+  encoder.add_temporary(src_view);
+  encoder.copy_buffer(
+      src_buf->buffer,
+      static_cast<omarchy::VulkanBuffer*>(dst.ptr())->buffer,
+      4096);
+  alloc.free(src);
+  REQUIRE(alloc.has_quarantined());
+  REQUIRE(alloc.get_cache_memory() == (1u << 20));
+
+  // active + cache + request fits the ceiling with 8 MiB to spare; the
+  // 16 MiB quarantine does not, so the malloc must release the cache.
+  constexpr size_t kRequest = 4u << 20;
+  alloc.set_gc_limit(
+      alloc.get_active_memory() + alloc.get_cache_memory() + kRequest +
+      (8u << 20));
+  auto fresh = alloc.malloc(kRequest);
+  alloc.set_gc_limit(saved_gc);
+  CHECK(alloc.get_cache_memory() == 0);
+
+  encoder.commit();
+  encoder.synchronize();
+  alloc.free(fresh);
+  alloc.free(dst);
+  alloc.clear_cache();
 }
 
 TEST_CASE("re-recorded buffers stay quarantined until completion") {
@@ -2350,8 +2439,15 @@ TEST_CASE("independent streams measure against the serialized sum") {
   // proprietary; the test still prints its ratio for every run so a
   // per-driver floor can be set from collected numbers. See
   // docs/KNOWN-ISSUES.md.
+  // Borealis on the M4 Pro (G16S) measures 0.83-0.93 over repeated runs of
+  // this case (the same binary on the M1/Honeykrisp device measures 1.0 and
+  // above), with every copy byte-for-byte correct; its floor is 0.80, which a
+  // global serialization lock would still fall well below.
+  const double floor =
+      dev.capabilities().driver_id == omarchy::kAuroraBorealisDriverId ? 0.80
+                                                                       : 0.95;
   if (dev.capabilities().driver_id != VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-    CHECK(ratio > 0.95);
+    CHECK(ratio > floor);
   }
   CHECK(std::memcmp(y1->data, x1->data, kBytes) == 0);
   CHECK(std::memcmp(y2->data, x2->data, kBytes) == 0);

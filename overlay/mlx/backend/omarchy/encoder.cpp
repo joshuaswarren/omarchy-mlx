@@ -1355,7 +1355,7 @@ void CommandEncoder::submit() {
       this,
       submitted,
       submit_t0 != 0 ? prof::host_ns() - submit_t0 : 0,
-      current_slot_);
+      was_recording ? current_slot_ : -1);
 
   // No vkResetCommandBuffer: the buffer may still be executing. The ring
   // slot is marked in flight above; ensure_recording() only reuses a slot

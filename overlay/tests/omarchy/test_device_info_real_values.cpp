@@ -351,6 +351,7 @@ TEST_CASE("default allocator limits never sit below what the heap can hold") {
   for (size_t heap : heaps) {
     CHECK(omarchy::default_memory_limit(heap) >= omarchy::default_gc_limit(heap));
     CHECK(omarchy::default_gc_limit(heap) == heap);
+    CHECK(omarchy::default_cache_limit(heap) == heap / 4);
     if (heap > weights) {
       // A model that fits the heap is under the limit and under the gc
       // ceiling: no cache drop and no trim on every allocation. (95% of
@@ -362,6 +363,7 @@ TEST_CASE("default allocator limits never sit below what the heap can hold") {
   // No device (total 0): the same 4 GiB fallback as before for both.
   CHECK(omarchy::default_memory_limit(0) == 4 * kGiB);
   CHECK(omarchy::default_gc_limit(0) == 4 * kGiB);
+  CHECK(omarchy::default_cache_limit(0) == kGiB);
 
   // The open-batch quarantine budget (eval.cpp, limit / 16) is tuned
   // against 90% of the heap and stays there: only the cache behaviour
@@ -383,6 +385,11 @@ TEST_CASE("default allocator limits never sit below what the heap can hold") {
   auto& alloc = omarchy::allocator();
   CHECK(alloc.get_memory_limit() >= alloc.get_gc_limit());
   CHECK(alloc.batch_limit() <= alloc.get_memory_limit());
+  // The reuse cache gets a quarter of the gc ceiling (#435: a cache allowed
+  // the whole heap grew to 5 GB next to 2.4 GB active and failed
+  // GEM_CREATE at 7.7 GB on the 13-inch M1, as freed memory reaches the
+  // kernel late).
+  CHECK(alloc.get_cache_limit() == alloc.get_gc_limit() / 4);
 }
 
 int main(int argc, char** argv) {

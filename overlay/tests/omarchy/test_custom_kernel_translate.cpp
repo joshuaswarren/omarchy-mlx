@@ -1313,6 +1313,41 @@ TEST_CASE("a comma inside a comment in a bf16 initializer is not a declarator se
   CHECK(body.find("float v = _mlx_bf16_round_trip(_mlx_arg0[c] );") != std::string::npos);
 }
 
+TEST_CASE("a parenthesis in a kernel-signature comment is ignored") {
+  const char* source =
+      "[[kernel]] void /* ignored unmatched ( */ // ignored line ( too\n"
+      "    glue_signature_comment(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  y[thread_position_in_grid.x] = 1.0f;\n"
+      "}\n";
+  const auto glsl = translate(source, 1);
+  CHECK(glsl.find("void main()") != std::string::npos);
+}
+
+TEST_CASE("Metal keywords in header comments are not code") {
+  // A header comment naming a Metal-only construct must not trip the
+  // helper-function guard: comments are not code.
+  const char* line_comment =
+      "// threadgroup helper note: shared scratch lives in the kernel\n"
+      "inline float twice(float x) { return x * 2.0f; }\n"
+      "[[kernel]] void header_line_comment(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  y[thread_position_in_grid.x] = twice(1.0f);\n"
+      "}\n";
+  CHECK(translate(line_comment, 1).find("void main()") != std::string::npos);
+  const char* block_comment =
+      "/* threadgroup float* scratch (unbalanced */\n"
+      "inline float twice(float x) { return x * 2.0f; }\n"
+      "[[kernel]] void header_block_comment(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  y[thread_position_in_grid.x] = twice(1.0f);\n"
+      "}\n";
+  CHECK(translate(block_comment, 1).find("void main()") != std::string::npos);
+}
+
 namespace {
 // Real compiler check: skipped (stated in the log) only where glslc is absent.
 bool glslc_present() {
