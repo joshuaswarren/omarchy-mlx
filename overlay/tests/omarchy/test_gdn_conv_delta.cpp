@@ -249,7 +249,7 @@ TEST_CASE("the GDN conv + delta default is the 13-inch and the 14-inch, and the 
   CHECK(omarchy::gdn_conv_delta_resolved_mode("") == 0);
   setenv("MLX_OMARCHY_GDN_CONV_DELTA", "", 1);  // an empty value counts as unset
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
-  for (const std::string& part : {m1, m1max}) {
+  for (const std::string& part : {m1, m1max, m2max}) {
     setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
     CHECK(omarchy::gdn_conv_delta_resolved_mode(part) == 2);
     setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);

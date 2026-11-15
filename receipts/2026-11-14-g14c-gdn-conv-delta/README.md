@@ -16,4 +16,4 @@ Decode, 128 tokens, bfloat16 activations, 4-bit weights, one process per arm, or
 | Qwen3.8-9B (24 GatedDelta layers) | 512 | 42.38 | 42.34 | -0.08 percent | equal |
 | Qwen3.8-9B | 2048 | 42.05 | 41.99 | -0.14 percent | equal |
 
-The 2B gains 0.17 ms and 0.11 ms per token. The 9B is flat: the arms of one side differ by about 0.2 percent among themselves. The prediction was +0.5 to +3 percent on the 2B (held) and +0.3 to +2 percent on the 9B (not held: flat, no loss beyond the spread).
+The 2B gains 0.17 ms and 0.11 ms per token. The 9B loses 0.02 ms per token at ctx 512 (-0.08 percent: the arms overlap, so this one is flat) and 0.03 ms per token at ctx 2048 (-0.14 percent): at ctx 2048 both flag-2 arms (41.98, 42.00) are slower than both default arms (42.06, 42.04), so that loss is small and steady, not noise. The rule still takes G14C because the 2B gain is larger and one rule covers the Qwen3.8 family. The prediction was +0.5 to +3 percent on the 2B (held) and +0.3 to +2 percent on the 9B (not held: flat at ctx 512, a small loss at ctx 2048).
