@@ -607,6 +607,15 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// The fused f16 decode SDPA kernel (sdpa_decode_native*.comp) uses no cooperative matrix, but its gate has always required one,
+// and the M1/M2 parts keep that gate until their own numbers exist. On G16S (Apple M4 Pro, Borealis, no cooperative matrix) the
+// gate is 32-wide subgroups with basic, arithmetic and shuffle operations, a 1024-lane workgroup and the shared stream; there the
+// fused kernel measured 586 -> 177 microseconds per call at 1100 keys and 1872 -> 308 at 4096 keys against the three-dispatch
+// composition (16 query / 8 kv heads, width 128). Pure.
+inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
+  return device_name.find("G16S") != std::string::npos;
+}
+
 // Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.
 // 0 means the fused kernel stays the default. The route costs 79 to 90 microseconds per call up to 512 keys (two dispatches) and 89 to 113 at 1024 keys, and it wins by more as the cache grows,
 // so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent
