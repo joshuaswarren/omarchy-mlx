@@ -49,6 +49,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/honeykrisp_identity.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
@@ -3098,6 +3099,68 @@ TEST_CASE("CPU PD hold: default on for G13 parts other than G13C, env overrides"
   CHECK_FALSE(cpu_pd_hold_enabled_for("0", "Apple M1 (G13G B1)"));
   CHECK(cpu_pd_hold_enabled_for("1", "Apple M1 Max (G13C C0)"));
   CHECK(cpu_pd_hold_enabled_for("on", "Apple M2 (G14G B1)"));
+}
+
+TEST_CASE("CPU uclamp: on unless MLX_OMARCHY_CPU_UCLAMP is 0") {
+  using mlx::core::omarchy::cpu_uclamp_enabled_for;
+  CHECK(cpu_uclamp_enabled_for(nullptr));
+  CHECK(cpu_uclamp_enabled_for(""));
+  CHECK(cpu_uclamp_enabled_for("1"));
+  CHECK(cpu_uclamp_enabled_for("00"));
+  CHECK_FALSE(cpu_uclamp_enabled_for("0"));
+}
+
+TEST_CASE("CPU uclamp: sched_attr keeps policy and sets only the floor") {
+  using namespace mlx::core::omarchy;
+  SchedAttr a = uclamp_min_attr(1024);
+  CHECK(sizeof(a) == 56);
+  CHECK(a.size == 56);
+  CHECK(a.sched_flags == (0x08u | 0x10u | 0x20u));
+  CHECK(a.sched_util_min == 1024);
+  CHECK(a.sched_util_max == 1024);
+  CHECK(a.sched_policy == 0);
+  CHECK(a.sched_nice == 0);
+  CHECK(a.sched_priority == 0);
+  CHECK(a.sched_runtime == 0);
+  CHECK(a.sched_deadline == 0);
+  CHECK(a.sched_period == 0);
+  // Field offsets are the kernel ABI.
+  CHECK(offsetof(SchedAttr, sched_flags) == 8);
+  CHECK(offsetof(SchedAttr, sched_util_min) == 48);
+  CHECK(offsetof(SchedAttr, sched_util_max) == 52);
+}
+
+TEST_CASE("CPU uclamp: applied once per thread, failure ignored and not retried") {
+  using namespace mlx::core::omarchy;
+  int calls = 0;
+  uint32_t seen_min = 0;
+  auto ok = [&](SchedAttr& a) {
+    ++calls;
+    seen_min = a.sched_util_min;
+    return 0L;
+  };
+  bool done = false;
+  CHECK(apply_cpu_uclamp_once(ok, nullptr, done));
+  CHECK(calls == 1);
+  CHECK(seen_min == 1024);
+  CHECK_FALSE(apply_cpu_uclamp_once(ok, nullptr, done));
+  CHECK(calls == 1);
+
+  // The syscall refuses (old kernel, no CONFIG_UCLAMP_TASK): no throw, one try.
+  int fails = 0;
+  auto refuse = [&](SchedAttr&) {
+    ++fails;
+    return -1L;
+  };
+  bool done2 = false;
+  CHECK_FALSE(apply_cpu_uclamp_once(refuse, nullptr, done2));
+  CHECK_FALSE(apply_cpu_uclamp_once(refuse, nullptr, done2));
+  CHECK(fails == 1);
+
+  // Opted out: the syscall is never made.
+  bool done3 = false;
+  CHECK_FALSE(apply_cpu_uclamp_once(ok, "0", done3));
+  CHECK(calls == 1);
 }
 
 TEST_CASE("recycled block is not rewritten by the previous owner in flight") {

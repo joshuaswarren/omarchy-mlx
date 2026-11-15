@@ -3,6 +3,7 @@
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/trace.h"
 
 #include "mlx/backend/omarchy/compute.h"
@@ -335,6 +336,9 @@ struct Runtime {
   // Discover devices once per process. Never throws; failures are recorded
   // in |error| so callers can surface exact reasons.
   bool init() {
+    // The first backend call: raise the clamp before any worker thread
+    // is created from this one.
+    raise_cpu_clamp_this_thread();
     std::lock_guard<std::mutex> lk(mutex);
     if (probed) {
       return ready;
