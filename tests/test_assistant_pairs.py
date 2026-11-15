@@ -294,6 +294,13 @@ class BasePairTest(unittest.TestCase):
 
 # ---------------------------------------------------------------- catalog pairs
 
+def chat_total(memory, tokens):
+    """What a pair admits for its chat worker: the worker is launched with the prefill chunk
+    serve_cli.server_argv pins (--prefill-step-size), so the estimate carries that chunk's scratch."""
+    step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, tokens)
+    return budget.estimate_required(memory, tokens, step).total
+
+
 class CatalogPairSchemaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -322,6 +329,43 @@ class CatalogPairSchemaTests(unittest.TestCase):
             # no invented measurements: automatic selection must refuse
             self.assertNotIn("extension", pair, pair["id"])
 
+
+    def test_a_backend_context_limit_names_a_receipt_that_exists(self):
+        # "reported, never inferred": a limit with no run behind it is refused
+        for entry in self.bundled["models"]:
+            extension = entry.get("extension") or {}
+            if extension.get("backend_context_qualified_tokens") is None:
+                continue
+            with self.subTest(model=entry["id"]):
+                receipt = extension.get("backend_context_receipt")
+                self.assertTrue(receipt)
+                self.assertTrue((Path(__file__).resolve().parents[1] / receipt).is_file())
+
+    def test_compact_limit_is_not_admitted_where_the_measured_peak_does_not_fit(self):
+        # The qualification run measured the chat worker's peak (VmHWM 17,698,560 kB = 16.9 GiB)
+        # at 16384 tokens; the estimate alone says 7.7 GiB. A 16 GiB machine must stay at the
+        # default, a 24 GiB one may take 16384.
+        chat = {m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"]
+        decision = 3 * GiB // 2  # decision worker, assumed for the sizing
+        small = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                         available_bytes=16 * GiB)
+        self.assertLessEqual(small["context_tokens"], budget.DEFAULT_CONTEXT_TOKENS)
+        self.assertEqual(small["binding"], "memory")
+        large = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                         available_bytes=24 * GiB)
+        self.assertEqual(large["context_tokens"], 16384)
+        # the claim a worker makes at 16384 is the measured peak, not the 7.7 GiB estimate
+        self.assertGreaterEqual(pairs.chat_estimate(chat, 16384).total, 17_698_560 * 1024)
+        # and the default context keeps the plain estimate
+        self.assertLess(pairs.chat_estimate(chat, 4096).total, 6 * GiB)
+
+    def test_compact_chat_model_admits_an_omp_sized_prompt(self):
+        # omp sends about 5.7k prompt tokens; the 4096 default refused it with HTTP 404
+        chat = {m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"]
+        ctx = pairs.admissible_context(chat, other_bytes=0, preference="balanced",
+                                       available_bytes=64 * GiB)
+        self.assertGreaterEqual(ctx["context_tokens"], 16384)
+        self.assertTrue(ctx["backend_context_qualified"])
 
     def test_bundled_chat_models_pin_revision_hashes_and_license(self):
         models = {entry["id"]: entry for entry in self.bundled["models"]}
@@ -979,11 +1023,11 @@ class ContextSizingTests(unittest.TestCase):
         # byte-exact and is exposed in limits["memory"]
         ctx = self.sizing(7 * GiB)
         mem_bound = ctx["limits"]["memory"]
-        est = budget.estimate_required(self.chat["memory"], mem_bound)
+        est = chat_total(self.chat["memory"], mem_bound)
         reserve = max(budget.SAFETY_RESERVE_BYTES, int(0.10 * 7 * GiB))
-        self.assertLessEqual(est.total + self.other_bytes + reserve, 7 * GiB)
-        one_more = budget.estimate_required(self.chat["memory"], mem_bound + 1)
-        self.assertGreater(one_more.total + self.other_bytes + reserve, 7 * GiB)
+        self.assertLessEqual(est + self.other_bytes + reserve, 7 * GiB)
+        one_more = chat_total(self.chat["memory"], mem_bound + 1)
+        self.assertGreater(one_more + self.other_bytes + reserve, 7 * GiB)
         # chosen context is bound by the default-admission cap, not by memory
         self.assertEqual(ctx["context_tokens"], budget.DEFAULT_CONTEXT_TOKENS)
         self.assertEqual(ctx["binding"], "backend")
@@ -1229,7 +1273,7 @@ class PairManagerTests(BasePairTest):
         # invent a "tiered" growth story. With the dev smoke override the
         # memory difference is visible.
         small = self.manager.setup("everyday", approve_download=False,
-                                   preference="balanced", available_bytes=8 * GiB)
+                                   preference="balanced", available_bytes=10 * GiB)  # 8 GiB no longer holds 4096 once prefill scratch counts
         self.manager = pairs.PairManager(self.home)
         large = self.manager.setup("everyday", approve_download=False,
                                    preference="balanced", available_bytes=64 * GiB)
@@ -1461,9 +1505,8 @@ class PairManagerTests(BasePairTest):
         held = budget.load_reservations(self.home)
         self.assertGreater(
             held[CHAT_SMALL_ID]["bytes"],
-            budget.estimate_required(
-                self.manager.catalog_models[CHAT_SMALL_ID]["memory"],
-                before["context_tokens"]).total)
+            chat_total(self.manager.catalog_models[CHAT_SMALL_ID]["memory"],
+                       before["context_tokens"]))
         self.assertEqual(self.manager._children["decision"].popen.pid, decision_pid)
         self.assertNotEqual(self.manager._children["chat"].popen.pid, old_chat_pid)
 
@@ -1581,7 +1624,7 @@ class PairManagerTests(BasePairTest):
         self.addCleanup(self.manager.stop)
         chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
         current = self.manager._context_tokens
-        current_bytes = budget.estimate_required(chat_memory, current).total
+        current_bytes = chat_total(chat_memory, current)
         old_chat = self.manager._children["chat"]
         with mock.patch.object(managed, "terminate", return_value=False):
             result = self.manager.ensure_context(current + 8192)
@@ -1605,7 +1648,7 @@ class PairManagerTests(BasePairTest):
         self.addCleanup(self.manager.stop)
         chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
         current = self.manager._context_tokens
-        current_bytes = budget.estimate_required(chat_memory, current).total
+        current_bytes = chat_total(chat_memory, current)
         old_chat = self.manager._children["chat"]
         decision_pid = self.manager._children["decision"].popen.pid
         events = []

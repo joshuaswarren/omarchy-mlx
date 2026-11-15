@@ -1,0 +1,25 @@
+{
+ "label": "m2-split",
+ "model": "Qwen3-4B-Instruct-2507-4bit",
+ "prompt_tokens": 443,
+ "gen_tokens": 128,
+ "decode_tok_s": [
+  20.98,
+  20.92
+ ],
+ "decode_median": 20.95,
+ "prefill_tok_s": [
+  79.1,
+  79.2
+ ],
+ "tokens_sha": [
+  "9e20669f96a7c584",
+  "9e20669f96a7c584"
+ ],
+ "env": {
+  "MLX_OMARCHY_BATCH_WORK": "10000",
+  "MLX_OMARCHY_SDPA_DECODE_SPLIT": "1"
+ },
+ "mlx": "0.32.4.dev202611111431+8380f002",
+ "load1_end": 0.62890625
+}

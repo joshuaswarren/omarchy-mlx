@@ -1731,6 +1731,7 @@ TEST_CASE("token-multi q4 gemv group is per-row bit-identical to the single-row 
   set_compile_mode(CompileMode::disabled);
   // (k, n_qkv, n_down) covers the qmv_fast tile (k%512==0), the single
   // word tile, and an n past the 8-column guard.
+  int formed_cells = 0;
   for (auto [k, n_qkv] : {std::pair<int, int>{896, 512}, {448, 130}}) {
     for (int tokens : {2, 3, 4, 5, 8, 9, 12, 16}) {
       auto model = make_token_model(n_qkv, k, bfloat16, stream);
@@ -1812,20 +1813,25 @@ TEST_CASE("token-multi q4 gemv group is per-row bit-identical to the single-row 
       sync_stream(stream);
       uint64_t dispatches = counters().vk_compute_dispatches.load() - before;
       candidate = candidate3;
-      if (dispatches > 4u) {
-        // The gemv group did not form in this context (see the census:
-        // group formation is proven by the dispatch trace on real model
-        // runs); a composed candidate would only re-measure the known
-        // composed-vs-gemv route difference. Skip rather than misreport.
-        MESSAGE("SKIPPING cell: gemv group did not form (dispatches=",
-                dispatches, ")");
+      // The token route serves rows 2..8 (dispatch_quantized_gemv_group
+      // refuses more). It plans without epilogues, so a formed group is one
+      // dispatch plus the two eager Adds. Anything above that is the
+      // composed route: cast + matmul pairs on a cooperative-matrix device,
+      // two FMA matmuls plus the Adds (4) where the matmul reads bf16
+      // directly. The composed matmul accumulates in its own order, so a
+      // per-row bit-identity claim against the single-row GEMV does not
+      // apply to it, and comparing it flakes on 1-ulp rounding. Skip those
+      // cells instead of misreporting them.
+      constexpr uint64_t kFormedGroupDispatches = 3u;
+      if (tokens > 8 || dispatches > kFormedGroupDispatches) {
+        MESSAGE("SKIPPING cell: gemv group did not form (tokens=", tokens,
+                " dispatches=", dispatches, ")");
+        unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
         continue;
       }
       INFO("k ", k, " n_qkv ", n_qkv, " tokens ", tokens);
-      // Both Adds fold as epilogues, so the token route is ONE
-      // dispatch; allow a little slack for a stray elementwise. The
-      // composed route would need a cast+matmul pair per projection.
-      CHECK_LE(dispatches, 4u);
+      CHECK_LE(dispatches, kFormedGroupDispatches);
+      ++formed_cells;
       for (int m = 0; m < tokens; ++m) {
         array cand0 = slice(candidate[0], {m, 0}, {m + 1, candidate[0].shape(1)}, stream);
         array cand1 = slice(candidate[1], {m, 0}, {m + 1, candidate[1].shape(1)}, stream);
@@ -1834,6 +1840,20 @@ TEST_CASE("token-multi q4 gemv group is per-row bit-identical to the single-row 
         expect_bit_exact(baselines[2 * m + 1], cand1, stream);
       }
       unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+    }
+  }
+  {
+    // A run that skips every cell proves nothing, so the token group must
+    // form on the parts where its per-row bit identity was measured (G16S).
+    // Other subgroup-32 parts report the count until their own runs exist.
+    const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+    if (caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u) {
+      if (caps.device_name.find("G16S") != std::string::npos) {
+        CHECK_GT(formed_cells, 0);
+      } else {
+        MESSAGE("token group formed in ", formed_cells, " cells");
+      }
     }
   }
   unsetenv("MLX_OMARCHY_FUSED_GEMV");

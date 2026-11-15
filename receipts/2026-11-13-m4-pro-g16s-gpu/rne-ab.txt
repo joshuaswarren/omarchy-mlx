@@ -1,0 +1,41 @@
+# f16 rounding A/B on G16S, Mesa 26.3.0-devel (git-05ddb00f5c), system ICD
+# new: wheel 0.32.4.dev202611132346+b445c03 (omarchy_f16_bits_rne); old: same tree with cast_int, fast_trio, fused_chain,
+# qmm_fma, qmm_vec, sdpa_decode_native_p1 and swiglu .comp taken from f4077931^ (packHalf2x16). Interleaved old,new,old,new.
+# script: rne_bench.py (200 calls per op after warmup, 5 blocks, median/min us per call incl. submission); digest = sha256 of the f16 output bits
+# kernels dispatched (MLX_OMARCHY_TRACE_DISPATCH): CastF32F16, QmmVecQ4WordSubgroupF16, QmmPrefillFmaF16, FastTrioSwigluF16, FastTrioNormF16, SdpaDecodeNativeTwoPassP1/P2F16Hd128
+== new
+cast f32->f16 16M            median_us    2787.5 min_us    2772.5 digest c45f5b6b6fed9018
+qmm vec f16 1x4096x4096      median_us     457.3 min_us     446.5 digest 46c72e656e8f341a
+qmm f16 8x4096x4096          median_us    1511.9 min_us    1446.1 digest 6a812f1bf83ac324
+qmm f16 512x4096x4096        median_us    9668.9 min_us    9573.6 digest 83c60adf8d624274
+silu*up f16 64x11008         median_us     321.5 min_us     308.4 digest 678ab6d1b6a0f19b
+rms_norm f16 64x4096         median_us     254.6 min_us     238.8 digest 5e7e65427a9d29bb
+sdpa decode f16 1100 keys    median_us     380.0 min_us     378.1 digest 10caaf89d21a00bc
+sdpa decode f16 4096 keys    median_us     755.8 min_us     741.4 digest 7174d191c4cf4c51
+== new
+cast f32->f16 16M            median_us    2965.8 min_us    2956.5 digest c45f5b6b6fed9018
+qmm vec f16 1x4096x4096      median_us     476.6 min_us     472.3 digest 46c72e656e8f341a
+qmm f16 8x4096x4096          median_us    1519.9 min_us    1485.8 digest 6a812f1bf83ac324
+qmm f16 512x4096x4096        median_us    9761.9 min_us    9652.0 digest 83c60adf8d624274
+silu*up f16 64x11008         median_us     348.4 min_us     327.5 digest 678ab6d1b6a0f19b
+rms_norm f16 64x4096         median_us     278.7 min_us     262.7 digest 5e7e65427a9d29bb
+sdpa decode f16 1100 keys    median_us     397.1 min_us     388.5 digest 10caaf89d21a00bc
+sdpa decode f16 4096 keys    median_us     764.6 min_us     752.1 digest 7174d191c4cf4c51
+== old
+cast f32->f16 16M            median_us    2962.0 min_us    2793.4 digest c45f5b6b6fed9018
+qmm vec f16 1x4096x4096      median_us     474.0 min_us     472.6 digest 46c72e656e8f341a
+qmm f16 8x4096x4096          median_us    1516.7 min_us    1510.3 digest 6a812f1bf83ac324
+qmm f16 512x4096x4096        median_us    9744.4 min_us    9670.3 digest 83c60adf8d624274
+silu*up f16 64x11008         median_us     333.0 min_us     319.3 digest 678ab6d1b6a0f19b
+rms_norm f16 64x4096         median_us     276.6 min_us     259.4 digest 5e7e65427a9d29bb
+sdpa decode f16 1100 keys    median_us     394.7 min_us     388.6 digest 10caaf89d21a00bc
+sdpa decode f16 4096 keys    median_us     759.6 min_us     755.1 digest 7174d191c4cf4c51
+== old
+cast f32->f16 16M            median_us    2982.5 min_us    2908.5 digest c45f5b6b6fed9018
+qmm vec f16 1x4096x4096      median_us     464.9 min_us     457.8 digest 46c72e656e8f341a
+qmm f16 8x4096x4096          median_us    1509.3 min_us    1500.3 digest 6a812f1bf83ac324
+qmm f16 512x4096x4096        median_us    9422.3 min_us    9292.0 digest 83c60adf8d624274
+silu*up f16 64x11008         median_us     326.2 min_us     325.3 digest 678ab6d1b6a0f19b
+rms_norm f16 64x4096         median_us     273.1 min_us     269.6 digest 5e7e65427a9d29bb
+sdpa decode f16 1100 keys    median_us     385.5 min_us     380.3 digest 10caaf89d21a00bc
+sdpa decode f16 4096 keys    median_us     779.2 min_us     760.5 digest 7174d191c4cf4c51

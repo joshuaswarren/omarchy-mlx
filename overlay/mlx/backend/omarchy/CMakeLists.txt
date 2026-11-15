@@ -78,6 +78,7 @@ function(omarchy_shader name source)
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
               "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_half.h"
       VERBATIM)
   else()
     add_custom_command(
@@ -87,6 +88,7 @@ function(omarchy_shader name source)
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
               "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_half.h"
       VERBATIM)
   endif()
   add_custom_command(

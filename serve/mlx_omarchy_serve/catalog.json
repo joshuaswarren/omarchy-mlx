@@ -756,6 +756,9 @@
         "variant": "4bit",
         "model_architecture": "Qwen3ForCausalLM",
         "kv_basis": "147456 B/token = 2 (K+V) x 36 layers x 8 KV heads x 128 head_dim x 2 bytes (bf16), from the pinned config.",
+        "backend_context_qualified_tokens": 16384,
+        "backend_context_peak_bytes": 18123325440,
+        "backend_context_receipt": "receipts/2026-11-15-compact-backend-context/README.md",
         "benchmark_receipt": "receipts/2026-09-30-chat-model-bench/README.md",
         "license_source": "Hugging Face model card (README.md) and API cardData.license at this pinned revision; public and ungated.",
         "files": [

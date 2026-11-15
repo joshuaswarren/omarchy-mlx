@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -134,6 +135,42 @@ void replace_word(
       value, std::regex("\\b" + regex_escape(needle) + "\\b"), replacement);
 }
 
+// Comments are stripped only late in translate_msl, so every brace scan before
+// that must step over them. Returns the index of the last character of a
+// comment that starts at `index`, value.size() if it never ends, or `index`
+// itself when no comment starts there.
+size_t skip_msl_comment(const std::string& value, size_t index) {
+  if (value.compare(index, 2, "//") == 0) {
+    const auto end = value.find('\n', index);
+    return end == std::string::npos ? value.size() : end;
+  }
+  if (value.compare(index, 2, "/*") == 0) {
+    const auto end = value.find("*/", index + 2);
+    return end == std::string::npos ? value.size() : end + 1;
+  }
+  return index;
+}
+size_t find_msl_delimiter(
+    const std::string& value,
+    size_t from,
+    char delimiter) {
+  for (size_t index = from; index < value.size(); ++index) {
+    const auto comment_end = skip_msl_comment(value, index);
+    if (comment_end != index) {
+      if (comment_end >= value.size()) {
+        return std::string::npos;
+      }
+      index = comment_end;
+      continue;
+    }
+    if (value[index] == delimiter) {
+      return index;
+    }
+  }
+  return std::string::npos;
+}
+
+
 size_t matching_delimiter(
     const std::string& value,
     size_t opening,
@@ -141,6 +178,10 @@ size_t matching_delimiter(
     char close) {
   int depth = 0;
   for (size_t index = opening; index < value.size(); ++index) {
+    index = skip_msl_comment(value, index);
+    if (index >= value.size()) {
+      break;
+    }
     if (value[index] == open) {
       ++depth;
     } else if (value[index] == close && --depth == 0) {
@@ -464,7 +505,7 @@ void translate_c_style_casts(std::string& code) {
   // `)` per match and silently dropped the bf16 rounding). Every other
   // scalar inner cast is a no-op under promotion, so the pair is dropped.
   static const std::regex chain(
-      R"(\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\)\s*\(\s*(bfloat16_t|float16_t|float|int|uint|bool|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\))");
+      R"(\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\)\s*\(\s*(bfloat16_t|_bf16_cast|float16_t|float|int|uint|bool|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\))");
   std::string prev;
   int guard = 0;
   while (code != prev && guard++ < 32) {
@@ -479,7 +520,10 @@ void translate_c_style_casts(std::string& code) {
     for (auto it = begin; it != end_it; ++it) {
       const auto& m = *it;
       collapsed << code.substr(last, static_cast<size_t>(m.position()) - last);
-      collapsed << (m.str(1) == "bfloat16_t" ? "_mlx_bf16_round_trip" : "");
+      const auto inner = m.str(1);
+      collapsed << (inner == "bfloat16_t" || inner == "_bf16_cast"
+                        ? "_mlx_bf16_round_trip"
+                        : "");
       last = static_cast<size_t>(m.position()) + m.length();
     }
     collapsed << code.substr(last);
@@ -1248,6 +1292,179 @@ std::vector<Parameter> parse_parameters(const std::string& signature) {
   return parameters;
 }
 
+// Metal rounds EVERY bfloat16_t cast, constructor, declaration and
+// reassignment to the bf16 grid (compute fp32, round on store). Applies that
+// to the type spelled `bfloat_name` in body/header and turns the type into
+// float. Used for the typename path (T) and the literal bfloat16_t type
+// (kda_glue_pre/post 2026-11-13: the literal type was a plain float, so only
+// the output store rounded and 6755 of 12288 q elements differed).
+void round_bf16_type(
+    std::string& body,
+    std::string& header,
+    const std::string& bfloat_name) {
+  // C-style casts `(T)x`: Metal constructs a bfloat16_t from x - a
+  // round to the bf16 grid. Rewritten to the concrete type FIRST so the
+  // later `(T)name` word substitution cannot turn the cast into a
+  // no-op `(float)x` (sconv_decode conv_r lost its rounding,
+  // 2026-11-07 recheck); the cast scanner maps bfloat16_t casts to
+  // _mlx_bf16_round_trip.
+  // Injected as a neutral token: translate_types renames the literal
+  // bfloat16_t to float before the cast scanner runs.
+  replace_all(body, "(" + bfloat_name + ")", "(_bf16_cast)");
+  replace_all(header, "(" + bfloat_name + ")", "(_bf16_cast)");
+  // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
+  // Word-bounded: a longer identifier ending in the template name
+  // (POST in the residual+RMSNorm kernel) must not lose its tail.
+  replace_word(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
+  replace_word(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
+  // Comma declarator lists `T a = x, b = y;` become one statement each, so
+  // the per-local reassignment wrap below never swallows a sibling
+  // declarator into its round-trip argument.
+  {
+    const std::regex list_pattern(
+        "\\b" + bfloat_name + R"(\s+[A-Za-z_][A-Za-z0-9_]*\s*=[^;]*,[^;]*;)");
+    std::string out;
+    size_t last = 0;
+    for (std::sregex_iterator it(body.begin(), body.end(), list_pattern);
+         it != std::sregex_iterator();
+         ++it) {
+      const auto begin = static_cast<size_t>(it->position());
+      const auto text = it->str();
+      const auto head = text.find_first_of(" \t\n");
+      std::string rewritten;
+      size_t item = head;
+      int depth = 0;
+      for (size_t i = head; i < text.size(); ++i) {
+        i = skip_msl_comment(text, i);
+        if (i >= text.size()) break;
+        const char ch = text[i];
+        if (ch == '(' || ch == '[' || ch == '{') ++depth;
+        if (ch == ')' || ch == ']' || ch == '}') --depth;
+        if ((ch == ',' && depth == 0) || ch == ';') {
+          auto piece = text.substr(item, i - item);
+          piece.erase(0, piece.find_first_not_of(" \t\n"));
+          rewritten += bfloat_name + " " + piece + "; ";
+          item = i + 1;
+        }
+      }
+      out += body.substr(last, begin - last) + rewritten;
+      last = begin + text.size();
+  }
+  body = out + body.substr(last);
+  }
+  // Declarations `T name = expr;`: the declaration becomes float and
+  // the initializing expression rounds like Metal's constructor.
+  const std::regex decl_pattern(
+      "\\b" + bfloat_name +
+      R"(\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
+  // Each bf16 local owns the text from its declaration to the end of the
+  // enclosing block; reassignments round only inside that span, so a float
+  // of the same name in another scope is never touched. Spans of the same
+  // name that end together (sequential redeclarations in one block) collapse
+  // into the earliest one so nothing is wrapped twice.
+  struct Bf16Scope {
+    std::string name;
+    size_t begin;
+    size_t end;
+  };
+  std::vector<Bf16Scope> scopes;
+  for (std::sregex_iterator it(body.begin(), body.end(), decl_pattern);
+       it != std::sregex_iterator();
+       ++it) {
+    const auto begin = static_cast<size_t>(it->position());
+    size_t end = body.size();
+    int depth = 0;
+    for (size_t i = begin; i < body.size(); ++i) {
+      i = skip_msl_comment(body, i);
+      if (i >= body.size()) {
+        break;
+      }
+      if (body[i] == '{') {
+        ++depth;
+      } else if (body[i] == '}') {
+        if (depth == 0) {
+          end = i;
+          break;
+        }
+        --depth;
+      }
+    }
+    const auto name = (*it)[1].str();
+    const bool seen = std::any_of(
+        scopes.begin(), scopes.end(), [&](const Bf16Scope& other) {
+          return other.name == name && other.end == end;
+        });
+    if (!seen) {
+      scopes.push_back({name, begin, end});
+    }
+  }
+  for (size_t k = scopes.size(); k-- > 0;) {
+    const auto scope = scopes[k];
+    const auto segment = body.substr(scope.begin, scope.end - scope.begin);
+    const auto wrapped = std::regex_replace(
+        segment,
+        std::regex(
+            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
+            R"(\s*=\s*([^;]+);)"),
+        "$1" + scope.name + " = _mlx_bf16_round_trip($2);");
+    body.replace(scope.begin, segment.size(), wrapped);
+    const auto delta = static_cast<std::ptrdiff_t>(wrapped.size()) -
+        static_cast<std::ptrdiff_t>(segment.size());
+    for (size_t j = 0; j < k; ++j) {
+      if (scopes[j].end >= scope.end) {
+        scopes[j].end = static_cast<size_t>(
+            static_cast<std::ptrdiff_t>(scopes[j].end) + delta);
+      }
+    }
+  }
+  replace_word(body, bfloat_name + " ", "float ");
+  replace_word(header, bfloat_name + " ", "float ");
+}
+
+// Strip MSL comments (// line and /* block */). Comments can contain
+// Metal keywords ('// One threadgroup per row' in the Qwen3.5 MoE
+// router kernel) that would trigger the final guard's substring check
+// even though they are not code. Stripping before all passes also
+// prevents the type/token replacements from corrupting comment text, and
+// keeps the delimiter scans from starting inside a comment.
+void strip_msl_comments(std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  const auto n = text.size();
+  for (size_t i = 0; i < n;) {
+    const char c = text[i];
+    // A quote opens a literal that no comment marker inside may end. A
+    // single quote after an alphanumeric is a C++14 digit separator
+    // (1'000), not a character literal.
+    const bool separator = c == '\'' && i > 0 &&
+        (std::isalnum(static_cast<unsigned char>(text[i - 1])) ||
+         text[i - 1] == '_');
+    if ((c == '"' || c == '\'') && !separator) {
+      size_t end = i + 1;
+      while (end < n && text[end] != c && text[end] != '\n') {
+        end += text[end] == '\\' ? 2 : 1;
+      }
+      end = std::min(end + 1, n);
+      out.append(text, i, end - i);
+      i = end;
+    } else if (text.compare(i, 2, "//") == 0) {
+      const auto end = text.find('\n', i);
+      i = end == std::string::npos ? n : end;
+    } else if (text.compare(i, 2, "/*") == 0) {
+      const auto end = text.find("*/", i + 2);
+      if (end == std::string::npos) {
+        out.append(text, i, n - i);
+        break;
+      }
+      i = end + 2;
+    } else {
+      out += c;
+      ++i;
+    }
+  }
+  text = std::move(out);
+}
+
 void resolve_kernel_templates(
     const std::string& source,
     size_t marker,
@@ -1267,6 +1484,7 @@ void resolve_kernel_templates(
     return;
   }
   header = source.substr(0, template_position);
+  strip_msl_comments(header);
   const std::string declarations =
       source.substr(template_position + 10, template_end - template_position - 10);
   const auto decltype_position = source.find("decltype(", marker);
@@ -1310,43 +1528,7 @@ void resolve_kernel_templates(
       // exp(abs(conv)));' — integer math where Metal computes in fp32.
       if (value == "bfloat16_t" || value == "bfloat16" ||
           value == "uint16_t") {
-        const auto bfloat_name = name;  // the template parameter name (e.g. T)
-        // C-style casts `(T)x`: Metal constructs a bfloat16_t from x - a
-        // round to the bf16 grid. Rewritten to the concrete type FIRST so the
-        // later `(T)name` word substitution cannot turn the cast into a
-        // no-op `(float)x` (sconv_decode conv_r lost its rounding,
-        // 2026-11-07 recheck); the cast scanner maps bfloat16_t casts to
-        // _mlx_bf16_round_trip.
-        // Injected as a neutral token: translate_types renames the literal
-        // bfloat16_t to float before the cast scanner runs.
-        replace_all(body, "(" + bfloat_name + ")", "(_bf16_cast)");
-        replace_all(header, "(" + bfloat_name + ")", "(_bf16_cast)");
-        // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
-        // Word-bounded: a longer identifier ending in the template name
-        // (POST in the residual+RMSNorm kernel) must not lose its tail.
-        replace_word(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
-        replace_word(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
-        // Declarations `T name = expr;`: the declaration becomes float and
-        // the initializing expression rounds like Metal's constructor.
-        const std::regex decl_pattern(
-            "\\b" + bfloat_name +
-            R"(\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
-        std::vector<std::string> bf16_locals;
-        for (std::sregex_iterator it(body.begin(), body.end(), decl_pattern);
-             it != std::sregex_iterator();
-             ++it) {
-          bf16_locals.push_back((*it)[1].str());
-        }
-        replace_word(body, bfloat_name + " ", "float ");
-        replace_word(header, bfloat_name + " ", "float ");
-        for (const auto& local : bf16_locals) {
-          body = std::regex_replace(
-              body,
-              std::regex(
-                  R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(local) +
-                  R"(\s*=\s*([^;]+);)"),
-              "$1" + local + " = _mlx_bf16_round_trip($2);");
-        }
+        round_bf16_type(body, header, name);
         value = "float";
       } else if (value == "float16_t" || value == "half") {
         // Metal promotes half arithmetic to float (half storage, fp32
@@ -1368,6 +1550,149 @@ void resolve_kernel_templates(
     replace_word(header, name, value);
     replace_word(body, name, value);
   }
+}
+
+// One lexer pass marking every byte that is code: outside // and /* */
+// comments and outside string and character literals. The helper-signature
+// regex is comment- and string-blind: it matches plain word pairs in
+// comment prose (a comment naming a stage must not lend its words as a
+// helper name), and a quoted include path containing /* is string content,
+// not a comment opener (lexing it as one swallowed the helper that
+// followed, leaving its parameters unspecialized). Byte 1 = code, byte 0 =
+// comment or literal text. Review of the mel-frontend fix, v0.7.43.
+std::vector<uint8_t> code_mask(const std::string& value) {
+  std::vector<uint8_t> mask(value.size(), 0);
+  bool line_comment = false;
+  bool block_comment = false;
+  bool in_string = false;
+  bool in_char = false;
+  bool in_number = false;
+  char last_byte = '\0';
+  for (size_t index = 0; index < value.size(); ++index) {
+    const char c = value[index];
+    if (line_comment) {
+      if (c == '\n') {
+        line_comment = false;
+        mask[index] = 1;
+        last_byte = '\n';
+      }
+    } else if (block_comment) {
+      if (value.compare(index, 2, "*/") == 0) {
+        block_comment = false;
+        last_byte = '/';
+        ++index;
+      }
+    } else if (in_string) {
+      if (c == '\\') {
+        ++index;
+      } else if (c == '"') {
+        in_string = false;
+        last_byte = '"';
+      }
+    } else if (in_char) {
+      if (c == '\\') {
+        ++index;
+      } else if (c == '\'') {
+        in_char = false;
+        last_byte = '\'';
+      }
+    } else if (in_number && c == '\'') {
+      mask[index] = 1;
+    } else if (value.compare(index, 2, "//") == 0) {
+      line_comment = true;
+      in_number = false;
+      last_byte = '/';
+      ++index;
+    } else if (value.compare(index, 2, "/*") == 0) {
+      block_comment = true;
+      in_number = false;
+      last_byte = '/';
+      ++index;
+    } else if (c == '"') {
+      in_string = true;
+      in_number = false;
+      last_byte = '"';
+    } else if (c == '\'') {
+      in_char = true;
+      last_byte = '\'';
+    } else if (c == '\\' && index + 1 < value.size() &&
+               value[index + 1] == '\n') {
+      mask[index] = 1;
+      mask[index + 1] = 1;
+      ++index;
+    } else {
+      mask[index] = 1;
+      const bool last_ident =
+          (last_byte >= '0' && last_byte <= '9') ||
+          (last_byte >= 'a' && last_byte <= 'z') ||
+          (last_byte >= 'A' && last_byte <= 'Z') || last_byte == '_';
+      const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
+      if (in_number && !word) {
+        in_number = false;
+      }
+      if (c >= '0' && c <= '9' && !last_ident) {
+        in_number = true;
+      }
+      if (c == 'R' && index + 1 < value.size() && value[index + 1] == '"') {
+        std::string prefix;
+        size_t start = index;
+        while (start > 0) {
+          if (value[start - 1] == '\n' && start >= 2 &&
+              value[start - 2] == '\\') {
+            start -= 2;
+            continue;
+          }
+          const char b = value[start - 1];
+          const bool ident = (b >= '0' && b <= '9') ||
+                             (b >= 'a' && b <= 'z') ||
+                             (b >= 'A' && b <= 'Z') || b == '_';
+          if (!ident) {
+            break;
+          }
+          prefix.push_back(b);
+          --start;
+        }
+        for (size_t low = 0; low * 2 < prefix.size(); ++low) {
+          const char swap = prefix[low];
+          prefix[low] = prefix[prefix.size() - 1 - low];
+          prefix[prefix.size() - 1 - low] = swap;
+        }
+        prefix.push_back('R');
+        const bool known_prefix = prefix == "R" || prefix == "uR" ||
+                                  prefix == "UR" || prefix == "LR" ||
+                                  prefix == "u8R";
+        size_t scan = index + 2;
+        if (known_prefix) {
+          while (scan < value.size() && value[scan] != '(') {
+            ++scan;
+          }
+        }
+        if (known_prefix && scan < value.size()) {
+          const std::string delim = value.substr(index + 2, scan - index - 2);
+          bool delim_ok = delim.size() <= 16;
+          for (const char d : delim) {
+            const bool excluded = d == ' ' || d == '\t' || d == '\n' ||
+                                  d == '\v' || d == '\f' || d == '\r' ||
+                                  d == '(' || d == ')' || d == '\\';
+            if (excluded) {
+              delim_ok = false;
+            }
+          }
+          if (delim_ok) {
+            const size_t close = value.find(")" + delim + "\"", scan + 1);
+            if (close != std::string::npos) {
+              index = close + delim.size() + 1;
+            } else {
+              index = value.size() - 1;
+            }
+          }
+        }
+      }
+      last_byte = c;
+    }
+  }
+  return mask;
 }
 
 // Helpers in the user header may take `threadgroup T*` parameters (shared
@@ -1392,13 +1717,21 @@ void specialize_threadgroup_helper_params(
   // positions, so rescan from the start until no parameter remains.
   while (true) {
     bool erased = false;
+    const auto mask = code_mask(header);
     for (std::sregex_iterator it(
              header.begin(), header.end(), helper_signature);
          it != std::sregex_iterator();
          ++it) {
       const std::string helper = (*it)[2].str();
-      const size_t paren = header.find('(', (*it).position(0));
-      if (paren == std::string::npos) {
+      if (!mask[(*it).position(0)]) {
+        continue;
+      }
+      size_t paren = (*it).position(0);
+      while (paren < header.size() &&
+             !(mask[paren] && header[paren] == '(')) {
+        ++paren;
+      }
+      if (paren >= header.size()) {
         continue;
       }
       const size_t close = matching_delimiter(header, paren, '(', ')');
@@ -2199,7 +2532,7 @@ Translation translate_msl(
   if (marker == std::string::npos) {
     throw std::runtime_error("generated MSL kernel entry point is missing");
   }
-  const auto arguments_open = source.find('(', marker);
+  const auto arguments_open = find_msl_delimiter(source, marker, '(');
   const auto arguments_close =
       matching_delimiter(source, arguments_open, '(', ')');
   const auto body_open = source.find('{', arguments_close);
@@ -2216,33 +2549,9 @@ Translation translate_msl(
   std::string header;
   std::string body = source.substr(body_open + 1, body_close - body_open - 1);
   resolve_kernel_templates(source, marker, header, body);
-  // Strip MSL comments (// line and /* block */). Comments can contain
-  // Metal keywords ('// One threadgroup per row' in the Qwen3.5 MoE
-  // router kernel) that would trigger the final guard's substring check
-  // even though they are not code. Stripping before all passes also
-  // prevents the type/token replacements from corrupting comment text.
-  {
-    size_t search = 0;
-    while (true) {
-      const auto line_start = body.find("//", search);
-      if (line_start == std::string::npos) break;
-      const auto line_end = body.find('\n', line_start);
-      const auto count = (line_end == std::string::npos)
-                             ? body.size() - line_start
-                             : line_end - line_start;
-      body.erase(line_start, count);
-      search = line_start;
-    }
-    search = 0;
-    while (true) {
-      const auto block_start = body.find("/*", search);
-      if (block_start == std::string::npos) break;
-      const auto block_end = body.find("*/", block_start + 2);
-      if (block_end == std::string::npos) break;
-      body.erase(block_start, block_end - block_start + 2);
-      search = block_start;
-    }
-  }
+  round_bf16_type(body, header, "bfloat16_t");
+  strip_msl_comments(header);
+  strip_msl_comments(body);
   specialize_threadgroup_helper_params(header, body);
   translate_header(header);
 
@@ -2828,6 +3137,14 @@ Translation translate_msl(
   needs_int16 = needs_int16 || body.find("int16_t") != std::string::npos ||
       body.find("uint16_t") != std::string::npos ||
       body.find("float16_t") != std::string::npos;
+  // The bf16 helpers are written in uint16_t: any use of them in the body or
+  // header (literal bfloat16_t locals on float-only buffers produce
+  // _mlx_bf16_round_trip with no bfloat16 buffer) needs the helper block and
+  // the int16 extension.
+  needs_bfloat = needs_bfloat ||
+      body.find("_mlx_bf16_") != std::string::npos ||
+      header.find("_mlx_bf16_") != std::string::npos;
+  needs_int16 = needs_int16 || needs_bfloat;
   needs_int64 = needs_int64 || body.find("int64_t") != std::string::npos ||
       body.find("uint64_t") != std::string::npos;
   // mlx injects `NAME_strides` as `constant int64_t*`; GLSL array subscripts
@@ -2930,7 +3247,7 @@ Translation translate_msl(
   glsl << declarations << hoisted_consts << shared_declarations;
   if (needs_bfloat) {
     glsl << "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
-         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
+         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); if ((bits & 0x7fffffffu) > 0x7f800000u) return uint16_t((bits & 0xffffu) == 0u ? bits >> 16 : 0x7fc0u); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
          << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n"
          << "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
   }
