@@ -10,6 +10,7 @@ Patched mlx-lm
   That file was built from the patch as of the wheel's commit: it sets MLX_OMARCHY_QMV_SMALL_T per verify pass and leaves
   MLX_OMARCHY_SDPA_SPLIT_ROWS to the caller. The e2e scripts set or unset the flag per arm. The PR head's patch adds the
   per-pass setting of the same flag when it is unset, so its default arm is the "flag set" arm of these rows.
+  History: #456 removed that per-pass setting. The patch no longer writes the flag, so an unset run now takes the default rows route.
 
 Vulkan driver
   16-inch M1 Max (G13C): stock driver ICD, sha256 80fdb36c3b6d517f7053db8a9d88cc330aa220ef7f7658a7cc13fa6e03dbfd75
