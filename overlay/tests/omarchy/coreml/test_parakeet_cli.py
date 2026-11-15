@@ -136,12 +136,27 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
 
 
 
-    def test_mlx_pip_name_is_the_shipped_wheel(self):
-        """The repair line for the mlx entry must name this repo's wheel
-        (scripts/build-wheel.sh builds mlx_omarchy), not PyPI mlx."""
+    def test_mlx_repair_points_at_the_system_package(self):
+        """mlx_omarchy is not on PyPI, so a bare `pip install`
+        mlx_omarchy line would fail. The repair text for the mlx entry
+        must point at reinstalling the omarchy-mlx system package."""
+        import re
         message = self.mod._missing_deps_message(["mlx.core"])
-        self.assertIn("mlx_omarchy", message)
-        self.assertNotIn("pip install mlx ", f"{message} ")
+        self.assertNotRegex(message, r"pip install\s+mlx[_a-z]*")
+        self.assertIn("omarchy-mlx", message)
+
+    def test_pip_line_matches_by_pattern_not_substring(self):
+        """The pip repair line is matched by regex (interpreter +
+        package names), so reordered or extended dep lists still match
+        without substring brittleness."""
+        import re
+        message = self.mod._missing_deps_message(
+            ["google.protobuf", "numpy"])
+        pattern = (
+            re.escape(sys.executable) + r" -m pip install "
+            r"(?=.*\bnumpy\b)(?=.*\bprotobuf\b)\S+"
+        )
+        self.assertRegex(message, pattern)
 
     def test_missing_deps_message_names_pip_line_and_interpreter(self):
         message = self.mod._missing_deps_message(["numpy", "google.protobuf"])
