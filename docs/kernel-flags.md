@@ -136,8 +136,9 @@ A/B gating and qualification, not for normal operation.
   With no draft model, `MLX_OMARCHY_PROMPT_LOOKUP=K` (1 to 7, read per call by `stream_generate`, so `mlx_lm.generate`
   too) drafts up to K tokens from the latest earlier match of the last 3 or 2 tokens in the prompt and output. Lookup
   drafts only while its first token has been right at least 30% of the time recently; plain steps keep scoring it, so
-  chat-style text without repeats runs as plain decode. Unset, empty or `0` keeps plain decode. The batched server route
-  is not covered.
+  chat-style text without repeats runs as plain decode. Unset, empty or `0` keeps plain decode, and so does a set
+  `max_kv_size`: the speculative route builds an unbounded cache, so a bounded run stays on plain decode and keeps its
+  `RotatingKVCache`. The batched server route is not covered.
 - The patches are idempotent and fail loudly on mlx-lm version drift.
 
 ## Acceptance bar

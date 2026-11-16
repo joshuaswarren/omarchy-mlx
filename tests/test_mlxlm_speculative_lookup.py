@@ -156,3 +156,61 @@ def test_greedy_output_matches_plain_decode(site, tmp_path):
     env.pop("MLX_OMARCHY_FULL_LOGITS", None)
     r = subprocess.run([sys.executable, "-c", TOY], env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0 and "ok" in r.stdout, r.stdout[-600:] + r.stderr[-1200:]
+
+
+ROUTE = r"""
+import os
+import mlx.core as mx
+import importlib
+g = importlib.import_module("mlx_lm.generate")  # the name mlx_lm.generate is the function
+from mlx_lm.tokenizer_utils import TokenizerWrapper
+
+calls = []
+
+
+def fake(name):
+    def step(prompt, model, *a, **kw):
+        calls.append((name, dict(kw)))
+        for t in range(3):
+            yield (mx.array(t + 1), mx.zeros(4), False) if name == "spec" else (mx.array(t + 1), mx.zeros(4))
+    return step
+
+
+class Det:
+    last_segment = ""
+    def add_token(self, t): pass
+    def finalize(self): pass
+
+
+class Tok(TokenizerWrapper):
+    def __init__(self): pass
+    eos_token_ids = set()
+    detokenizer = Det()
+
+
+g.speculative_generate_step = fake("spec")
+g.generate_step = fake("plain")
+os.environ["MLX_OMARCHY_PROMPT_LOOKUP"] = "3"
+
+
+def route(**kw):
+    calls.clear()
+    list(g.stream_generate(None, Tok(), [1, 2, 3], max_tokens=3, **kw))
+    return calls[0]
+
+
+name, kw = route()
+assert name == "spec" and kw["num_draft_tokens"] == 3, (name, kw)
+name, kw = route(max_kv_size=64)
+assert name == "plain" and kw["max_kv_size"] == 64 and "num_draft_tokens" not in kw, (name, kw)
+print("ok")
+"""
+
+
+def test_prompt_lookup_keeps_the_max_kv_size_bound(site):
+    # speculative_generate_step builds an unbounded KVCache, so a set max_kv_size must stay on generate_step.
+    pytest.importorskip("mlx.core")
+    pytest.importorskip("transformers")
+    env = dict(os.environ, PYTHONPATH=str(site.parent) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    r = subprocess.run([sys.executable, "-c", ROUTE], env=env, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0 and "ok" in r.stdout, r.stdout[-600:] + r.stderr[-1200:]

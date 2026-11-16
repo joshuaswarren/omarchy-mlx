@@ -298,12 +298,12 @@
 -    if draft_model is None:
 +    # mlx-omarchy prompt lookup: MLX_OMARCHY_PROMPT_LOOKUP=K (1..7) drafts up to K
 +    # tokens per step from earlier text and verifies them in one short pass.
-+    # Unset, empty or 0 keeps plain decode. A draft model takes precedence.
++    # Unset, empty or 0 keeps plain decode, as does max_kv_size. A draft model takes precedence.
 +    lookup_k = os.environ.get("MLX_OMARCHY_PROMPT_LOOKUP", "")
 +    lookup_k = int(lookup_k) if lookup_k.strip().isdigit() else 0
-+    if draft_model is None and lookup_k > 0 and kwargs.get("input_embeddings") is None:
++    if draft_model is None and lookup_k > 0 and kwargs.get("input_embeddings") is None and kwargs.get("max_kv_size") is None:
 +        kwargs["num_draft_tokens"] = min(lookup_k, 7)
-+        for k in ("max_kv_size", "prompt_progress_callback", "input_embeddings"):
++        for k in ("prompt_progress_callback", "input_embeddings"):
 +            kwargs.pop(k, None)
 +        if kwargs.get("prefill_step_size") is None:
 +            kwargs.pop("prefill_step_size", None)
