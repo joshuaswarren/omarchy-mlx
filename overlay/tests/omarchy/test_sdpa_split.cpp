@@ -350,6 +350,13 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 191));
   CHECK(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 192));
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 0);
+  // Ultra exclusions (#418): neither Ultra part is qualified for a nonzero
+  // default, so both keep the fused kernel (min_keys 0) and the default is
+  // off at any key length.
+  CHECK(omarchy::sdpa_split_min_keys("Apple M1 Ultra (G13D B1)") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Ultra (G14D B1)") == 0);
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Ultra (G13D B1)", 4096));
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Ultra (G14D B1)", 4096));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 320));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 319));
