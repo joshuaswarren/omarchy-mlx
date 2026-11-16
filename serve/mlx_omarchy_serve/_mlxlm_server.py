@@ -576,6 +576,15 @@ def main() -> None:
         print(f"error: {LIMIT_ENV} must be positive", file=sys.stderr)
         raise SystemExit(3)
     start_managed()
+    # Serving placement, step 1: clamp THIS thread before mlx and mlx_lm start
+    # their stream threads, so every thread they create inherits uclamp_min.
+    # Same call bench_decode.py makes before any mlx import. Silent fallback:
+    # EPERM / old kernel / off switch -> serving is unchanged.
+    try:
+        from .perf_placement import apply_from_env
+    except ImportError:
+        from perf_placement import apply_from_env
+    early_applied, early_detail = apply_from_env()
     try:
         import mlx_lm.server as server_module
     except ImportError as exc:
@@ -630,17 +639,11 @@ def main() -> None:
 
         traced_pct._omarchy_ttft_wrapped = True
         server_module._process_control_tokens = traced_pct
-    # Serving placement (no root): raise uclamp_min on THIS startup thread
-    # before the HTTP server and decode threads spawn, so every serving
-    # thread inherits the P-cluster boost hint (stock governors). Silent
-    # fallback: EPERM / old kernel / off switch -> serving is unchanged.
-    try:
-        from .perf_placement import apply_from_env
-    except ImportError:
-        from perf_placement import apply_from_env
+    # Step 1 already ran above, before mlx_lm started its threads. This second
+    # call only covers threads that predated it; nothing new is imported here.
     applied, detail = apply_from_env()
     print(f"shim: uclamp placement {'applied' if applied else 'skipped'} "
-          f"({detail})", file=sys.stderr, flush=True)
+          f"(start: {early_detail}; now: {detail})", file=sys.stderr, flush=True)
     server_module.main()
 
 
