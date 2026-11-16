@@ -149,7 +149,7 @@ TEST_CASE("recv from a singleton group throws invalid_argument") {
 }
 
 TEST_CASE(
-    "strict init: ring demands env, mpi and nccl still refuse, jaccl quirks") {
+    "strict init: ring, mpi, nccl and jaccl all refuse without a transport") {
   // ring strict init without MLX_RANK/MLX_HOSTFILE throws the env guard
   // at ring.cpp:829-837 ("[ring] You need to provide...") -- a real
   // transport demanding a hostfile, NOT a stub refusal. A two-rank group
@@ -160,18 +160,11 @@ TEST_CASE(
   // mpi strict init throws while libmpi.so is absent; the same canary as
   // the is_available("mpi") check above.
   CHECK_THROWS_AS(distributed::init(true, "mpi"), std::runtime_error);
-  // jaccl is the one exception and this is upstream behavior on a Mac too:
-  // the any-branch of init() reassigns bk_ to "jaccl" unconditionally
-  // (distributed.cpp) even when jaccl::init returns nullptr, so
-  // register_group caches the EmptyGroup under the key "jaccl" and every
-  // later init(true, "jaccl") cache-hits instead of throwing. Whether a
-  // strict jaccl init throws therefore depends on what ran earlier in
-  // the process (discovery runs one case per process; the aggregate
-  // binary runs many), so pin only the post-init() state a caller sees.
+  // jaccl refuses too. mlx 0.32.4 no longer caches the EmptyGroup that the
+  // any-branch of init() produced under the key "jaccl", so a strict init
+  // throws whatever ran earlier in the process.
   distributed::init();
-  auto jaccl = distributed::init(true, "jaccl");
-  CHECK_EQ(jaccl.size(), 1);
-  CHECK_EQ(jaccl.rank(), 0);
+  CHECK_THROWS_AS(distributed::init(true, "jaccl"), std::runtime_error);
 }
 
 TEST_CASE("non-strict init of ungrouped backends yields a one-rank group") {
