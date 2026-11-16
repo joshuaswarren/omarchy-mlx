@@ -366,6 +366,7 @@ omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_B
 # rows of one [R, K] activation against one 2D weight, weight words read once
 # per block; m in 9..16 runs as two host passes of <= 8.
 omarchy_shader(qmm_vec_q4_word_subgroup_rows8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8)
+omarchy_shader(qmm_vec_q4_word_subgroup_batch8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_BATCH=8)
 # Multi-row word decode kernel for 4-bit group 32, 8-bit group 64 and
 # 8-bit group 32 affine weights (QBITS/QGROUP in qmm_vec.comp); the
 # 4-bit group-64 builds above are unchanged.
