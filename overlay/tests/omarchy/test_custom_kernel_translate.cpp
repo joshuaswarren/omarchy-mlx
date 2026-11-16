@@ -1774,3 +1774,52 @@ TEST_CASE("a punctuation raw-string delimiter is a valid delimiter") {
   CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
         std::string::npos);
 }
+
+TEST_CASE("a c-style cast inside a comment is not rewritten") {
+  // Issue #428 audit: the cast scanner walks every '(' in the file,
+  // including parens inside comments. A comment holding "(float) x"
+  // must survive untouched; the scanner must not splice a functional
+  // cast into comment prose.
+  const char* source =
+      "[[kernel]] void glue_comment_cast(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  // NOTE: range is (float) clamped below\n"
+      "  y[thread_position_in_grid.x] = 1.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("float(clamped)") == std::string::npos);
+}
+
+TEST_CASE("a helper call named in a comment does not throw") {
+  // Issue #428 audit: the body call-site search for `helper + "("`
+  // has no comment guard (the 427 fix guarded the header scan only).
+  // A comment naming the helper with a paren must not route the
+  // scan into matching_delimiter mid-comment.
+  std::string source =
+      "// see msv_row_inv_rms(acc, 1e-6f, 2560, local_sums, local_inv, 0u, lid) for the math\n";
+  source += residual_norm_style;
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("void main()") != std::string::npos);
+}
+
+TEST_CASE("commented trigger literals for every raw paren scan are inert") {
+  // Issue #428 audit, second half: the as_type, atomic, elem_to_loc and
+  // decltype scans anchor on distinctive literals. A comment holding any
+  // of them with parens must not route a scan into matching_delimiter
+  // mid-comment. translate_msl strips comments before these passes run;
+  // this test pins that ordering end to end.
+  const char* source =
+      "[[kernel]] void glue_comment_literals(\n"
+      "    device float* y [[buffer(0)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  // as_type<ushort>(g) atomic_fetch_explicit(p, v, memory_order_relaxed)\n"
+      "  // elem_to_loc(x, y_shape, z, w) decltype(values)\n"
+      "  y[thread_position_in_grid.x] = 1.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("void main()") != std::string::npos);
+  CHECK(glsl.find("as_type") == std::string::npos);
+  CHECK(glsl.find("atomic_fetch_explicit") == std::string::npos);
+  CHECK(glsl.find("elem_to_loc") == std::string::npos);
+}
