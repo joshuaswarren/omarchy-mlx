@@ -6739,4 +6739,5 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
         kernel_wide !=
         static_cast<int64_t>(
             omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16));
+  }
 }
