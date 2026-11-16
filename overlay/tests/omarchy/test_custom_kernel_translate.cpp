@@ -1823,3 +1823,35 @@ TEST_CASE("commented trigger literals for every raw paren scan are inert") {
   CHECK(glsl.find("atomic_fetch_explicit") == std::string::npos);
   CHECK(glsl.find("elem_to_loc") == std::string::npos);
 }
+
+TEST_CASE("compound assignments on bf16 locals round like Metal") {
+  // #421: Metal's bfloat16_t operators round EVERY store, including
+  // `x += e` (acc = bfloat16_t(acc + e)). The translator must rewrite
+  // compound assignments on bf16 locals through _mlx_bf16_round_trip,
+  // not emit them as written (which would carry fp32 precision).
+  const char* source =
+      "template <typename T>\n"
+      "[[kernel]] void compound_accum(\n"
+      "    const device bfloat16_t* x [[buffer(0)]],\n"
+      "    const device bfloat16_t* y [[buffer(1)]],\n"
+      "    device float* out [[buffer(2)]],\n"
+      "    uint thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid;\n"
+      "  T acc = x[c];\n"
+      "  acc += y[c];\n"
+      "  acc *= (y[c] + x[c]);\n"
+      "  out[c] = acc;\n"
+      "}\n"
+      "template [[kernel]] decltype(compound_accum<bfloat16_t>) "
+      "compound_accum<bfloat16_t>;\n";
+  auto glsl = translate(source, 1);
+  // Rewritten through the round trip, with the row accumulated on the
+  // left of the operator.
+  CHECK(
+      glsl.find("acc = _mlx_bf16_round_trip(acc +") != std::string::npos);
+  CHECK(
+      glsl.find("acc = _mlx_bf16_round_trip(acc *") != std::string::npos);
+  // The unrounded forms must be gone: no bare `acc +=` or `acc *=` survives.
+  CHECK(glsl.find("acc +=") == std::string::npos);
+  CHECK(glsl.find("acc *=") == std::string::npos);
+}
