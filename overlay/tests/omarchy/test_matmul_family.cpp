@@ -6642,7 +6642,7 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
   Stream cpu = default_stream(Device::cpu);
   std::mt19937 rng(892);
   std::uniform_real_distribution<float> frac(-1.0f, 1.0f);
-  for (int m : {2, 3, 5, 8, 9, 13, 16}) {
+  for (int m : {2, 3, 4}) {
     // K stays a multiple of 64 (quantize requirement) and of 8 (row-base
     // alignment); 320 takes the hashed-word path, 2048 the wide path.
     for (int k : {320, 2048}) {
@@ -6715,4 +6715,28 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
       }
     }
   }
+  // Narrowed gate: m = 8 with the route on must NOT take Rows8 (the
+  // scalar-FMA row chain loses to the coopmat tile there); it takes the
+  // tile path instead.
+  {
+    const int m = 8, k = 2048, n = 5120;
+    std::vector<float> x_values(static_cast<size_t>(m) * k, 0.25f);
+    std::vector<float> matrix(static_cast<size_t>(n) * k, 0.125f);
+    array x = astype(
+        array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
+    array w_fp = array(matrix.begin(), Shape{n, k}, float32);
+    auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+    array scales = astype(parts[1], bfloat16, stream);
+    array biases = astype(parts[2], bfloat16, stream);
+    setenv("MLX_OMARCHY_QMM_ROWS", "1", 1);
+    array out_wide = quantized_matmul(
+        x, parts[0], scales, biases, true, 64, 4, "affine", stream);
+    REQUIRE(evaluation_error(out_wide).empty());
+    const int64_t kernel_wide =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    unsetenv("MLX_OMARCHY_QMM_ROWS");
+    CHECK(
+        kernel_wide !=
+        static_cast<int64_t>(
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16));
 }

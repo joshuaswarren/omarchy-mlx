@@ -1840,7 +1840,9 @@ void main() {
 // dot, the same input_sum, the same block epilogue and the same subgroup
 // reduction, so each row matches the single-row main bit for bit while the
 // weight bytes are read once instead of R times. Rows past matrix_m do no
-// work (guarded, not clamped); m in 9..16 runs as two host passes of <= 8.
+// work (guarded, not clamped). The host gates R to 2..4; wider rows keep
+// the tile path (the scalar-FMA row chain loses to the coopmat tile at
+// R >= 8, measured 2026-11-15).
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
