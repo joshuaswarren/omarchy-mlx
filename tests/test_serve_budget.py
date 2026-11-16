@@ -378,6 +378,12 @@ class GpuClientCapTests(unittest.TestCase):
             broken = Path(tmp) / "broken"
             broken.write_text("client_limit notanumber\n")
             self.assertIsNone(budget.gpu_client_cap(broken))
+            dup = Path(tmp) / "dup"
+            dup.write_text("client_limit 8112390144\nclient_limit 8112390144\n")
+            self.assertEqual(budget.gpu_client_cap(dup), 8112390144)
+            conflict = Path(tmp) / "conflict"
+            conflict.write_text("client_limit 8112390144\nclient_limit 4294967296\n")
+            self.assertEqual(budget.gpu_client_cap(conflict), 4294967296)
 
     def test_admit_refuses_over_gpu_client_cap(self):
         # the asahi per-client GPU heap cap can forbid a model that fits
