@@ -112,7 +112,7 @@
  
      Yields:
          Tuple[mx.array, mx.array, bool]: One token, a vector of log probabilities,
-@@ -726,20 +795,20 @@
+@@ -726,20 +795,26 @@
  
      y = prompt.astype(mx.uint32)
      prev_tokens = None
@@ -136,10 +136,16 @@
 +    draft_trim = lookup or cache.can_trim_prompt_cache(draft_cache)
 +    history = prompt.tolist() if lookup else None
 +    hit_rate = 1.0
++    # mlx-omarchy adaptive num_draft (draft-model path): shrink the draft run by a
++    # running EMA of the acceptance fraction so low-acceptance text drafts fewer
++    # tokens. Greedy-exact (the verify validates every drafted token). Default on;
++    # MLX_OMARCHY_SPEC_ADAPT=0 restores the fixed num_draft_tokens behaviour.
++    accept_ema = 1.0
++    spec_adapt = (not lookup) and os.environ.get("MLX_OMARCHY_SPEC_ADAPT", "1") != "0"
  
      sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
  
-@@ -795,13 +864,24 @@
+@@ -795,13 +870,24 @@
              mx.clear_cache()
          return y
  
@@ -166,7 +172,7 @@
          ys = []
          for _ in range(num_draft):
              y, _ = _step(draft_model, draft_cache, y)
-@@ -810,22 +890,57 @@
+@@ -810,22 +896,60 @@
          return mx.concatenate(ys)
  
      with mx.stream(generation_stream):
@@ -212,6 +218,9 @@
 +                    y = cur[0]
 +                    continue
 +                num_draft = len(draft_list)
++            if spec_adapt and num_draft > 0:
++                import math
++                num_draft = max(1, min(num_draft, int(math.ceil(num_draft_tokens * accept_ema))))
 +            model_snap = None if model_trim or num_draft == 0 else _omarchy_snapshot(model_cache)
 +            draft_snap = None if draft_trim or num_draft == 0 else _omarchy_snapshot(draft_cache)
 +            draft_in = draft_y
@@ -228,7 +237,7 @@
              draft_tokens = draft_tokens.tolist()
              tokens = tokens.tolist()
              n = 0
-@@ -835,32 +950,59 @@
+@@ -835,32 +959,61 @@
                      break
                  n += 1
                  ntoks += 1
@@ -239,6 +248,8 @@
                      break
 +            if lookup:
 +                hit_rate = 0.8 * hit_rate + 0.2 * (n > 0)
++            elif spec_adapt and num_draft > 0:
++                accept_ema = 0.8 * accept_ema + 0.2 * (n / num_draft)
              if ntoks < max_tokens:
                  ntoks += 1
 +                if lookup:
@@ -291,7 +302,7 @@
  
  
  def stream_generate(
-@@ -907,7 +1049,19 @@
+@@ -907,7 +1060,19 @@
  
      kwargs["max_tokens"] = max_tokens
  
