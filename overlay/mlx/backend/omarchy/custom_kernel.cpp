@@ -1401,8 +1401,18 @@ void round_bf16_type(
   for (size_t k = scopes.size(); k-- > 0;) {
     const auto scope = scopes[k];
     const auto segment = body.substr(scope.begin, scope.end - scope.begin);
-    const auto wrapped = std::regex_replace(
+    // Compound assignments `x op= e;` (+= -= *= /=): Metal rounds the store
+    // too, so rewrite to `x = _mlx_bf16_round_trip(x op (e));` (#421). Runs
+    // before the plain reassignment so `+=` is not mistaken for `=`.
+    const auto compounded = std::regex_replace(
         segment,
+        std::regex(
+            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
+            R"(\s*([+\-*/])=\s*([^;]+);)"),
+        "$1" + scope.name + " = _mlx_bf16_round_trip(" + scope.name +
+            " $2 ($3));");
+    const auto wrapped = std::regex_replace(
+        compounded,
         std::regex(
             R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
             R"(\s*=\s*([^;]+);)"),
