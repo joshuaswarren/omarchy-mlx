@@ -327,11 +327,13 @@ class YieldOrderTests(unittest.TestCase):
 
 class ThinkingDefaultTests(unittest.TestCase):
     """The client that hit the break is our own serve profiler
-    (receipts/2026-11-16-gpu-client-cap/lb-prof3g.py). Its exact body
-    carries no thinking flag and no chat_template_kwargs - like
-    tools/serve-bench/run-window.sh - so an opt-in mapping cannot help
-    it. The serve default is thinking OFF; clients opt back in with
-    thinking:true or explicit chat_template_kwargs."""
+    (receipts/2026-11-16-gpu-client-cap/lb-prof3g.py): its exact body
+    carries no chat_template_kwargs - like tools/serve-bench - so an
+    opt-in flag cannot help it. The serve default is thinking OFF;
+    opt-in is chat_template_kwargs.enable_thinking. Requests are real
+    mlx_lm.server.CompletionRequest objects, so an invented attribute
+    cannot pass the test (w7X review finding). Skipped where mlx_lm is
+    not importable."""
 
     FAILING_BODY = {
         "model": "mlx-community/gemma-4-e4b-it-4bit",
@@ -345,51 +347,52 @@ class ThinkingDefaultTests(unittest.TestCase):
                       "real failure mode."}],
     }
 
-    def _kwargs(self, body, kwargs=None):
+    def setUp(self):
+        try:
+            import mlx_lm.server  # noqa: F401
+        except ImportError:
+            self.skipTest("mlx_lm not importable on this host")
+
+    def _kwargs(self, body, args_kwargs=None):
         import types
+        import mlx_lm.server as srv
         import mlx_omarchy_serve._mlxlm_server as mod
 
         captured = {}
+        request = srv.CompletionRequest(
+            request_type="chat", prompt=None, messages=body["messages"],
+            tools=None, role_mapping=None)
+        # the real request carries no body and no chat_template_kwargs
+        self.assertFalse(hasattr(request, "body"))
+        args = types.SimpleNamespace(
+            chat_template_kwargs=dict(args_kwargs) if args_kwargs else None)
 
         class FakeGenerator:
             pass
 
-        def original(gen, tokenizer, request, args):
-            captured["kwargs"] = args.chat_template_kwargs
+        def original(self_gen, tokenizer, req, a):
+            captured["kwargs"] = a.chat_template_kwargs
             return [1], [[1]], ["assistant"], "normal"
 
-        gen = FakeGenerator()
-        gen._tokenize = original
-        request = types.SimpleNamespace(body=body,
-                                        chat_template_kwargs=kwargs)
-        args = types.SimpleNamespace(chat_template_kwargs=None)
-        mod.ResponseGenerator = gen.__class__
-        mod.ResponseGenerator._tokenize = original
-        mod.install_thinking_switch(mod)
-        mod.ResponseGenerator._tokenize(gen, None, request, args)
+        FakeGenerator._tokenize = original
+        mod.install_thinking_switch(
+            types.SimpleNamespace(ResponseGenerator=FakeGenerator))
+        FakeGenerator()._tokenize(None, request, args)
         return captured["kwargs"]
 
-    def test_red_exact_failing_body_gets_content_default(self):
+    def test_exact_failing_body_gets_content_default(self):
         body = dict(self.FAILING_BODY)
-        self.assertNotIn("thinking", body)
         self.assertNotIn("chat_template_kwargs", body)
         kwargs = self._kwargs(body)
         self.assertEqual(kwargs, {"enable_thinking": False})
 
     def test_bench_client_body_gets_content_default(self):
-        body = {"model": "qwen3.8-27b",
-                "messages": [{"role": "user",
-                              "content": "Say hi in one word."}],
-                "max_tokens": 16}
-        kwargs = self._kwargs(body)
+        kwargs = self._kwargs({"model": "qwen3.8-27b",
+                               "messages": [{"role": "user",
+                                             "content": "Say hi in one word."}],
+                               "max_tokens": 16})
         self.assertEqual(kwargs, {"enable_thinking": False})
 
-    def test_thinking_true_opts_back_in(self):
-        kwargs = self._kwargs({"thinking": True})
+    def test_explicit_args_kwargs_win(self):
+        kwargs = self._kwargs(self.FAILING_BODY, {"enable_thinking": True})
         self.assertEqual(kwargs, {"enable_thinking": True})
-
-    def test_explicit_chat_template_kwargs_win(self):
-        # explicit enable_thinking is upstream's own per-request knob:
-        # the wrapper leaves args untouched and upstream applies it
-        kwargs = self._kwargs({"thinking": False}, {"enable_thinking": True})
-        self.assertIsNone(kwargs)
