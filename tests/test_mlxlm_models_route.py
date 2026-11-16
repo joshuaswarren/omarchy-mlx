@@ -229,14 +229,21 @@ class RealUpstreamTests(unittest.TestCase):
 
             with unittest.mock.patch.object(srv, "_run_http_server", spy):
                 shim.install_models_route(srv)
-            srv._run_http_server(1, 2, h.response_generator)
-            h2 = captured["handler"](h.response_generator)
+                srv._run_http_server(1, 2, h.response_generator)
+            cls = captured["handler"]
+            # BaseRequestHandler.__init__ wants request/client/server; the
+            # route only touches handler state, so borrow it from h
+            h2 = cls.__new__(cls)
+            h2.__dict__.update(h.__dict__)
+            h.wfile = io.BytesIO()
+            h2.wfile = h.wfile
+            h2.headers_sent = []
             h2.path = "/v1/models"
             h2.do_GET()
             fixed = json.loads(h2.wfile.getvalue())["data"]
             self.assertEqual([m["id"] for m in fixed], [loaded])
             self.assertIn(("Access-Control-Allow-Origin", "*"),
-                          h2.headers_sent)
+                          h.headers_sent)
 
 
 class YieldOrderTests(unittest.TestCase):
