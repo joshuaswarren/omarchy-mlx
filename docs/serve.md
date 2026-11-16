@@ -622,6 +622,13 @@ Inspect `/v1/models`, then use its actual model ID in requests. A successful
 model listing is not a generation smoke test: `/v1/chat/completions` must
 return a completion ID and nonempty assistant content.
 
+Chat answers in `delta.content` by default. Thinking-capable chat templates
+(gemma, the Qwen3 family) default their thought channel ON upstream, which
+would send every delta to `delta.reasoning` with `content` empty; the serve
+sets `enable_thinking: false` for every request unless the caller opts in.
+To receive the thought channel, send
+`"chat_template_kwargs": {"enable_thinking": true}` in the request body.
+
 ```bash
 curl --fail-with-body http://127.0.0.1:8080/v1/models
 ```
