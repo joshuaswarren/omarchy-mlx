@@ -1822,6 +1822,8 @@ TEST_CASE("commented trigger literals for every raw paren scan are inert") {
   CHECK(glsl.find("as_type") == std::string::npos);
   CHECK(glsl.find("atomic_fetch_explicit") == std::string::npos);
   CHECK(glsl.find("elem_to_loc") == std::string::npos);
+}
+
 TEST_CASE("compound assignments on bf16 locals round like Metal") {
   // #421: Metal's bfloat16_t operators round EVERY store, including
   // `x += e` (acc = bfloat16_t(acc + e)). The translator must rewrite

@@ -1401,24 +1401,28 @@ void round_bf16_type(
   for (size_t k = scopes.size(); k-- > 0;) {
     const auto scope = scopes[k];
     const auto segment = body.substr(scope.begin, scope.end - scope.begin);
+    // Plain reassignments `x = e;` round through the constructor. Runs first:
+    // the pattern needs a bare `=`, so compound `x op= e;` never matches it.
+    const auto wrapped = std::regex_replace(
+        segment,
+        std::regex(
+            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
+            R"(\s*=\s*([^;]+);)"),
+        "$1" + scope.name + " = _mlx_bf16_round_trip($2);");
     // Compound assignments `x op= e;` (+= -= *= /=): Metal rounds the store
     // too, so rewrite to `x = _mlx_bf16_round_trip(x op (e));` (#421). Runs
-    // before the plain reassignment so `+=` is not mistaken for `=`.
+    // after the plain pass: its output is already a plain `x = ...` form,
+    // and running it second means the plain pass never sees (and double-
+    // wraps) the compound output.
     const auto compounded = std::regex_replace(
-        segment,
+        wrapped,
         std::regex(
             R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
             R"(\s*([+\-*/])=\s*([^;]+);)"),
         "$1" + scope.name + " = _mlx_bf16_round_trip(" + scope.name +
             " $2 ($3));");
-    const auto wrapped = std::regex_replace(
-        compounded,
-        std::regex(
-            R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(scope.name) +
-            R"(\s*=\s*([^;]+);)"),
-        "$1" + scope.name + " = _mlx_bf16_round_trip($2);");
-    body.replace(scope.begin, segment.size(), wrapped);
-    const auto delta = static_cast<std::ptrdiff_t>(wrapped.size()) -
+    body.replace(scope.begin, segment.size(), compounded);
+    const auto delta = static_cast<std::ptrdiff_t>(compounded.size()) -
         static_cast<std::ptrdiff_t>(segment.size());
     for (size_t j = 0; j < k; ++j) {
       if (scopes[j].end >= scope.end) {
