@@ -244,7 +244,9 @@ def _load_reservations_file(path: Path) -> dict[str, dict]:
             raise BudgetError(f"reservation {name!r}: pair_id must be a string")
         parent = val.get("parent")
         claimed = val.get("claimed")
-        for label, ident in (("parent", parent), ("claimed", claimed)):
+        identity = val.get("identity")
+        for label, ident in (("parent", parent), ("claimed", claimed),
+                             ("identity", identity)):
             if ident is None:
                 continue
             if (not isinstance(ident, dict)
@@ -255,7 +257,8 @@ def _load_reservations_file(path: Path) -> dict[str, dict]:
                     f"reservation {name!r}: {label} must be {{pid: int, starttime: int}}")
         out[str(name)] = {"bytes": val["bytes"], "note": str(val.get("note", "")),
                           "state": state, "resident_floor_bytes": floor, "owner": owner,
-                          "pair_id": pair_id, "parent": parent, "claimed": claimed}
+                          "pair_id": pair_id, "parent": parent, "claimed": claimed,
+                          "identity": identity}
     return out
 
 
@@ -308,7 +311,8 @@ def _update_reservations(mutate, home: Path | None):
 def set_reservation(name: str, byte_count: int, note: str = "",
                     home: Path | None = None, state: str = "pending",
                     resident_floor_bytes: int | None = None,
-                    owner: str | None = None) -> None:
+                    owner: str | None = None,
+                    identity: dict | None = None) -> None:
     if not name or byte_count <= 0:
         raise BudgetError("reservation needs a name and positive bytes")
     if state not in RESERVATION_STATES:
@@ -323,7 +327,8 @@ def set_reservation(name: str, byte_count: int, note: str = "",
                 f"({existing['owner']}); refusing to overwrite"
             )
         data[name] = {"bytes": int(byte_count), "note": note, "state": state,
-                      "resident_floor_bytes": resident_floor_bytes, "owner": owner}
+                      "resident_floor_bytes": resident_floor_bytes, "owner": owner,
+                      "identity": identity}
 
     _update_reservations(mutate, home)
 
@@ -374,7 +379,8 @@ def clear_reservation(name: str, home: Path | None = None,
         entry = data.get(name)
         if entry is None:
             return False
-        if entry.get("owner") and entry["owner"] != owner:
+        if (entry.get("owner") and entry["owner"] != owner
+                and not identity_dead(entry.get("identity"))):
             raise BudgetError(
                 f"reservation {name!r} is owned by another holder "
                 f"({entry['owner']}); refusing to clear"
@@ -406,7 +412,8 @@ class Admission:
 def admit(required: int, home: Path | None = None) -> Admission:
     """Fit check against MemAvailable with aggregate reservations."""
     available = mem_available()
-    reserved = sum(_contribution(r) for r in load_reservations(home).values())
+    reserved = sum(_contribution(r) for r in load_reservations(home).values()
+                   if not identity_dead(r.get("identity")))
     headroom = available - SAFETY_RESERVE_BYTES - reserved - required
     lines = [
         f"MemAvailable:      {available / GiB:.2f} GiB",
@@ -433,6 +440,7 @@ def admit_and_reserve(
     state: str = "pending",
     resident_floor_bytes: int | None = None,
     available_bytes: int | None = None,
+    identity: dict | None = None,
 ) -> Admission:
     """The shared atomic budget transaction: the fit check and the
     reservation write happen under one exclusive lock, so concurrent
@@ -458,7 +466,8 @@ def admit_and_reserve(
                 f"reservation {name!r} already held ({holder}); two processes "
                 "may not serve the same catalog id"
             )
-        others = sum(_contribution(r) for key, r in data.items() if key != name)
+        others = sum(_contribution(r) for key, r in data.items()
+                     if key != name and not identity_dead(r.get("identity")))
         headroom = available - SAFETY_RESERVE_BYTES - others - byte_count
         lines = [
             f"MemAvailable:      {available / GiB:.2f} GiB",
@@ -474,7 +483,8 @@ def admit_and_reserve(
                 + " — refusing concurrent overcommit"
             )
         data[name] = {"bytes": int(byte_count), "note": note, "state": state,
-                      "resident_floor_bytes": resident_floor_bytes, "owner": owner}
+                      "resident_floor_bytes": resident_floor_bytes, "owner": owner,
+                      "identity": identity}
         return Admission(True, byte_count, others, available,
                          SAFETY_RESERVE_BYTES, headroom, lines, owner)
 
@@ -509,6 +519,25 @@ def identity_alive(ident: dict | None) -> bool:
     if live is None:
         return False
     return live == ident
+
+
+def identity_dead(ident: dict | None) -> bool:
+    """True only when /proc/<pid> does not exist, so the process is provably
+    gone (no pid reuse ambiguity). Uncertain cases (permission errors,
+    malformed records) return False: an uncertain reservation still counts."""
+    if not isinstance(ident, dict):
+        return False
+    try:
+        pid = int(ident.get("pid", -1))
+    except (TypeError, ValueError):
+        return False
+    try:
+        Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _reservation_pair_records(home: Path | None, pair_id: str) -> dict[str, dict]:

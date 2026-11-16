@@ -1027,7 +1027,8 @@ def cmd_serve(args, cat, home) -> int:
             budget.admit_and_reserve(
                 launch_name, admission.required,
                 note=f"CLI launch: {resolved.repo or resolved.local_path}",
-                owner=launch_owner, home=home, state="pending")
+                owner=launch_owner, home=home, state="pending",
+                identity=budget.proc_identity(os.getpid()))
         child = subprocess.Popen(argv, env=child_env)
         returncode = child.wait()
     except budget.BudgetError as exc:
