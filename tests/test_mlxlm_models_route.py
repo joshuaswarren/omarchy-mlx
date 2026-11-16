@@ -237,7 +237,9 @@ class RealUpstreamTests(unittest.TestCase):
             h2.__dict__.update(h.__dict__)
             h.wfile = io.BytesIO()
             h2.wfile = h.wfile
-            h2.headers_sent = []
+            # drop the upstream call's headers so the CORS assertion below
+            # can only pass through the route's own completion headers
+            h.headers_sent.clear()
             h2.path = "/v1/models"
             h2.do_GET()
             fixed = json.loads(h2.wfile.getvalue())["data"]
