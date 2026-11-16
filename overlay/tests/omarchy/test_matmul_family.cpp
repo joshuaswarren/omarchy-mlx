@@ -6643,7 +6643,9 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
   std::mt19937 rng(892);
   std::uniform_real_distribution<float> frac(-1.0f, 1.0f);
   for (int m : {2, 3, 5, 8, 9, 13, 16}) {
-    for (int k : {264, 2048}) {
+    // K stays a multiple of 64 (quantize requirement) and of 8 (row-base
+    // alignment); 320 takes the hashed-word path, 2048 the wide path.
+    for (int k : {320, 2048}) {
       for (int n : {513, 5120}) {
         // Random bf16 activation and fp weights; quantize the weights on
         // the CPU stream exactly as the mlx pipeline does.
