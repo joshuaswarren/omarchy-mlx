@@ -43,6 +43,12 @@ the gate enforces them.
    changes with every build. The gate fails a stable release without the
    copy, or with a copy whose bytes differ from the stamped aarch64 wheel.
    `SHA256SUMS` covers the copy like any other asset.
+   A stable release also records the Mesa commit it was qualified on in
+   `packaging/qualified-mesa-commit` (one full 40-digit commit, in the tag).
+   The distro package pins a Mesa commit by hand, and its `check()` fails
+   when that pin differs from this file. Edit the file in the release
+   commit whenever the qualified driver changes. The gate fails a stable
+   release whose tag lacks the file or holds anything else.
 
 3. Create the GitHub release as a DRAFT. Upload the assets to it. Run the
    gate and the installed-from-release gates against the DRAFT's assets.

@@ -64,6 +64,9 @@ WHERE_BUILT = {
 }
 # Fixed-name copy of the aarch64 wheel (no per-build stamp in the name), so omacom/omarchy-pkgs can follow the tag.
 ALIAS_WHEEL = "omarchy-mlx-wheel-cp314-aarch64.whl"
+# The Mesa commit this release was qualified on. omacom/omarchy-pkgs pins a Mesa commit by hand and its check() fails when
+# the pin differs from this file in the tag tarball, so a release that needs a newer driver cannot publish unattended.
+MESA_COMMIT_FILE = "packaging/qualified-mesa-commit"
 
 
 def run(cmd, **kw):
@@ -145,6 +148,25 @@ def alias_failure(is_diag, alias, wheels):
     return (f"{ALIAS_WHEEL} differs from the linux_aarch64 wheel "
             f"{', '.join(w.name for w in stamped)}: it must be a "
             "byte-identical copy")
+
+
+def mesa_commit_failure(is_diag, text):
+    """None, or why the tag's qualified Mesa commit file is missing or malformed."""
+    if is_diag:
+        return None
+    if text is None:
+        return (f"{MESA_COMMIT_FILE} is missing at the tag: a stable release records the Mesa commit it was "
+                "qualified on")
+    if not re.fullmatch(r"[0-9a-f]{40}\n?", text):
+        return f"{MESA_COMMIT_FILE} must hold one full 40-digit lowercase commit, got {text.strip()[:60]!r}"
+    return None
+
+
+def tag_mesa_commit(repo, tag_commit_sha):
+    """Text of MESA_COMMIT_FILE at the tag's commit, or None when it is absent."""
+    proc = run(["gh", "api", f"repos/{repo}/contents/{MESA_COMMIT_FILE}?ref={tag_commit_sha}",
+                "-H", "Accept: application/vnd.github.raw+json"])
+    return proc.stdout if proc.returncode == 0 else None
 
 
 def receipt_paths(repo_root, tag):
@@ -475,6 +497,9 @@ def run_checks(args, work):
                 f"{ALIAS_WHEEL}: SHA256SUMS lists {listed} but the uploaded "
                 f"bytes hash to {actual}; the installer's checksum step "
                 "would fail")
+    mesa_problem = mesa_commit_failure(is_diag, tag_mesa_commit(args.repo, tag_full))
+    if mesa_problem:
+        all_failures.append(mesa_problem)
     if alias_problem:
         all_failures.append(alias_problem)
     elif alias is not None and not is_diag:

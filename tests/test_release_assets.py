@@ -89,13 +89,32 @@ class AliasWheelTests(unittest.TestCase):
                           MODULE["alias_failure"](False, alias, only_x86))
 
 
+class QualifiedMesaCommitTests(unittest.TestCase):
+    def test_only_one_full_lowercase_commit_passes(self):
+        check = MODULE["mesa_commit_failure"]
+        good = "439dc032d70ab9ec7e3b40afd4efd920f75c56f1\n"
+        self.assertIsNone(check(False, good))
+        self.assertIsNone(check(False, good.strip()))
+        self.assertIn("is missing", check(False, None))
+        for bad in ("", "439dc032d7\n", good.upper(), good + good, "main\n"):
+            self.assertIn("one full 40-digit", check(False, bad), repr(bad))
+
+    def test_diagnostics_release_needs_none(self):
+        self.assertIsNone(MODULE["mesa_commit_failure"](True, None))
+
+    def test_the_commit_in_this_tree_is_valid(self):
+        path = Path(__file__).resolve().parents[1] / MODULE["MESA_COMMIT_FILE"]
+        self.assertTrue(path.is_file(), "a release cut from this tree would fail the gate")
+        self.assertIsNone(MODULE["mesa_commit_failure"](False, path.read_text()))
+
+
 class AliasMainTests(unittest.TestCase):
     """main() against a stubbed release: the alias leaves the wheel list, its SHA256SUMS line is checked, -diag is exempt."""
 
     STAMPED = AliasWheelTests.STAMPED
     X86 = AliasWheelTests.X86
 
-    def _run(self, tag, files, sums_override=None):
+    def _run(self, tag, files, sums_override=None, mesa="b" * 40 + "\n"):
         import contextlib
         import io
         import shutil
@@ -132,6 +151,7 @@ class AliasMainTests(unittest.TestCase):
                 "download_wheels": lambda repo, t, dest: sorted(root / n for n in files if n.endswith(".whl")),
                 "download_asset": fake_download_asset,
                 "tag_commit": lambda *a: "a" * 40,
+                "tag_mesa_commit": lambda *a: mesa,
                 "verify": fake_verify,
                 "run": fake_run,
             }
@@ -174,6 +194,17 @@ class AliasMainTests(unittest.TestCase):
         code, out, _ = self._run("v9.9.9", files, {alias: "e" * 64})
         self.assertEqual(code, 1, out)
         self.assertIn("SHA256SUMS lists", out)
+
+    def test_stable_release_needs_the_qualified_mesa_commit_at_its_tag(self):
+        files = {self.STAMPED: b"aarch64", self.X86: b"x86", MODULE["ALIAS_WHEEL"]: b"aarch64"}
+        code, out, _ = self._run("v9.9.9", files, mesa=None)
+        self.assertEqual(code, 1, out)
+        self.assertIn("qualified-mesa-commit is missing", out)
+        code, out, _ = self._run("v9.9.9", files, mesa="439dc032d7\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("one full 40-digit", out)
+        code, out, _ = self._run("v9.9.9", files)
+        self.assertEqual(code, 0, out)
 
     def test_diagnostics_release_is_exempt_and_prints_no_identity_line(self):
         code, out, _ = self._run("v9.9.9-diag.1", {self.STAMPED: b"aarch64"})
