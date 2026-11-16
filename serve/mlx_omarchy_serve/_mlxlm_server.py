@@ -123,6 +123,11 @@ def install_models_route(server_module) -> None:
         base = handler_class or server_module.APIHandler
 
         class _ModelsHandler(base):
+            # uniform ~64 ms per-chunk stalls on the served stream are the
+            # Nagle/delayed-ACK interaction; TCP_NODELAY restores the
+            # engine's own ~46 ms/token cadence (jw16 measurement)
+            disable_nagle_algorithm = True
+
             def do_GET(self):  # noqa: N802 (stdlib API)
                 path = self.path.split("?", 1)[0]
                 if path == "/v1/models":
@@ -404,6 +409,8 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
         base = handler_class or server_module.APIHandler
 
         class _GatedHandler(base):
+            disable_nagle_algorithm = True
+
             def do_POST(self):  # noqa: N802 (stdlib API)
                 path = self.path.split("?", 1)[0]
                 if path == YIELD_CONTROL_PATH:

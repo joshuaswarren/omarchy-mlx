@@ -323,3 +323,52 @@ class YieldOrderTests(unittest.TestCase):
     def test_yield_route_survives_route_then_gate(self):
         handler = self._stack(["route", "gate"])
         self.assertIn(self._post_yield(handler), (200, 403, 409))
+
+
+class NagleTests(unittest.TestCase):
+    """The 64 ms uniform per-chunk stall of the served stream is the
+    Nagle/delayed-ACK interaction on the SSE socket (loopback included).
+    Every handler class the shim builds must set
+    disable_nagle_algorithm so http.server opens connections with
+    TCP_NODELAY; otherwise decode at ~46 ms/token emits at ~64 ms."""
+
+    def _captured(self, install):
+        import types
+        captured = {}
+
+        class APIHandler:
+            def __init__(self, response_generator=None, **kw):
+                self.response_generator = response_generator
+
+            def do_GET(self):
+                pass
+
+            def do_POST(self):
+                pass
+
+        def inner(host, port, response_generator, server_class=None,
+                  handler_class=None):
+            captured["handler"] = handler_class
+            return (host, port)
+
+        server = types.SimpleNamespace(
+            APIHandler=APIHandler, ThreadingHTTPServer=object,
+            BatchGenerator=type("BG", (), {"next": lambda self: None}),
+            _run_http_server=inner)
+        install(server)
+        server._run_http_server(1, 2, None)
+        return captured["handler"]
+
+    def test_route_handler_disables_nagle(self):
+        handler = self._captured(shim.install_models_route)
+        self.assertTrue(getattr(handler, "disable_nagle_algorithm", False))
+
+    def test_gated_handler_disables_nagle(self):
+        from mlx_omarchy_serve._mlxlm_server import YieldGate
+        gate = YieldGate()
+
+        def install(server):
+            shim.install_yield_gate(server, gate)
+
+        handler = self._captured(install)
+        self.assertTrue(getattr(handler, "disable_nagle_algorithm", False))
