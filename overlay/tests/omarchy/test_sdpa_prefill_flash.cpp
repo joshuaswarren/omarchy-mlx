@@ -29,6 +29,8 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
@@ -1111,4 +1113,89 @@ TEST_CASE("flash submission splits stay out of a recording tape") {
   REQUIRE(eager.first.size() == taped.first.size());
   CHECK(std::memcmp(eager.first.data(), taped.first.data(),
                     eager.first.size() * sizeof(float)) == 0);
+}
+
+// #455: the Q_CHUNK=8 twin of the causal coopmat flash kernel (the G16S
+// default) must give the same bytes as the 16-panel kernel it replaces
+// (MLX_OMARCHY_SDPA_FLASH_QCHUNK=0). The twin keeps the per-key-block add
+// order, so the match is exact, not a tolerance. The shapes cover the paths
+// the twin changes most: the clamped last q tile (q_len % 32 != 0), the
+// diagonal tile gating with a nonzero key offset (k_len > q_len), and the
+// long-context lengths the e2e gain is claimed at. The route needs
+// k_len % 8 == 0, so the 2048+17 row case pairs q_len 2065 with k_len 2072.
+TEST_CASE("causal flash Q_CHUNK=8 twin matches the 16-panel kernel exactly") {
+  if (!compute_available()) return;
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.device_name.find("G16S") == std::string::npos ||
+      !caps.cooperative_matrix_bf16_8) {
+    MESSAGE("skip: the Q_CHUNK=8 default is G16S-only (device ",
+            caps.device_name, ")");
+    return;
+  }
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+  unsetenv("MLX_OMARCHY_SDPA_FLASH_KV");
+  const int64_t twin_id = static_cast<int64_t>(
+      omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8);
+  const int64_t panel16_id = static_cast<int64_t>(
+      omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16);
+  struct Case {
+    int q_len;
+    int k_len;
+    const char* what;
+  };
+  const Case cases[] = {
+      {2065, 2072, "2048+17 rows: q_len % 32 = 17, key offset 7"},
+      {8192, 8192, "L=8192 square"},
+      {1024, 3072, "k_len > q_len: key offset 2048"},
+      {2056, 2056, "q_len % 32 = 8, square"},
+  };
+  constexpr int q_heads = 32;
+  constexpr int kv_heads = 8;
+  uint32_t seed = 455u;
+  for (const auto& c : cases) {
+    CAPTURE(c.q_len);
+    CAPTURE(c.k_len);
+    array q = make_bf16({1, q_heads, c.q_len, kHd}, seed++, stream);
+    array k = make_bf16({1, kv_heads, c.k_len, kHd}, seed++, stream);
+    array v = make_bf16({1, kv_heads, c.k_len, kHd}, seed++, stream);
+    auto run = [&](const char* qchunk, int64_t* kernel) {
+      if (qchunk == nullptr) {
+        unsetenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
+      } else {
+        setenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK", qchunk, 1);
+      }
+      array out = fast::scaled_dot_product_attention(
+          q, k, v, 1.0f / std::sqrt(static_cast<float>(kHd)), "causal",
+          std::nullopt, {}, false, stream);
+      out.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      *kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+      return flat(out, stream);
+    };
+    int64_t twin_kernel = -1;
+    int64_t panel16_kernel = -1;
+    const auto twin = run(nullptr, &twin_kernel);
+    const auto panel16 = run("0", &panel16_kernel);
+    unsetenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
+    size_t mismatches = 0;
+    float max_abs = 0.0f;
+    bool finite = true;
+    for (size_t i = 0; i < twin.size(); ++i) {
+      if (std::memcmp(&twin[i], &panel16[i], sizeof(float)) != 0) {
+        ++mismatches;
+        max_abs = std::max(max_abs, std::fabs(twin[i] - panel16[i]));
+      }
+      finite = finite && std::isfinite(twin[i]);
+    }
+    MESSAGE("[qchunk8 parity] ", std::string(c.what), ": q_len ", c.q_len, " k_len ",
+            c.k_len, " kernels ", twin_kernel, "/", panel16_kernel,
+            " mismatches ", mismatches, " of ", twin.size(), " max_abs ",
+            max_abs);
+    CHECK_EQ(twin_kernel, twin_id);
+    CHECK_EQ(panel16_kernel, panel16_id);
+    REQUIRE_EQ(twin.size(), panel16.size());
+    CHECK(finite);
+    CHECK_EQ(mismatches, 0u);
+  }
 }

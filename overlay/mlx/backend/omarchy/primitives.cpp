@@ -16760,12 +16760,10 @@ void ScaledDotProductAttention::eval_gpu(
       params.v_batchstride = checked_u32(v.strides()[0], tag, out);
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
-      // Q_CHUNK=8 is the G16S default: eight Q panels stay live and are
-      // reused across the four key-blocks of a tile. Isolated L=2048/8192
-      // /16384 was -8.0/-8.6/-10.0%; e2e Qwen3-8B-4bit pf8010 +1.25%
-      // disjoint, pf16004 +3.14% disjoint, pf2060/pf4006 overlap. Tokens
-      // identical. MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the 16-panel
-      // kernel. Other parts keep that kernel (unmeasured).
+      // Q_CHUNK=8 twin (eight Q panels live, reused across the four
+      // key-blocks of a tile; same add order, so output is bit-identical)
+      // is the G16S default. MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the
+      // 16-panel kernel; other parts keep it. Measurements:
       // receipts/2026-11-15-m4-pro-g16s-sdpa-flash-qchunk8
       omarchy::ComputeKernel cf_kernel =
           omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16;
