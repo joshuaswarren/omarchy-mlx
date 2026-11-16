@@ -363,7 +363,10 @@ def install_thinking_switch(server_module) -> None:
     ``chat_template_kwargs.enable_thinking`` (which always wins).
     Templates that ignore the kwarg are unchanged.
     """
-    generator = server_module.ResponseGenerator
+    generator = getattr(server_module, "ResponseGenerator", None)
+    if generator is None:
+        # stub servers (tests) have no generator surface; nothing to wrap
+        return
     original = getattr(generator, "_tokenize", None)
     if not callable(original):
         raise RuntimeError(
