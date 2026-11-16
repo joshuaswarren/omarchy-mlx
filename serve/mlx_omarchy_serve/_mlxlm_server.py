@@ -352,6 +352,47 @@ class YieldGate:
             self._cond.notify_all()
 
 
+def wrap_generator_with_gate(real_generator, gate):
+    """Return a generator whose next() delays delivery by one cycle.
+
+    The upstream batch loop reads ``r.logprobs[r.token].item()`` per
+    response - a GPU readback that fully serializes the async decode
+    pipeline (jw16 measurement: 26.5 ms inside the step plus a 27 ms
+    readback = 63 ms per streamed chunk). Delivering the previous
+    cycle's responses lets that readback overlap the next forward pass,
+    about 2x served decode throughput, for one step of extra latency.
+    """
+
+    class _DelayedBatchGenerator:
+        _omarchy_yield_wrapped = True
+
+        def __init__(self):
+            self._real = real_generator
+            self._pending = ([], [])
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def next(self, *args, **kwargs):
+            gate._before_step()
+            try:
+                result = self._real.next(*args, **kwargs)
+                out = self._pending
+                self._pending = result
+                if (not result[0] and not result[1]
+                        and (out[0] or out[1])):
+                    # end of stream: flush the held final batch
+                    self._pending = ([], [])
+                if _ttft_armed["first_chunk"] and (out[0] or out[1]):
+                    _ttft_armed["first_chunk"] = False
+                    _ttft_trace("first_chunk")
+                return out
+            finally:
+                gate._after_step()
+
+    return _DelayedBatchGenerator()
+
+
 def install_yield_gate(server_module, gate: YieldGate) -> None:
     """Wrap the pinned decode loop and HTTP handler with the yield gate.
 
@@ -383,21 +424,14 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
         _omarchy_yield_wrapped = True
 
         def __init__(self, *args, **kwargs):
-            self._real = real_generator(*args, **kwargs)
+            self._delayed = wrap_generator_with_gate(
+                real_generator(*args, **kwargs), gate)
 
         def __getattr__(self, name):
-            return getattr(self._real, name)
+            return getattr(self._delayed, name)
 
         def next(self, *args, **kwargs):
-            gate._before_step()
-            try:
-                result = self._real.next(*args, **kwargs)
-                if _ttft_armed["first_chunk"]:
-                    _ttft_armed["first_chunk"] = False
-                    _ttft_trace("first_chunk")
-                return result
-            finally:
-                gate._after_step()
+            return self._delayed.next(*args, **kwargs)
 
     server_module.BatchGenerator = _GatedBatchGenerator
 

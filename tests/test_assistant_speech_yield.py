@@ -138,10 +138,10 @@ class FakeBatchGenerator:
 
     def next(self):
         if not self._tokens:
-            return []
+            return ([], [])
         token = self._tokens.pop(0)
         self.log.append(("step", token))
-        return [token]
+        return ([token], [token])
 
     def insert_segments(self, **kwargs):
         self.log.append(("insert",))
@@ -187,7 +187,7 @@ class InstallAndWorkerTests(unittest.TestCase):
 
         class BatchGenerator:
             def next(self):
-                return []
+                return ([], [])
 
         module.BatchGenerator = BatchGenerator
 
@@ -208,7 +208,7 @@ class InstallAndWorkerTests(unittest.TestCase):
         # A moved BatchGenerator.next must refuse the launch.
         class Moved:
             def next(self, extra):
-                return []
+                return ([], [])
 
         module2 = FakeServerModule()
         module2.BatchGenerator = Moved
@@ -257,7 +257,15 @@ class InstallAndWorkerTests(unittest.TestCase):
         done = threading.Event()
 
         def generate():
-            while generator.next():
+            # the real serve loop unpacks and keeps polling empty cycles
+            # until the stream ends; two consecutive empties = exhausted
+            seen_empty = 0
+            while seen_empty < 2:
+                prompt_r, gen_r = generator.next()
+                if not prompt_r and not gen_r:
+                    seen_empty += 1
+                else:
+                    seen_empty = 0
                 time.sleep(0.005)
             done.set()
 

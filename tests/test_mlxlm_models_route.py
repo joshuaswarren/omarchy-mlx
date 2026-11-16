@@ -372,3 +372,55 @@ class NagleTests(unittest.TestCase):
 
         handler = self._captured(install)
         self.assertTrue(getattr(handler, "disable_nagle_algorithm", False))
+
+
+class PipelineDelayTests(unittest.TestCase):
+    """The upstream batch loop reads r.logprobs[r.token].item() per token,
+    a GPU readback that fully serializes the async decode pipeline
+    (jw16: inside-step 26.5 ms + sync 27 ms = the observed 63 ms per
+    chunk). Delivering responses one cycle late lets that readback
+    overlap the next forward pass - about 2x served decode throughput -
+    at the cost of one step of extra latency."""
+
+    def _make(self):
+        import types
+        from mlx_omarchy_serve._mlxlm_server import YieldGate
+
+        class FakeGen:
+            def __init__(self):
+                self.batches = [
+                    ([("p", 0)], [("g", 1)]),
+                    ([], [("g", 2)]),
+                    ([], []),
+                ]
+                self.calls = 0
+
+            def next(self):
+                b = self.batches[min(self.calls, len(self.batches) - 1)]
+                self.calls += 1
+                return b
+
+        gate = YieldGate()
+        real = FakeGen()
+        wrapped = shim.wrap_generator_with_gate(
+            real, gate)
+        return wrapped, real
+
+    def test_first_call_returns_empty_and_delays_batch(self):
+        wrapped, _ = self._make()
+        self.assertEqual(wrapped.next(), ([], []))
+
+    def test_subsequent_calls_deliver_previous_cycle(self):
+        wrapped, _ = self._make()
+        wrapped.next()
+        self.assertEqual(wrapped.next(), ([("p", 0)], [("g", 1)]))
+        self.assertEqual(wrapped.next(), ([], [("g", 2)]))
+
+    def test_final_batch_flushed_on_empty(self):
+        wrapped, _ = self._make()
+        wrapped.next()
+        wrapped.next()
+        wrapped.next()
+        # underlying generator is exhausted; the held batch must flush
+        self.assertEqual(wrapped.next(), ([], []))
+        self.assertEqual(wrapped.next(), ([], []))
