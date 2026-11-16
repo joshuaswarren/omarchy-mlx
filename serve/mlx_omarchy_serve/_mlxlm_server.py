@@ -22,6 +22,7 @@ of silently dropping the cap.
 
 from __future__ import annotations
 
+import functools
 import inspect
 import json
 import os
@@ -347,6 +348,49 @@ class YieldGate:
             self._cond.notify_all()
 
 
+def install_thinking_switch(server_module) -> None:
+    """Serve default: chat answers in ``content`` unless the request
+    asks for thinking.
+
+    Thinking-capable chat templates (gemma-4) default the thought
+    channel on; with a small max_tokens the stream never closes it and
+    every delta lands in ``delta.reasoning`` with ``content`` empty
+    (jw16 repro: 30 completion tokens, 38 chars, all reasoning). The
+    clients that hit this - the serve profiler, tools/serve-bench -
+    send plain chat bodies with no thinking field, so the mapping is
+    the serve default: ``enable_thinking: False`` unless the request
+    opts in with ``thinking: true`` or an explicit
+    ``chat_template_kwargs.enable_thinking`` (which always wins).
+    Templates that ignore the kwarg are unchanged.
+    """
+    generator = server_module.ResponseGenerator
+    original = getattr(generator, "_tokenize", None)
+    if not callable(original):
+        raise RuntimeError(
+            "no ResponseGenerator._tokenize to wrap; this shim does not "
+            "know this mlx-lm build and refuses the thinking switch")
+    if getattr(original, "_omarchy_thinking_switch", False):
+        return
+
+    @functools.wraps(original)
+    def _tokenize(self, tokenizer, request, args):
+        body = getattr(request, "body", None) or {}
+        explicit = dict(getattr(request, "chat_template_kwargs", None) or {})
+        if "enable_thinking" in explicit:
+            return original(self, tokenizer, request, args)
+        thinking = body.get("thinking")
+        kwargs = dict(getattr(args, "chat_template_kwargs", None) or {})
+        if thinking is True:
+            kwargs["enable_thinking"] = True
+        else:
+            kwargs.setdefault("enable_thinking", False)
+        args.chat_template_kwargs = kwargs
+        return original(self, tokenizer, request, args)
+
+    _tokenize._omarchy_thinking_switch = True  # noqa: B010 - guard flag
+    generator._tokenize = _tokenize
+
+
 def install_yield_gate(server_module, gate: YieldGate) -> None:
     """Wrap the pinned decode loop and HTTP handler with the yield gate.
 
@@ -664,6 +708,9 @@ def main() -> None:
         if trained <= 0:
             print(f"error: {TRAINED_ENV} must be positive", file=sys.stderr)
             raise SystemExit(3)
+    # inert until a request sends a thinking field or body flag; explicit
+    # chat_template_kwargs still win
+    install_thinking_switch(server_module)
     install(server_module, limit, trained=trained)
     gate = None
     if getattr(server_module, "BatchGenerator", None) is not None and getattr(server_module, "_run_http_server", None) is not None:
