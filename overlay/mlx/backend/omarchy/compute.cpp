@@ -295,6 +295,7 @@
 #include "qmm_vec_q4_word_f32.h"
 #include "qmm_vec_q4_word_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_batch4_bf16.h"
+#include "qmm_vec_q4_word_subgroup_rows8_bf16.h"
 #include "qmm_vec_q4_word_subgroup_f16.h"
 #include "qmm_vec_q4_word_subgroup_f32.h"
 #include "qmm_vec_q4_multi_bf16.h"
