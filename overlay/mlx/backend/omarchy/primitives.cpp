@@ -8661,6 +8661,49 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       return;
     }
   }
+  // Small-row decode: an [R, K] activation with 2 <= R <= 4 against one 2D
+  // weight reads each weight word once per block instead of once per row;
+  // every row keeps the single-row chain (same pattern as the batch-shared
+  // GEMV above, rows strided by K in one activation instead of batch
+  // slices). Narrowed to R <= 4 (measured 2026-11-15, jwm1 G13G): the
+  // scalar-FMA row chain loses to the coopmat tile at R >= 8, so wider
+  // rows keep the tile path. On by default; MLX_OMARCHY_QMM_ROWS=0
+  // (read live) restores the tile path. Bit-identity with the single-row
+  // kernel is pinned by the rowbatch doctest; the failing-first benchmark
+  // is spike-qmv-target.py (line 892). Alignment: every row's uvec4 x loads
+  // need a 16-byte-aligned row base, so the base sits on an 8-element
+  // boundary and K is a multiple of 8 (the single-row kernel shares the K
+  // rule through words_per_row; the base rule is new because rows stride by
+  // K here). Unaligned views fall through to the tile path.
+  if (decode_path_override("MLX_OMARCHY_QMM_ROWS") != 0 && use_q4_word &&
+      out.dtype() == bfloat16 && transpose_ && batch == 1u &&
+      w.ndim() == 2 && scales.ndim() == 2 && biases.ndim() == 2 &&
+      params.matrix_m >= 2u && params.matrix_m <= 4u &&
+      (params.matrix_k % 8u) == 0u && (params.lhs_offset % 8u) == 0u) {
+    const auto& caps_rows = encoder.device().capabilities();
+    bool sg32_rows = caps_rows.subgroup_size == 32u &&
+        (caps_rows.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    if (sg32_rows) {
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          caps_rows,
+          sg32_rows,
+          "QmmVecRows8SubgroupBF16",
+          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+           (encoder.device().hardware_capabilities().subgroup_operations &
+            VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+      auto rows_params = params;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16,
+          bindings,
+          rows_params,
+          std::min(n_groups_qmm_vec, omarchy::kMaxComputeGroupCountX),
+          1u,
+          1u);
+      return;
+    }
+  }
   if (tile_path) {
     // bf16-activation scalar-FMA prefill: the bf16 build of the f16 FMA
     // kernel, wherever the cooperative route is not reachable for this

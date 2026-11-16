@@ -118,6 +118,11 @@ uint16_t bf16_store(float value) {
      defined(QMM_VEC_MULTI))
 #error "QMM_VEC_BATCH builds on the bf16 packed-x single-weight column"
 #endif
+#if defined(QMM_VEC_ROWS) && \
+    (ROWS_PER_SLOT != 2 || !defined(USE_BF16) || !defined(QMM_VEC_Q4_WORD) || \
+     defined(QMM_VEC_MULTI))
+#error "QMM_VEC_ROWS builds on the bf16 packed-x single-weight column"
+#endif
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
 #endif
@@ -1678,6 +1683,18 @@ void main() {
 #ifndef QMM_VEC_Q4_WORD
 #error "ROWS_PER_SLOT > 1 builds on QMM_VEC_Q4_WORD"
 #endif
+// Shared scale/bias fetch for the batch-shared and small-row word kernels:
+// the per-column parameters for one weight block. Generic over the row loop
+// (bt/rows for QMM_VEC_BATCH, rt/rows for QMM_VEC_ROWS).
+#define Q4_ROWS_BATCH_PARAMS(w, S, B) \
+  float scale_r[ROWS_PER_SLOT]; \
+  float bias_r[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    scale_r[r] = \
+        LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + (w) / 8u]); \
+    bias_r[r] = \
+        LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + (w) / 8u]); \
+  }
 #if defined(QMM_VEC_BATCH)
 // Batch-shared form (MLX_OMARCHY_QMV_BATCH, default on): params.shape[0] = B <=
 // QMM_VEC_BATCH x rows against ONE 2D weight (no per-batch weight or param
@@ -1700,15 +1717,6 @@ void main() {
     acc[bt][r] += fma(scale_r[r], dot[r], bias_term); \
   } \
 }
-#define Q4_ROWS_BATCH_PARAMS(w, S, B) \
-  float scale_r[ROWS_PER_SLOT]; \
-  float bias_r[ROWS_PER_SLOT]; \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    scale_r[r] = \
-        LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + (w) / 8u]); \
-    bias_r[r] = \
-        LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + (w) / 8u]); \
-  }
 // The eight nibble-to-float conversions of each weight word and column are
 // computed once per word and reused by every row (they used to be recomputed
 // per row, so every added row cost about one weight stream of ALU work).
@@ -1805,6 +1813,114 @@ void main() {
       float total = subgroupAdd(acc[bt][r]);
       if (lane_in_slot == 0u && column + r < n) {
         output_data.values[params.output_offset + bt * params.matrix_n +
+            column + r] = STORE_VALUE(total);
+      }
+    }
+  }
+}
+#elif defined(QMM_VEC_ROWS)
+// Q4_ROWS_ROWS is the QMM_VEC_ROWS twin of Q4_ROWS_BATCH: the row loop runs
+// rt over the rows of one [R, K] activation (x_row strided by matrix_k, the
+// same layout as the batch slices above) instead of bt over batch slices.
+// Per row the chain is Q4_ROWS_BATCH_ROW exactly, so each row matches the
+// single-row main bit for bit.
+#define Q4_ROWS_ROW(w, X_WORDS) { \
+  uint x_row = params.lhs_offset + rt * params.matrix_k; \
+  precise float dot[ROWS_PER_SLOT]; \
+  precise float input_sum = 0.0; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    dot[r] = 0.0; \
+  } \
+  X_WORDS \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    precise float bias_term = input_sum * bias_r[r]; \
+    acc[rt][r] += fma(scale_r[r], dot[r], bias_term); \
+  } \
+}
+#define Q4_ROWS_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+    for (uint w = lane_in_slot * 2u; w < words_per_row; \
+         w += LANES * 2u) { \
+      uint wa[ROWS_PER_SLOT]; \
+      uint wb[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      } \
+      Q4_ROWS_BATCH_PARAMS(w, S, B) \
+      for (uint rt = 0u; rt < uint(QMM_VEC_ROWS); ++rt) { \
+        if (rt < rows) { \
+          Q4_ROWS_ROW(w, \
+            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+            uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+            Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+            Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
+            Q4_QUAD_ROWS(wb[r], xb.x, xb.y) \
+            Q4_QUAD_ROWS(wb[r] >> 16u, xb.z, xb.w)) \
+        } \
+      } \
+    } \
+  } else { \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+      } \
+      Q4_ROWS_BATCH_PARAMS(w, S, B) \
+      for (uint rt = 0u; rt < uint(QMM_VEC_ROWS); ++rt) { \
+        if (rt < rows) { \
+          Q4_ROWS_ROW(w, \
+            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+            Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+            Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w)) \
+        } \
+      } \
+    } \
+  } \
+}
+// Small-row form (MLX_OMARCHY_QMM_ROWS, default on): params.matrix_m = R <=
+// QMM_VEC_ROWS rows of ONE [R, K] activation against ONE 2D weight (batch =
+// 1, no per-row weight or param stride). Each block loads its weight words,
+// scales and biases once and runs every row's chain on them. Per row that
+// chain is Q4_ROWS_BATCH_ROW exactly: the same quads in the same order into
+// dot, the same input_sum, the same block epilogue and the same subgroup
+// reduction, so each row matches the single-row main bit for bit while the
+// weight bytes are read once instead of R times. Rows past matrix_m do no
+// work (guarded, not clamped). The host gates R to 2..4; wider rows keep
+// the tile path (the scalar-FMA row chain loses to the coopmat tile at
+// R >= 8, measured 2026-11-15).
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint rows = min(params.matrix_m, uint(QMM_VEC_ROWS));
+  uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP +
+      column_slot * uint(ROWS_PER_SLOT);
+  uint n = params.matrix_n;
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  precise float acc[QMM_VEC_ROWS][ROWS_PER_SLOT];
+  for (uint rt = 0u; rt < uint(QMM_VEC_ROWS); ++rt) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc[rt][r] = 0.0;
+    }
+  }
+  if (column_active) {
+    uint w_base = params.rhs_offset;
+    uint s_base = params.aux_offset;
+    uint b_base = params.aux_size;
+    Q4_ROWS_ROWS(input_w, scales, biases)
+  }
+  for (uint rt = 0u; rt < rows; ++rt) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      float total = subgroupAdd(acc[rt][r]);
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + rt * params.matrix_n +
             column + r] = STORE_VALUE(total);
       }
     }
