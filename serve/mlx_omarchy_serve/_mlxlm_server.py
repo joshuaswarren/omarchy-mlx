@@ -124,6 +124,8 @@ def install_models_route(server_module) -> None:
         base = handler_class or server_module.APIHandler
 
         class _ModelsHandler(base):
+            disable_nagle_algorithm = True
+
             def do_GET(self):  # noqa: N802 (stdlib API)
                 path = self.path.split("?", 1)[0]
                 if path == "/v1/models":
@@ -385,6 +387,47 @@ def install_thinking_switch(server_module) -> None:
 
     _tokenize._omarchy_thinking_switch = True  # noqa: B010 - guard flag
     generator._tokenize = _tokenize
+def wrap_generator_with_gate(real_generator, gate):
+    """Return a generator whose next() pre-evaluates response logprobs.
+
+    The upstream batch loop reads ``r.logprobs[r.token].item()`` per
+    response - a GPU readback that serializes the async decode pipeline
+    (16-inch M1 Max measurement: 26.5 ms inside the step plus a 27 ms
+    readback = 63 ms per streamed chunk). That read runs on the same
+    thread as the loop, so delaying delivery cannot overlap it;
+    evaluating the full logprobs array inside the wrapped step can,
+    because this step's forward pass was already scheduled at the
+    step's start and finishes while ``next()`` waits for the previous
+    one. mlx import is deferred: only a real decode step needs it.
+    """
+
+    class _EvalBatchGenerator:
+        _omarchy_yield_wrapped = True
+
+        def __init__(self):
+            self._real = real_generator
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def next(self, *args, **kwargs):
+            gate._before_step()
+            try:
+                result = self._real.next(*args, **kwargs)
+                prompts, gens = result
+                arrays = [r.logprobs for r in list(prompts) + list(gens)
+                          if getattr(r, "logprobs", None) is not None]
+                if arrays:
+                    import mlx.core as mx
+                    mx.eval(*arrays)
+                if _ttft_armed["first_chunk"] and (prompts or gens):
+                    _ttft_armed["first_chunk"] = False
+                    _ttft_trace("first_chunk")
+                return result
+            finally:
+                gate._after_step()
+
+    return _EvalBatchGenerator()
 
 
 def install_yield_gate(server_module, gate: YieldGate) -> None:
@@ -418,21 +461,14 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
         _omarchy_yield_wrapped = True
 
         def __init__(self, *args, **kwargs):
-            self._real = real_generator(*args, **kwargs)
+            self._eval = wrap_generator_with_gate(
+                real_generator(*args, **kwargs), gate)
 
         def __getattr__(self, name):
-            return getattr(self._real, name)
+            return getattr(self._eval, name)
 
         def next(self, *args, **kwargs):
-            gate._before_step()
-            try:
-                result = self._real.next(*args, **kwargs)
-                if _ttft_armed["first_chunk"]:
-                    _ttft_armed["first_chunk"] = False
-                    _ttft_trace("first_chunk")
-                return result
-            finally:
-                gate._after_step()
+            return self._eval.next(*args, **kwargs)
 
     server_module.BatchGenerator = _GatedBatchGenerator
 
@@ -444,6 +480,8 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
         base = handler_class or server_module.APIHandler
 
         class _GatedHandler(base):
+            disable_nagle_algorithm = True
+
             def do_POST(self):  # noqa: N802 (stdlib API)
                 path = self.path.split("?", 1)[0]
                 if path == YIELD_CONTROL_PATH:
