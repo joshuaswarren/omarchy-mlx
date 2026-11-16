@@ -22,6 +22,7 @@ of silently dropping the cap.
 
 from __future__ import annotations
 
+import functools
 import inspect
 import json
 import os
@@ -347,6 +348,45 @@ class YieldGate:
             self._cond.notify_all()
 
 
+def install_thinking_switch(server_module) -> None:
+    """Serve default: chat answers in ``content`` unless the request
+    opts in.
+
+    Thinking-capable chat templates (gemma-4, the Qwen3 family) default
+    the thought channel on; with a small max_tokens the stream never
+    closes it and every delta lands in ``delta.reasoning`` with
+    ``content`` empty. The clients that hit this - the serve profiler,
+    tools/serve-bench - send plain chat bodies, so the shim sets
+    ``enable_thinking: False`` for every request that does not carry an
+    explicit ``chat_template_kwargs.enable_thinking``. Opt-in is
+    ``chat_template_kwargs: {"enable_thinking": true}`` (upstream's own
+    per-request knob, which upstream applies on top of args).
+    Templates that ignore the kwarg are unchanged.
+    """
+    generator = getattr(server_module, "ResponseGenerator", None)
+    if generator is None:
+        # stub servers (tests) have no generator surface; nothing to wrap
+        return
+    original = getattr(generator, "_tokenize", None)
+    if not callable(original):
+        raise RuntimeError(
+            "no ResponseGenerator._tokenize to wrap; this shim does not "
+            "know this mlx-lm build and refuses the thinking switch")
+    if getattr(original, "_omarchy_thinking_switch", False):
+        return
+
+    @functools.wraps(original)
+    def _tokenize(self, tokenizer, request, args):
+        kwargs = dict(getattr(args, "chat_template_kwargs", None) or {})
+        if "enable_thinking" not in kwargs:
+            kwargs["enable_thinking"] = False
+            args.chat_template_kwargs = kwargs
+        return original(self, tokenizer, request, args)
+
+    _tokenize._omarchy_thinking_switch = True  # noqa: B010 - guard flag
+    generator._tokenize = _tokenize
+
+
 def install_yield_gate(server_module, gate: YieldGate) -> None:
     """Wrap the pinned decode loop and HTTP handler with the yield gate.
 
@@ -664,6 +704,10 @@ def main() -> None:
         if trained <= 0:
             print(f"error: {TRAINED_ENV} must be positive", file=sys.stderr)
             raise SystemExit(3)
+    # chat answers in content by default; opt-in via the request's
+    # chat_template_kwargs. Applies to every template that honors
+    # enable_thinking, not only gemma.
+    install_thinking_switch(server_module)
     install(server_module, limit, trained=trained)
     gate = None
     if getattr(server_module, "BatchGenerator", None) is not None and getattr(server_module, "_run_http_server", None) is not None:

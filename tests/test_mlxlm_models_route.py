@@ -323,3 +323,76 @@ class YieldOrderTests(unittest.TestCase):
     def test_yield_route_survives_route_then_gate(self):
         handler = self._stack(["route", "gate"])
         self.assertIn(self._post_yield(handler), (200, 403, 409))
+
+
+class ThinkingDefaultTests(unittest.TestCase):
+    """The client that hit the break is our own serve profiler
+    (receipts/2026-11-16-gpu-client-cap/lb-prof3g.py): its exact body
+    carries no chat_template_kwargs - like tools/serve-bench - so an
+    opt-in flag cannot help it. The serve default is thinking OFF;
+    opt-in is chat_template_kwargs.enable_thinking. Requests are real
+    mlx_lm.server.CompletionRequest objects, so an invented attribute
+    cannot pass the test (w7X review finding). Skipped where mlx_lm is
+    not importable."""
+
+    FAILING_BODY = {
+        "model": "mlx-community/gemma-4-e4b-it-4bit",
+        "max_tokens": 120,
+        "temperature": 0.2,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "messages": [{"role": "user", "content":
+                      "Explain, in about one hundred words, how a counterweight "
+                      "elevator system keeps the motor load small, and name one "
+                      "real failure mode."}],
+    }
+
+    def setUp(self):
+        try:
+            import mlx_lm.server  # noqa: F401
+        except ImportError:
+            self.skipTest("mlx_lm not importable on this host")
+
+    def _kwargs(self, body, args_kwargs=None):
+        import types
+        import mlx_lm.server as srv
+        import mlx_omarchy_serve._mlxlm_server as mod
+
+        captured = {}
+        request = srv.CompletionRequest(
+            request_type="chat", prompt=None, messages=body["messages"],
+            tools=None, role_mapping=None)
+        # the real request carries no body and no chat_template_kwargs
+        self.assertFalse(hasattr(request, "body"))
+        args = types.SimpleNamespace(
+            chat_template_kwargs=dict(args_kwargs) if args_kwargs else None)
+
+        class FakeGenerator:
+            pass
+
+        def original(self_gen, tokenizer, req, a):
+            captured["kwargs"] = a.chat_template_kwargs
+            return [1], [[1]], ["assistant"], "normal"
+
+        FakeGenerator._tokenize = original
+        mod.install_thinking_switch(
+            types.SimpleNamespace(ResponseGenerator=FakeGenerator))
+        FakeGenerator()._tokenize(None, request, args)
+        return captured["kwargs"]
+
+    def test_exact_failing_body_gets_content_default(self):
+        body = dict(self.FAILING_BODY)
+        self.assertNotIn("chat_template_kwargs", body)
+        kwargs = self._kwargs(body)
+        self.assertEqual(kwargs, {"enable_thinking": False})
+
+    def test_bench_client_body_gets_content_default(self):
+        kwargs = self._kwargs({"model": "qwen3.8-27b",
+                               "messages": [{"role": "user",
+                                             "content": "Say hi in one word."}],
+                               "max_tokens": 16})
+        self.assertEqual(kwargs, {"enable_thinking": False})
+
+    def test_explicit_args_kwargs_win(self):
+        kwargs = self._kwargs(self.FAILING_BODY, {"enable_thinking": True})
+        self.assertEqual(kwargs, {"enable_thinking": True})
