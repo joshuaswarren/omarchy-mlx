@@ -439,10 +439,16 @@ def gpu_client_cap(path: Path | None = None) -> int | None:
         sorted(Path("/sys/devices/platform/soc").glob("*/gpu_memory"))
     for node in candidates:
         try:
-            for line in node.read_text(encoding="utf-8").splitlines():
-                key, _, value = line.partition(" ")
-                if key == "client_limit":
-                    return int(value)
+            caps = [int(line.partition(" ")[2])
+                    for line in node.read_text(encoding="utf-8").splitlines()
+                    if line.partition(" ")[0] == "client_limit"]
+            if not caps:
+                continue
+            if len(set(caps)) > 1:
+                # disagreeing lines: trust the smallest cap. It is the
+                # safe bound; a 6 GiB model must not pass a 4 GiB line.
+                return min(caps)
+            return caps[-1]
         except (OSError, ValueError):
             return None
     return None
