@@ -28,6 +28,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 # PairGates: install /v1/internal/memory probe if the patcher is on
 # PYTHONPATH. Side-effect import — no-op if absent.
@@ -85,6 +86,64 @@ def _ttft_trace(event: str, **fields) -> None:
     fields["event"] = event
     fields["t"] = time.monotonic()
     print("[ttft] " + json.dumps(fields), flush=True)
+
+
+def loaded_models_payload(model_ref: str) -> dict:
+    """The OpenAI-compatible /v1/models payload: the LOADED model only.
+
+    Upstream handle_models_request scans the whole HF cache and appends the
+    --model entry last, so data[0] is whichever repo downloaded most
+    recently - a server serving gemma reported Qwen because that download
+    was newer. Clients read data[0].id, so the served model must be the
+    only entry. Upstream's /v1/models/<repo_id> filter path still falls
+    through to the cache scan; only the bare route is overridden.
+    """
+    ref = model_ref or "unknown"
+    p = Path(ref)
+    if p.exists():
+        ref = str(p.resolve())
+    return {"object": "list",
+            "data": [{"id": ref, "object": "model",
+                      "created": int(time.time())}]}
+
+
+def install_models_route(server_module) -> None:
+    """Answer GET /v1/models with the loaded model; wrap, not replace, the
+    incoming handler class so this composes with the yield gate in any
+    install order. A stub server without the HTTP surface skips the route
+    (same tolerance as the yield gate)."""
+    original_run = getattr(server_module, "_run_http_server", None)
+    if not callable(original_run):
+        print("warning: no _run_http_server surface; loaded-model /v1/models "
+              "route disabled", file=sys.stderr)
+        return
+
+    def run_with_models(host, port, response_generator, server_class=None,
+                        handler_class=None):
+        base = handler_class or server_module.APIHandler
+
+        class _ModelsHandler(base):
+            def do_GET(self):  # noqa: N802 (stdlib API)
+                path = self.path.split("?", 1)[0]
+                if path == "/v1/models":
+                    raw = json.dumps(loaded_models_payload(
+                        self.response_generator.cli_args.model)).encode("utf-8")
+                    # Upstream answers through _set_completion_headers, which
+                    # adds the CORS headers; bypassing it dropped them and
+                    # broke cross-origin browser clients (w86 review).
+                    self._set_completion_headers(200)
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                return base.do_GET(self)
+
+        return original_run(host, port, response_generator,
+                            server_class=server_class
+                            or server_module.ThreadingHTTPServer,
+                            handler_class=_ModelsHandler)
+
+    server_module._run_http_server = run_with_models
 
 
 def install(server_module, limit: int, trained: int | None = None) -> None:
@@ -337,7 +396,7 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
 
     server_module.BatchGenerator = _GatedBatchGenerator
 
-    base_handler = server_module.APIHandler
+    base_handler = handler_class or server_module.APIHandler
 
     class _GatedHandler(base_handler):
         def do_POST(self):  # noqa: N802 (stdlib API)
@@ -375,7 +434,7 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
                        handler_class=None):
         return run_fn(host, port, response_generator,
                       server_class=server_class or server_module.ThreadingHTTPServer,
-                      handler_class=_GatedHandler)
+                      handler_class=handler_class or _GatedHandler)
 
     server_module._run_http_server = _run_with_gate
 
@@ -614,6 +673,9 @@ def main() -> None:
         # keep the honest busy refusal instead of a fake pause.
         print("warning: no BatchGenerator surface; speech yield gate disabled",
               file=sys.stderr)
+    # The route installs LAST so the gate's _run_http_server signature
+    # guard above still inspects the original upstream function.
+    install_models_route(server_module)
     probe_wanted = os.environ.get(PROBE_ENV) == "1"
     print(f"shim: PROBE_ENV={os.environ.get(PROBE_ENV)!r} "
           f"installing={probe_wanted}", file=sys.stderr, flush=True)
