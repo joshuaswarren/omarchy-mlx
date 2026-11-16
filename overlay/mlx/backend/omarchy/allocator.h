@@ -254,6 +254,16 @@ class VulkanAllocator : public allocator::Allocator {
 
 MLX_API VulkanAllocator& allocator();
 
+// Hand a buffer that came from allocator().malloc to array::set_data, which
+// takes allocator::Data since mlx 0.32.4. The Data frees the buffer.
+inline ::mlx::core::allocator::Data adopt_buffer(
+    ::mlx::core::allocator::Buffer buffer) {
+  return ::mlx::core::allocator::Data(
+      buffer, [](::mlx::core::allocator::Buffer b) {
+        ::mlx::core::allocator::allocator().free(b);
+      });
+}
+
 // Round a request to the allocator page so cached buffers can be reused for
 // any smaller request.
 size_t round_size(size_t size);

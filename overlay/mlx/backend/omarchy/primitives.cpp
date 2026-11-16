@@ -240,8 +240,8 @@ enum ElementwiseOperation : uint32_t {
   FloorDivideFloatOperation,
 };
 
-allocator::Buffer allocate_omarchy(size_t size) {
-  return omarchy::allocator().malloc(size);
+allocator::Data allocate_omarchy(size_t size) {
+  return ::mlx::core::allocator::malloc(size);
 }
 
 uint32_t checked_u32(size_t value, const std::string& name, const array& out) {
@@ -444,7 +444,7 @@ array materialize_batched_matrix(
   flags.col_contiguous = materialized.size() <= 1 ||
       materialized.size() == *max_dim;
   materialized.set_data(
-      omarchy::allocator().malloc(materialized.nbytes()),
+      ::mlx::core::allocator::malloc(materialized.nbytes()),
       materialized.size(),
       strides,
       flags,
@@ -5608,7 +5608,7 @@ array make_fft_temp(Shape shape, Dtype dtype, const Stream& s) {
   auto max_dim = std::max_element(temp.shape().begin(), temp.shape().end());
   flags.col_contiguous = temp.size() <= 1 || temp.size() == *max_dim;
   temp.set_data(
-      omarchy::allocator().malloc(temp.nbytes()),
+      ::mlx::core::allocator::malloc(temp.nbytes()),
       temp.size(),
       strides,
       flags,
@@ -5638,7 +5638,7 @@ array make_fft_input_dense(
   auto max_dim = std::max_element(shape.begin(), shape.end());
   flags.col_contiguous = dense.size() <= 1 || dense.size() == *max_dim;
   dense.set_data(
-      omarchy::allocator().malloc(dense.nbytes()),
+      ::mlx::core::allocator::malloc(dense.nbytes()),
       dense.size(),
       strides,
       flags,
@@ -9413,13 +9413,13 @@ bool dispatch_quantized_gemv_group(
     // The deleted Multiply's output materializes: workgroup 0 of the
     // dispatch writes the product it recomputes, so retained
     // references stay valid.
-    outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
+    outgate->x.set_data(::mlx::core::allocator::malloc(outgate->x.nbytes()));
   }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
     // so their retained references stay valid (their only readers
     // were the swiglu dispatch this fold deletes).
-    swiglu_out->set_data(allocator().malloc(swiglu_out->nbytes()));
+    swiglu_out->set_data(::mlx::core::allocator::malloc(swiglu_out->nbytes()));
     Strides fold_strides(members[0].node.ndim(), 1);
     for (int i = members[0].node.ndim() - 2; i >= 0; --i) {
       fold_strides[i] =
@@ -9443,9 +9443,9 @@ bool dispatch_quantized_gemv_group(
         0);
   } else {
     for (auto& member : members) {
-      member.node.set_data(allocator().malloc(member.node.nbytes()));
+      member.node.set_data(::mlx::core::allocator::malloc(member.node.nbytes()));
       if (member.epilogue) {
-        member.epilogue->set_data(allocator().malloc(member.epilogue->nbytes()));
+        member.epilogue->set_data(::mlx::core::allocator::malloc(member.epilogue->nbytes()));
       }
       if (member.sum_window) {
         auto& window = *member.sum_window;
@@ -9638,7 +9638,7 @@ bool dispatch_dense_gemv_group(
       any_window = true;
       continue;
     }
-    nodes[i].set_data(allocator().malloc(nodes[i].nbytes()));
+    nodes[i].set_data(::mlx::core::allocator::malloc(nodes[i].nbytes()));
   }
   std::array<ComputeBinding, kDenseVecMultiBindings> bindings{};
   bindings[0] = binding(x);
@@ -9979,9 +9979,9 @@ bool dispatch_rope_pair(
     auto& window = *kv_window;
     bind_kv_window_storage(window, stream);
   } else {
-    k_node.set_data(allocator().malloc(k_node.nbytes()));
+    k_node.set_data(::mlx::core::allocator::malloc(k_node.nbytes()));
   }
-  q_node.set_data(allocator().malloc(q_node.nbytes()));
+  q_node.set_data(::mlx::core::allocator::malloc(q_node.nbytes()));
   array& k_out = kv_window ? kv_window->node : k_node;
   ComputeParams params;
   params.count = static_cast<uint32_t>(total);

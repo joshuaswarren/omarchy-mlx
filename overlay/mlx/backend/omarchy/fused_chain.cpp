@@ -540,11 +540,11 @@ void dispatch_chain(
     const Stream& stream,
     bool materialize_intermediates) {
   auto& encoder = get_command_encoder(stream);
-  out.set_data(allocator().malloc(out.nbytes()));
+  out.set_data(::mlx::core::allocator::malloc(out.nbytes()));
   if (materialize_intermediates) {
     for (size_t i = 0; i + 1 < chain.node_arrays.size(); ++i) {
       chain.node_arrays[i].set_data(
-          allocator().malloc(chain.node_arrays[i].nbytes()));
+          ::mlx::core::allocator::malloc(chain.node_arrays[i].nbytes()));
     }
   }
   const bool materialize_nodes =
@@ -625,7 +625,7 @@ void dispatch_chain(
   keeper_flags.row_contiguous = true;
   keeper_flags.col_contiguous = true;
   program_keeper.set_data(
-      program_buffer,
+      ::mlx::core::omarchy::adopt_buffer(program_buffer),
       program_keeper.size(),
       Strides{1},
       keeper_flags,
@@ -1999,7 +1999,7 @@ void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
         window.base.flags(),
         window.base.data_size());
   } else {
-    window.node.set_data(allocator().malloc(window.node.nbytes()));
+    window.node.set_data(::mlx::core::allocator::malloc(window.node.nbytes()));
     copy_gpu(
         window.base,
         window.node,
