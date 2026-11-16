@@ -3,11 +3,13 @@
 <!-- BEGIN GENERATED CONTRIBUTORS (contributors.yml; do not hand-edit) -->
 
 - [@ddalcu](https://github.com/ddalcu)
+- [@fbalazsy](https://github.com/fbalazsy)
 - [@fgilio](https://github.com/fgilio)
 - [@harg74](https://github.com/harg74)
 - [@invaliddayta](https://github.com/invaliddayta)
 - [@khasinski](https://github.com/khasinski)
 - [@ram2600](https://github.com/ram2600)
+- [@RyanTheTide](https://github.com/RyanTheTide)
 - [@satchlj](https://github.com/satchlj)
 - [@scottjones](https://github.com/scottjones)
 - [@sharmis-tp](https://github.com/sharmis-tp)
