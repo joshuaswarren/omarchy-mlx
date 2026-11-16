@@ -430,6 +430,24 @@ def disk_check(need: int, path: Path) -> tuple[bool, int, str]:
     return free >= need, free, str(path)
 
 
+def gpu_client_cap(path: Path | None = None) -> int | None:
+    """The per-client GPU memory cap from the Apple Silicon sysfs node, or
+    None when the machine has none (any non-Apple GPU, or a kernel without
+    the accounting). A model larger than this cap can never allocate its
+    buffers, no matter what MemAvailable says."""
+    candidates = [path] if path is not None else \
+        sorted(Path("/sys/devices/platform/soc").glob("*/gpu_memory"))
+    for node in candidates:
+        try:
+            for line in node.read_text(encoding="utf-8").splitlines():
+                key, _, value = line.partition(" ")
+                if key == "client_limit":
+                    return int(value)
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def admit_and_reserve(
     name: str,
     byte_count: int,
@@ -441,6 +459,7 @@ def admit_and_reserve(
     resident_floor_bytes: int | None = None,
     available_bytes: int | None = None,
     identity: dict | None = None,
+    gpu_client_cap_bytes: int | None = None,
 ) -> Admission:
     """The shared atomic budget transaction: the fit check and the
     reservation write happen under one exclusive lock, so concurrent
@@ -481,6 +500,15 @@ def admit_and_reserve(
                 "does not fit: "
                 + "; ".join(lines)
                 + " — refusing concurrent overcommit"
+            )
+        cap = gpu_client_cap_bytes if gpu_client_cap_bytes is not None \
+            else gpu_client_cap()
+        if cap is not None and byte_count > cap:
+            raise BudgetError(
+                f"does not fit: gpu per-client cap {cap / GiB:.2f} GiB < "
+                f"requirement {byte_count / GiB:.2f} GiB — this model can "
+                "never allocate its buffers on this machine; lower --context "
+                "or use a smaller model"
             )
         data[name] = {"bytes": int(byte_count), "note": note, "state": state,
                       "resident_floor_bytes": resident_floor_bytes, "owner": owner,
@@ -594,6 +622,13 @@ def admit_and_reserve_batch(items, *, pair_id: str, home: Path | None = None,
         if headroom < 0:
             raise BudgetError(
                 "pair does not fit: " + "; ".join(lines) + " — refusing concurrent overcommit")
+        cap = gpu_client_cap()  # batch has no test override; sysfs only
+        if cap is not None and total > cap:
+            raise BudgetError(
+                f"pair does not fit: gpu per-client cap {cap / GiB:.2f} GiB < "
+                f"pair requirement {total / GiB:.2f} GiB — lower --context "
+                "or use a smaller model"
+            )
         out = []
         for name, byte_count, note in items:
             owner = generate_owner()

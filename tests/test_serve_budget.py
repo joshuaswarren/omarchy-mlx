@@ -366,6 +366,41 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(budget.identity_dead(budget.proc_identity(os.getpid())))
 
 
+class GpuClientCapTests(unittest.TestCase):
+    def test_gpu_client_cap_reads_sysfs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node = Path(tmp) / "gpu_memory"
+            node.write_text(
+                "user_committed 941752320\nkernel_resident 50872320\n"
+                "limit 10870602792\nclient_limit 8112390144\nrefused 20\n")
+            self.assertEqual(budget.gpu_client_cap(node), 8112390144)
+            self.assertIsNone(budget.gpu_client_cap(Path(tmp) / "missing"))
+            broken = Path(tmp) / "broken"
+            broken.write_text("client_limit notanumber\n")
+            self.assertIsNone(budget.gpu_client_cap(broken))
+
+    def test_admit_refuses_over_gpu_client_cap(self):
+        # the asahi per-client GPU heap cap can forbid a model that fits
+        # RAM: the E4B needs 8.67 GiB while a 15 GB machine caps each
+        # client at 7.56 GiB
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with unittest.mock.patch.object(budget, "mem_available",
+                                            lambda: int(16 * GiB)):
+                with self.assertRaises(budget.BudgetError) as ctx:
+                    budget.admit_and_reserve(
+                        "gemma", int(8.67 * GiB), owner="t", home=home,
+                        available_bytes=int(16 * GiB),
+                        gpu_client_cap_bytes=int(7.56 * GiB))
+                self.assertIn("7.56", str(ctx.exception))
+                self.assertIn("8.67", str(ctx.exception))
+                ok = budget.admit_and_reserve(
+                    "gemma", int(6 * GiB), owner="t2", home=home,
+                    available_bytes=int(16 * GiB),
+                    gpu_client_cap_bytes=int(7.56 * GiB))
+                self.assertTrue(ok.fits)
+
+
 class DiskTests(unittest.TestCase):
     def test_disk_check_compares_free_to_need(self):
         with tempfile.TemporaryDirectory() as tmp:
