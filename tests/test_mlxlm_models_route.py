@@ -396,3 +396,194 @@ class ThinkingDefaultTests(unittest.TestCase):
     def test_explicit_args_kwargs_win(self):
         kwargs = self._kwargs(self.FAILING_BODY, {"enable_thinking": True})
         self.assertEqual(kwargs, {"enable_thinking": True})
+class NagleTests(unittest.TestCase):
+    """The 64 ms uniform per-chunk stall of the served stream is the
+    Nagle/delayed-ACK interaction on the SSE socket (loopback included).
+    Every handler class the shim builds must set
+    disable_nagle_algorithm so http.server opens connections with
+    TCP_NODELAY; otherwise decode at ~46 ms/token emits at ~64 ms."""
+
+    def _captured(self, install):
+        import types
+        captured = {}
+
+        class APIHandler:
+            def __init__(self, response_generator=None, **kw):
+                self.response_generator = response_generator
+
+            def do_GET(self):
+                pass
+
+            def do_POST(self):
+                pass
+
+        def inner(host, port, response_generator, server_class=None,
+                  handler_class=None):
+            captured["handler"] = handler_class
+            return (host, port)
+
+        server = types.SimpleNamespace(
+            APIHandler=APIHandler, ThreadingHTTPServer=object,
+            BatchGenerator=type("BG", (), {"next": lambda self: None}),
+            _run_http_server=inner)
+        install(server)
+        server._run_http_server(1, 2, None)
+        return captured["handler"]
+
+    def test_route_handler_disables_nagle(self):
+        handler = self._captured(shim.install_models_route)
+        self.assertTrue(getattr(handler, "disable_nagle_algorithm", False))
+
+    def test_gated_handler_disables_nagle(self):
+        from mlx_omarchy_serve._mlxlm_server import YieldGate
+        gate = YieldGate()
+
+        def install(server):
+            shim.install_yield_gate(server, gate)
+
+        handler = self._captured(install)
+        self.assertTrue(getattr(handler, "disable_nagle_algorithm", False))
+
+
+class PreEvalTests(unittest.TestCase):
+    """The upstream batch loop reads r.logprobs[r.token].item() per
+    token on the same thread that drives the steps, so delaying
+    delivery cannot overlap that GPU readback (jw16 A/B: the delay
+    left the per-chunk gap at 60-65 ms). Instead the wrapped step
+    evaluates each response's logprobs array itself - the forward pass
+    was already scheduled at the step's start, so the array is ready
+    by the time the loop's .item() runs - making that read a host
+    read. The wrapper is otherwise pass-through."""
+
+    def _wrapped(self, batches, evals):
+        import types
+        import mlx_omarchy_serve._mlxlm_server as mod
+        from mlx_omarchy_serve._mlxlm_server import YieldGate
+
+        fake_mx = types.SimpleNamespace(eval=lambda *a: evals.append(a))
+        fake_pkg = types.ModuleType("mlx")
+        real_core = sys.modules.get("mlx.core")
+        real_pkg = sys.modules.get("mlx")
+        sys.modules["mlx"] = fake_pkg
+        sys.modules["mlx.core"] = fake_mx
+        self.addCleanup(sys.modules.pop, "mlx.core", None)
+        self.addCleanup(sys.modules.pop, "mlx", None)
+        for name, real in (("mlx.core", real_core), ("mlx", real_pkg)):
+            if real is not None:
+                self.addCleanup(sys.modules.__setitem__, name, real)
+
+        class FakeGen:
+            def __init__(self, script):
+                self._script = list(script)
+
+            def next(self):
+                return self._script.pop(0) if self._script else ([], [])
+
+        gate = YieldGate()
+        mod._ttft_armed["first_chunk"] = False
+        return mod.wrap_generator_with_gate(FakeGen(batches), gate)
+
+    def test_evals_logprobs_arrays_of_every_response(self):
+        import types
+        from itertools import count
+        ids = count()
+        pr = types.SimpleNamespace(logprobs=f"lp{next(ids)}")
+        gr = types.SimpleNamespace(logprobs=f"lp{next(ids)}")
+        batches = [
+            ([pr], [gr]),
+            ([], []),
+        ]
+        evals = []
+        wrapped = self._wrapped(batches, evals)
+        wrapped.next()
+        self.assertEqual(len(evals), 1)
+        self.assertEqual(evals[0], ("lp0", "lp1"))
+
+    def test_passes_batches_through_untouched(self):
+        batches = [
+            ([("p",)], [("g",)]),
+            ([], []),
+        ]
+        evals = []
+        wrapped = self._wrapped(batches, evals)
+        self.assertEqual(wrapped.next(), ([("p",)], [("g",)]))
+        self.assertEqual(wrapped.next(), ([], []))
+        self.assertEqual(evals, [])
+
+    def test_skips_import_when_no_arrays(self):
+        batches = [([], [])]
+        evals = []
+        wrapped = self._wrapped(batches, evals)
+        self.assertEqual(wrapped.next(), ([], []))
+        self.assertEqual(evals, [])
+
+
+class OutputPreservationTests(unittest.TestCase):
+    """One-cycle-late delivery must not change output: the token
+    sequence, each response's text, finish_reason and logprobs are
+    delivered exactly as the underlying generator produced them, and
+    the stream still ends on the same final token (EOS, stop string
+    and max_tokens all end through finish_reason on the last batch)."""
+
+    def _run(self, script, stop_after=None):
+        """script: list of batches the fake generator returns.
+        Returns the flattened deliveries the consumer sees."""
+        from mlx_omarchy_serve._mlxlm_server import YieldGate
+        import mlx_omarchy_serve._mlxlm_server as mod
+
+        class FakeGen:
+            def __init__(self, script):
+                self._script = list(script)
+
+            def next(self):
+                return self._script.pop(0) if self._script else ([], [])
+
+        gate = YieldGate()
+        mod._ttft_armed["first_chunk"] = False
+        wrapped = mod.wrap_generator_with_gate(FakeGen(script), gate)
+        out = []
+        for _ in range(len(script) + 4):
+            prompt_r, gen_r = wrapped.next()
+            for r in prompt_r:
+                out.append(("p",) + tuple(r))
+            for r in gen_r:
+                out.append(("g",) + tuple(r))
+            if stop_after is not None and len(out) >= stop_after:
+                break
+        return out
+
+    def test_sequence_and_payloads_identical_after_delay(self):
+        batches = [
+            ([], [("tok", i, f"logprob-{i}", None) for i in range(3)]),
+            ([], [("tok", 3, "logprob-3", "length")]),
+        ]
+        delivered = self._run(batches)
+        self.assertEqual(delivered, [
+            ("g", "tok", 0, "logprob-0", None),
+            ("g", "tok", 1, "logprob-1", None),
+            ("g", "tok", 2, "logprob-2", None),
+            ("g", "tok", 3, "logprob-3", "length"),
+        ])
+
+    def test_final_batch_with_finish_reason_flushed(self):
+        # EOS/stop/max_tokens all arrive as finish_reason on the last
+        # generation batch; the delay must still deliver that batch.
+        batches = [
+            ([], [("eos", 9, "logprob-9", "stop")]),
+            ([], []),
+        ]
+        delivered = self._run(batches)
+        self.assertEqual(delivered, [
+            ("g", "eos", 9, "logprob-9", "stop"),
+        ])
+
+    def test_prompt_responses_keep_order_before_generation(self):
+        batches = [
+            ([("pre", 0, None, None)], []),
+            ([], [("tok", 1, "lp1", None)]),
+            ([], []),
+        ]
+        delivered = self._run(batches)
+        self.assertEqual([d[0] for d in delivered], ["p", "g"])
+        self.assertEqual(delivered[0], ("p", "pre", 0, None, None))
+        self.assertEqual(delivered[1], ("g", "tok", 1, "lp1", None))
