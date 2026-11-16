@@ -396,45 +396,48 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
 
     server_module.BatchGenerator = _GatedBatchGenerator
 
-    base_handler = handler_class or server_module.APIHandler
-
-    class _GatedHandler(base_handler):
-        def do_POST(self):  # noqa: N802 (stdlib API)
-            path = self.path.split("?", 1)[0]
-            if path == YIELD_CONTROL_PATH:
-                return self._handle_yield_control()
-            secret = self.headers.get(YIELD_SECRET_HEADER)
-            if secret:
-                gate.bind_secret(secret)
-            return base_handler.do_POST(self)
-
-        def _handle_yield_control(self):
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length) or b"{}")
-                if not isinstance(body, dict):
-                    raise ValueError("body must be a JSON object")
-            except (ValueError, OSError):
-                self._yield_json(400, {"error": "invalid control body"})
-                return
-            status, payload = gate.control(
-                body.get("action"), body.get("secret"),
-                body.get("ack_timeout", YIELD_ACK_MAX_SECONDS))
-            self._yield_json(status, payload)
-
-        def _yield_json(self, status, payload):
-            raw = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
     def _run_with_gate(host, port, response_generator, server_class=None,
                        handler_class=None):
+        # Build the gated class HERE, on the incoming handler, so a route
+        # installed before the gate stays the base (its do_GET survives)
+        # and the gate's do_POST routing is always present.
+        base = handler_class or server_module.APIHandler
+
+        class _GatedHandler(base):
+            def do_POST(self):  # noqa: N802 (stdlib API)
+                path = self.path.split("?", 1)[0]
+                if path == YIELD_CONTROL_PATH:
+                    return self._handle_yield_control()
+                secret = self.headers.get(YIELD_SECRET_HEADER)
+                if secret:
+                    gate.bind_secret(secret)
+                return base.do_POST(self)
+
+            def _handle_yield_control(self):
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(body, dict):
+                        raise ValueError("body must be a JSON object")
+                except (ValueError, OSError):
+                    self._yield_json(400, {"error": "invalid control body"})
+                    return
+                status, payload = gate.control(
+                    body.get("action"), body.get("secret"),
+                    body.get("ack_timeout", YIELD_ACK_MAX_SECONDS))
+                self._yield_json(status, payload)
+
+            def _yield_json(self, status, payload):
+                raw = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
         return run_fn(host, port, response_generator,
                       server_class=server_class or server_module.ThreadingHTTPServer,
-                      handler_class=handler_class or _GatedHandler)
+                      handler_class=_GatedHandler)
 
     server_module._run_http_server = _run_with_gate
 

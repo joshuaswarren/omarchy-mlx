@@ -88,7 +88,8 @@ class RouteTests(unittest.TestCase):
 
         return types.SimpleNamespace(APIHandler=APIHandler,
                                      ThreadingHTTPServer=object,
-                                     _run_http_server=lambda *a, **k: (a, k))
+                                     _run_http_server=lambda host, port, response_generator,
+                                          server_class=None, handler_class=None: (host, port))
 
     def test_models_route_answers_with_loaded_model(self):
         server = self._server()
@@ -217,12 +218,99 @@ class RealUpstreamTests(unittest.TestCase):
                              "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
             self.assertNotEqual(upstream[0]["id"], loaded)
 
-            with unittest.mock.patch.object(srv, "_run_http_server",
-                                            lambda *a, **k: None):
+            # capture the handler class the route builds, then drive its
+            # do_GET directly (the upstream do_GET would re-answer)
+            captured = {}
+
+            def spy(host, port, response_generator, server_class=None,
+                    handler_class=None):
+                captured["handler"] = handler_class
+                return host, port
+
+            with unittest.mock.patch.object(srv, "_run_http_server", spy):
                 shim.install_models_route(srv)
-            h2 = self._fake_self(srv, loaded)
-            h2.handle_models_request()
+            srv._run_http_server(1, 2, h.response_generator)
+            h2 = captured["handler"](h.response_generator)
+            h2.path = "/v1/models"
+            h2.do_GET()
             fixed = json.loads(h2.wfile.getvalue())["data"]
             self.assertEqual([m["id"] for m in fixed], [loaded])
             self.assertIn(("Access-Control-Allow-Origin", "*"),
                           h2.headers_sent)
+
+
+class YieldOrderTests(unittest.TestCase):
+    """The gate's yield route must survive either install order: post to
+    YIELD_CONTROL_PATH through the stacked handler in both orders and
+    check the status is not the upstream 404/501 (which the plain
+    APIHandler do_POST would produce for an unknown path)."""
+
+    def _stack(self, order):
+        import types
+        from mlx_omarchy_serve._mlxlm_server import YieldGate
+
+        class APIHandler:
+            def __init__(self, response_generator=None, **kw):
+                self.response_generator = response_generator
+
+            def do_POST(self):
+                self.status = 501
+
+            def _set_completion_headers(self, status_code=200):
+                pass
+
+        captured = {}
+
+        def inner(host, port, response_generator, server_class=None,
+                  handler_class=None):
+            captured["handler"] = handler_class
+            return (host, port)
+
+        server = types.SimpleNamespace(APIHandler=APIHandler,
+                                       ThreadingHTTPServer=object,
+                                       BatchGenerator=type('BG', (), {'next': lambda self: None}),
+                                       _run_http_server=inner)
+        captured = {}
+
+        def inner(host, port, response_generator, server_class=None,
+                  handler_class=None):
+            captured["handler"] = handler_class
+            return (host, port)
+
+        gate = YieldGate()
+        steps = {"gate": lambda s: shim.install_yield_gate(s, gate),
+                 "route": shim.install_models_route}
+        for step in order:
+            steps[step](server)
+        server._run_http_server(1, 2, None)
+        return captured["handler"]
+
+    def _post_yield(self, handler_cls):
+        import io
+        import json as jsonlib
+        import types
+        gen = types.SimpleNamespace(cli_args=types.SimpleNamespace(model="m"))
+        h = handler_cls(gen)
+        h.status = None
+        h.headers_sent = []
+        h.send_response = lambda code, *a: setattr(h, "status", code)
+        h.send_header = lambda k, v: h.headers_sent.append((k, v))
+        h.end_headers = lambda: None
+        h.path = "/v1/internal/yield"
+        class _H:
+            def get(self, key, default=None):
+                return default
+        h.headers = _H()
+        h.rfile = io.BytesIO(jsonlib.dumps(
+            {"action": "hold", "secret": "s", "ack_timeout": 0.1}).encode())
+        h.wfile = io.BytesIO()
+        h.do_POST()
+        return h.status
+
+    def test_yield_route_survives_gate_then_route(self):
+        handler = self._stack(["gate", "route"])
+        self.assertIn(self._post_yield(handler), (200, 403, 409))
+
+    def test_yield_route_survives_route_then_gate(self):
+        handler = self._stack(["route", "gate"])
+        self.assertIn(self._post_yield(handler), (200, 403, 409))
