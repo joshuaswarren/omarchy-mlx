@@ -93,13 +93,36 @@ def _p_core_cpus(root: Path = _SYSFS_CPU) -> list[int] | None:
     return cpus if len(cpus) < len(capacity) else None
 
 
+def _pin_mask(root: Path = _SYSFS_CPU) -> list[int] | None:
+    """Performance cores a new worker may use, or None to leave it alone."""
+    if os.environ.get(_NO_PIN) == "1":
+        return None
+    return _p_core_cpus(root)
+
+
+def _pin_preexec(cpus: list[int]):
+    """A ``preexec_fn`` that runs in the child between fork and exec: the
+    worker is born pinned, so every thread it starts later inherits the
+    mask. The post-spawn pass in ``_pin_worker`` only has to confirm it."""
+    wanted = set(cpus)
+
+    def pin() -> None:
+        try:
+            allowed = set(os.sched_getaffinity(0))
+            mask = wanted & allowed
+            if mask and mask != allowed:
+                os.sched_setaffinity(0, mask)
+        except OSError:
+            pass
+
+    return pin
+
+
 def _pin_worker(pid: int, root: Path = _SYSFS_CPU) -> list[int] | None:
     """Set every task of the worker to the performance cores it may use.
     Returns that list, or None when nothing was set. Threads the worker
     starts later inherit the mask."""
-    if os.environ.get(_NO_PIN) == "1":
-        return None
-    cpus = _p_core_cpus(root)
+    cpus = _pin_mask(root)
     if not cpus:
         return None
     applied: list[int] | None = None
@@ -331,14 +354,20 @@ class ResidentAneWorker:
 
         self._stderr = self._stderr_path.open("wb")
         started = time.monotonic_ns()
+        # Pin inside the child before exec: a post-spawn sched_setaffinity
+        # cannot cover threads the worker starts in the window before the
+        # parent lists /proc/<pid>/task. preexec makes the whole thread
+        # tree born-pinned; the pass below only confirms and reports.
+        pin_cpus = _pin_mask()
         self._process = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self._stderr,
+            preexec_fn=_pin_preexec(pin_cpus) if pin_cpus else None,
         )
         self.worker_starts += 1
-        self.worker_pinned = _pin_worker(self._process.pid)
+        self.worker_pinned = _pin_worker(self._process.pid) or pin_cpus
         # In relay-bypass mode the worker prints the same bundle reports
         # and a "relay-bypass ready ..." banner; the resident's "loaded"
         # line never reaches us (it's the worker's spawn success line,

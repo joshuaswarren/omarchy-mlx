@@ -280,6 +280,22 @@ class ResidentAneWorkerTest(unittest.TestCase):
                 self.assertEqual(session.worker_pinned, p_cores)
                 self.assertEqual(self._allowed(session._process.pid), set(p_cores))
 
+    def test_the_worker_is_born_pinned(self):
+        """The pin lands in the child between fork and exec: with the
+        post-spawn pass stubbed to a no-op the process is still on the
+        performance cores, so no worker thread can ever start on an
+        efficiency core."""
+        sysfs, p_cores = self._fake_chip()
+        seen = []
+        with mock.patch.object(_module, "_pin_mask", lambda *a, **k: p_cores), \
+                mock.patch.object(_module, "_pin_worker",
+                                  lambda pid, *a, **k: seen.append(pid) or None):
+            session = self._session()
+            with session:
+                self.assertEqual(self._allowed(session._process.pid), set(p_cores))
+                self.assertEqual(seen, [session._process.pid])
+                self.assertEqual(session.worker_pinned, p_cores)
+
     def test_every_thread_of_a_multithreaded_worker_is_pinned(self):
         sysfs, p_cores = self._fake_chip()
         code = ("import threading, time\n"
