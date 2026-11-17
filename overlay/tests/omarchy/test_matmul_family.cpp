@@ -1294,10 +1294,11 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
         if (a_t || b_t) {
           continue;
         }
-        if (coopmat_device && m >= 32) {
+        if (coopmat_device && m >= 30 && k >= 896 && n >= 896) {
           // The route expectation is load-bearing: a gate regression to
           // the 16x16 tile must fail here, so pin the dispatch the way
-          // the q4g32 case does.
+          // the q4g32 case does. Pinned on the Qwen shapes only: the
+          // small tail shapes above take the tile kernel by design.
           std::fflush(stderr);
           int saved = ::dup(::fileno(stderr));
           FILE* cap = std::fopen("/tmp/matmul_bf16_route_cap.log", "w");
@@ -1323,8 +1324,18 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
           std::string want = "[rtmod] DISPATCH kernel=" +
               std::to_string(static_cast<uint32_t>(
                   omarchy::ComputeKernel::MatmulBF16Coopmat)) + " ";
+          std::string seen;
+          for (size_t pos = route_trace.find("kernel=");
+              pos != std::string::npos;
+              pos = route_trace.find("kernel=", pos + 1)) {
+            size_t begin = pos + 7;
+            size_t end =
+                route_trace.find_first_not_of("0123456789", begin);
+            seen += route_trace.substr(begin, end - begin) + " ";
+          }
           CHECK_MESSAGE(route_trace.find(want) != std::string::npos,
-              label, " did not dispatch MatmulBF16Coopmat");
+              label, " did not dispatch MatmulBF16Coopmat; seen ids: ",
+              seen);
         }
       }
     }
@@ -5257,7 +5268,16 @@ TEST_CASE("f16 qmm prefill dispatches coopmat wherever fp32xfp32 8x8x8 is advert
       break;
     }
   }
-  CHECK(dispatched_f16_coopmat);
+  std::string seen;
+  for (size_t pos = text.find("kernel=");
+      pos != std::string::npos;
+      pos = text.find("kernel=", pos + 1)) {
+    size_t begin = pos + 7;
+    size_t end = text.find_first_not_of("0123456789", begin);
+    seen += text.substr(begin, end - begin) + " ";
+  }
+  CHECK_MESSAGE(dispatched_f16_coopmat,
+      "f16 qmm prefill did not take a coopmat kernel; seen ids: ", seen);
 }
 
 TEST_CASE("qmm non-transposed small-k zone matches host reference") {
