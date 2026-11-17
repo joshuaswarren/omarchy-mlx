@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Whole omarchy test suite (minus ane_runtime) at w7q/p437-rebase head.
 set -uo pipefail
+# no set -e: run steps keep going past a failing command so later steps record status
 S=$HOME/scratch
 rm -f $S/w7q-p437suite.flag
 export MLX_OMARCHY_WORK_DIR=$S/w7q-p437-suite-work

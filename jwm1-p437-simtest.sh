@@ -2,6 +2,7 @@
 # Fail-before / pass-after for the f16 coopmat pin, under the f32-only
 # capability sim, then the fixed branch on real hardware.
 set -uo pipefail
+# no set -e: run steps keep going past a failing command so later steps record status
 S=$HOME/scratch
 rm -f $S/w7q-p437.flag
 export MLX_OMARCHY_WORK_DIR=$S/w7q-p437-work
