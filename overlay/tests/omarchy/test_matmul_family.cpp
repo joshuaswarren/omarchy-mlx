@@ -1294,7 +1294,7 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
         if (a_t || b_t) {
           continue;
         }
-        if (coopmat_device && m >= 30 && k >= 896 && n >= 896) {
+        if (coopmat_device && m >= 32 && k >= 896 && n >= 896) {
           // The route expectation is load-bearing: a gate regression to
           // the 16x16 tile must fail here, so pin the dispatch the way
           // the q4g32 case does. Pinned on the Qwen shapes only: the
@@ -4243,13 +4243,26 @@ TEST_CASE("batched quantized_matmul is bit-identical per batch row alone") {
         // q4g32 case does: a gate regression to the tile route leaves
         // none of these in the trace and fails here.
         using K = omarchy::ComputeKernel;
+        // Every bf16 prefill coopmat build, so the pin fails only if
+        // no coopmat kernel runs at all (the device picks the variant).
         const std::vector<K> batched_coopmat{
             K::QmmPrefillCoopmatBF16,
             K::QmmPrefillCoopmatM16BF16,
             K::QmmPrefillCoopmatBF16X32,
             K::QmmPrefillCoopmatM16BF16X32,
             K::QmmPrefillCoopmatBF16X32FullN,
-            K::QmmPrefillCoopmatM16BF16X32FullN};
+            K::QmmPrefillCoopmatM16BF16X32FullN,
+            K::QmmPrefillCoopmatM16BF16X32FullNLdsPad,
+            K::QmmPrefillCoopmatM16BF16X32FullNChunk,
+            K::QmmPrefillCoopmatM16BF16X32FullNChunkPad,
+            K::QmmPrefillCoopmatBF16X32FullNRasterSwap,
+            K::QmmPrefillCoopmatBF16X32FullNRasterG2,
+            K::QmmPrefillCoopmatBF16X32FullNRasterG4,
+            K::QmmPrefillCoopmatBF16X32FullNRasterG8,
+            K::QmmPrefillCoopmatBF16X32FullNTwoN,
+            K::QmmPrefillCoopmatBF16X32FullNChunk,
+            K::QmmPrefillCoopmatBF16X32FullNLdsPad,
+            K::QmmPrefillCoopmatBF16X32FullNChunkPad};
         std::fflush(stderr);
         int saved = ::dup(::fileno(stderr));
         FILE* cap = std::fopen("/tmp/qmm_batch_route_cap.log", "w");
@@ -5225,15 +5238,15 @@ TEST_CASE("f16 qmm prefill dispatches coopmat wherever fp32xfp32 8x8x8 is advert
   }
   HostQuantizedWeights host =
       host_affine_quantize(matrix, n, k, 64, 4);
-  std::vector<float> scales_rt = round_trip(stream, host.scales, bfloat16);
+  std::vector<float> scales_rt = round_trip(stream, host.scales, float16);
   std::vector<float> biases_rt =
-      round_trip(stream, host.biases, bfloat16);
+      round_trip(stream, host.biases, float16);
   std::vector<float> x_flat(16 * k);
   for (auto& v : x_flat) {
     v = dist(gen);
   }
   std::vector<float> x_rt = round_trip(stream, x_flat, float16);
-  array x(x_rt.begin(), Shape{1, 16, k}, float16);
+  array x(x_rt.begin(), Shape{16, k}, float16);
   array w_words(host.words.begin(), Shape{n, k / 8}, uint32);
   array scales(scales_rt.begin(), Shape{n, groups}, bfloat16);
   array biases(biases_rt.begin(), Shape{n, groups}, bfloat16);
