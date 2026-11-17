@@ -8583,7 +8583,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // G16S). Route it to the same constant-shift word kernel built with
     // QGROUP=128 (scale/bias stride K/128); bindings and params are the
     // group-64 path's.
-    if (subgroup_ready && transpose_ && bits_ == 4 && group_size_ == 128 &&
+    // The documented MLX_OMARCHY_QMM_VEC_Q4_WORD=0 off-switch must reach the
+    // group-128 route too, so the gate checks use_word_format like the
+    // group-64 selection below.
+    if (use_word_format && subgroup_ready && transpose_ && bits_ == 4 &&
+        group_size_ == 128 &&
         out.dtype() == bfloat16 && w.ndim() == 2 && scales.ndim() == 2 &&
         biases.ndim() == 2 && params.matrix_k % 128u == 0u &&
         n_groups_qmm_vec <= omarchy::kMaxComputeGroupCountX) {
