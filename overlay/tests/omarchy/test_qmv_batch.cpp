@@ -296,12 +296,12 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   array x4 = x_pass(4);
   array x5 = x_pass(5);
   const auto batch4 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
+  const auto batch8 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16;
   if (!ran(traced_kernels([&] { gemv(x1, q, false, s); }),
            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16)) {
     std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
     return;
   }
-  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "0", s); }), batch4));
   CHECK(ran(traced_kernels([&] { short_pass(x3, q, "3", s); }), batch4));
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "3", s); }), batch4));
@@ -310,10 +310,17 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   const bool wide_cap = dev_caps.device_name.find("G13C") != std::string::npos ||
       dev_caps.device_name.find("G16S") != std::string::npos;
   if (wide_cap) {
-    // On G13C and G16S, MLX_OMARCHY_QMV_SMALL_T=8 engages through 8 rows via 4-row blocks.
-    CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "8", s); }), batch4));
+    // G13C and G16S default the short pass on when the variable is unset: it
+    // engages through 8 rows, the range an explicit =8 covers. Up to 4 rows
+    // take the batch4 kernel; 5 to 8 rows take the one-dispatch batch8 kernel
+    // (QMV_BATCH8 default on there). =0 forces the route off.
+    CHECK(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
+    CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "", s); }), batch8));
+    CHECK(ran(traced_kernels([&] { short_pass(x_pass(8), q, "8", s); }), batch8));
+    CHECK_FALSE(ran(traced_kernels([&] { short_pass(x_pass(8), q, "", s); }), batch4));
   } else {
-    // Elsewhere, values above 4 stay capped at 4.
+    // Elsewhere the route stays opt-in: unset is off and values above 4 cap at 4.
+    CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "", s); }), batch4));
     CHECK_FALSE(ran(traced_kernels([&] { short_pass(x5, q, "8", s); }), batch4));
   }
   setenv("MLX_OMARCHY_QMV_BATCH", "0", 1);

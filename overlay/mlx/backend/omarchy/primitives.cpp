@@ -4087,9 +4087,11 @@ static int decode_path_override(const char* name) {
 // route is opt-in until a numerics decision
 // (receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
 static int qmv_small_t_max_rows() {
+  // Unset -> -1 (caller applies the per-part default); an explicit value < 2
+  // (e.g. MLX_OMARCHY_QMV_SMALL_T=0) forces the route off; >=2 is clamped to 8.
   const char* v = std::getenv("MLX_OMARCHY_QMV_SMALL_T");
   if (v == nullptr || *v == '\0') {
-    return 0;
+    return -1;
   }
   int rows = std::atoi(v);
   if (rows < 2) {
@@ -8362,7 +8364,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // [1, T, K] x with 2 <= T <= the env limit against one 2D 4-bit group-64
   // transposed weight. Resolved before normalization because the GEMV reads
   // x through the same 16-byte uvec4 view as the single-row route.
-  const int small_t_max = qmv_small_t_device_cap(encoder, qmv_small_t_max_rows());
+  int small_t_requested = qmv_small_t_max_rows();
+  if (small_t_requested < 0) {
+    // Unset: default ON for the wide parts where the multi-row GEMV is a
+    // measured small-M bandwidth win (G16S ~3x at M=2..4 vs the coopmat tile;
+    // G13C); OFF elsewhere (G13G regressed, receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
+    const std::string& st_dn = encoder.device().capabilities().device_name;
+    small_t_requested = (st_dn.find("G16S") != std::string::npos ||
+                         st_dn.find("G13C") != std::string::npos)
+        ? 8
+        : 0;
+  }
+  const int small_t_max = qmv_small_t_device_cap(encoder, small_t_requested);
   const int small_t_rows = x.ndim() >= 2 ? x.shape(-2) : 1;
   bool small_t_candidate = small_t_max >= 2 && use_q4_word &&
       out.dtype() == bfloat16 && small_t_rows >= 2 &&
@@ -8641,7 +8654,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
-      constexpr uint32_t kBlockRows = 4u;
+      // A 5-to-8-row pass fits one 8-row dispatch on a part whose cap is 8,
+      // which reads the weight stream once instead of twice (two 4-row
+      // blocks). Each row still matches the single-row chain, because the
+      // batch-8 shader runs the same per-row chain as the batch-4 shader.
+      // MLX_OMARCHY_QMV_BATCH8=0 keeps 4-row blocks.
+      const bool batch8 = params.matrix_m > 4u &&
+          qmv_small_t_device_cap(encoder, 8) >= 8 &&
+          decode_path_override("MLX_OMARCHY_QMV_BATCH8") != 0;
+      const uint32_t kBlockRows = batch8 ? 8u : 4u;
+      const omarchy::ComputeKernel block_kernel = batch8
+          ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16
+          : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
       for (uint32_t row = 0u; row < params.matrix_m; row += kBlockRows) {
         uint32_t rows = std::min(kBlockRows, params.matrix_m - row);
         omarchy::ComputeParams block = params;
@@ -8651,7 +8675,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         block.lhs_offset = params.lhs_offset + row * params.matrix_k;
         block.output_offset = params.output_offset + row * params.matrix_n;
         encoder.dispatch_compute(
-            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16,
+            block_kernel,
             bindings,
             block,
             n_groups_qmm_vec,
