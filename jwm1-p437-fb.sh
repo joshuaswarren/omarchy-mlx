@@ -3,6 +3,7 @@
 # (old f16-A selector), run under the f32-only capability sim. The pin
 # must FAIL there, proving the fixed branch's pass is load-bearing.
 set -uo pipefail
+# no set -e: run steps keep going past a failing command so later steps record status
 S=$HOME/scratch
 rm -f $S/w7q-p437fb.flag
 SRCFB=$S/w7q-p437fb-src
