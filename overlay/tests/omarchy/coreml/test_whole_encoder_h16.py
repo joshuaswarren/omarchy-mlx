@@ -180,6 +180,16 @@ class LaneTest(unittest.TestCase):
             self.assertFalse(ane_lane.h16_machine(Path(tmp)))
         self.assertFalse(ane_lane.h16_machine(Path("/nonexistent")))
 
+    def test_probe_never_opens_a_node_off_an_h16_machine(self):
+        # On a lane 1/2 machine the ioctl would wake the ANE before the
+        # driver rejects the number, so the device tree must gate the open.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "accel0").touch()
+            with mock.patch.object(ane_lane, "h16_machine", return_value=False), \
+                 mock.patch.object(ane_lane.os, "open") as opened:
+                self.assertIsNone(ane_lane.h16_node(Path(tmp)))
+            opened.assert_not_called()
+
     def test_no_accel_directory_is_no_lane_3(self):
         self.assertIsNone(ane_lane.h16_node(Path("/nonexistent/accel")))
 

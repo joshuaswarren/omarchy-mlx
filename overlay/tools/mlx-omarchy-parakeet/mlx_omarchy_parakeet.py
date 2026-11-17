@@ -21,8 +21,10 @@ pins. Any other audio runs the general contract (on-device execution,
 finite outputs, stream geometry, cross-repeat determinism); audio longer
 than the 30 s model window is transcribed in 30 s chunks with carried
 TDT recurrent state. Any mismatch, missing capability, or divergent
-output is an explicit refusal — there is no CPU or GPU-only encoder
-fallback.
+output is an explicit refusal; lanes 1 and 2 have no CPU or GPU-only encoder
+fallback. On an H16 machine without the whole-encoder bundle the encoder runs
+on the GPU, chosen at start-up; a lane-3 failure while running is an error,
+not a retry on the GPU.
 """
 
 import argparse

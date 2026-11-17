@@ -30,7 +30,13 @@ HWX_MANIFEST_VERSION = 5
 
 
 def h16_node(accel_dir: Path = Path("/dev/accel")) -> Path | None:
-    """The first accel node that reports ABI 3 on H16, or None."""
+    """The first accel node that reports ABI 3 on H16, or None.
+
+    Off an H16 machine this returns None without opening any node: on lane 1
+    the get-caps ioctl wakes the ANE before the driver rejects the number.
+    """
+    if not h16_machine():
+        return None
     for path in sorted(Path(accel_dir).glob("accel*")):
         try:
             fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
