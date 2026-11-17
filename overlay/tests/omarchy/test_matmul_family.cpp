@@ -1321,9 +1321,27 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
           std::string route_trace(
               (std::istreambuf_iterator<char>(route_in)),
               std::istreambuf_iterator<char>());
-          std::string want = "[rtmod] DISPATCH kernel=" +
-              std::to_string(static_cast<uint32_t>(
-                  omarchy::ComputeKernel::MatmulBF16Coopmat)) + " ";
+          // The direct route shadows MatmulBF16Coopmat wherever a row
+          // (or the bf16_8 shape) engages; those kernels are the same
+          // 8x8x8 coopmat class, so accept the family. A regression to
+          // the tile or scalar-FMA kernels matches none of them.
+          const std::vector<omarchy::ComputeKernel> dense_coopmat{
+              omarchy::ComputeKernel::MatmulBF16Coopmat,
+              omarchy::ComputeKernel::MatmulDirectBF16Nn,
+              omarchy::ComputeKernel::MatmulDirectBF16Nt,
+              omarchy::ComputeKernel::MatmulDirectBF16Tn,
+              omarchy::ComputeKernel::MatmulDirectBF16Tt,
+              omarchy::ComputeKernel::MatmulDirectBF16NtK4S8,
+              omarchy::ComputeKernel::MatmulDirectBF16TnWS8};
+          bool dispatched_dense_coopmat = false;
+          for (auto kernel : dense_coopmat) {
+            if (route_trace.find("[rtmod] DISPATCH kernel=" +
+                    std::to_string(static_cast<uint32_t>(kernel)) + " ") !=
+                std::string::npos) {
+              dispatched_dense_coopmat = true;
+              break;
+            }
+          }
           std::string seen;
           for (size_t pos = route_trace.find("kernel=");
               pos != std::string::npos;
@@ -1333,8 +1351,8 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
                 route_trace.find_first_not_of("0123456789", begin);
             seen += route_trace.substr(begin, end - begin) + " ";
           }
-          CHECK_MESSAGE(route_trace.find(want) != std::string::npos,
-              label, " did not dispatch MatmulBF16Coopmat; seen ids: ",
+          CHECK_MESSAGE(dispatched_dense_coopmat,
+              label, " did not dispatch a bf16 coopmat kernel; seen ids: ",
               seen);
         }
       }
@@ -5248,8 +5266,11 @@ TEST_CASE("f16 qmm prefill dispatches coopmat wherever fp32xfp32 8x8x8 is advert
   std::vector<float> x_rt = round_trip(stream, x_flat, float16);
   array x(x_rt.begin(), Shape{16, k}, float16);
   array w_words(host.words.begin(), Shape{n, k / 8}, uint32);
-  array scales(scales_rt.begin(), Shape{n, groups}, bfloat16);
-  array biases(biases_rt.begin(), Shape{n, groups}, bfloat16);
+  // Scales and biases must share x's f16 dtype: the route requires the
+  // affine dtype to match the output, or the call falls out of the
+  // specialized path into the generic dequantize fallback.
+  array scales(scales_rt.begin(), Shape{n, groups}, float16);
+  array biases(biases_rt.begin(), Shape{n, groups}, float16);
 
   std::fflush(stderr);
   int saved = ::dup(::fileno(stderr));
