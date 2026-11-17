@@ -609,7 +609,7 @@ TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   const bool f16_coopmat_claim = e.coopmat_claim &&
       omarchy::cooperative_matrix_advertises(
           caps().cooperative_matrix_shapes,
-          omarchy::qmm_prefill_coopmat_shape()));
+          omarchy::qmm_prefill_coopmat_shape());
   constexpr int m = 64;
   constexpr int k = 128;
   constexpr int n = 32;
