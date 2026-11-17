@@ -182,6 +182,16 @@ install_system() {
     cp -a "$serve_src/$pkg/." "$site_dir/$pkg/"
   done
   cp "$ROOT/serve/mlx_omarchy_paths.py" "$site_dir/mlx_omarchy_paths.py"
+  # Stamp the serve copies with this build so _mlxlm_server can refuse a
+  # mismatched wheel at startup.
+  local stamp="$site_dir/mlx_omarchy_serve/.build-commit"
+  if commit=$(git -C "$ROOT" rev-parse --short=10 HEAD 2>/dev/null); then
+    printf '%s\n' "$commit" > "$stamp"
+  elif [[ -n "${MLX_OMARCHY_VERSION:-}" ]]; then
+    printf '%s\n' "${MLX_OMARCHY_VERSION#v}" > "$stamp"
+  else
+    printf 'unknown\n' > "$stamp"
+  fi
 
   if [[ -d "$site_dir/mlx_lm" ]]; then
     say "Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)"

@@ -13,6 +13,13 @@ tokens are ever resident and the aggregate equals the admitted context.
 A larger --prompt-cache-size re-enables prefix caching at a documented
 cost: worst-case resident KV becomes (cache + 1) x the admitted context.
 
+Build-stamp match: the venv carries this package as unpackaged copies
+(install.sh SERVE_PACKAGES), so a wheel-only reinstall can leave an old
+shim against a new wheel. main() refuses to launch (exit 4) unless the
+.build-commit stamp written by install.sh matches the installed
+mlx-omarchy wheel version; MLX_OMARCHY_ALLOW_SERVE_DRIFT=1 downgrades the
+refusal to a loud warning.
+
 Fail-closed pinning: the shim supports exactly the pinned mlx-lm version.
 A different mlx_lm.__version__ refuses to launch unless
 MLX_OMARCHY_ALLOW_UNPINNED_MLXLM=1 is set explicitly (loud warning); if
@@ -41,7 +48,77 @@ except ImportError:
 LIMIT_ENV = "MLX_OMARCHY_SERVE_CONTEXT_LIMIT"
 TRAINED_ENV = "MLX_OMARCHY_SERVE_TRAINED_CONTEXT"  # optional: the model's trained horizon, warn-only
 UNPINNED_ENV = "MLX_OMARCHY_ALLOW_UNPINNED_MLXLM"
+STAMP_ENV = "MLX_OMARCHY_ALLOW_SERVE_DRIFT"
+STAMP_FILE = ".build-commit"  # written by install.sh next to this module
 SUPPORTED_MLXLM_VERSIONS = ("0.31.3",)
+
+
+def _wheel_commit(version: str | None) -> str | None:
+    """The build token a wheel advertises: the commit in the local
+    version segment, else the release version itself."""
+    if not version:
+        return None
+    version = str(version).strip()
+    if not version:
+        return None
+    if "+" in version:
+        return version.rsplit("+", 1)[1][:10] or None
+    return version.lstrip("v") or None
+
+
+def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False):
+    """Compare the serve copies' build stamp with the installed wheel.
+
+    Returns (refusal, warning): refusal is a loud error string when the
+    launch must not proceed, warning when drift is allowed but named.
+    """
+    build = _wheel_commit(wheel_version)
+    if not build:
+        return ("cannot read the installed mlx-omarchy wheel version; "
+                "the serve copies may not match it (reinstall with "
+                f"install.sh, or set {STAMP_ENV}=1 to continue)", None)
+    if not stamp:
+        return ("this venv's serve copies carry no build stamp; "
+                "reinstall with install.sh so the wheel and the serve "
+                f"copies come from one build, or set {STAMP_ENV}=1 to "
+                "continue", None)
+    stamp = str(stamp).strip().lstrip("v")
+    if stamp and (build.startswith(stamp) or stamp.startswith(build)):
+        return (None, None)
+    if drift_allowed:
+        return (None, f"serve copies ({stamp}) do not match the installed "
+                f"mlx-omarchy wheel ({build}); continuing on "
+                f"{STAMP_ENV}=1")
+    return (f"serve copies ({stamp}) do not match the installed "
+            f"mlx-omarchy wheel ({build}); reinstall with install.sh, or "
+            f"set {STAMP_ENV}=1 to continue", None)
+
+
+def read_build_stamp(directory=None):
+    """Read the install.sh stamp next to this module; missing means the
+    copies predate stamping."""
+    path = (Path(directory) if directory else Path(__file__).parent) / STAMP_FILE
+    try:
+        return path.read_text().strip() or None
+    except OSError:
+        return None
+
+
+def check_build_stamp(wheel_version=None):
+    """Refuse to launch when serve copies and wheel disagree."""
+    try:
+        import importlib.metadata as _md
+        version = wheel_version if wheel_version is not None else _md.version("mlx-omarchy")
+    except Exception:
+        version = wheel_version if wheel_version is not None else None
+    refusal, warning = resolve_stamp_mismatch(
+        read_build_stamp(), version,
+        drift_allowed=os.environ.get(STAMP_ENV) == "1")
+    if warning:
+        print(f"warning: {warning}", file=sys.stderr, flush=True)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr, flush=True)
+        raise SystemExit(4)
 
 
 def _mlxlm_version(server_module) -> str:
@@ -706,6 +783,7 @@ def start_managed() -> None:
 
 
 def main() -> None:
+    check_build_stamp()
     raw = os.environ.get(LIMIT_ENV, "")
     try:
         limit = int(raw)
