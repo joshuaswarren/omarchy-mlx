@@ -37,10 +37,11 @@ std::vector<CoopmatShape> agx3b_shapes() {
 
 } // namespace
 
-TEST_CASE("qmm_prefill_coopmat_shape names the shape each output dtype emits") {
+TEST_CASE("qmm_prefill_coopmat_shape names the shape both output dtypes emit") {
   // Both builds widen the activations to an fp32 A matrix: fp32xfp32 8x8x8,
-  // fp32 accumulate, subgroup, non-saturating.
-  const CoopmatShape f16 = omarchy::qmm_prefill_coopmat_shape(true);
+  // fp32 accumulate, subgroup, non-saturating. One shape covers f16 and
+  // bf16 output, so the selector takes no dtype argument any more.
+  const CoopmatShape f16 = omarchy::qmm_prefill_coopmat_shape();
   CHECK(f16.m == 8u);
   CHECK(f16.n == 8u);
   CHECK(f16.k == 8u);
@@ -52,36 +53,37 @@ TEST_CASE("qmm_prefill_coopmat_shape names the shape each output dtype emits") {
   CHECK(f16.saturating == false);
   CHECK(f16 == same_operand(CoopmatType::Float32));
 
-  const CoopmatShape bf16 = omarchy::qmm_prefill_coopmat_shape(false);
+  const CoopmatShape bf16 = omarchy::qmm_prefill_coopmat_shape();
+  CHECK(bf16 == f16);
   CHECK(bf16 == same_operand(CoopmatType::Float32));
 }
 
 TEST_CASE("AGX3B advertises the shape of both qmm prefill routes") {
   const std::vector<CoopmatShape> adv = agx3b_shapes();
   CHECK(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(false)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
   CHECK(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(true)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
 TEST_CASE("a device without the fp32xfp32 shape declines both routes") {
   const std::vector<CoopmatShape> adv = {same_operand(CoopmatType::Float16)};
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(true)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(false)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
 TEST_CASE("no coopmat device advertises nothing") {
   const std::vector<CoopmatShape> adv;
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(true)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(false)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
 TEST_CASE("the match is exact in every field") {
-  const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape(false);
+  const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape();
 
   // A shape that differs in exactly one field must not match.
   auto differs = [&](CoopmatShape s) {
