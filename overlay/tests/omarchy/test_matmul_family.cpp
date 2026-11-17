@@ -5478,7 +5478,7 @@ TEST_CASE(
   const bool f16_coopmat_device = coopmat_device &&
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
-          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
+          omarchy::qmm_prefill_coopmat_shape());
 
   for (auto [m, n, k, seed] : {
            std::tuple{2, 7, 64, 67u},
@@ -5603,7 +5603,7 @@ TEST_CASE("qmm coopmat prefill matches host reference at Qwen shapes") {
   const bool f16_coopmat_device = coopmat_device &&
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
-          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
+          omarchy::qmm_prefill_coopmat_shape());
   std::cout << "[provenance] cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
             << " subgroup_size=" << caps.subgroup_size
@@ -5717,7 +5717,7 @@ TEST_CASE("qmm coopmat output is bit-identical across x offset alignment") {
   const bool f16_coopmat_device = coopmat_device &&
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
-          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
+          omarchy::qmm_prefill_coopmat_shape());
   std::cout << "[provenance] cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
             << " subgroup_size=" << caps.subgroup_size

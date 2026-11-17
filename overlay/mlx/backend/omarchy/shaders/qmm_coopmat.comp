@@ -437,7 +437,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #else
         // f16 x is widened to an f32 A matrix: B is f32, and a device that
         // lists only same-operand shapes (f16 x f16, f32 x f32) has no
-        // f16-A/f32-B configuration (omarchy::qmm_prefill_coopmat_shape).
+        // fp32xfp32 configuration (omarchy::qmm_prefill_coopmat_shape).
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
 #endif
