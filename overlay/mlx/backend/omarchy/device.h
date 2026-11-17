@@ -544,12 +544,15 @@ std::string kernel_limit_heap_warning(
 
 // GatedDeltaUpdate decode on the f32 A_log raw route (Qwen3.5-9B) with Hk != Hv: the parts whose
 // default is the untiled prefetch kernel with native GQA (ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa),
-// because that route was measured bit-equal to the tiled one and faster on them (receipts/2026-10-18-gdn-pf-gqa).
+// because that route was measured bit-equal to the tiled one and faster on them (G14C and G13C:
+// receipts/2026-10-18-gdn-pf-gqa; G16S, the M4 Pro: Qwen3.5-4B-MLX-4bit decode 55.27 -> 60.89 tok/s,
+// identical tokens, receipts/2026-11-15-m4-pro-g16s-decode-defaults).
 // Keyed on the device name so an unmeasured part keeps its previous default (a G13 part other than G13C
 // already runs the untiled kernel with the expansion copies). Pure.
 inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13C") != std::string::npos;
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G16S") != std::string::npos;
 }
 
 // GatedDeltaUpdate decode on the bf16 A_log raw route: the (part, head ratio) pairs whose default is the untiled prefetch
@@ -639,18 +642,35 @@ inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name)
 //   G13S (Apple M1 Pro): 192 keys (128: chain 55.6 against 96.4; 192: chain 114.4 against 91.2, independent 117.2 against 90.6);
 //   G14G (Apple M2): 192 keys (128: chain 86.7 against 88.1; 192: chain 154.8 against 89.2, independent 153.7 against 88.3).
 // Qwen3-4B 4-bit decode at a 443-token prompt, 128 generated: +28.2 percent (G13S, 32.4 to 41.5 tokens per second), +20.0 percent (G14G, 17.6 to 21.1),
-// tokens identical. Pure.
+// tokens identical.
+//   G16S (Apple M4 Pro): 320 keys with the value-phase pass 1 (288: independent 55.7 against 57.6, chain 56.9 against 56.5; 320: independent 61.9 against 59.7,
+//   chain 61.6 against 56.2; two sweeps of 224 to 6144 keys, receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k); the plain pass 1 first wins at 1024 keys (147.9 against 84.2).
+//   Qwen3-8B 4-bit decode, 128 generated, two rounds, default against the route with the value-phase pass 1: 443-token prompt 39.8 and 39.7 to 40.9 and 40.9 tokens
+//   per second (+2.9 percent), 2048 tokens 31.5 to 38.2 (+21.6), 4000 tokens 25.2 to 35.5 and 35.0 (+39.6), tokens identical. Head width 256 starts later on this
+//   part, sdpa_split_wide_min_keys. Pure.
 inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G13G") != std::string::npos) return 128;
   if (device_name.find("G13C") != std::string::npos) return 320;
   if (device_name.find("G14C") != std::string::npos) return 320;
   if (device_name.find("G13S") != std::string::npos) return 192;
   if (device_name.find("G14G") != std::string::npos) return 192;
+  if (device_name.find("G16S") != std::string::npos) return 320;
   return 0;
 }
 
-inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len) {
-  uint32_t min_keys = sdpa_split_min_keys(device_name);
+// Head width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the smallest cache length from which the route is the default, where a part measured it apart from
+// width 128; every other part uses sdpa_split_min_keys.
+//   G16S (Apple M4 Pro): 768 keys. Width 256 runs the plain pass 1 there (the width-256 value-phase pass 1 has no default on this part), and Qwen3.5-4B 4-bit decode
+//   with the route forced, 128 generated, two rounds: 443-token prompt 64.0 and 64.1 against 64.7 and 65.1 tokens per second; 562 tokens 64.3 and 57.0 against
+//   64.4 and 64.9; 749 tokens 64.3 and 64.3 against 63.5 and 64.0; 1038 tokens 64.3 and 64.3 against 61.7 and 62.4; 2048 tokens 63.4 and 63.5 against 58.0 and 57.9; 4000 tokens
+//   59.9 and 60.1 against 51.6 and 51.6 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), tokens identical. Pure.
+inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
+  if (device_name.find("G16S") != std::string::npos) return 768;
+  return sdpa_split_min_keys(device_name);
+}
+
+inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len, int head_dim = 128) {
+  uint32_t min_keys = head_dim == 256 ? sdpa_split_wide_min_keys(device_name) : sdpa_split_min_keys(device_name);
   return min_keys != 0 && k_len >= min_keys;
 }
 
@@ -660,10 +680,13 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len) {
 //   G14C (Apple M2 Max): 128 to 1024 keys 86 to 93 against 64 to 75; 2048 keys 103.8 against 89.1; 4096 keys 124.8 against 150.1; so the limit is 2048;
 //   G13C (Apple M1 Max): 128 to 2048 keys 80 to 104 against 59 to 85; 4096 keys 155.6 against 149.4 (tie); 8192 keys 299.7 against 313.2; so the limit is 2048;
 //   G13G (Apple M1): 128 and 512 keys 78 and 88 against 57 and 73, but 1024 keys 113 against 130 and 2048 keys 239 against 268, and decode of Qwen3-4B reads -0.5 percent at 477 prompt tokens and -2.4 percent at 1888, so the default stays off.
+//   G16S (Apple M4 Pro): the variant is faster at every measured length, 224 to 16384 keys (2048 keys 145.8 against 109.8 independent, 4096 keys 212.4 against 164.5,
+//   6144 keys 278.5 against 226.6, 16384 keys 633.4 against 507.8; receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), so the limit is the longest length measured.
 // Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated, one tree, default against the variant: +4.6 percent on G14C (63.1 to 66.0 tokens per second), +2.8 percent at 1888 tokens. An unmeasured part keeps the plain pass 1. Pure.
 inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (device_name.find("G14C") != std::string::npos) return 2048;
   if (device_name.find("G13C") != std::string::npos) return 2048;
+  if (device_name.find("G16S") != std::string::npos) return 16384;
   return 0;
 }
 
@@ -675,9 +698,14 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
 // 64-key block variant of the value-phase split-K pass 1 (MLX_OMARCHY_SDPA_SPLIT_BK64 unset): the largest cache length, in keys, up to which the variant is the default on a part.
 // 0 means the 128-key blocks stay the default. Four query heads per key-value head only. Chain microseconds per call, 128-key blocks against 64-key blocks, ten chains each:
 //   G14C (Apple M2 Max): 512 keys 82.6 against 69.2; 1024 keys 81.5 against 75.7 (ranges overlap); 2048 keys 102.8 against 120.3; so the limit is 512.
+//   G16S (Apple M4 Pro), independent and chain, two sweeps: 320 keys 54.3 to 55.0 against 39.2 to 41.4; 512 keys 55.9 to 58.7 against 43.8 to 44.9;
+//   1024 keys 60.8 to 69.3 against 70.4 to 77.0; so the limit is 512 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k). Qwen3-8B 4-bit decode, 128 generated, two rounds, 128-key against 64-key blocks:
+//   426-token prompt 41.6 and 41.5 against 41.9 and 42.6 tokens per second; past the limit the 64-key blocks lose (664 tokens 41.3 and 41.3 against 40.8 and 41.2,
+//   970 tokens 41.1 and 41.1 against 39.6 and 40.3), tokens identical.
 // An unmeasured part keeps the 128-key blocks. Pure.
 inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (device_name.find("G14C") != std::string::npos) return 512;
+  if (device_name.find("G16S") != std::string::npos) return 512;
   return 0;
 }
 
