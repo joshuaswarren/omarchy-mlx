@@ -50,10 +50,44 @@ class ResolveStampMismatchTests(unittest.TestCase):
         self.assertIn("build stamp", refusal)
         self.assertIsNone(warning)
 
-    def test_missing_wheel_refuses(self):
+    def test_missing_wheel_with_stamp_refuses(self):
         refusal, warning = shim.resolve_stamp_mismatch("ef7923c374", None)
         self.assertIsNotNone(refusal)
         self.assertIn("wheel version", refusal)
+
+    def test_no_stamp_and_no_wheel_warns_but_runs(self):
+        # Dev from a checkout: nothing on either side to compare.
+        refusal, warning = shim.resolve_stamp_mismatch(None, None)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
+        self.assertIn("cannot run", warning)
+
+    def test_override_covers_a_missing_wheel(self):
+        refusal, warning = shim.resolve_stamp_mismatch(
+            "ef7923c374", None, drift_allowed=True)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
+        self.assertIn(shim.STAMP_ENV, warning)
+
+    def test_override_covers_a_missing_stamp(self):
+        refusal, warning = shim.resolve_stamp_mismatch(
+            None, "0.32.4.dev+ef7923c374", drift_allowed=True)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
+        self.assertIn(shim.STAMP_ENV, warning)
+
+    def test_checkout_import_only_warns_on_mismatch(self):
+        refusal, warning = shim.resolve_stamp_mismatch(
+            "7ec5347", "0.32.4.dev202611170306+ef7923c374", installed=False)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
+        self.assertIn("installed copies", warning)
+
+    def test_checkout_import_only_warns_on_missing_wheel(self):
+        refusal, warning = shim.resolve_stamp_mismatch(
+            "ef7923c374", None, installed=False)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
 
     def test_mismatch_refuses_and_names_both_sides(self):
         refusal, warning = shim.resolve_stamp_mismatch(

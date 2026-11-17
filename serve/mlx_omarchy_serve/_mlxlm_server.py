@@ -66,18 +66,37 @@ def _wheel_commit(version: str | None) -> str | None:
     return version.lstrip("v") or None
 
 
-def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False):
+def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
+                           installed=True):
     """Compare the serve copies' build stamp with the installed wheel.
 
     Returns (refusal, warning): refusal is a loud error string when the
-    launch must not proceed, warning when drift is allowed but named.
+    launch must not proceed, warning when the check cannot bite or drift
+    is allowed but named. `installed` marks the copies as living in a
+    site-packages venv; a checkout only ever warns, so dev runs and the
+    subprocess tests stay unaffected.
     """
     build = _wheel_commit(wheel_version)
+    demote = not installed
     if not build:
+        if drift_allowed or demote:
+            return (None, f"no installed mlx-omarchy wheel version to "
+                    f"compare the serve copies against"
+                    + ("; continuing on " + STAMP_ENV + "=1"
+                       if drift_allowed else "; the serve-drift check "
+                       "cannot run here"))
+        if not stamp:
+            return (None, "no build stamp and no installed mlx-omarchy "
+                    "wheel; the serve-drift check cannot run")
         return ("cannot read the installed mlx-omarchy wheel version; "
                 "the serve copies may not match it (reinstall with "
                 f"install.sh, or set {STAMP_ENV}=1 to continue)", None)
     if not stamp:
+        if drift_allowed or demote:
+            return (None, f"this venv's serve copies carry no build stamp"
+                    + ("; continuing on " + STAMP_ENV + "=1"
+                       if drift_allowed else "; refusing only applies to "
+                       "installed copies"))
         return ("this venv's serve copies carry no build stamp; "
                 "reinstall with install.sh so the wheel and the serve "
                 f"copies come from one build, or set {STAMP_ENV}=1 to "
@@ -85,10 +104,11 @@ def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False):
     stamp = str(stamp).strip().lstrip("v")
     if stamp and (build.startswith(stamp) or stamp.startswith(build)):
         return (None, None)
-    if drift_allowed:
+    if drift_allowed or demote:
         return (None, f"serve copies ({stamp}) do not match the installed "
-                f"mlx-omarchy wheel ({build}); continuing on "
-                f"{STAMP_ENV}=1")
+                f"mlx-omarchy wheel ({build})"
+                + ("; continuing on " + STAMP_ENV + "=1" if drift_allowed
+                   else "; refusing only applies to installed copies"))
     return (f"serve copies ({stamp}) do not match the installed "
             f"mlx-omarchy wheel ({build}); reinstall with install.sh, or "
             f"set {STAMP_ENV}=1 to continue", None)
@@ -105,15 +125,21 @@ def read_build_stamp(directory=None):
 
 
 def check_build_stamp(wheel_version=None):
-    """Refuse to launch when serve copies and wheel disagree."""
+    """Refuse to launch when serve copies and wheel disagree.
+
+    Refusal applies only to copies living in site-packages; a checkout
+    import of this module only warns, so dev runs are never blocked.
+    """
     try:
         import importlib.metadata as _md
         version = wheel_version if wheel_version is not None else _md.version("mlx-omarchy")
     except Exception:
         version = wheel_version if wheel_version is not None else None
+    installed = "site-packages" in str(Path(__file__).resolve())
     refusal, warning = resolve_stamp_mismatch(
         read_build_stamp(), version,
-        drift_allowed=os.environ.get(STAMP_ENV) == "1")
+        drift_allowed=os.environ.get(STAMP_ENV) == "1",
+        installed=installed)
     if warning:
         print(f"warning: {warning}", file=sys.stderr, flush=True)
     if refusal:
