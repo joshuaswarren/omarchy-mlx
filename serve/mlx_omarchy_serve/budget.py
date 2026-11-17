@@ -94,6 +94,16 @@ PREFILL_MARGIN = 1.15
 # 64 heads so it also holds for larger models; it only shrinks the chunk.
 MAX_STORAGE_BINDING_BYTES = 2**31 - 1
 PREFILL_CAP_HEADS = 64
+# The 512 default stays, measured on jwm1 (13-inch M1, mlx-lm 0.31.3,
+# gemma4-e4b, 8197-token prefills, two independent queue pairs, 2026-11-17):
+# prefill step 256 halves the worst inter-token stall while a prefill is in
+# flight (3.027 s -> 1.545 s and 3.014 s -> 1.550 s) but costs about 11
+# percent decode (2.89 -> 2.55 and 2.88 -> 2.57 tok/s), against llama.cpp's
+# ~5 percent decode cost for the same stall halving (report 288, darkhorse
+# PR 522). Decided 2026-11-17: 256 is not shipped as the mlx default.
+# Measurement note for this host: the 5 s canary's run-to-run variance across
+# a pair is 10-17 pct, so a 5 pct canary band always voids here; a 20 pct
+# band covers both observed spreads with margin.
 DEFAULT_PREFILL_STEP_TOKENS = 512
 
 
