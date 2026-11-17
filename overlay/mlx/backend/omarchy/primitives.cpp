@@ -101,7 +101,8 @@ namespace {
 // composed fallback chain always pick the same row-reduction order and
 // stay bit-identical at every shape.
 bool apple_norm_shape_selected(size_t row_length, size_t rows) {
-  if (row_length != 256u && row_length != 2048u && row_length != 2560u) {
+  if (row_length != 256u && row_length != 2048u && row_length != 2560u &&
+      row_length != 4096u) {
     return false;
   }
   return row_length < 2048u || rows <= 64u;
@@ -166,6 +167,16 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
       chip.find("G14C") != std::string::npos;
 }
 
+// The width-4096 subgroup-tree norm (sixteen contiguous values per lane of the
+// 256-thread workgroup) is measured on G16S only (receipts/2026-11-17-m4-pro-g16s-norm-4096);
+// MLX_OMARCHY_NORM_APPLE_4096=1 forces it on and =0 forces it off on any chip.
+bool apple_norm_4096_allowed(const omarchy::Device& device) {
+  if (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
+    return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096");
+  }
+  return device.capabilities().device_name.find("G16S") != std::string::npos;
+}
+
 bool apple_norm_enabled(
     const omarchy::Device& device,
     size_t row_length,
@@ -175,6 +186,9 @@ bool apple_norm_enabled(
     return false;
   }
   if (row_length == 2560u && !apple_norm_2560_allowed(device)) {
+    return false;
+  }
+  if (row_length == 4096u && !apple_norm_4096_allowed(device)) {
     return false;
   }
   const auto& caps = device.capabilities();

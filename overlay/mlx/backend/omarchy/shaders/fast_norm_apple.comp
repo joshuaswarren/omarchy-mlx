@@ -12,6 +12,8 @@
 //     subgroups per WG) + 1 second-level shared stage of 8 partials +
 //     subgroupSum again = 3 threadgroup barriers,
 //   - weight loaded once per output element (from registers if scalar),
+//   - width 4096 (G16S, omarchy::apple_norm_4096_allowed) keeps the same 256-thread tree with sixteen contiguous values per thread. That order is this
+//     kernel's own; it is not claimed to equal another backend's reduction order at that width.
 //
 // The RMS formula matches the deployed path; reduction order differs. `precise`
 // prevents implicit FMA in sum-of-squares.
@@ -72,7 +74,7 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint MAX_READS = 10u;      // 256 * 8 = 2048 and 256 * 10 = 2560 take the register path
+const uint MAX_READS = 16u;      // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
 shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
 
 void main() {
@@ -89,7 +91,7 @@ void main() {
     float reg_x[MAX_READS];
     precise float reg_sq = 0.0;
     uint n_reads = row_length / 256u;
-    bool reg_path = (row_length == 2048u || row_length == 2560u);
+    bool reg_path = (row_length == 2048u || row_length == 2560u || row_length == 4096u);
     if (reg_path) {
       uint base = thread * n_reads;
       for (uint i = 0u; i < 8u; ++i) {
@@ -97,7 +99,12 @@ void main() {
         reg_sq += reg_x[i] * reg_x[i];
       }
       if (n_reads == 10u) {
-        for (uint i = 8u; i < MAX_READS; ++i) {
+        for (uint i = 8u; i < 10u; ++i) {
+          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
+          reg_sq += reg_x[i] * reg_x[i];
+        }
+      } else if (n_reads == 16u) {
+        for (uint i = 8u; i < 16u; ++i) {
           reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
           reg_sq += reg_x[i] * reg_x[i];
         }
@@ -140,7 +147,19 @@ void main() {
             STORE_VALUE(result);
       }
       if (n_reads == 10u) {
-        for (uint i = 8u; i < MAX_READS; ++i) {
+        for (uint i = 8u; i < 10u; ++i) {
+          uint index = base + i;
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+          precise float norm_weight = norm * weight;
+          precise float result = reg_x[i] * norm_weight;
+          output_data.values[params.output_offset + row * row_length + index] =
+              STORE_VALUE(result);
+        }
+      } else if (n_reads == 16u) {
+        for (uint i = 8u; i < 16u; ++i) {
           uint index = base + i;
           float weight =
               (params.lhs_size == 1u)

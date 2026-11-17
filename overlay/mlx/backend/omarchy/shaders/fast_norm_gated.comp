@@ -165,8 +165,9 @@ void main() {
 
 #ifdef APPLE_REDUCTION
     uint n_reads = row_length / threads;
-    bool contiguous = row_length == 8u * threads || row_length == 10u * threads;
-    float cached_x[10];
+    bool contiguous = row_length == 8u * threads || row_length == 10u * threads ||
+        row_length == 16u * threads;
+    float cached_x[16];
     float local_sq = 0.0;
     if (contiguous) {
       for (uint read = 0u; read < 8u; ++read) {
@@ -177,6 +178,13 @@ void main() {
       }
       if (n_reads == 10u) {
         for (uint read = 8u; read < 10u; ++read) {
+          float value = LOAD_VALUE(input_data.values[start + thread * n_reads + read]);
+          cached_x[read] = value;
+          precise float square = value * value;
+          local_sq += square;
+        }
+      } else if (n_reads == 16u) {
+        for (uint read = 8u; read < 16u; ++read) {
           float value = LOAD_VALUE(input_data.values[start + thread * n_reads + read]);
           cached_x[read] = value;
           precise float square = value * value;
@@ -212,6 +220,11 @@ void main() {
       }
       if (n_reads == 10u) {
         for (uint read = 8u; read < 10u; ++read) {
+          store_normed(row, row_length, thread * n_reads + read, cached_x[read],
+                       norm, scale);
+        }
+      } else if (n_reads == 16u) {
+        for (uint read = 8u; read < 16u; ++read) {
           store_normed(row, row_length, thread * n_reads + read, cached_x[read],
                        norm, scale);
         }
