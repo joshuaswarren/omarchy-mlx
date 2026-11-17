@@ -233,9 +233,8 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
     // Mirror the advertised-shape list the booleans summarize so the
     // exact-shape kernel gates see the simulated device the same way real
     // detection would. A simulated coopmat driver lists the same-operand
-    // fp32 and fp16 8x8x8 shapes; it never lists the mixed fp16-A/fp32-B
-    // shape, so the fp16 qmm prefill route falls back under simulation
-    // exactly as it does on a device advertising only same-operand shapes.
+    // fp32 and fp16 8x8x8 shapes, as a device advertising only same-operand
+    // shapes does.
     caps.cooperative_matrix_shapes.clear();
     if (profile.cooperative_matrix != 0) {
       auto same_operand_8x8x8 = [](CoopmatType t) {

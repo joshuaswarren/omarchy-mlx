@@ -37,61 +37,53 @@ std::vector<CoopmatShape> agx3b_shapes() {
 
 } // namespace
 
-TEST_CASE("qmm_prefill_coopmat_shape names the shape each output dtype emits") {
-  const CoopmatShape f16 = omarchy::qmm_prefill_coopmat_shape(true);
+TEST_CASE("qmm_prefill_coopmat_shape names the shape both output dtypes emit") {
+  // Both builds widen the activations to an fp32 A matrix: fp32xfp32 8x8x8,
+  // fp32 accumulate, subgroup, non-saturating. One shape covers f16 and
+  // bf16 output, so the selector takes no dtype argument any more.
+  const CoopmatShape f16 = omarchy::qmm_prefill_coopmat_shape();
   CHECK(f16.m == 8u);
   CHECK(f16.n == 8u);
   CHECK(f16.k == 8u);
-  // fp16 output: activations stay fp16 (A), weights dequantize to fp32 (B) -
-  // a mixed matmad.
-  CHECK(f16.a == CoopmatType::Float16);
+  CHECK(f16.a == CoopmatType::Float32);
   CHECK(f16.b == CoopmatType::Float32);
   CHECK(f16.c == CoopmatType::Float32);
   CHECK(f16.result == CoopmatType::Float32);
   CHECK(f16.scope == CoopmatScope::Subgroup);
   CHECK(f16.saturating == false);
+  CHECK(f16 == same_operand(CoopmatType::Float32));
 
-  const CoopmatShape bf16 = omarchy::qmm_prefill_coopmat_shape(false);
-  // bf16 output: activations are widened to fp32 before the matmad, so A is
-  // fp32 and the shape is same-operand fp32xfp32.
-  CHECK(bf16.a == CoopmatType::Float32);
-  CHECK(bf16.b == CoopmatType::Float32);
-  CHECK(bf16.c == CoopmatType::Float32);
-  CHECK(bf16.result == CoopmatType::Float32);
+  const CoopmatShape bf16 = omarchy::qmm_prefill_coopmat_shape();
+  CHECK(bf16 == f16);
   CHECK(bf16 == same_operand(CoopmatType::Float32));
 }
 
-TEST_CASE("AGX3B advertises the bf16 route's shape but not the fp16 route's") {
+TEST_CASE("AGX3B advertises the shape of both qmm prefill routes") {
   const std::vector<CoopmatShape> adv = agx3b_shapes();
-  // bf16 output needs fp32xfp32: advertised -> coopmat stays (the 2.19x
-  // prefill win is kept).
   CHECK(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(false)));
-  // fp16 output needs the mixed fp16-A/fp32-B shape: not advertised -> the
-  // route must fall back to the non-coopmat tile kernel.
-  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(true)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
+  CHECK(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
-TEST_CASE("a device that lists the mixed shape keeps the fp16 coopmat route") {
-  std::vector<CoopmatShape> adv = agx3b_shapes();
-  adv.push_back(omarchy::qmm_prefill_coopmat_shape(true)); // mixed fp16/fp32
-  CHECK(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(true)));
-  CHECK(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(false)));
+TEST_CASE("a device without the fp32xfp32 shape declines both routes") {
+  const std::vector<CoopmatShape> adv = {same_operand(CoopmatType::Float16)};
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape()));
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
 TEST_CASE("no coopmat device advertises nothing") {
   const std::vector<CoopmatShape> adv;
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(true)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      adv, omarchy::qmm_prefill_coopmat_shape(false)));
+      adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
 TEST_CASE("the match is exact in every field") {
-  const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape(false);
+  const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape();
 
   // A shape that differs in exactly one field must not match.
   auto differs = [&](CoopmatShape s) {
@@ -120,13 +112,4 @@ TEST_CASE("the match is exact in every field") {
 
   // The identical shape matches.
   CHECK(omarchy::cooperative_matrix_advertises({want}, want));
-}
-
-TEST_CASE("the mixed fp16 shape is distinct from same-operand fp16") {
-  // fp16xfp16 (what cooperative_matrix_f16_8 summarizes) is not the fp16 qmm
-  // route's shape: that route is fp16-A/fp32-B. A device offering only
-  // fp16xfp16 must not satisfy the fp16 qmm route.
-  const std::vector<CoopmatShape> f16f16 = {same_operand(CoopmatType::Float16)};
-  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
-      f16f16, omarchy::qmm_prefill_coopmat_shape(true)));
 }

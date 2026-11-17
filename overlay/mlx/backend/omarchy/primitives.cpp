@@ -8323,18 +8323,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   constexpr uint32_t kQmmCoopmatSharedBytes =
       (32u * 16u + 16u * 32u) * sizeof(float);
   const auto& coopmat_caps = encoder.device().capabilities();
-  // The prefill coopmat shader emits an 8x8x8 matmad whose A operand is the
-  // activation type and whose B operand (dequantized weights) is fp32: an
-  // fp16-A/fp32-B mixed shape for an fp16 output, an fp32xfp32 shape for a
-  // bf16 output (activations are widened to fp32 first). Take the route only
-  // when the device advertised that exact shape; a device that lists only
-  // same-operand 8x8x8 shapes (Apple AGX3B: fp32xfp32 and fp16xfp16) keeps
-  // the bf16 route but declines the fp16 route's mixed shape, which falls
-  // back to the register-blocked tile kernel below instead of failing
-  // pipeline creation with VK_ERROR_UNKNOWN.
+  // The prefill coopmat shader emits an 8x8x8 fp32xfp32 matmad for both
+  // output dtypes: the dequantized weights (B) are fp32 and the activations
+  // (A) are widened to fp32 first. Take the route only when the device
+  // advertised that exact shape (omarchy::qmm_prefill_coopmat_shape);
+  // otherwise fall back to the register-blocked tile kernel below instead of
+  // failing pipeline creation with VK_ERROR_UNKNOWN.
   const bool coopmat_shape_advertised = omarchy::cooperative_matrix_advertises(
       coopmat_caps.cooperative_matrix_shapes,
-      omarchy::qmm_prefill_coopmat_shape(out.dtype() == float16));
+      omarchy::qmm_prefill_coopmat_shape());
   bool coopmat_reachable =
       tile_path && rb_enabled && coopmat_format &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&

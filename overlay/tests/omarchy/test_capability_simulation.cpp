@@ -604,15 +604,12 @@ TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   }
   Stream stream = gpu_stream();
   const auto e = expectations();
-  // The fp16 qmm prefill coopmat kernel emits a mixed fp16-A/fp32-B matmad,
-  // so it is reachable only where that exact shape is advertised. A simulated
-  // coopmat device lists the same-operand fp32 and fp16 shapes but not the
-  // mixed one, so the fp16 route falls back to the register-blocked tile - as
-  // it does on a device (AGX3B) that advertises only same-operand shapes.
+  // The fp16 qmm prefill coopmat kernel is reachable only where the shape it
+  // emits (qmm_prefill_coopmat_shape) is advertised.
   const bool f16_coopmat_claim = e.coopmat_claim &&
       omarchy::cooperative_matrix_advertises(
           caps().cooperative_matrix_shapes,
-          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
+          omarchy::qmm_prefill_coopmat_shape());
   constexpr int m = 64;
   constexpr int k = 128;
   constexpr int n = 32;
