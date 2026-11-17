@@ -8331,7 +8331,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // failing pipeline creation with VK_ERROR_UNKNOWN.
   const bool coopmat_shape_advertised = omarchy::cooperative_matrix_advertises(
       coopmat_caps.cooperative_matrix_shapes,
-      omarchy::qmm_prefill_coopmat_shape(out.dtype() == float16));
+      omarchy::qmm_prefill_coopmat_shape());
   bool coopmat_reachable =
       tile_path && rb_enabled && coopmat_format &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&

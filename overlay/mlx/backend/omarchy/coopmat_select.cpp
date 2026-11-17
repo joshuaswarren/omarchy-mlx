@@ -13,14 +13,13 @@ bool cooperative_matrix_advertises(
       advertised.end();
 }
 
-CoopmatShape qmm_prefill_coopmat_shape(bool out_is_f16) {
+CoopmatShape qmm_prefill_coopmat_shape() {
   CoopmatShape shape;
   shape.m = 8u;
   shape.n = 8u;
   shape.k = 8u;
   // Both output dtypes widen the activations to an fp32 A matrix before the
   // matmad (fp16 x is loaded as fp16 and converted), so the shape is fp32xfp32.
-  (void)out_is_f16;
   shape.a = CoopmatType::Float32;
   shape.b = CoopmatType::Float32;
   shape.c = CoopmatType::Float32;

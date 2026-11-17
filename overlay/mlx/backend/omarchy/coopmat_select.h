@@ -81,6 +81,6 @@ bool cooperative_matrix_advertises(
 // same-operand 8x8x8 shapes (fp32xfp32 and fp16xfp16, as Apple AGX3B does)
 // therefore keeps the cooperative matrix for both routes; a device without the
 // fp32xfp32 shape falls back for both.
-CoopmatShape qmm_prefill_coopmat_shape(bool out_is_f16);
+CoopmatShape qmm_prefill_coopmat_shape();
 
 } // namespace mlx::core::omarchy

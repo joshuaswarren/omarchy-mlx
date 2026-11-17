@@ -1291,6 +1291,41 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
                   << (b_t ? " bT" : " b")
                   << " max_abs_err=" << max_abs_err << "\n";
         CHECK_EQ(max_abs_err, 0.0f);
+        if (a_t || b_t) {
+          continue;
+        }
+        if (coopmat_device && m >= 32) {
+          // The route expectation is load-bearing: a gate regression to
+          // the 16x16 tile must fail here, so pin the dispatch the way
+          // the q4g32 case does.
+          std::fflush(stderr);
+          int saved = ::dup(::fileno(stderr));
+          FILE* cap = std::fopen("/tmp/matmul_bf16_route_cap.log", "w");
+          REQUIRE_MESSAGE(cap != nullptr, "route capture open failed");
+          ::dup2(::fileno(cap), ::fileno(stderr));
+          setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+          readback_f32(
+              stream,
+              matmul(
+                  bf16_operand(a_values, batch, m, k, false),
+                  bf16_operand(b_values, batch, k, n, false),
+                  stream));
+          omarchy::get_command_encoder(stream).synchronize();
+          std::fflush(stderr);
+          ::dup2(saved, ::fileno(stderr));
+          ::close(saved);
+          std::fclose(cap);
+          unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+          std::ifstream route_in("/tmp/matmul_bf16_route_cap.log");
+          std::string route_trace(
+              (std::istreambuf_iterator<char>(route_in)),
+              std::istreambuf_iterator<char>());
+          std::string want = "[rtmod] DISPATCH kernel=" +
+              std::to_string(static_cast<uint32_t>(
+                  omarchy::ComputeKernel::MatmulBF16Coopmat)) + " ";
+          CHECK_MESSAGE(route_trace.find(want) != std::string::npos,
+              label, " did not dispatch MatmulBF16Coopmat");
+        }
       }
     }
   };
@@ -4191,6 +4226,51 @@ TEST_CASE("batched quantized_matmul is bit-identical per batch row alone") {
           stream);
       REQUIRE(evaluation_error(full).empty());
       std::vector<float> full_bits = readback_f32(stream, full);
+      if (batch == 2 && m == 64) {
+        // The batched prefill must take a cooperative tile kernel, not
+        // the register-blocked tile. Pin the dispatch the way the
+        // q4g32 case does: a gate regression to the tile route leaves
+        // none of these in the trace and fails here.
+        using K = omarchy::ComputeKernel;
+        const std::vector<K> batched_coopmat{
+            K::QmmPrefillCoopmatBF16,
+            K::QmmPrefillCoopmatM16BF16,
+            K::QmmPrefillCoopmatBF16X32,
+            K::QmmPrefillCoopmatM16BF16X32,
+            K::QmmPrefillCoopmatBF16X32FullN,
+            K::QmmPrefillCoopmatM16BF16X32FullN};
+        std::fflush(stderr);
+        int saved = ::dup(::fileno(stderr));
+        FILE* cap = std::fopen("/tmp/qmm_batch_route_cap.log", "w");
+        REQUIRE_MESSAGE(cap != nullptr, "route capture open failed");
+        ::dup2(::fileno(cap), ::fileno(stderr));
+        setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+        array pin_out = quantized_matmul(
+            x, w_words, scales, biases, true, group_size, bits,
+            "affine", stream);
+        pin_out.eval();
+        omarchy::get_command_encoder(stream).synchronize();
+        std::fflush(stderr);
+        ::dup2(saved, ::fileno(stderr));
+        ::close(saved);
+        std::fclose(cap);
+        unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+        std::ifstream pin_in("/tmp/qmm_batch_route_cap.log");
+        std::string pin_trace(
+            (std::istreambuf_iterator<char>(pin_in)),
+            std::istreambuf_iterator<char>());
+        bool dispatched_coopmat = false;
+        for (auto kernel : batched_coopmat) {
+          if (pin_trace.find("[rtmod] DISPATCH kernel=" +
+                  std::to_string(static_cast<uint32_t>(kernel)) + " ") !=
+              std::string::npos) {
+            dispatched_coopmat = true;
+            break;
+          }
+        }
+        CHECK_MESSAGE(dispatched_coopmat,
+            "batched bf16 qmm prefill did not take a coopmat kernel");
+      }
       for (int b = 0; b < batch; ++b) {
         std::vector<float> x_one(
             x_rt.begin() + static_cast<ptrdiff_t>(b) * m * k,
@@ -4634,7 +4714,7 @@ TEST_CASE("q4g32 and q8 affine formats take the word decode and coopmat prefill 
   const bool f16_coopmat = coopmat &&
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
-          omarchy::qmm_prefill_coopmat_shape(/*out_is_f16=*/true));
+          omarchy::qmm_prefill_coopmat_shape());
   using K = omarchy::ComputeKernel;
 
   auto trace_of = [&](const std::function<void()>& call) {
@@ -5091,6 +5171,93 @@ TEST_CASE("qmm tile matches host reference and qmm.comp across prefill shapes") 
       }
     }
   }
+}
+
+// The fp16 qmm prefill coopmat route must engage wherever the device
+// advertises fp32xfp32 8x8x8 - the shape the selector reports for BOTH
+// output dtypes since the f16 x is widened to an f32 A matrix. This pin
+// is unconditional on that advertised shape: a selector that reports an
+// unadvertised shape (an f16 A matrix, as before the f32 widening) makes
+// the gate refuse and the tile kernel run, and fails here on exactly
+// those devices.
+TEST_CASE("f16 qmm prefill dispatches coopmat wherever fp32xfp32 8x8x8 is advertised") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  omarchy::CoopmatShape want;
+  want.m = 8u;
+  want.n = 8u;
+  want.k = 8u;
+  want.a = omarchy::CoopmatType::Float32;
+  want.b = omarchy::CoopmatType::Float32;
+  want.c = omarchy::CoopmatType::Float32;
+  want.result = omarchy::CoopmatType::Float32;
+  want.scope = omarchy::CoopmatScope::Subgroup;
+  want.saturating = false;
+  if (!caps.cooperative_matrix_f32_8 || !subgroup_ready ||
+      !omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes, want)) {
+    return;
+  }
+  std::mt19937 gen(20261116);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  int k = 2048;
+  int n = 2048;
+  int groups = k / 64;
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, 64, 4);
+  std::vector<float> scales_rt = round_trip(stream, host.scales, bfloat16);
+  std::vector<float> biases_rt =
+      round_trip(stream, host.biases, bfloat16);
+  std::vector<float> x_flat(16 * k);
+  for (auto& v : x_flat) {
+    v = dist(gen);
+  }
+  std::vector<float> x_rt = round_trip(stream, x_flat, float16);
+  array x(x_rt.begin(), Shape{1, 16, k}, float16);
+  array w_words(host.words.begin(), Shape{n, k / 8}, uint32);
+  array scales(scales_rt.begin(), Shape{n, groups}, bfloat16);
+  array biases(biases_rt.begin(), Shape{n, groups}, bfloat16);
+
+  std::fflush(stderr);
+  int saved = ::dup(::fileno(stderr));
+  FILE* cap = std::fopen("/tmp/qmm_f16_shape_cap.log", "w");
+  REQUIRE(cap != nullptr);
+  ::dup2(::fileno(cap), ::fileno(stderr));
+  setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+  array out = quantized_matmul(
+      x, w_words, scales, biases, true, 64, 4, "affine", stream);
+  out.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  std::fflush(stderr);
+  ::dup2(saved, ::fileno(stderr));
+  ::close(saved);
+  std::fclose(cap);
+  unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+  std::ifstream in("/tmp/qmm_f16_shape_cap.log");
+  std::string text((std::istreambuf_iterator<char>(in)),
+      std::istreambuf_iterator<char>());
+  const std::vector<omarchy::ComputeKernel> f16_prefill{
+      omarchy::ComputeKernel::QmmPrefillCoopmatM16F16,
+      omarchy::ComputeKernel::QmmPrefillCoopmatF16};
+  bool dispatched_f16_coopmat = false;
+  for (auto kernel : f16_prefill) {
+    if (text.find("[rtmod] DISPATCH kernel=" +
+            std::to_string(static_cast<uint32_t>(kernel)) + " ") !=
+        std::string::npos) {
+      dispatched_f16_coopmat = true;
+      break;
+    }
+  }
+  CHECK(dispatched_f16_coopmat);
 }
 
 TEST_CASE("qmm non-transposed small-k zone matches host reference") {
