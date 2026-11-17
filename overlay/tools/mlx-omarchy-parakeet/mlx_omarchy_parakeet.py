@@ -150,14 +150,24 @@ def _venv_has_deps(venv_python: Path, missing: list[str]) -> bool:
 
 
 def _missing_deps_message(missing: list[str]) -> str:
+    pip_missing = [m for m in missing if m != "mlx.core"]
     pip_line = f"{sys.executable} -m pip install " + " ".join(
-        _PIP_NAMES.get(module, module) for module in missing
+        _PIP_NAMES.get(module, module) for module in pip_missing
     )
+    if "mlx.core" in missing:
+        # mlx_omarchy is not on PyPI: a `pip install mlx_omarchy` line
+        # would fail. The mlx runtime only arrives with the omarchy-mlx
+        # system package (or a venv rebuilt from the release wheel), so
+        # the repair text says that instead of naming a pip package.
+        repair = "reinstall the omarchy-mlx system package"
+        if pip_missing:
+            repair += f", and install the rest with `{pip_line}`"
+    else:
+        repair = f"install them with `{pip_line}`"
     message = (
         "missing runtime dependencies for transcribe: "
         f"{', '.join(missing)}; this launcher ran under "
-        f"{sys.executable}, which does not have them; install them with "
-        f"`{pip_line}` "
+        f"{sys.executable}, which does not have them; {repair} "
         "(ffmpeg handles FLAC decode when soundfile is absent)"
     )
     if (_SYSTEM_VENV_PYTHON.is_file()
