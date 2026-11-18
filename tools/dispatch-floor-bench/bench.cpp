@@ -471,14 +471,21 @@ struct RecRes {
   std::vector<uint64_t> per_disp;  // only when ts_per_dispatch
 };
 
+// DFB_NO_TS=1 skips every timestamp query: with the dependency-tracked CDM
+// barrier the timestamp writes lose the device on the M2 driver builds, and
+// host wall time is the absolute scale here anyway.
+static const bool g_no_ts = getenv("DFB_NO_TS") != nullptr;
+
 static RecRes run_recorded(Bench& b, const RecCfg& c) {
   VkCommandBuffer cmd = b.cmd;
   double rec0 = now_us();
   VkCommandBufferBeginInfo bi{};
   bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   g_vk.BeginCommandBuffer(cmd, &bi);
-  g_vk.CmdResetQueryPool(cmd, b.qpool, 0, c.ts_per_dispatch ? 2 * c.n + 2 : 2);
-  g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, b.qpool, 0);
+  if (!g_no_ts) {
+    g_vk.CmdResetQueryPool(cmd, b.qpool, 0, c.ts_per_dispatch ? 2 * c.n + 2 : 2);
+    g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, b.qpool, 0);
+  }
   g_vk.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, c.pipe->pipe);
   g_vk.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, b.layout, 0,
       1, &b.set_a, 0, nullptr);
@@ -524,6 +531,18 @@ static RecRes run_recorded(Bench& b, const RecCfg& c) {
           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &full, 0, nullptr, 0,
           nullptr);
+    } else if (c.barrier_mode == 4) {
+      // Buffer-only barrier on the one storage buffer, compute -> compute.
+      VkBufferMemoryBarrier bb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+      bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      bb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      bb.buffer = b.out.buf;
+      bb.offset = 0;
+      bb.size = VK_WHOLE_SIZE;
+      g_vk.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bb, 0,
+          nullptr);
     }
     g_vk.CmdDispatch(cmd, c.grid, 1, 1);
     if (c.ts_per_dispatch)
@@ -550,7 +569,8 @@ static RecRes run_recorded(Bench& b, const RecCfg& c) {
           0, 1, &after, 0, nullptr, 0, nullptr);
     }
   }
-  g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool, 1);
+  if (!g_no_ts)
+    g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool, 1);
   g_vk.EndCommandBuffer(cmd);
   double rec1 = now_us();
 
@@ -566,10 +586,14 @@ static RecRes run_recorded(Bench& b, const RecCfg& c) {
 
   uint32_t qn = c.ts_per_dispatch ? 2 * c.n + 2 : 2;
   std::vector<uint64_t> ticks(qn);
-  if (g_vk.GetQueryPoolResults(g_vk.dev, b.qpool, 0, qn, qn * sizeof(uint64_t),
-      ticks.data(), sizeof(uint64_t),
-      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS)
-    die("GetQueryPoolResults");
+  VkResult qr = g_no_ts ? VK_SUCCESS : g_vk.GetQueryPoolResults(g_vk.dev, b.qpool, 0, qn,
+      qn * sizeof(uint64_t), ticks.data(), sizeof(uint64_t),
+      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+  if (qr != VK_SUCCESS) {
+    // Host wall time is the absolute scale here; device ticks are optional.
+    fprintf(stderr, "GetQueryPoolResults rc=%d: device ticks zeroed\n", (int)qr);
+    std::fill(ticks.begin(), ticks.end(), 0);
+  }
 
   RecRes r;
   r.record_us = rec1 - rec0;
@@ -687,6 +711,8 @@ int main() {
       {"barrier_empty_1wg", &b.empty, nullptr, 1, 512, 1, 0, 0, 0, 0},
       {"barrierfull_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 0, 0, 0,
           0, 3},
+      {"barrierbuf_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 0, 0, 0, 0,
+          4},
       {"mlxpair_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 0, 0, 0, 0, 2},
       {"rebind_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 1, 0, 0, 0},
       {"pushconst_trivial_1wg", &b.tpc, nullptr, 1, 512, 0, 0, 1, 0, 0},
@@ -697,8 +723,17 @@ int main() {
       {"tsper_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 0, 0, 0, 1},
   };
 
+  // Warm-up: about 150 ms of work so the GPU clock has ramped before case 1.
+  {
+    RecCfg wc{};
+    wc.pipe = &b.nop;
+    wc.grid = 4096;
+    wc.n = 64;
+    for (int i = 0; i < 100; ++i) run_recorded(b, wc);
+  }
   const int kReps = 5;
   for (const auto& c : cases) {
+    if (g_no_ts && c.ts_per) continue;
     RecCfg rc{};
     rc.pipe = c.pipe;
     rc.pipe_alt = c.pipe_alt;
