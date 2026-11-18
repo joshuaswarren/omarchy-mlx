@@ -11,8 +11,15 @@ mkdir -p "$OUT"
 # Packaged hosts have no standalone .whl; gdn_logits omits --wheel (installed RECORD only).
 PROMPT='Tell me about the history of computing in three short paragraphs: the early mechanical era, the transistor era, and the modern GPU era.'
 M4B="${MODEL_4B:-$(find "$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3-4B-4bit/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)}"
-M2B="${MODEL_2B:-$(find "$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3.8-2B-4bit/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)}"
-test -d "$M4B" && test -d "$M2B" || { echo "missing models M4B=$M4B M2B=$M2B"; exit 2; }
+M2B="${MODEL_2B:-$(
+  find "$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3.8-2B-4bit/snapshots" \
+    "$HOME/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots" \
+    -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1
+)}"
+if ! test -d "$M4B" || ! test -d "$M2B"; then
+  echo "missing models M4B=$M4B M2B=$M2B"
+  exit 2
+fi
 run_bench() {
   local model="$1" tag="$2" envpair="$3" i="$4"
   ( unset MLX_OMARCHY_WAVE_SCHED; eval "export $envpair"

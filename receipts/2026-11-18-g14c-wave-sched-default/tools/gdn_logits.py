@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """gdn_logits.py: per-step log-probabilities of a pinned greedy decode, for the GDN decode-kernel numerics gate.
 One process is one arm (the caller sets the environment). Records, per generated token: the id, the top 20 (id, logprob),
 and the full float32 log-probability vector for the first --full-steps tokens. Same prompt handling as scripts/bench_decode.py."""
