@@ -1628,10 +1628,10 @@ TEST_CASE("the OOM retry settles on progress, not global idleness") {
 // overrides either way.
 TEST_CASE("wave scheduling is a G16S default only") {
   CHECK(omarchy::wave_sched_default_part("Apple M4 Pro (G16S B1)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
 }
 

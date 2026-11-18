@@ -650,14 +650,19 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 // encoder records each batch in earliest-wave order by default. G16S (Apple
 // M4 Pro): with aurora-silicon/mesa#353 and #343, Qwen3-8B decode +1.4%
 // (wave) and +2.7% (both), tokens identical
-// (receipts/2026-11-15-m4-pro-wave-sched). Other parts keep tape order until
-// they are measured; MLX_OMARCHY_WAVE_SCHED=1 or =0 overrides on any part.
+// (receipts/2026-11-15-m4-pro-wave-sched). G14C (Apple M2 Max): Qwen3-4B-4bit
+// decode three paired runs, wave off vs on, identical ids every arm; step logprob
+// gate (gdn_logits.py, 32 steps) max |dlogprob|=0; Qwen3.8-2B flat decode,
+// same logprob gate (receipts/2026-11-18-g14c-wave-sched-default).
+// Other parts keep tape order until measured; MLX_OMARCHY_WAVE_SCHED=1 or =0
+// overrides on any part.
 inline bool wave_sched_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_WAVE_SCHED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
-  return device_name.find("G16S") != std::string::npos;
+  // G16S and measured G14C default on; initial G17C keeps off pending M5 calibration.
+  return device_name.find("G16S") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos;
 }
 
 inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
