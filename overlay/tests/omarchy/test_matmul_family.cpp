@@ -4745,18 +4745,19 @@ TEST_CASE("qmm_vec group-128 word route dispatches") {
       caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
   if (subgroup_kernel) {
-    const int k = 4096;
+    const int k = 12288;
     const int n = 64;
     std::mt19937 gen(503128);
-    std::normal_distribution<float> dist(0.0f, 0.02f);
+    std::normal_distribution<float> wdist(0.0f, 0.02f);
+    std::normal_distribution<float> xdist(0.0f, 1.0f);
     std::vector<float> matrix(static_cast<size_t>(n) * k);
     for (auto& value : matrix) {
-      value = dist(gen);
+      value = wdist(gen);
     }
     HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 128, 4);
     std::vector<float> x_values(k);
     for (auto& value : x_values) {
-      value = dist(gen);
+      value = xdist(gen);
     }
     array x = astype(
         array(x_values.begin(), Shape{1, k}, float32), bfloat16, stream);
