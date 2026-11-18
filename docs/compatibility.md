@@ -790,6 +790,19 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   matmul matches the 16x16 tile bit for bit" (`omarchy_matmul_family_tests`).
   Since 2026-10-06 it serves only the shapes `MatmulDirectF16` declines and
   the causal attention shortcuts.
+  `MatmulRbF32` is the same tile built for float32 storage
+  (`-DUSE_F32=1`). It takes the f32 matmuls with `matrix_m >= 32` and no
+  bias that neither `MatmulDirectF32` nor `MatmulF32Coopmat` takes, which
+  is every such f32 product on a driver without `VK_KHR_cooperative_matrix`.
+  On a driver that has the f32 cooperative matrix it takes the f32
+  products those gates decline (odd `n`, `k % 8 != 0`, odd `m` with a
+  column-major lhs). Composed f32 causal attention at `q_len >= 32`
+  without the cooperative matrix also takes it, with the causal skip
+  flags. Stored bits equal `MatmulF32`. Tests "register-blocked f32 matmul
+  matches the 16x16 tile bit for bit" (also asserts the route ran) and
+  "f32 addmm at 32 or more rows keeps its bias off the register-blocked
+  tile" (`omarchy_matmul_family_tests`);
+  `MLX_OMARCHY_NO_MATMUL_RB_F32=1` keeps the 16x16 tile.
 - `MatmulDirectF16{Nn,Nt,Tn,Tt}` (`shaders/matmul_coopmat_direct.comp`):
   the same f16 matmul contract on the 8x8x8 cooperative matrix with fp16
   operands and an f32 accumulator, every operand tile loaded straight from
