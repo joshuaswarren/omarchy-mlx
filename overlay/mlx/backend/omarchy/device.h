@@ -639,6 +639,25 @@ inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name)
   return device_name.find("G16S") != std::string::npos;
 }
 
+// Two-pass bf16 4-bit/group-64 prefill (MLX_OMARCHY_QMM_BF16W unset): the parts where a transposed quantized_matmul with enough
+// rows (qmm_bf16w_rows_ok) dequantizes the weight to bf16 once (the affine Dequant kernel) and contracts it with the dense bf16
+// matmul, instead of dequantizing to float32 tiles inside the cooperative-matrix qmm kernel. Rounding the weight to bf16 before the
+// product is what the Metal backend does (its quantized loader stores T tiles for the MMA).
+//   G16S (Apple M4 Pro, cooperative-matrix driver), Qwen3-8B-4bit prefill: receipts/2026-11-15-m4-pro-g16s-qmm-bf16w.
+// An unmeasured part keeps the single-kernel route. Pure.
+inline bool qmm_bf16w_default_part(const std::string& device_name) {
+  return device_name.find("G16S") != std::string::npos;
+}
+// Row rule of the two-pass route: the dequantize pass costs one weight read and one bf16 write per call, which enough rows amortize.
+// G16S, milliseconds per call, single-kernel against two-pass (best of three runs of six calls):
+//   N x K 4096x4096: 256 rows 1.76 against 3.03, 512 rows 3.34 against 3.06, 2048 rows 12.65 against 10.66
+//   N x K 12288x4096: 256 rows 4.84 against 8.14, 512 rows 9.42 against 8.60, 2048 rows 36.84 against 31.33
+//   N x K 151936x4096 (vocabulary head): 768 rows 170.7 against 200.6, 1024 rows 257.9 against 250.4, 2048 rows 532.1 against 469.8
+// so from 1024 rows on any weight, and from 512 rows when the weight has at most 2^26 elements. Pure.
+inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
+  return rows >= 1024 || (rows >= 512 && n * k <= (size_t{1} << 26));
+}
+
 // Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.
 // 0 means the fused kernel stays the default. The route costs 79 to 90 microseconds per call up to 512 keys (two dispatches) and 89 to 113 at 1024 keys, and it wins by more as the cache grows,
 // so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent

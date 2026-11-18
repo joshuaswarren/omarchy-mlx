@@ -7323,6 +7323,146 @@ TEST_CASE("bf16 linear-layer matmul takes the FMA kernel over the cooperative ma
   }
 }
 
+
+TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
+  for (int round = 0; round < 2; ++round) {
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M4 Pro (G16S B1)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(""));
+  }
+  CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(511, 4096, 4096));
+  CHECK(omarchy::qmm_bf16w_rows_ok(512, 4096, 4096));
+  CHECK(omarchy::qmm_bf16w_rows_ok(512, 12288, 4096));
+  CHECK(omarchy::qmm_bf16w_rows_ok(512, 16384, 4096));
+  CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(512, 16385, 4096));
+  CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(1023, 151936, 4096));
+  CHECK(omarchy::qmm_bf16w_rows_ok(1024, 151936, 4096));
+}
+
+// MLX_OMARCHY_QMM_BF16W=1 on a cooperative-matrix device: a bf16 4-bit
+// group-64 transposed product with enough rows is the affine Dequant kernel
+// to bf16 followed by the dense bf16 matmul, so it must equal that
+// composition bit for bit and end on MatmulBF16Coopmat. The weight is
+// rounded to bf16 once, so the error against the host reference may grow by
+// one bf16 step of the weight; 0 keeps the single-kernel route, and a short
+// pass under the row rule keeps it with the flag set.
+TEST_CASE("bf16 Q4 two-pass prefill equals the dequantize and dense matmul composition") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_reachable = caps.cooperative_matrix_f32_8 &&
+      caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      (32u * 16u + 16u * 32u) * sizeof(float) <=
+          caps.max_compute_shared_memory_size;
+  std::cout << "[provenance] device=" << caps.device_name
+            << " coopmat_reachable=" << (coopmat_reachable ? 1 : 0) << "\n";
+  if (!coopmat_reachable) {
+    skip("the two-pass route needs the cooperative-matrix qmm route");
+    return;
+  }
+  unsetenv("MLX_OMARCHY_QMM_TILE");
+  unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4, k = 256, n = 640;
+  std::mt19937 gen(20261115);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  HostQuantizedWeights rounded = host;
+  rounded.scales = round_trip(stream, host.scales, bfloat16);
+  rounded.biases = round_trip(stream, host.biases, bfloat16);
+  array w_words(host.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+  auto run = [&](const array& x, const char* flag) {
+    if (flag) {
+      setenv("MLX_OMARCHY_QMM_BF16W", flag, 1);
+    } else {
+      unsetenv("MLX_OMARCHY_QMM_BF16W");
+    }
+    array out = quantized_matmul(
+        x, w_words, scales, biases, true, group_size, bits, "affine", stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t dispatched =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    const auto error = evaluation_error(out);
+    REQUIRE_MESSAGE(error.empty(), error);
+    return std::pair{readback_f32(stream, out), dispatched};
+  };
+  for (int m : {300, 1024}) {
+    std::vector<float> x_values(static_cast<size_t>(m) * k);
+    for (auto& v : x_values) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_values, bfloat16);
+    std::vector<float> expected =
+        host_quantized_matmul(rounded, x_rt, m, n, k, group_size, bits);
+    array x(x_rt.begin(), Shape{1, m, k}, bfloat16);
+    eval({x, w_words, scales, biases});
+    omarchy::get_command_encoder(stream).synchronize();
+    auto [single, single_kernel] = run(x, "0");
+    auto [forced, forced_kernel] = run(x, "1");
+    INFO("m=" << m << " n=" << n << " k=" << k);
+    REQUIRE_EQ(single.size(), expected.size());
+    REQUIRE_EQ(forced.size(), expected.size());
+    if (m < 512) {
+      CHECK_NE(forced_kernel,
+          static_cast<int64_t>(omarchy::ComputeKernel::MatmulBF16Coopmat));
+      CHECK(forced == single);
+      continue;
+    }
+    CHECK_EQ(forced_kernel,
+        static_cast<int64_t>(omarchy::ComputeKernel::MatmulBF16Coopmat));
+    unsetenv("MLX_OMARCHY_QMM_BF16W");
+    array deq = dequantize(
+        w_words, scales, biases, group_size, bits, "affine", std::nullopt,
+        std::nullopt, stream);
+    array composed = matmul(x, transpose(deq, {1, 0}, stream), stream);
+    composed.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    std::vector<float> reference = readback_f32(stream, composed);
+    REQUIRE_EQ(reference.size(), forced.size());
+    CHECK(forced == reference);
+    double x_max = 0.0, w_max = 0.0, o_max = 1.0;
+    for (float v : x_rt) {
+      x_max = std::max(x_max, std::fabs(static_cast<double>(v)));
+    }
+    for (int i = 0; i < n; ++i) {
+      for (int g = 0; g < k / group_size; ++g) {
+        const double s = rounded.scales[i * (k / group_size) + g];
+        const double b = rounded.biases[i * (k / group_size) + g];
+        w_max = std::max({w_max, std::fabs(b), std::fabs(b + 15.0 * s)});
+      }
+    }
+    for (double v : expected) {
+      o_max = std::max(o_max, std::fabs(v));
+    }
+    const double bound = k * x_max * w_max * std::ldexp(1.0, -9) +
+        (3.0 * k + 1.0) * 2.0 * o_max * std::ldexp(1.0, -23) +
+        2.0 * o_max * std::ldexp(1.0, -8);
+    double diff_forced = 0.0, diff_single = 0.0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      diff_forced = std::max(
+          diff_forced, std::fabs(static_cast<double>(forced[i]) - expected[i]));
+      diff_single = std::max(
+          diff_single, std::fabs(static_cast<double>(single[i]) - expected[i]));
+    }
+    std::cout << "[qmm-bf16w] m=" << m << " two-pass max_diff=" << diff_forced
+              << " single-kernel max_diff=" << diff_single
+              << " bound=" << bound << "\n";
+    CHECK(diff_forced <= bound);
+  }
+  unsetenv("MLX_OMARCHY_QMM_BF16W");
+}
+
 TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
   if (!compute_available()) {
     return;
