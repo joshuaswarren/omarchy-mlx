@@ -11,6 +11,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -65,6 +66,12 @@ void poison_freed_buffer(void* data, size_t size) {
     words[i] = kPoisonFreedWord;
   }
 }
+
+// Retries after the quarantine drain and cache clear when vkAllocateMemory
+// reports OOM: spaced attempts give a driver that uncharges closed GEM
+// objects asynchronously time to catch up (#435).
+constexpr int kOomRetryAttempts = 3;
+constexpr auto kOomRetrySettle = std::chrono::seconds(3);
 
 // Test-only hook: simulate one or more vkAllocateMemory OOM results.
 bool consume_test_oom() {
@@ -255,8 +262,21 @@ Buffer VulkanAllocator::malloc(size_t size) {
       std::unique_lock rl(mutex_);
       buffer_cache_.clear();
     }
-    alloc_result =
-        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+    // The driver can free the kernel GEM objects after vkFreeMemory
+    // returns, so an immediate retry can run ahead of the memory coming
+    // back (#435). Settle briefly between retries; a genuine OOM still
+    // fails after the bounded attempts below.
+    for (int attempt = 0; attempt < kOomRetryAttempts; ++attempt) {
+      alloc_result = consume_test_oom()
+          ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+          : dt.AllocateMemory(
+                device().handle(), &mai, nullptr, &buf->memory);
+      if (alloc_result != VK_ERROR_OUT_OF_DEVICE_MEMORY &&
+          alloc_result != VK_ERROR_OUT_OF_HOST_MEMORY) {
+        break;
+      }
+      std::this_thread::sleep_for(kOomRetrySettle);
+    }
   }
   if (alloc_result != VK_SUCCESS) {
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
