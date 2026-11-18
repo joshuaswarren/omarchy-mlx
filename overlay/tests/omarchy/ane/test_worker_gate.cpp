@@ -552,6 +552,28 @@ TEST_CASE("the init retry runs once, only on no supported device, and re-points 
     CHECK_FALSE(s.run().ok);
     CHECK(s.attempts == 1);
   }
+  SUBCASE("a successful retry reports the packaged ICD that found no device") {
+    Stub s;
+    s.outcome[0] = 1;
+    s.outcome[1] = 0;
+    const auto r = s.run();
+    REQUIRE(r.ok);
+    // The capability report's icd_source is "search" (the system driver is
+    // in use); icd_fallback_from must name the packaged ICD that enumerated
+    // no supported device so mlx-omarchy-info can show why.
+    CHECK(icd_fallback_from(r) == packaged);
+  }
+  SUBCASE("no fallback provenance without a rescued retry") {
+    Stub s;
+    CHECK(icd_fallback_from(s.run()).empty());
+    Stub refused;
+    refused.outcome[0] = 2;
+    CHECK(icd_fallback_from(refused.run()).empty());
+    Stub both_fail;
+    both_fail.outcome[0] = 1;
+    both_fail.outcome[1] = 1;
+    CHECK(icd_fallback_from(both_fail.run()).empty());
+  }
 }
 
 TEST_CASE("the packaged mesa-git-sha file supplies the expected SHA") {

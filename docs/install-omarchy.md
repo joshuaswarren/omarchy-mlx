@@ -412,8 +412,11 @@ device, or the loader cannot load it at all (`vkCreateInstance` returns
 backend destroys that Vulkan instance and retries once with the
 first Honeykrisp ICD JSON of the system search (case 3), setting both
 variables to it (`icd_source` `search`) and printing one `[omarchy]` line to
-stderr that names both ICDs. The packaged Mesa targets M1/M2, so a newer
-chip it cannot serve can still run on the system driver. An override (case 1)
+stderr that names both ICDs. The packaged path that found no supported
+device is reported as `icd_fallback_from` by `mlx-omarchy-info` and
+`mx.device_info()`; it is empty in every other case. The packaged Mesa
+targets M1/M2, so a newer chip it cannot serve can still run on the system
+driver. An override (case 1)
 never falls back, a refusal other than "no supported device" (for example a
 packaged SHA mismatch) does not retry, and when the retry also finds no
 device the error carries both reasons.
@@ -436,10 +439,10 @@ the loader's normal ICD search and the system Mesa driver.
 ### Identity check
 
 `mlx-omarchy-info` and `mx.device_info()` report `icd_path`, `icd_source`
-(`packaged`, `override`, or `search`), `driver`, `driver_info`,
-`driver_sha`, `expected_sha`, and `expected_sha_source`. `driver_sha` is
-the hex run after `git-` in driver info when that run is at least 7 digits.
-Otherwise it is empty.
+(`packaged`, `override`, or `search`), `icd_fallback_from`, `driver`,
+`driver_info`, `driver_sha`, `expected_sha`, and `expected_sha_source`.
+`driver_sha` is the hex run after `git-` in driver info when that run is at
+least 7 digits. Otherwise it is empty.
 
 Expected SHA (`resolve_expected_sha_policy`):
 

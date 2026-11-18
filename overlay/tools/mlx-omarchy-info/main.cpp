@@ -332,6 +332,7 @@ void print_json(uint32_t index) {
   str_field("driver_sha", caps.driver_sha, true);
   str_field("icd_path", caps.icd_path, true);
   str_field("icd_source", caps.icd_source, true);
+  str_field("icd_fallback_from", caps.icd_fallback_from, true);
   str_field("expected_sha", caps.expected_sha, true);
   str_field("expected_sha_source", caps.expected_sha_source, true);
   str_field(
@@ -424,6 +425,10 @@ void print_text(uint32_t index) {
   std::cout << "  driver SHA:        " << caps.driver_sha << "\n";
   std::cout << "  ICD:               " << caps.icd_path << "\n";
   std::cout << "  ICD source:        " << caps.icd_source << "\n";
+  std::cout << "  ICD fallback from: "
+            << (caps.icd_fallback_from.empty() ? "none"
+                                               : caps.icd_fallback_from)
+            << "\n";
   std::cout << "  expected SHA:      " << caps.expected_sha << "\n";
   std::cout << "  expected SHA from: "
             << (caps.expected_sha_source.empty() ? "none (record only)"

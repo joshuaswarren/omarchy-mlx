@@ -219,6 +219,14 @@ IcdFallbackResult init_with_icd_fallback(
   return result;
 }
 
+// The packaged ICD path an info surface reports as the failed driver when
+// a system-ICD retry rescued discovery; empty when no retry ran or the
+// packaged attempt never lost the device to the system ICD.
+inline std::string icd_fallback_from(const IcdFallbackResult& result) {
+  return result.ok && !result.fallback_path.empty() ? result.packaged_path
+                                                    : "";
+}
+
 inline std::string resolve_honeykrisp_icd(
     const std::vector<std::string>& candidates,
     const char* user_files) {

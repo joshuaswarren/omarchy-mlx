@@ -94,6 +94,9 @@ struct CapabilityReport {
   std::string icd_path;
   // ICD selection origin: "packaged", "override", or "search".
   std::string icd_source;
+  // The packaged ICD that enumerated no supported device before the
+  // system ICD served the retry; empty when no fallback ran.
+  std::string icd_fallback_from;
   // Expected Mesa git SHA and where it came from: "env", "packaged file",
   // or empty when identity is recorded without enforcement.
   std::string expected_sha;

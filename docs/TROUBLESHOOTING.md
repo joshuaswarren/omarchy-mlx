@@ -11,6 +11,11 @@ Back to the [README](../README.md).
   ICD under `/usr/lib/omarchy-mlx/vulkan/` and leaves the system Mesa
   driver installed. See
   [docs/install-omarchy.md](install-omarchy.md).
+- `mlx-omarchy-info` reports `icd_source` `search` and names a path in
+  `icd_fallback_from`: the packaged driver was selected but enumerated
+  no supported device on this chip, so the backend retried on the system
+  driver named by `icd_path`. Update `omarchy-mlx-vulkan` to a build that
+  knows the chip; the fallback keeps MLX working meanwhile.
 - The backend refuses to start and names a non-Apple GPU. The refusal
   is on purpose. Set `MLX_OMARCHY_ALLOW_NON_APPLE=1` only on a dev
   box with software Vulkan.
