@@ -4735,7 +4735,11 @@ TEST_CASE("qmm_vec packed-word candidate matches baseline and host reference") {
 // a 4-bit group-128 transposed bf16 decode GEMV has to differ in at least one
 // element, because the two kernels accumulate in a different order. Bit
 // identical output means the word route is dead code.
-{
+TEST_CASE("qmm_vec group-128 word route dispatches") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
   const auto& caps = omarchy::device(0).capabilities();
   const bool subgroup_kernel =
       caps.subgroup_size == 32u &&
