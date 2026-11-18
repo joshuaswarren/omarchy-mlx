@@ -1149,6 +1149,30 @@ TEST_CASE(
   unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
 }
 
+TEST_CASE(
+    "malloc retries again after a settle when the first OOM retry also fails") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  alloc.clear_cache();
+
+  // Two consecutive driver OOMs: the kernel may uncharge the freed memory
+  // only after vkFreeMemory returns, so an immediate second attempt still
+  // fails (#435 reason 2). A short settle and retry must rescue it.
+  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "2", 1);
+  const size_t before_active = alloc.get_active_memory();
+  auto* buf =
+      static_cast<omarchy::VulkanBuffer*>(alloc.malloc(4u << 20).ptr());
+  unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
+  REQUIRE(buf != nullptr);
+  CHECK(buf->memory != VK_NULL_HANDLE);
+  CHECK(alloc.get_active_memory() == before_active + (4u << 20));
+  alloc.free(allocator::Buffer{buf});
+  alloc.clear_cache();
+}
+
 TEST_CASE("round_size: above 1 MiB at most 12.5% waste, octave sizes exact") {
   using omarchy::round_size;
   CHECK(round_size(1) == 4096);
