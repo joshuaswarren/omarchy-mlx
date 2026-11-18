@@ -8292,7 +8292,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool use_word_format =
       (q4_word_env == nullptr || std::strcmp(q4_word_env, "1") == 0) &&
       transpose_ && !q4_g64_transpose &&
-      ((bits_ == 4 && group_size_ == 32) ||
+      ((bits_ == 4 && (group_size_ == 32 || group_size_ == 128)) ||
        (bits_ == 8 && (group_size_ == 64 || group_size_ == 32)));
   // Prefill coopmat eligibility, resolved before operand normalization so
   // a row-contiguous x view at an odd f16-element offset is materialized
@@ -8623,7 +8623,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               use_q4_word ? omarchy::ComputeKernel::QmmVecQ4WordBF16
                           : omarchy::ComputeKernel::QmmVecBF16);
     if (use_word_format && subgroup_ready &&
-        (out.dtype() == float16 || out.dtype() == bfloat16)) {
+        (out.dtype() == float16 || out.dtype() == bfloat16) &&
+        !(bits_ == 4 && group_size_ == 128)) {
+      // Group 128 never reaches this override: bf16 took the dedicated
+      // QmmVecQ4WordSubgroupBF16G128 route above and returned, and f16 has
+      // no group-128 word build, so it must keep the generic subgroup vec
+      // kernel instead of the group-32 word kernels selected here.
       vec_kernel = qmm_vec_word_format_kernel(
           out.dtype() == bfloat16, bits_, group_size_);
     }
