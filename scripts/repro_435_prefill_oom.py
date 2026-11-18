@@ -59,7 +59,7 @@ def run(model_id, context, chunk, reps):
         for start in starts:
             mx.eval(
                 model(
-                    mx.array(ids[start : start + chunk][None]),
+                    mx.array(ids[start : start + chunk])[None],
                     cache=cache,
                 )
             )
