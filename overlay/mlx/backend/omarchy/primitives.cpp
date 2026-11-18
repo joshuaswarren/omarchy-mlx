@@ -8711,7 +8711,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // table below never sees coopmat_rows == 64 (review of #508).
       const bool full_n = (params.matrix_n % 32u) == 0u &&
           std::getenv("MLX_OMARCHY_QMM_NO_FULLN") == nullptr;
-      uint32_t coopmat_rows = coopmat_tile_rows(
+      uint32_t coopmat_rows = omarchy::coopmat_tile_rows(
           params.matrix_m,
           n_groups,
           encoder.device().hardware_capabilities().device_name,
@@ -8868,7 +8868,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               : pad_bytes;
           // STEP_K=32 doubles the B-tile (32 x 36 f32); still well
           // under typical max shared. CHUNK stays the 32-row path only.
-          const uint32_t step_k = qmm_coopmat_stepk_env();
+          const uint32_t step_k = omarchy::qmm_coopmat_stepk_env();
           const uint32_t ratio_bytes = step_k * 36u * 4u;
           const uint32_t need_ratio =
               need > ratio_bytes ? need : ratio_bytes;
@@ -8884,9 +8884,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               // twin; CHUNK is 32-row-only.
               qmm_kernel = qmm_g4_pad_ratio_kernel(
                   coopmat_rows,
-                  qmm_coopmat_sg4_env(),
+                  omarchy::qmm_coopmat_sg4_env(),
                   step_k,
-                  qmm_cheap_deq_env());
+                  omarchy::qmm_cheap_deq_env());
             }
             grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
             grid_y = 1u;
@@ -9034,7 +9034,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       uint32_t n_groups = coopmat ? (params.matrix_n + 31u) / 32u
                                   : (params.matrix_n + 15u) / 16u;
       uint32_t coopmat_rows = coopmat
-          ? coopmat_tile_rows(
+          ? omarchy::coopmat_tile_rows(
                 params.matrix_m,
                 n_groups,
                 encoder.device().hardware_capabilities().device_name)
