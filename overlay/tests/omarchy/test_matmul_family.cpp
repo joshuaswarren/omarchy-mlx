@@ -7339,6 +7339,8 @@ TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
   CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(512, 16385, 4096));
   CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(1023, 151936, 4096));
   CHECK(omarchy::qmm_bf16w_rows_ok(1024, 151936, 4096));
+  CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(
+      512, std::numeric_limits<size_t>::max() / 2 + 1, 2));
 }
 
 // MLX_OMARCHY_QMM_BF16W=1 on a cooperative-matrix device: a bf16 4-bit
@@ -7460,6 +7462,122 @@ TEST_CASE("bf16 Q4 two-pass prefill equals the dequantize and dense matmul compo
               << " bound=" << bound << "\n";
     CHECK(diff_forced <= bound);
   }
+  unsetenv("MLX_OMARCHY_QMM_BF16W");
+}
+
+TEST_CASE("bf16 Q4 two-pass prefill rank-2 x and batched x match composition") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_reachable = caps.cooperative_matrix_f32_8 &&
+      caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      (32u * 16u + 16u * 32u) * sizeof(float) <=
+          caps.max_compute_shared_memory_size;
+  if (!coopmat_reachable) {
+    skip("the two-pass route needs the cooperative-matrix qmm route");
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4, k = 256, n = 640, m = 1024;
+  std::mt19937 gen(20261118);
+  std::uniform_real_distribution<float> dist(-1.5f, 1.5f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k, 0.125f);
+  HostQuantizedWeights rounded =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  rounded.scales = round_trip(stream, rounded.scales, bfloat16);
+  rounded.biases = round_trip(stream, rounded.biases, bfloat16);
+  array w_words(rounded.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+  std::vector<float> x_values(static_cast<size_t>(2) * m * k);
+  for (auto& v : x_values) {
+    v = dist(gen);
+  }
+  std::vector<float> x_rt = round_trip(stream, x_values, bfloat16);
+  auto run_forced = [&](const array& x) {
+    setenv("MLX_OMARCHY_QMM_BF16W", "1", 1);
+    array out = quantized_matmul(
+        x, w_words, scales, biases, true, group_size, bits, "affine", stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    REQUIRE_MESSAGE(evaluation_error(out).empty(), evaluation_error(out));
+    return readback_f32(stream, out);
+  };
+  {
+    std::vector<float> row_x(x_rt.begin(), x_rt.begin() + static_cast<size_t>(m) * k);
+    array x(row_x.begin(), Shape{m, k}, bfloat16);
+    eval({x, w_words, scales, biases});
+    std::vector<float> expected =
+        host_quantized_matmul(rounded, row_x, m, n, k, group_size, bits);
+    std::vector<float> forced = run_forced(x);
+    REQUIRE_EQ(forced.size(), expected.size());
+    CHECK(forced == expected);
+  }
+  {
+    array x(x_rt.begin(), Shape{2, m, k}, bfloat16);
+    eval({x, w_words, scales, biases});
+    std::vector<float> forced = run_forced(x);
+    REQUIRE_EQ(forced.size(), static_cast<size_t>(2) * m * n);
+    for (int b = 0; b < 2; ++b) {
+      std::vector<float> row_x(
+          x_rt.begin() + static_cast<size_t>(b) * m * k,
+          x_rt.begin() + static_cast<size_t>(b + 1) * m * k);
+      std::vector<float> expected =
+          host_quantized_matmul(rounded, row_x, m, n, k, group_size, bits);
+      for (size_t i = 0; i < expected.size(); ++i) {
+        INFO("batch " << b << " idx " << i);
+        CHECK(forced[static_cast<size_t>(b) * m * n + i] == expected[i]);
+      }
+    }
+  }
+  unsetenv("MLX_OMARCHY_QMM_BF16W");
+}
+
+TEST_CASE("bf16 Q4 two-pass encoder scratch is n by k bf16 on forced route") {
+  const int n = 4096;
+  const int k = 4096;
+  const int m = 1024;
+  const size_t scratch_bytes = static_cast<size_t>(n) * k * 2;
+  CHECK(omarchy::qmm_bf16w_rows_ok(m, static_cast<size_t>(n), static_cast<size_t>(k)));
+  std::cout << "[qmm-bf16w-scratch] n=" << n << " k=" << k
+            << " m=" << m << " encoder_bf16_bytes=" << scratch_bytes
+            << " (M4 Pro vocabulary head 151936x4096 would be about "
+            << (static_cast<size_t>(151936) * 4096 * 2) << " bytes on his machine only)"
+            << "\n";
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_reachable = caps.cooperative_matrix_f32_8 &&
+      caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      (32u * 16u + 16u * 32u) * sizeof(float) <=
+          caps.max_compute_shared_memory_size;
+  if (!coopmat_reachable) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4;
+  std::vector<float> matrix(static_cast<size_t>(n) * k, 0.0625f);
+  HostQuantizedWeights rounded =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  rounded.scales = round_trip(stream, rounded.scales, bfloat16);
+  rounded.biases = round_trip(stream, rounded.biases, bfloat16);
+  array w_words(rounded.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+  std::vector<float> x_values(static_cast<size_t>(m) * k, 0.03125f);
+  x_values = round_trip(stream, x_values, bfloat16);
+  array x(x_values.begin(), Shape{1, m, k}, bfloat16);
+  setenv("MLX_OMARCHY_QMM_BF16W", "1", 1);
+  array out = quantized_matmul(
+      x, w_words, scales, biases, true, group_size, bits, "affine", stream);
+  out.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  REQUIRE_MESSAGE(evaluation_error(out).empty(), evaluation_error(out));
+  CHECK_EQ(
+      omarchy::trace::counters().last_dispatched_kernel.load(),
+      static_cast<int64_t>(omarchy::ComputeKernel::MatmulBF16Coopmat));
   unsetenv("MLX_OMARCHY_QMM_BF16W");
 }
 

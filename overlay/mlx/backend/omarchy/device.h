@@ -655,7 +655,14 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
 //   N x K 151936x4096 (vocabulary head): 768 rows 170.7 against 200.6, 1024 rows 257.9 against 250.4, 2048 rows 532.1 against 469.8
 // so from 1024 rows on any weight, and from 512 rows when the weight has at most 2^26 elements. Pure.
 inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
-  return rows >= 1024 || (rows >= 512 && n * k <= (size_t{1} << 26));
+  if (rows >= 1024) {
+    return true;
+  }
+  if (rows < 512 || k == 0) {
+    return false;
+  }
+  constexpr size_t max_elems = size_t{1} << 26;
+  return n <= max_elems / k;
 }
 
 // Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.
