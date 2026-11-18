@@ -814,6 +814,9 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
   CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
 
+  // The G17C row (M5 Max) takes 100000 (initial value matching G14C pending calibration on M5).
+  CHECK(omarchy::calibrated_batch_work("Apple M5 Max (G17C B1)") == 100000);
+
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
 
@@ -826,10 +829,10 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // Every calibrated row must sit between the off switch and the old
   // global default: a calibrated value above 40000 would loosen the
   // shipped cap on that board without a receipt saying why. G14C is the
-  // one row above it (receipts/2026-11-13-g14c-batch-work).
+  // one row above it (receipts/2026-11-13-g14c-batch-work), and G17C matches it pending M5 calibration.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= (row.board == "G14C" ? 100000 : 40000));
+      CHECK(row.budget <= (row.board == "G14C" || row.board == "G17C" ? 100000 : 40000));
     }
   }
 }

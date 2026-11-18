@@ -165,7 +165,8 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
   }
   const std::string& chip = device.capabilities().device_name;
   return chip.find("G13C") != std::string::npos ||
-      chip.find("G14C") != std::string::npos;
+      chip.find("G14C") != std::string::npos ||
+      chip.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
 }
 
 // The width-4096 subgroup-tree norm (sixteen contiguous values per lane of the
@@ -175,7 +176,9 @@ bool apple_norm_4096_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096");
   }
-  return device.capabilities().device_name.find("G16S") != std::string::npos;
+  const std::string& chip = device.capabilities().device_name;
+  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
+  return chip.find("G16S") != std::string::npos;
 }
 
 bool apple_norm_enabled(
@@ -4117,6 +4120,9 @@ static int qmv_small_t_max_rows() {
 
 static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
   if (requested_max < 2) return 0;
+  if (const char* env = std::getenv("MLX_OMARCHY_QMV_SMALL_T_CAP")) {
+    return std::min(requested_max, static_cast<int>(std::strtol(env, nullptr, 10)));
+  }
   const std::string& name = encoder.device().capabilities().device_name;
   const bool wide = name.find("G13C") != std::string::npos ||
       name.find("G16S") != std::string::npos;
@@ -8280,6 +8286,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // measured small-M bandwidth win (G16S ~3x at M=2..4 vs the coopmat tile;
     // G13C); OFF elsewhere (G13G regressed, receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
     const std::string& st_dn = encoder.device().capabilities().device_name;
+    // G16S and G13C default to 8; G14C and initial G17C (Max class) keep 0 pending calibration on M5.
     small_t_requested = (st_dn.find("G16S") != std::string::npos ||
                          st_dn.find("G13C") != std::string::npos)
         ? 8
