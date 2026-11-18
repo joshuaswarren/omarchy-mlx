@@ -8365,6 +8365,51 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
 
+  // Two-pass bf16 prefill (MLX_OMARCHY_QMM_BF16W, read live): a bf16
+  // 4-bit/group-64 transposed product with enough rows
+  // (omarchy::qmm_bf16w_rows_ok) against one 2D weight dequantizes the
+  // weight to bf16 with the affine Dequant kernel and contracts x with it
+  // through the dense bf16 matmul. The weight is rounded to bf16 before the
+  // product, as the Metal backend does (QuantizedBlockLoader stores T tiles
+  // for the MMA), so the output is not bit-equal to the single-kernel route,
+  // which keeps the dequantized weight in float32. The dequantized weight is
+  // an encoder temporary: its buffer returns to the allocator cache when the
+  // batch completes, and the next call of the same shape reuses it. Unset
+  // follows omarchy::qmm_bf16w_default_part, 0 keeps the single-kernel
+  // route, any other non-empty value selects the two-pass route where it
+  // applies. Only where the cooperative-matrix qmm route is reachable, so
+  // the dense product has its cooperative-matrix kernel.
+  if (coopmat_reachable && transpose_ && bits_ == 4 && group_size_ == 64 &&
+      out.dtype() == bfloat16 && x_d.dtype() == bfloat16 &&
+      w_d.ndim() == 2 && scales_d.ndim() == 2 && biases_d.ndim() == 2 &&
+      x_d.ndim() >= 2 && out.size() > 0 &&
+      omarchy::qmm_bf16w_rows_ok(batch * static_cast<size_t>(m),
+          static_cast<size_t>(n), static_cast<size_t>(k))) {
+    const int bf16w_env = decode_path_override("MLX_OMARCHY_QMM_BF16W");
+    if (bf16w_env > 0 ||
+        (bf16w_env < 0 &&
+            omarchy::qmm_bf16w_default_part(coopmat_caps.device_name))) {
+      array deq(Shape{n, k}, bfloat16, nullptr, {});
+      dispatch_affine_dequantize(
+          tag, w_d, scales_d, biases_d, deq, bits_, group_size_, stream());
+      encoder.add_temporary(deq);
+      // [.., K, N] column-major view of the [N, K] weight, leading size-1
+      // axes to match x's rank; the matmul broadcasts them over x's batch.
+      Shape view_shape(x_d.ndim(), 1);
+      Strides view_strides(x_d.ndim(), static_cast<int64_t>(n) * k);
+      view_shape[x_d.ndim() - 2] = k;
+      view_shape[x_d.ndim() - 1] = n;
+      view_strides[x_d.ndim() - 2] = 1;
+      view_strides[x_d.ndim() - 1] = k;
+      array deq_t(std::move(view_shape), bfloat16, nullptr, {});
+      deq_t.copy_shared_buffer(
+          deq, view_strides, {true, false, true}, deq.size(), 0);
+      encoder.add_temporary(deq_t);
+      dispatch_matmul(tag, {x_d, deq_t}, out, 1.0f, 0.0f, false, stream());
+      return;
+    }
+  }
+
   out.set_data(allocate_omarchy(out.nbytes()));
   if (out.size() == 0) {
     return;
