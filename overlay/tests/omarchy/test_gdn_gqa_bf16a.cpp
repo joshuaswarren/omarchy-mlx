@@ -447,10 +447,18 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
   CHECK(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 16));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 24));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 0, 0));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M5 Max (G17C B1)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M5 Max (G17C B1)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M5 Max (G17C B1)", 16, 64));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M5 Max (G17C B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M5 Max (G17C B1)", 16, 24));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M5 Max (G17C B1)", 0, 0));
   // The wide prefetch kernel is the default only at equal head counts, on the two parts it was measured on.
   CHECK(omarchy::gdn_pf_wide_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK(omarchy::gdn_pf_wide_default("Apple M5 Max (G17C B1)", 16, 16));
   CHECK(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 16, 16));
   CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M2 Max (G14C B1)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M5 Max (G17C B1)", 16, 48));
   CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 16, 32));
   CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 Max (G13C C0)", 16, 48));
   CHECK_FALSE(omarchy::gdn_pf_wide_default("Apple M1 (G13G B1)", 16, 16));

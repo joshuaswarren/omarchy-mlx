@@ -14,6 +14,8 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -45,7 +47,7 @@ struct DirectMatmulRow {
 // removed). G16S (Apple M4 Pro) rows: receipts/2026-11-15-m4-pro-g16s-direct-rows
 // (bf16 NT needs aurora-silicon/mesa#350). A bf16 a @ b.T takes the direct
 // route only through a row here.
-inline constexpr std::array<DirectMatmulRow, 26> kDirectMatmulRows{{
+inline constexpr std::array<DirectMatmulRow, 23> kDirectMatmulRows{{
     {"G13C", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13C", float16, true, false, 4096u, 4096u,
@@ -88,18 +90,13 @@ inline constexpr std::array<DirectMatmulRow, 26> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
     {"G16S", float16, true, false, 512u, 12288u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
-    {"G17C", bfloat16, false, true, 512u, 1024u,
+    // M5 Max: initial values matching G14C (same Max class) pending calibration on M5
+    {"G17C", bfloat16, true, false, 4096u, 4096u,
+     {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
+    {"G17C", bfloat16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
-    {"G17C", bfloat16, true, false, 1024u, 1024u,
-     {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
-    {"G17C", bfloat16, true, false, 512u, 12288u,
-     {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
-    {"G17C", float16, false, true, 512u, 1024u,
-     {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
-    {"G17C", float16, true, false, 1024u, 1024u,
-     {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
-    {"G17C", float16, true, false, 512u, 12288u,
-     {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
+    {"G17C", float16, false, true, 1024u, 4096u,
+     {ComputeKernel::MatmulDirectF16NtK2S8, 64u}},
 }};
 
 inline DirectMatmulRoute select_direct_matmul_route(
@@ -111,6 +108,11 @@ inline DirectMatmulRoute select_direct_matmul_route(
     uint32_t m,
     uint32_t n,
     DirectMatmulRoute shipped) {
+  if (const char* env = std::getenv("MLX_OMARCHY_DIRECT_MATMUL")) {
+    if (std::strcmp(env, "0") == 0) {
+      return shipped;
+    }
+  }
   for (const auto& row : rows) {
     if (device_name.find(row.chip) != std::string_view::npos &&
         row.dtype == dtype && row.a_transposed == a_transposed &&

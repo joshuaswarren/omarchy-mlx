@@ -8,6 +8,7 @@
 #include <array>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -550,10 +551,13 @@ std::string kernel_limit_heap_warning(
 // Keyed on the device name so an unmeasured part keeps its previous default (a G13 part other than G13C
 // already runs the untiled kernel with the expansion copies). Pure.
 inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_GDN_PF_GQA")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
   return device_name.find("G14C") != std::string::npos ||
       device_name.find("G13C") != std::string::npos ||
-      device_name.find("G16S") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;
+      device_name.find("G17C") != std::string::npos ||  // initial value matching G14C (same Max class) pending calibration on M5
+      device_name.find("G16S") != std::string::npos;
 }
 
 // GatedDeltaUpdate decode on the bf16 A_log raw route: the (part, head ratio) pairs whose default is the untiled prefetch
@@ -568,8 +572,12 @@ inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
 // Keyed on the device name and the head ratio, so an unmeasured pair keeps the tiled default. Pure.
 inline bool gdn_bf16a_untiled_default(const std::string& device_name, int hk, int hv) {
   if (hk <= 0) return false;
+  if (const char* env = std::getenv("MLX_OMARCHY_GDN_BF16A_UNTILED")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
   if (device_name.find("G13C") != std::string::npos) return hv == 2 * hk || hv == 3 * hk || hv == hk;
   if (device_name.find("G14C") != std::string::npos) return hv == 3 * hk || hv == hk;
+  if (device_name.find("G17C") != std::string::npos) return hv == 3 * hk || hv == hk;  // initial value matching G14C (same Max class) pending calibration on M5
   return false;
 }
 
@@ -579,6 +587,9 @@ inline bool gdn_bf16a_untiled_default(const std::string& device_name, int hk, in
 //   G13C at equal head counts (Qwen3.8-2B: +4.0 percent against the tiled kernel, +3.3 with the plain one), receipts/2026-10-22-gdn-wide-g13c.
 // Every other pair that takes the untiled kernel keeps the plain one. Pure.
 inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) {
+  if (const char* env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
   if (!gdn_bf16a_untiled_default(device_name, hk, hv)) return false;
   return hv == hk;
 }
@@ -592,7 +603,9 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
 // The 16-inch (G13C) is unmeasured, so it keeps the stock route until its own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this
 // everywhere.
 inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13G") != std::string::npos || device_name.find("G14C") != std::string::npos;
+  return device_name.find("G13G") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
 }
 
 // The one resolver for the fused GatedDelta conv + delta op's mode: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated
@@ -618,7 +631,11 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
 // receipts/2026-10-23-vocab-tail-g14c. On G13C (M1 Max, 2B and 4B) and G13G (M1, 4B) the same switches measured 0.6 percent or less, so those parts keep
 // the single-workgroup kernels. Keyed on the device name, so an unmeasured part keeps its previous default. Pure.
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  if (const char* env = std::getenv("MLX_OMARCHY_VOCAB_TAIL_CHUNKED")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
 }
 
 // The fused f16 decode SDPA kernel (sdpa_decode_native*.comp) uses no cooperative matrix, but its gate has always required one,
@@ -633,13 +650,19 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 // (receipts/2026-11-15-m4-pro-wave-sched). Other parts keep tape order until
 // they are measured; MLX_OMARCHY_WAVE_SCHED=1 or =0 overrides on any part.
 inline bool wave_sched_default_part(const std::string& device_name) {
-  return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;
+  if (const char* env = std::getenv("MLX_OMARCHY_WAVE_SCHED")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
+  return device_name.find("G16S") != std::string::npos;
 }
 
 inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
-  return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
+  return device_name.find("G16S") != std::string::npos;
 }
 
 // Two-pass bf16 4-bit/group-64 prefill (MLX_OMARCHY_QMM_BF16W unset): the parts where a transposed quantized_matmul with enough
@@ -649,8 +672,11 @@ inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name)
 //   G16S (Apple M4 Pro, cooperative-matrix driver), Qwen3-8B-4bit prefill: receipts/2026-11-15-m4-pro-g16s-qmm-bf16w.
 // An unmeasured part keeps the single-kernel route. Pure.
 inline bool qmm_bf16w_default_part(const std::string& device_name) {
-  return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;
+  if (const char* env = std::getenv("MLX_OMARCHY_QMM_BF16W")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
+  return device_name.find("G16S") != std::string::npos;
 }
 // Row rule of the two-pass route: the dequantize pass costs one weight read and one bf16 write per call, which enough rows amortize.
 // G16S, milliseconds per call, single-kernel against two-pass (best of three runs of six calls):
@@ -689,13 +715,16 @@ inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
 //   per second (+2.9 percent), 2048 tokens 31.5 to 38.2 (+21.6), 4000 tokens 25.2 to 35.5 and 35.0 (+39.6), tokens identical. Head width 256 starts later on this
 //   part, sdpa_split_wide_min_keys. Pure.
 inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
   if (device_name.find("G13G") != std::string::npos) return 128;
   if (device_name.find("G13C") != std::string::npos) return 320;
   if (device_name.find("G14C") != std::string::npos) return 320;
+  if (device_name.find("G17C") != std::string::npos) return 320;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G13S") != std::string::npos) return 192;
   if (device_name.find("G14G") != std::string::npos) return 192;
   if (device_name.find("G16S") != std::string::npos) return 320;
-  if (device_name.find("G17C") != std::string::npos) return 320;
   return 0;
 }
 
@@ -706,8 +735,10 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
 //   64.4 and 64.9; 749 tokens 64.3 and 64.3 against 63.5 and 64.0; 1038 tokens 64.3 and 64.3 against 61.7 and 62.4; 2048 tokens 63.4 and 63.5 against 58.0 and 57.9; 4000 tokens
 //   59.9 and 60.1 against 51.6 and 51.6 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), tokens identical. Pure.
 inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
   if (device_name.find("G16S") != std::string::npos) return 768;
-  if (device_name.find("G17C") != std::string::npos) return 768;
   return sdpa_split_min_keys(device_name);
 }
 
@@ -726,10 +757,13 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len, i
 //   6144 keys 278.5 against 226.6, 16384 keys 633.4 against 507.8; receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), so the limit is the longest length measured.
 // Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated, one tree, default against the variant: +4.6 percent on G14C (63.1 to 66.0 tokens per second), +2.8 percent at 1888 tokens. An unmeasured part keeps the plain pass 1. Pure.
 inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
   if (device_name.find("G14C") != std::string::npos) return 2048;
   if (device_name.find("G13C") != std::string::npos) return 2048;
+  if (device_name.find("G17C") != std::string::npos) return 2048;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 16384;
-  if (device_name.find("G17C") != std::string::npos) return 16384;
   return 0;
 }
 
@@ -747,9 +781,12 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
 //   970 tokens 41.1 and 41.1 against 39.6 and 40.3), tokens identical.
 // An unmeasured part keeps the 128-key blocks. Pure.
 inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
   if (device_name.find("G14C") != std::string::npos) return 512;
+  if (device_name.find("G17C") != std::string::npos) return 512;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 512;
-  if (device_name.find("G17C") != std::string::npos) return 512;
   return 0;
 }
 
@@ -775,9 +812,13 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 //   heads win at 64 (and 34 and 66 in the model rows) and both lose at 76, the first count tried above 68. The 68 is not two workgroups per core; it is the measured edge. Models: Qwen3.8-2B +3.4 percent at 512 and +4.66 at 2048 context, Qwen3.8-9B +1.57 and +1.47.
 //   Every other part: no default (the width-128 variant's default is measured; the width-256 one is not).
 inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_HD256_PV_LIMIT")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
   if (device_name.find("G13G") != std::string::npos) return 16u;
   if (device_name.find("G13C") != std::string::npos) return 64u;
   if (device_name.find("G14C") != std::string::npos) return 68u;
+  if (device_name.find("G17C") != std::string::npos) return 68u;  // initial value matching G14C (same Max class) pending calibration on M5
   return 0u;
 }
 

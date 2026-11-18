@@ -34,6 +34,9 @@ namespace mlx::core::omarchy {
 // grid clears the per-core floor sooner, so the wider tile wins), which
 // is the safe direction.
 inline uint32_t apple_gpu_cores(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_GPU_CORES")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
   if (device_name == "Apple M1 (G13G B1)") {
     return 8u;
   }
@@ -41,6 +44,10 @@ inline uint32_t apple_gpu_cores(const std::string& device_name) {
     return 32u;
   }
   if (device_name == "Apple M2 Max (G14C B1)") {
+    return 38u;
+  }
+  if (device_name.find("G17C") != std::string::npos) {
+    // M5 Max: initial value matching G14C (same Max class) pending calibration on M5
     return 38u;
   }
   return 0u;
@@ -114,10 +121,8 @@ inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
       return true;
     }
   }
-  // Default on G16S and G17C: 64-row G4+LdsPad, measured +6.6% pf2060
-  // prefill with bit-identical tokens (kill switch: =32).
-  return (device_name.find("G16S") != std::string::npos) ||
-      (device_name.find("G17C") != std::string::npos);
+  // G16S defaults on (64-row G4+LdsPad); G14C and initial G17C (Max class) keep 32-row default pending calibration on M5.
+  return device_name.find("G16S") != std::string::npos;
 }
 
 inline bool qmm_coopmat_sg4_env() {
