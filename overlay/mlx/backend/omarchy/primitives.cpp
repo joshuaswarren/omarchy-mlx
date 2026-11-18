@@ -8292,7 +8292,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool use_word_format =
       (q4_word_env == nullptr || std::strcmp(q4_word_env, "1") == 0) &&
       transpose_ && !q4_g64_transpose &&
-      ((bits_ == 4 && group_size_ == 32) ||
+      ((bits_ == 4 && (group_size_ == 32 || group_size_ == 128)) ||
        (bits_ == 8 && (group_size_ == 64 || group_size_ == 32)));
   // Prefill coopmat eligibility, resolved before operand normalization so
   // a row-contiguous x view at an odd f16-element offset is materialized
@@ -8577,6 +8577,33 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         (encoder.device().hardware_capabilities().subgroup_size == 32u &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+    // 4-bit group-128 decode GEMV: the shipped word-format fast path only
+    // covers group 64/32, so group-128 fell to the generic affine vec
+    // kernel (runtime shift/mask unpack), ~6x slower (18 vs ~110 GB/s on
+    // G16S). Route it to the same constant-shift word kernel built with
+    // QGROUP=128 (scale/bias stride K/128); bindings and params are the
+    // group-64 path's.
+    // The documented MLX_OMARCHY_QMM_VEC_Q4_WORD=0 off-switch must reach the
+    // group-128 route too, so the gate checks use_word_format like the
+    // group-64 selection below.
+    if (use_word_format && subgroup_ready && transpose_ && bits_ == 4 &&
+        group_size_ == 128 &&
+        out.dtype() == bfloat16 && w.ndim() == 2 && scales.ndim() == 2 &&
+        biases.ndim() == 2 && params.matrix_k % 128u == 0u &&
+        n_groups_qmm_vec <= omarchy::kMaxComputeGroupCountX) {
+      if (std::getenv("MLX_OMARCHY_TRACE_QMM_VEC")) {
+        std::fprintf(
+            stderr, "[qmm_vec] QmmVecQ4WordSubgroupBF16G128 dispatched\n");
+      }
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16G128,
+          bindings,
+          params,
+          n_groups_qmm_vec,
+          1u,
+          1u);
+      return;
+    }
     // Eligibility was computed before dense normalization because the packed
     // f16 input view also requires a 16-byte-aligned x row.
     auto vec_kernel = subgroup_ready
@@ -8600,7 +8627,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               use_q4_word ? omarchy::ComputeKernel::QmmVecQ4WordBF16
                           : omarchy::ComputeKernel::QmmVecBF16);
     if (use_word_format && subgroup_ready &&
-        (out.dtype() == float16 || out.dtype() == bfloat16)) {
+        (out.dtype() == float16 || out.dtype() == bfloat16) &&
+        !(bits_ == 4 && group_size_ == 128)) {
+      // Group 128 never reaches this override: bf16 took the dedicated
+      // QmmVecQ4WordSubgroupBF16G128 route above and returned, and f16 has
+      // no group-128 word build, so it must keep the generic subgroup vec
+      // kernel instead of the group-32 word kernels selected here.
       vec_kernel = qmm_vec_word_format_kernel(
           out.dtype() == bfloat16, bits_, group_size_);
     }

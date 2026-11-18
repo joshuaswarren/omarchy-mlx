@@ -400,8 +400,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     defined(QMM_VEC_TOKENS) || defined(QMM_VEC_GREEDY)
 #error "QBITS/QGROUP builds cover the multi-row word kernel only"
 #endif
-#if (QBITS != 4 && QBITS != 8) || (QGROUP != 64 && QGROUP != 32)
-#error "QBITS must be 4 or 8 and QGROUP 64 or 32"
+#if (QBITS != 4 && QBITS != 8) || (QGROUP != 64 && QGROUP != 32 && QGROUP != 128)
+#error "QBITS must be 4 or 8 and QGROUP 64, 32 or 128"
 #endif
 #endif
 #ifdef QMM_VEC_Q4_WORD
@@ -551,6 +551,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 }
 #if QGROUP == 32
 #define Q4_ROWS_GROUP(w) ((w) / 4u)
+#elif QGROUP == 128
+#define Q4_ROWS_GROUP(w) ((w) / 16u)
 #else
 #define Q4_ROWS_GROUP(w) ((w) / 8u)
 #endif

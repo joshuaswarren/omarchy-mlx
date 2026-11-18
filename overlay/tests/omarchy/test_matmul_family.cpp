@@ -4731,6 +4731,87 @@ TEST_CASE("qmm_vec packed-word candidate matches baseline and host reference") {
   CHECK_EQ(gated_v, base_v);
 }
 
+// The group-128 word kernel must actually dispatch: with the gate on and off,
+// a 4-bit group-128 transposed bf16 decode GEMV has to differ in at least one
+// element, because the two kernels accumulate in a different order. Bit
+// identical output means the word route is dead code.
+TEST_CASE("qmm_vec group-128 word route dispatches") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_kernel =
+      caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
+  if (subgroup_kernel) {
+    const int k = 12288;
+    const int n = 64;
+    std::mt19937 gen(503128);
+    std::normal_distribution<float> wdist(0.0f, 0.02f);
+    std::normal_distribution<float> xdist(0.0f, 1.0f);
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
+      value = wdist(gen);
+    }
+    HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 128, 4);
+    std::vector<float> x_values(k);
+    for (auto& value : x_values) {
+      value = xdist(gen);
+    }
+    array x = astype(
+        array(x_values.begin(), Shape{1, k}, float32), bfloat16, stream);
+    array w(host.words.begin(), Shape{n, k / 8}, uint32);
+    array scales = astype(
+        array(host.scales.begin(), Shape{n, k / 128}, float32),
+        bfloat16,
+        stream);
+    array biases = astype(
+        array(host.biases.begin(), Shape{n, k / 128}, float32),
+        bfloat16,
+        stream);
+    // The two kernels can agree bit for bit at bf16 rounding, so liveness is
+    // asserted through the route's own trace line, not the output bytes: with
+    // MLX_OMARCHY_TRACE_QMM_VEC set, the gate-on eval must name the G128
+    // kernel and the gate-off eval must not.
+    auto eval_once = [&](void) {
+      return readback_f32(stream, quantized_matmul(
+          x, w, scales, biases, true, 128, 4, "affine", stream));
+    };
+    auto captured_trace = [&](void) {
+      std::fflush(stderr);
+      int saved_stderr = dup(fileno(stderr));
+      FILE* captured = std::tmpfile();
+      dup2(fileno(captured), fileno(stderr));
+      eval_once();
+      std::fflush(stderr);
+      dup2(saved_stderr, fileno(stderr));
+      close(saved_stderr);
+      rewind(captured);
+      std::vector<char> captured_bytes;
+      for (int ch; (ch = std::fgetc(captured)) != EOF;) {
+        captured_bytes.push_back(static_cast<char>(ch));
+      }
+      std::fclose(captured);
+      return std::string(captured_bytes.begin(), captured_bytes.end());
+    };
+    setenv("MLX_OMARCHY_TRACE_QMM_VEC", "1", 1);
+    QmmVecQ4WordGate gate(false);
+    std::string off_trace = captured_trace();
+    gate.set(true);
+    std::string on_trace = captured_trace();
+    unsetenv("MLX_OMARCHY_TRACE_QMM_VEC");
+    INFO("group-128 trace with the gate off: ", off_trace);
+    INFO("group-128 trace with the gate on: ", on_trace);
+    CHECK(
+        on_trace.find("QmmVecQ4WordSubgroupBF16G128 dispatched") !=
+        std::string::npos);
+    CHECK(
+        off_trace.find("QmmVecQ4WordSubgroupBF16G128 dispatched") ==
+        std::string::npos);
+  }
+}
+
 // 4-bit group 32 and 8-bit group 64/32 affine weights (transposed, f16 or
 // bf16) take the multi-row word decode kernel at m == 1 and the coopmat
 // prefill builds at m > 1 (QBITS/QGROUP in qmm_vec.comp and
