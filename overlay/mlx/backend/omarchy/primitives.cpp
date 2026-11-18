@@ -8882,7 +8882,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
             } else {
               // 64-row (and the 32-row ratio twins) always use a pad
               // twin; CHUNK is 32-row-only.
-              qmm_kernel = qmm_g4_pad_ratio_kernel(
+              qmm_kernel = omarchy::qmm_g4_pad_ratio_kernel(
                   coopmat_rows,
                   omarchy::qmm_coopmat_sg4_env(),
                   step_k,
