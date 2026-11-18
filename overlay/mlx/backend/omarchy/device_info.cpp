@@ -198,6 +198,7 @@ device_info(int device_index) {
     info["driver_sha"] = caps.driver_sha;
     info["icd_path"] = caps.icd_path;
     info["icd_source"] = caps.icd_source;
+    info["icd_fallback_from"] = caps.icd_fallback_from;
     info["expected_sha"] = caps.expected_sha;
     info["expected_sha_source"] = caps.expected_sha_source;
     info["stock_driver_warning"] =

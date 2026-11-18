@@ -369,7 +369,12 @@ struct Runtime {
           return ::setenv("VK_DRIVER_FILES", path.c_str(), 1) == 0 &&
               ::setenv("VK_ICD_FILENAMES", path.c_str(), 1) == 0;
         });
-    if (result.ok && !result.fallback_path.empty()) {
+    const std::string failed_icd = icd_fallback_from(result);
+    if (!failed_icd.empty()) {
+      for (auto& device : supported) {
+        device.caps.icd_fallback_from = failed_icd;
+        device.hardware.icd_fallback_from = failed_icd;
+      }
       std::fprintf(
           stderr,
           "[omarchy] the packaged Honeykrisp ICD (%s) found no supported"
