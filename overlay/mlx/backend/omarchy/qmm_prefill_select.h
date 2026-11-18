@@ -33,7 +33,7 @@ namespace mlx::core::omarchy {
 // step-down is conservative on a smaller part (fewer cores means the
 // grid clears the per-core floor sooner, so the wider tile wins), which
 // is the safe direction.
-uint32_t apple_gpu_cores(const std::string& device_name) {
+inline uint32_t apple_gpu_cores(const std::string& device_name) {
   if (device_name == "Apple M1 (G13G B1)") {
     return 8u;
   }
@@ -69,7 +69,7 @@ uint32_t apple_gpu_cores(const std::string& device_name) {
 // the step-down and restores the shipped pick exactly.
 constexpr uint32_t kCoopmatWorkgroupsPerCore = 6u;
 
-uint32_t coopmat_workgroups_per_core() {
+inline uint32_t coopmat_workgroups_per_core() {
   static const uint32_t value = [] {
     const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE");
     if (env == nullptr) {
@@ -103,7 +103,7 @@ uint32_t coopmat_workgroups_per_core() {
 // so nothing is traded for the halved per-step work. Contract prompts
 // are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
 // cost 400-950 us each, 133 of them per first token.
-bool qmm_coopmat_rows64_requested(const std::string& device_name) {
+inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
   const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
@@ -119,12 +119,12 @@ bool qmm_coopmat_rows64_requested(const std::string& device_name) {
   return device_name.find("G16S") != std::string::npos;
 }
 
-bool qmm_coopmat_sg4_env() {
+inline bool qmm_coopmat_sg4_env() {
   const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   return env != nullptr && std::string(env) == "64sg4";
 }
 
-uint32_t qmm_coopmat_stepk_env() {
+inline uint32_t qmm_coopmat_stepk_env() {
   const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
   if (env != nullptr && std::string(env) == "32") {
     return 32u;
@@ -132,7 +132,7 @@ uint32_t qmm_coopmat_stepk_env() {
   return 16u;
 }
 
-bool qmm_cheap_deq_env() {
+inline bool qmm_cheap_deq_env() {
   const char* env = std::getenv("MLX_OMARCHY_QMM_CHEAP_DEQ");
   return env != nullptr && env[0] == '1';
 }
@@ -141,7 +141,7 @@ bool qmm_cheap_deq_env() {
 // The per-output k chain is unchanged; only staging granularity, the
 // number of rows sharing one W tile, or the nibble->f32 conversion
 // changes.
-omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
+inline omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
     uint32_t rows, bool sg4, uint32_t step_k, bool cheap) {
   using K = omarchy::ComputeKernel;
   if (rows == 64u && sg4) {
@@ -168,7 +168,7 @@ omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
                : K::QmmPrefillCoopmatBF16X32FullNLdsPad;
 }
 
-uint32_t coopmat_tile_rows(
+inline uint32_t coopmat_tile_rows(
     uint32_t matrix_m,
     uint32_t n_groups,
     const std::string& device_name,
