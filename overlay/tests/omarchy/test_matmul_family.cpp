@@ -4770,22 +4770,45 @@ TEST_CASE("qmm_vec group-128 word route dispatches") {
         array(host.biases.begin(), Shape{n, k / 128}, float32),
         bfloat16,
         stream);
-    QmmVecQ4WordGate gate(false);
-    auto generic = readback_f32(stream, quantized_matmul(
-        x, w, scales, biases, true, 128, 4, "affine", stream));
-    gate.set(true);
-    auto word = readback_f32(stream, quantized_matmul(
-        x, w, scales, biases, true, 128, 4, "affine", stream));
-    size_t differing = 0;
-    for (size_t i = 0; i < generic.size(); ++i) {
-      if (generic[i] != word[i]) {
-        ++differing;
+    // The two kernels can agree bit for bit at bf16 rounding, so liveness is
+    // asserted through the route's own trace line, not the output bytes: with
+    // MLX_OMARCHY_TRACE_QMM_VEC set, the gate-on eval must name the G128
+    // kernel and the gate-off eval must not.
+    auto eval_once = [&](void) {
+      return readback_f32(stream, quantized_matmul(
+          x, w, scales, biases, true, 128, 4, "affine", stream));
+    };
+    auto captured_trace = [&](void) {
+      std::fflush(stderr);
+      int saved_stderr = dup(fileno(stderr));
+      FILE* captured = std::tmpfile();
+      dup2(fileno(captured), fileno(stderr));
+      eval_once();
+      std::fflush(stderr);
+      dup2(saved_stderr, fileno(stderr));
+      close(saved_stderr);
+      rewind(captured);
+      std::vector<char> captured_bytes;
+      for (int ch; (ch = std::fgetc(captured)) != EOF;) {
+        captured_bytes.push_back(static_cast<char>(ch));
       }
-    }
-    INFO(
-        "group-128 word route: differing=", differing, " of ",
-        generic.size());
-    CHECK(differing > 0);
+      std::fclose(captured);
+      return std::string(captured_bytes.begin(), captured_bytes.end());
+    };
+    setenv("MLX_OMARCHY_TRACE_QMM_VEC", "1", 1);
+    QmmVecQ4WordGate gate(false);
+    std::string off_trace = captured_trace();
+    gate.set(true);
+    std::string on_trace = captured_trace();
+    unsetenv("MLX_OMARCHY_TRACE_QMM_VEC");
+    INFO("group-128 trace with the gate off: ", off_trace);
+    INFO("group-128 trace with the gate on: ", on_trace);
+    CHECK(
+        on_trace.find("QmmVecQ4WordSubgroupBF16G128 dispatched") !=
+        std::string::npos);
+    CHECK(
+        off_trace.find("QmmVecQ4WordSubgroupBF16G128 dispatched") ==
+        std::string::npos);
   }
 }
 

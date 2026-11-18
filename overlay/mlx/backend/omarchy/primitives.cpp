@@ -8591,6 +8591,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         out.dtype() == bfloat16 && w.ndim() == 2 && scales.ndim() == 2 &&
         biases.ndim() == 2 && params.matrix_k % 128u == 0u &&
         n_groups_qmm_vec <= omarchy::kMaxComputeGroupCountX) {
+      if (std::getenv("MLX_OMARCHY_TRACE_QMM_VEC")) {
+        std::fprintf(
+            stderr, "[qmm_vec] QmmVecQ4WordSubgroupBF16G128 dispatched\n");
+      }
       encoder.dispatch_compute(
           omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16G128,
           bindings,
