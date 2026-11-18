@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-09-20T19:30:09Z",
+  "generated_at": "2026-11-18T07:10:45Z",
   "source": "https://huggingface.co/api/models",
   "models": [
     {
@@ -1001,8 +1001,8 @@
         }
       },
       "availability": {
-        "size_bytes": 5179241512,
-        "refreshed_at": "2026-11-15T17:55:00Z"
+        "size_bytes": 5146800534,
+        "refreshed_at": "2026-11-18T07:10:45Z"
       },
       "family": "gemma-4-e4b",
       "extension": {
