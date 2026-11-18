@@ -1135,6 +1135,21 @@ enum class ComputeKernel : uint16_t {
   // default): two GQA query heads share each K/V tile. Appended to keep
   // profile kernel ids stable.
   SdpaCausalFlashCoopmatBF16Qchunk8Heads2,
+  // Dequant:matmad ratio twins of the landed 32-row G4+LdsPad qmm
+  // prefill route (STEP_K=32, TILE_ROWS=64, SG4, CHEAP_DEQ). Opt-in via
+  // MLX_OMARCHY_QMM_COOPMAT_STEPK, MLX_OMARCHY_QMM_COOPMAT_ROWS,
+  // MLX_OMARCHY_QMM_CHEAP_DEQ. Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmatBF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatBF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadK32Cheap,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPad,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadK32Cheap,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPad,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap,
   Count,
 };
 

@@ -7014,15 +7014,94 @@ uint32_t coopmat_workgroups_per_core() {
 // so nothing is traded for the halved per-step work. Contract prompts
 // are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
 // cost 400-950 us each, 133 of them per first token.
+bool qmm_coopmat_rows64_requested(const std::string& device_name) {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "32" || v == "0" || v == "16") {
+      return false;
+    }
+    if (v == "64" || v == "64sg4") {
+      return true;
+    }
+  }
+  // Default on G16S: 64-row G4+LdsPad, measured +6.6% pf2060
+  // prefill with bit-identical tokens (kill switch: =32).
+  return device_name.find("G16S") != std::string::npos;
+}
+
+bool qmm_coopmat_sg4_env() {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  return env != nullptr && std::string(env) == "64sg4";
+}
+
+uint32_t qmm_coopmat_stepk_env() {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+  if (env != nullptr && std::string(env) == "32") {
+    return 32u;
+  }
+  return 16u;
+}
+
+bool qmm_cheap_deq_env() {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_CHEAP_DEQ");
+  return env != nullptr && env[0] == '1';
+}
+
+// Landed G4+LdsPad default, or an env-gated dequant-ratio twin of it.
+// The per-output k chain is unchanged; only staging granularity, the
+// number of rows sharing one W tile, or the nibble->f32 conversion
+// changes.
+omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
+    uint32_t rows, bool sg4, uint32_t step_k, bool cheap) {
+  using K = omarchy::ComputeKernel;
+  if (rows == 64u && sg4) {
+    if (step_k == 32u) {
+      return cheap ? K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap
+                   : K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32;
+    }
+    return cheap ? K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadCheap
+                 : K::QmmPrefillCoopmatSG4BF16X32FullNLdsPad;
+  }
+  if (rows == 64u) {
+    if (step_k == 32u) {
+      return cheap ? K::QmmPrefillCoopmatM64BF16X32FullNLdsPadK32Cheap
+                   : K::QmmPrefillCoopmatM64BF16X32FullNLdsPadK32;
+    }
+    return cheap ? K::QmmPrefillCoopmatM64BF16X32FullNLdsPadCheap
+                 : K::QmmPrefillCoopmatM64BF16X32FullNLdsPad;
+  }
+  if (step_k == 32u) {
+    return cheap ? K::QmmPrefillCoopmatBF16X32FullNLdsPadK32Cheap
+                 : K::QmmPrefillCoopmatBF16X32FullNLdsPadK32;
+  }
+  return cheap ? K::QmmPrefillCoopmatBF16X32FullNLdsPadCheap
+               : K::QmmPrefillCoopmatBF16X32FullNLdsPad;
+}
+
 uint32_t coopmat_tile_rows(
     uint32_t matrix_m,
     uint32_t n_groups,
-    const std::string& device_name) {
+    const std::string& device_name,
+    bool allow_rows64 = false) {
   if (matrix_m <= 16u) {
     return 16u;
   }
   uint32_t cores = apple_gpu_cores(device_name);
   uint32_t per_core = coopmat_workgroups_per_core();
+  // 64-row experiment: take it only when M is large enough that the
+  // 64-row grid still fills the part. G16S is not in apple_gpu_cores
+  // (returns 0) and would otherwise be stuck at 32; the env is still
+  // honored there for M >= 128.
+  if (allow_rows64 && qmm_coopmat_rows64_requested(device_name) &&
+      matrix_m >= 128u) {
+    uint32_t m_groups_64 = (matrix_m + 63u) / 64u;
+    if (cores == 0u || per_core == 0u ||
+        static_cast<uint64_t>(m_groups_64) * n_groups >=
+            static_cast<uint64_t>(cores) * per_core) {
+      return 64u;
+    }
+  }
   if (cores == 0u || per_core == 0u) {
     return 32u;
   }
@@ -8810,7 +8889,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       uint32_t coopmat_rows = coopmat_tile_rows(
           params.matrix_m,
           n_groups,
-          encoder.device().hardware_capabilities().device_name);
+          encoder.device().hardware_capabilities().device_name,
+          /* allow_rows64 = */ true);
       uint32_t m_groups =
           (params.matrix_m + coopmat_rows - 1u) / coopmat_rows;
       // Direct-global-load A: widen bf16 x to f32 once (the widening is
@@ -8902,17 +8982,20 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       bool env_routed = false;
       const char* twon_env = std::getenv("MLX_OMARCHY_QMM_TWON");
       const char* raster_env = std::getenv("MLX_OMARCHY_QMM_RASTER");
-      const bool default_g4 = coopmat_rows == 32u && full_n &&
-          params.matrix_m > 32u &&
+      const bool default_g4 =
+          (coopmat_rows == 32u || coopmat_rows == 64u) && full_n &&
+          params.matrix_m > coopmat_rows &&
           std::getenv("MLX_OMARCHY_QMM_NO_RASTER") == nullptr;
-      if (coopmat_rows == 32u && full_n) {
-        if (twon_env != nullptr && twon_env[0] == '1' &&
-            (params.matrix_n % 64u) == 0u) {
+      if ((coopmat_rows == 32u || coopmat_rows == 64u) && full_n) {
+        if (coopmat_rows == 32u && twon_env != nullptr &&
+            twon_env[0] == '1' && (params.matrix_n % 64u) == 0u) {
           qmm_kernel =
               omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNTwoN;
           grid_x = n_groups / 2u;
           env_routed = true;
-        } else if (raster_env != nullptr && raster_env[0] != '\0') {
+        } else if (
+            coopmat_rows == 32u && raster_env != nullptr &&
+            raster_env[0] != '\0') {
           const std::string_view raster{raster_env};
           if (raster == "swap") {
             qmm_kernel =
@@ -8931,7 +9014,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
             grid_y = 1u;
             env_routed = true;
           }
-        } else if (default_g4) {
+        } else if (default_g4 && coopmat_rows == 32u) {
           constexpr uint32_t gm = 4u;
           qmm_kernel =
               omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG4;
@@ -8960,14 +9043,28 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           const uint32_t need = chunk_on
               ? (pad_on ? chunk_pad_bytes : chunk_bytes)
               : pad_bytes;
-          if (need <= coopmat_caps.max_compute_shared_memory_size) {
-            qmm_kernel = chunk_on
-                ? (pad_on
-                       ? omarchy::ComputeKernel::
-                             QmmPrefillCoopmatBF16X32FullNChunkPad
-                       : omarchy::ComputeKernel::
-                             QmmPrefillCoopmatBF16X32FullNChunk)
-                : omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad;
+          // STEP_K=32 doubles the B-tile (32 x 36 f32); still well
+          // under typical max shared. CHUNK stays the 32-row path only.
+          const uint32_t step_k = qmm_coopmat_stepk_env();
+          const uint32_t ratio_bytes = step_k * 36u * 4u;
+          const uint32_t need_ratio =
+              need > ratio_bytes ? need : ratio_bytes;
+          if (need_ratio <= coopmat_caps.max_compute_shared_memory_size) {
+            if (chunk_on && coopmat_rows == 32u) {
+              qmm_kernel = pad_on
+                  ? omarchy::ComputeKernel::
+                        QmmPrefillCoopmatBF16X32FullNChunkPad
+                  : omarchy::ComputeKernel::
+                        QmmPrefillCoopmatBF16X32FullNChunk;
+            } else {
+              // 64-row (and the 32-row ratio twins) always use a pad
+              // twin; CHUNK is 32-row-only.
+              qmm_kernel = qmm_g4_pad_ratio_kernel(
+                  coopmat_rows,
+                  qmm_coopmat_sg4_env(),
+                  step_k,
+                  qmm_cheap_deq_env());
+            }
             grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
             grid_y = 1u;
             env_routed = true;
