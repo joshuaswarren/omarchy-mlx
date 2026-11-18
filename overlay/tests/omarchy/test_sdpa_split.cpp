@@ -369,10 +369,16 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 320));
   CHECK(omarchy::sdpa_split_min_keys("Apple M4 (G16G B0)") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M5 Max (G17C B1)") == 320);
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 319));
+  CHECK(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 320));
   // Head width 256: G16S starts at 768 keys; every other part keeps its width-128 threshold.
   CHECK(omarchy::sdpa_split_wide_min_keys("Apple M4 Pro (G16S B1)") == 768);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 767, 256));
   CHECK(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 768, 256));
+  CHECK(omarchy::sdpa_split_wide_min_keys("Apple M5 Max (G17C B1)") == 768);
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 767, 256));
+  CHECK(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 768, 256));
   CHECK(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 320, 128));
   CHECK(omarchy::sdpa_split_wide_min_keys("Apple M1 Max (G13C C0)") == 320);
   CHECK(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 320, 256));
@@ -398,6 +404,10 @@ TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a ke
   CHECK(omarchy::sdpa_split_pv_default("Apple M4 Pro (G16S B1)", 320));
   CHECK(omarchy::sdpa_split_pv_default("Apple M4 Pro (G16S B1)", 16384));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M4 Pro (G16S B1)", 16384 + 1));
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M5 Max (G17C B1)") == 16384);
+  CHECK(omarchy::sdpa_split_pv_default("Apple M5 Max (G17C B1)", 320));
+  CHECK(omarchy::sdpa_split_pv_default("Apple M5 Max (G17C B1)", 16384));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M5 Max (G17C B1)", 16384 + 1));
 }
 
 TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512 keys on G14C and G16S and off elsewhere") {
@@ -413,6 +423,9 @@ TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to 512
   CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M4 Pro (G16S B1)") == 512);
   CHECK(omarchy::sdpa_split_bk64_default("Apple M4 Pro (G16S B1)", 320));
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M4 Pro (G16S B1)", 513));
+  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M5 Max (G17C B1)") == 512);
+  CHECK(omarchy::sdpa_split_bk64_default("Apple M5 Max (G17C B1)", 320));
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M5 Max (G17C B1)", 513));
 }
 
 TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4, V alignment, and follows its per-chip workgroup limit when unset") {

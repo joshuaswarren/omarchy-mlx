@@ -814,6 +814,9 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
   CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
 
+  // The G17C row (M5 Max) takes 40000.
+  CHECK(omarchy::calibrated_batch_work("Apple M5 Max (G17C B1)") == 40000);
+
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
 

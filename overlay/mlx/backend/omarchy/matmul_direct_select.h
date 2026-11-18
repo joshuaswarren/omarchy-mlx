@@ -45,7 +45,7 @@ struct DirectMatmulRow {
 // removed). G16S (Apple M4 Pro) rows: receipts/2026-11-15-m4-pro-g16s-direct-rows
 // (bf16 NT needs aurora-silicon/mesa#350). A bf16 a @ b.T takes the direct
 // route only through a row here.
-inline constexpr std::array<DirectMatmulRow, 20> kDirectMatmulRows{{
+inline constexpr std::array<DirectMatmulRow, 26> kDirectMatmulRows{{
     {"G13C", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13C", float16, true, false, 4096u, 4096u,
@@ -87,6 +87,18 @@ inline constexpr std::array<DirectMatmulRow, 20> kDirectMatmulRows{{
     {"G16S", float16, true, false, 1024u, 1024u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
     {"G16S", float16, true, false, 512u, 12288u,
+     {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
+    {"G17C", bfloat16, false, true, 512u, 1024u,
+     {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
+    {"G17C", bfloat16, true, false, 1024u, 1024u,
+     {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
+    {"G17C", bfloat16, true, false, 512u, 12288u,
+     {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
+    {"G17C", float16, false, true, 512u, 1024u,
+     {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
+    {"G17C", float16, true, false, 1024u, 1024u,
+     {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
+    {"G17C", float16, true, false, 512u, 12288u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
 }};
 

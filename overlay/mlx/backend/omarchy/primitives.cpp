@@ -165,7 +165,8 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
   }
   const std::string& chip = device.capabilities().device_name;
   return chip.find("G13C") != std::string::npos ||
-      chip.find("G14C") != std::string::npos;
+      chip.find("G14C") != std::string::npos ||
+      chip.find("G17C") != std::string::npos;
 }
 
 // The width-4096 subgroup-tree norm (sixteen contiguous values per lane of the
@@ -175,7 +176,9 @@ bool apple_norm_4096_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096");
   }
-  return device.capabilities().device_name.find("G16S") != std::string::npos;
+  const std::string& chip = device.capabilities().device_name;
+  return chip.find("G16S") != std::string::npos ||
+      chip.find("G17C") != std::string::npos;
 }
 
 bool apple_norm_enabled(
@@ -4119,7 +4122,8 @@ static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requeste
   if (requested_max < 2) return 0;
   const std::string& name = encoder.device().capabilities().device_name;
   const bool wide = name.find("G13C") != std::string::npos ||
-      name.find("G16S") != std::string::npos;
+      name.find("G16S") != std::string::npos ||
+      name.find("G17C") != std::string::npos;
   int cap = wide ? 8 : 4;
   return std::min(requested_max, cap);
 }
@@ -8281,7 +8285,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // G13C); OFF elsewhere (G13G regressed, receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
     const std::string& st_dn = encoder.device().capabilities().device_name;
     small_t_requested = (st_dn.find("G16S") != std::string::npos ||
-                         st_dn.find("G13C") != std::string::npos)
+                         st_dn.find("G13C") != std::string::npos ||
+                         st_dn.find("G17C") != std::string::npos)
         ? 8
         : 0;
   }

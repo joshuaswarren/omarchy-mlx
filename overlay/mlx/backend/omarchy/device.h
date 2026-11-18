@@ -552,7 +552,8 @@ std::string kernel_limit_heap_warning(
 inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
       device_name.find("G13C") != std::string::npos ||
-      device_name.find("G16S") != std::string::npos;
+      device_name.find("G16S") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;
 }
 
 // GatedDeltaUpdate decode on the bf16 A_log raw route: the (part, head ratio) pairs whose default is the untiled prefetch
@@ -632,11 +633,13 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 // (receipts/2026-11-15-m4-pro-wave-sched). Other parts keep tape order until
 // they are measured; MLX_OMARCHY_WAVE_SCHED=1 or =0 overrides on any part.
 inline bool wave_sched_default_part(const std::string& device_name) {
-  return device_name.find("G16S") != std::string::npos;
+  return device_name.find("G16S") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;
 }
 
 inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
-  return device_name.find("G16S") != std::string::npos;
+  return device_name.find("G16S") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;
 }
 
 // Two-pass bf16 4-bit/group-64 prefill (MLX_OMARCHY_QMM_BF16W unset): the parts where a transposed quantized_matmul with enough
@@ -646,7 +649,8 @@ inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name)
 //   G16S (Apple M4 Pro, cooperative-matrix driver), Qwen3-8B-4bit prefill: receipts/2026-11-15-m4-pro-g16s-qmm-bf16w.
 // An unmeasured part keeps the single-kernel route. Pure.
 inline bool qmm_bf16w_default_part(const std::string& device_name) {
-  return device_name.find("G16S") != std::string::npos;
+  return device_name.find("G16S") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;
 }
 // Row rule of the two-pass route: the dequantize pass costs one weight read and one bf16 write per call, which enough rows amortize.
 // G16S, milliseconds per call, single-kernel against two-pass (best of three runs of six calls):
@@ -691,6 +695,7 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G13S") != std::string::npos) return 192;
   if (device_name.find("G14G") != std::string::npos) return 192;
   if (device_name.find("G16S") != std::string::npos) return 320;
+  if (device_name.find("G17C") != std::string::npos) return 320;
   return 0;
 }
 
@@ -702,6 +707,7 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
 //   59.9 and 60.1 against 51.6 and 51.6 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), tokens identical. Pure.
 inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
   if (device_name.find("G16S") != std::string::npos) return 768;
+  if (device_name.find("G17C") != std::string::npos) return 768;
   return sdpa_split_min_keys(device_name);
 }
 
@@ -723,6 +729,7 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (device_name.find("G14C") != std::string::npos) return 2048;
   if (device_name.find("G13C") != std::string::npos) return 2048;
   if (device_name.find("G16S") != std::string::npos) return 16384;
+  if (device_name.find("G17C") != std::string::npos) return 16384;
   return 0;
 }
 
@@ -742,6 +749,7 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
 inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (device_name.find("G14C") != std::string::npos) return 512;
   if (device_name.find("G16S") != std::string::npos) return 512;
+  if (device_name.find("G17C") != std::string::npos) return 512;
   return 0;
 }
 

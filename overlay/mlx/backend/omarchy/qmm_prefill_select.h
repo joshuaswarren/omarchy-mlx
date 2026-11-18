@@ -114,9 +114,10 @@ inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
       return true;
     }
   }
-  // Default on G16S: 64-row G4+LdsPad, measured +6.6% pf2060
+  // Default on G16S and G17C: 64-row G4+LdsPad, measured +6.6% pf2060
   // prefill with bit-identical tokens (kill switch: =32).
-  return device_name.find("G16S") != std::string::npos;
+  return (device_name.find("G16S") != std::string::npos) ||
+      (device_name.find("G17C") != std::string::npos);
 }
 
 inline bool qmm_coopmat_sg4_env() {

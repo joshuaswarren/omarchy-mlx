@@ -719,6 +719,10 @@ TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
   CHECK(coopmat_tile_rows(
             128u, n_groups, g16s, qmm_prefill_allow_rows64(true, true)) ==
         64u);
+  const std::string g17c = "Apple M5 Max (G17C B1)";
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, g17c, qmm_prefill_allow_rows64(true, true)) ==
+        64u);
   // Refused: another bf16 format (not q4-g64) at the same shape.
   CHECK_FALSE(qmm_prefill_allow_rows64(false, true));
   CHECK(coopmat_tile_rows(
@@ -866,6 +870,12 @@ TEST_CASE("direct matmul route: every row starts at its measured m floor") {
       {"Apple M4 Pro (G16S B1)", float16, false, true, 512u, 1024u, ComputeKernel::MatmulDirectF16NtK4S8},
       {"Apple M4 Pro (G16S B1)", float16, true, false, 1024u, 1024u, ComputeKernel::MatmulDirectF16TnWS8},
       {"Apple M4 Pro (G16S B1)", float16, true, false, 512u, 12288u, ComputeKernel::MatmulDirectF16TnWS8},
+      {"Apple M5 Max (G17C B1)", bfloat16, false, true, 512u, 1024u, ComputeKernel::MatmulDirectBF16NtK4S8},
+      {"Apple M5 Max (G17C B1)", bfloat16, true, false, 1024u, 1024u, ComputeKernel::MatmulDirectBF16TnWS8},
+      {"Apple M5 Max (G17C B1)", bfloat16, true, false, 512u, 12288u, ComputeKernel::MatmulDirectBF16TnWS8},
+      {"Apple M5 Max (G17C B1)", float16, false, true, 512u, 1024u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M5 Max (G17C B1)", float16, true, false, 1024u, 1024u, ComputeKernel::MatmulDirectF16TnWS8},
+      {"Apple M5 Max (G17C B1)", float16, true, false, 512u, 12288u, ComputeKernel::MatmulDirectF16TnWS8},
   };
   for (const auto& f : floors) {
     CAPTURE(f.device);
@@ -7327,6 +7337,7 @@ TEST_CASE("bf16 linear-layer matmul takes the FMA kernel over the cooperative ma
 TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
   for (int round = 0; round < 2; ++round) {
     CHECK(omarchy::qmm_bf16w_default_part("Apple M4 Pro (G16S B1)"));
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M5 Max (G17C B1)"));
     CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
     CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
     CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));

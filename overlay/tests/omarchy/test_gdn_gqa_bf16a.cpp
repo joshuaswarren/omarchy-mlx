@@ -369,6 +369,7 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
   CHECK(omarchy::gdn_pf_gqa_default_part("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::gdn_pf_gqa_default_part("Apple M1 Max (G13C C0)"));
   CHECK(omarchy::gdn_pf_gqa_default_part("Apple M4 Pro (G16S B1)"));
+  CHECK(omarchy::gdn_pf_gqa_default_part("Apple M5 Max (G17C B1)"));
   CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M2 Pro (G14S B1)"));
   CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M1 Ultra (G13D C0)"));
