@@ -1127,6 +1127,10 @@ enum class ComputeKernel : uint16_t {
   // QGROUP=128 (constant-shift unpack, scale/bias stride K/128). Appended to
   // keep profile kernel ids stable.
   QmmVecQ4WordSubgroupBF16G128,
+  // Causal flash Q_CHUNK=8 twin (shaders/sdpa_prefill_flash_causal_coopmat.comp
+  // -DQ_CHUNK=8): eight 8-wide Q panels stay live and are reused across the
+  // four key-blocks of a tile. Appended to keep profile kernel ids stable.
+  SdpaCausalFlashCoopmatBF16Qchunk8,
   Count,
 };
 
