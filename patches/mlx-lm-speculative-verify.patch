@@ -1,6 +1,13 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -679,10 +679,66 @@
+@@ -6,5 +6,6 @@ import argparse
+ import functools
+ import json
++import math
+ import os
+ import sys
+ import time
+@@ -679,10 +680,66 @@
          n += 1
  
  
@@ -68,7 +75,7 @@
      *,
      num_draft_tokens: int = 2,
      max_tokens: int = 256,
-@@ -693,6 +749,9 @@
+@@ -693,6 +750,9 @@
      kv_bits: Optional[int] = None,
      kv_group_size: int = 64,
      quantized_kv_start: int = 0,
@@ -78,7 +85,7 @@
  ) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
      """
      A generator producing token ids based on the given prompt from the model.
-@@ -700,7 +759,10 @@
+@@ -700,7 +760,10 @@
      Args:
          prompt (mx.array): The input prompt.
          model (nn.Module): The model to use for generation.
@@ -90,7 +97,7 @@
          num_draft_tokens (int, optional): The number of draft tokens for
            speculative decoding. Default: ``2``.
          max_tokens (int): The maximum number of tokens. Use``-1`` for an infinite
-@@ -711,13 +773,20 @@
+@@ -711,13 +774,20 @@
            A list of functions that take tokens and logits and return the processed
            logits. Default: ``None``.
          prompt_cache (List[Any], optional): A pre-computed prompt cache. Note, if
@@ -112,7 +119,7 @@
  
      Yields:
          Tuple[mx.array, mx.array, bool]: One token, a vector of log probabilities,
-@@ -726,20 +795,26 @@
+@@ -726,20 +796,26 @@
  
      y = prompt.astype(mx.uint32)
      prev_tokens = None
@@ -145,7 +152,7 @@
  
      sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
  
-@@ -795,13 +870,24 @@
+@@ -795,13 +871,24 @@
              mx.clear_cache()
          return y
  
@@ -172,7 +179,7 @@
          ys = []
          for _ in range(num_draft):
              y, _ = _step(draft_model, draft_cache, y)
-@@ -810,22 +896,60 @@
+@@ -810,22 +897,59 @@
          return mx.concatenate(ys)
  
      with mx.stream(generation_stream):
@@ -219,7 +226,6 @@
 +                    continue
 +                num_draft = len(draft_list)
 +            if spec_adapt and num_draft > 0:
-+                import math
 +                num_draft = max(1, min(num_draft, int(math.ceil(num_draft_tokens * accept_ema))))
 +            model_snap = None if model_trim or num_draft == 0 else _omarchy_snapshot(model_cache)
 +            draft_snap = None if draft_trim or num_draft == 0 else _omarchy_snapshot(draft_cache)
