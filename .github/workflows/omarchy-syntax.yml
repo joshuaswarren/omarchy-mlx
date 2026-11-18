@@ -41,7 +41,11 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The merged job serializes what used to be two parallel jobs; the last 20
+    # runs measured 6.3-17.5 min on success and one run was killed at the old
+    # 20-minute limit mid-build (PR 510, run 44257862769). 30 covers the
+    # measured worst case with margin and still catches a real hang.
+    timeout-minutes: 30
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
