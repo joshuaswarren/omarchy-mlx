@@ -690,6 +690,17 @@
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
+#include "qmm_coopmat_x32_fn_g4_pad_cheap.h"
+#include "qmm_coopmat_x32_fn_g4_pad_k32.h"
+#include "qmm_coopmat_x32_fn_g4_pad_k32_cheap.h"
+#include "qmm_coopmat_m64_x32_fn_g4_pad.h"
+#include "qmm_coopmat_m64_x32_fn_g4_pad_cheap.h"
+#include "qmm_coopmat_m64_x32_fn_g4_pad_k32.h"
+#include "qmm_coopmat_m64_x32_fn_g4_pad_k32_cheap.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_cheap.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_k32.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -2173,6 +2184,28 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {logsumexp_combine_bf16, logsumexp_combine_bf16_size};
     case ComputeKernel::GatherQmmWord2BF16:
       return {gather_qmm_word2_bf16, gather_qmm_word2_bf16_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadCheap:
+      return {qmm_coopmat_x32_fn_g4_pad_cheap, qmm_coopmat_x32_fn_g4_pad_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadK32:
+      return {qmm_coopmat_x32_fn_g4_pad_k32, qmm_coopmat_x32_fn_g4_pad_k32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadK32Cheap:
+      return {qmm_coopmat_x32_fn_g4_pad_k32_cheap, qmm_coopmat_x32_fn_g4_pad_k32_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPad:
+      return {qmm_coopmat_m64_x32_fn_g4_pad, qmm_coopmat_m64_x32_fn_g4_pad_size};
+    case ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPadCheap:
+      return {qmm_coopmat_m64_x32_fn_g4_pad_cheap, qmm_coopmat_m64_x32_fn_g4_pad_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPadK32:
+      return {qmm_coopmat_m64_x32_fn_g4_pad_k32, qmm_coopmat_m64_x32_fn_g4_pad_k32_size};
+    case ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPadK32Cheap:
+      return {qmm_coopmat_m64_x32_fn_g4_pad_k32_cheap, qmm_coopmat_m64_x32_fn_g4_pad_k32_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPad:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad, qmm_coopmat_sg4_x32_fn_g4_pad_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadCheap:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_cheap, qmm_coopmat_sg4_x32_fn_g4_pad_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_k32, qmm_coopmat_sg4_x32_fn_g4_pad_k32_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap, qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
