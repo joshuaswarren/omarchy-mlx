@@ -4731,6 +4731,59 @@ TEST_CASE("qmm_vec packed-word candidate matches baseline and host reference") {
   CHECK_EQ(gated_v, base_v);
 }
 
+// The group-128 word kernel must actually dispatch: with the gate on and off,
+// a 4-bit group-128 transposed bf16 decode GEMV has to differ in at least one
+// element, because the two kernels accumulate in a different order. Bit
+// identical output means the word route is dead code.
+{
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_kernel =
+      caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
+  if (subgroup_kernel) {
+    const int k = 4096;
+    const int n = 64;
+    std::mt19937 gen(503128);
+    std::normal_distribution<float> dist(0.0f, 0.02f);
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 128, 4);
+    std::vector<float> x_values(k);
+    for (auto& value : x_values) {
+      value = dist(gen);
+    }
+    array x = astype(
+        array(x_values.begin(), Shape{1, k}, float32), bfloat16, stream);
+    array w(host.words.begin(), Shape{n, k / 8}, uint32);
+    array scales = astype(
+        array(host.scales.begin(), Shape{n, k / 128}, float32),
+        bfloat16,
+        stream);
+    array biases = astype(
+        array(host.biases.begin(), Shape{n, k / 128}, float32),
+        bfloat16,
+        stream);
+    QmmVecQ4WordGate gate(false);
+    auto generic = readback_f32(stream, quantized_matmul(
+        x, w, scales, biases, true, 128, 4, "affine", stream));
+    gate.set(true);
+    auto word = readback_f32(stream, quantized_matmul(
+        x, w, scales, biases, true, 128, 4, "affine", stream));
+    size_t differing = 0;
+    for (size_t i = 0; i < generic.size(); ++i) {
+      if (generic[i] != word[i]) {
+        ++differing;
+      }
+    }
+    INFO(
+        "group-128 word route: differing=", differing, " of ",
+        generic.size());
+    CHECK(differing > 0);
+  }
+}
+
 // 4-bit group 32 and 8-bit group 64/32 affine weights (transposed, f16 or
 // bf16) take the multi-row word decode kernel at m == 1 and the coopmat
 // prefill builds at m > 1 (QBITS/QGROUP in qmm_vec.comp and
