@@ -33,6 +33,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
+#include "mlx/backend/omarchy/qmm_prefill_select.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
@@ -706,6 +707,31 @@ TEST_CASE("register-blocked f16 matmul matches the 16x16 tile bit for bit") {
     }
     CHECK_LT(max_err, 0.05f);
   }
+}
+
+TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
+  using mlx::core::omarchy::coopmat_tile_rows;
+  using mlx::core::omarchy::qmm_prefill_allow_rows64;
+  const std::string g16s = "Apple M4 Pro (G16S B1)";
+  const uint32_t n_groups = 64u; // a fill-large column grid
+  // Allowed: 4-bit group-64 transposed and FullN at M >= 128 on G16S.
+  CHECK(qmm_prefill_allow_rows64(true, true));
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, g16s, qmm_prefill_allow_rows64(true, true)) ==
+        64u);
+  // Refused: another bf16 format (not q4-g64) at the same shape.
+  CHECK_FALSE(qmm_prefill_allow_rows64(false, true));
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, g16s, qmm_prefill_allow_rows64(false, true)) ==
+        32u);
+  // Refused: a non-FullN N (the X32 build) at the same shape.
+  CHECK_FALSE(qmm_prefill_allow_rows64(true, false));
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, g16s, qmm_prefill_allow_rows64(true, false)) ==
+        32u);
+  // Parts outside G16S never take 64 rows, gate or not.
+  CHECK(coopmat_tile_rows(128u, n_groups, "Apple M1 (G13G B1)", true) ==
+        32u);
 }
 
 TEST_CASE("direct matmul route: first matching row wins, else the shipped route") {
