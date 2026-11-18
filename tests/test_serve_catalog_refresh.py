@@ -145,6 +145,49 @@ class RefreshCoreTests(unittest.TestCase):
         self.assertEqual(after["version"], before["version"])
         self.assertEqual(after["source"], before["source"])
 
+    def test_refresh_preserves_the_escaping_it_was_read_with(self):
+        entry = seed_entry(memory={"weights_bytes": 1000, "kv_bytes_per_token": None,
+                                   "peak_estimate_bytes": None})
+        entry["qualification"]["notes"] = "measured on the part - full dash \u2014 here"
+        entry["availability"]["size_bytes"] = 999  # stale, forces a real write
+        self.write(seed_catalog(entry))  # write() dumps ensure_ascii=True
+        raw_before = self.path.read_text(encoding="utf-8")
+        self.assertIn("\\u2014", raw_before)
+
+        code, report = refresher.refresh(
+            self.path, FakeFetch({"org/repo": ("a" * 40, 12345)}), ok_validate,
+            now="2026-09-20T20:00:00Z")
+
+        self.assertEqual(code, refresher.EXIT_OK)
+        raw_after = self.path.read_text(encoding="utf-8")
+        self.assertIn("\\u2014", raw_after)
+        self.assertNotIn("\u2014", raw_after)
+        before = json.loads(raw_before)
+        after = json.loads(raw_after)
+        self.assertEqual(
+            {k: v for k, v in before.items() if k not in ("generated_at", "models")},
+            {k: v for k, v in after.items() if k not in ("generated_at", "models")})
+        for old, new in zip(before["models"], after["models"]):
+            self.assertEqual({k: v for k, v in old.items() if k != "availability"},
+                             {k: v for k, v in new.items() if k != "availability"})
+
+    def test_refresh_preserves_literal_non_ascii_when_read_that_way(self):
+        entry = seed_entry(memory={"weights_bytes": 1000, "kv_bytes_per_token": None,
+                                   "peak_estimate_bytes": None})
+        entry["qualification"]["notes"] = "full dash \u2014 here"
+        entry["availability"]["size_bytes"] = 999
+        self.path.write_text(
+            json.dumps(seed_catalog(entry), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+
+        code, report = refresher.refresh(
+            self.path, FakeFetch({"org/repo": ("a" * 40, 12345)}), ok_validate,
+            now="2026-09-20T20:00:00Z")
+
+        self.assertEqual(code, refresher.EXIT_OK)
+        raw_after = self.path.read_text(encoding="utf-8")
+        self.assertIn("\u2014", raw_after)
+
     def test_no_write_when_every_size_already_current(self):
         self.write(seed_catalog(seed_entry()))
         before = self.path.read_text(encoding="utf-8")

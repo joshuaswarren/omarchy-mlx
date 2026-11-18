@@ -177,7 +177,12 @@ def refresh(catalog_path, fetch, validate, api_base=DEFAULT_API_BASE, timeout=20
         report.append("check mode: no write")
         return (EXIT_DRIFT if drifted else EXIT_OK), report
 
-    text = json.dumps(updated, indent=2, ensure_ascii=False) + "\n"
+    # Write back with the escaping the file was read with: a catalog stored
+    # ASCII-escaped stays ASCII-escaped, so a refresh diffs as metadata only
+    # (PR 475 review at 9aeae2bd: em-dash escapes were rewritten as literal
+    # characters, a content change the metadata-only claim excludes).
+    ensure_ascii = not any(ch > "\x7f" for ch in raw)
+    text = json.dumps(updated, indent=2, ensure_ascii=ensure_ascii) + "\n"
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=str(Path(catalog_path).parent),
         prefix=".catalog-refresh-", delete=False,
