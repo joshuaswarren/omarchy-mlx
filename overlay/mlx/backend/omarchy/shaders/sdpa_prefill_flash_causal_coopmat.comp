@@ -38,10 +38,22 @@
 // loops over p below are the remaining generality and are left in place rather than refactored (debt, H35 entry).
 #define ROWP 1
 
+// Q_CHUNK: keep this many 8-wide Q panels live (8: two passes over D).
+// Reloaded once per pass and reused across the 4 key-blocks of a tile
+// (same add order as s=0..DT-1, bit-identical to the 16-panel walk).
+#ifndef Q_CHUNK
+#define Q_CHUNK 0
+#endif
+
 const uint MAT = 8u;
 const uint SGS = 4u;                    // subgroups per workgroup
 const uint HD = 128u;
 const uint DT = HD / MAT;               // 16 column tiles of the output
+#if Q_CHUNK
+const uint QA_N = min(uint(Q_CHUNK), DT);
+#else
+const uint QA_N = DT;
+#endif
 const uint KT = 32u;                    // keys per tile
 const uint KB = KT / MAT;               // 4 key blocks per tile
 const uint SG_ROWS = uint(ROWP) * MAT;
@@ -136,12 +148,14 @@ void main() {
   const uint vs = params.v_rowstride;
   const uint os = params.o_rowstride;
 
-  coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> qa[ROWP][DT];
+  coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> qa[ROWP][QA_N];
+#if !Q_CHUNK
   for (uint p = 0u; p < uint(ROWP); ++p) {
     for (uint s = 0u; s < DT; ++s) {
       coopMatLoad(qa[p][s], q, q_base + (row0 + p * MAT) * qs + s * MAT, qs, gl_CooperativeMatrixLayoutRowMajor);
     }
   }
+#endif
   ACCT acc[ROWP][DT];
   for (uint p = 0u; p < uint(ROWP); ++p) {
     for (uint d = 0u; d < DT; ++d) {
@@ -164,6 +178,40 @@ void main() {
   for (uint t = 0u; t < tiles; ++t) {
     const uint k0 = t * KT;
 
+#if Q_CHUNK
+    // Two D-passes: load QA_N Q panels once and reuse them across the
+    // 4 key-blocks. Same add order as s=0..DT-1.
+    ACCT sc[ROWP][KB];
+    for (uint p = 0u; p < uint(ROWP); ++p) {
+      for (uint c = 0u; c < KB; ++c) {
+        sc[p][c] = ACCT(0.0);
+      }
+    }
+    for (uint qoff = 0u; qoff < DT; qoff += QA_N) {
+      for (uint p = 0u; p < uint(ROWP); ++p) {
+        for (uint s = 0u; s < QA_N; ++s) {
+          coopMatLoad(qa[p][s], q, q_base + (row0 + p * MAT) * qs + (qoff + s) * MAT, qs, gl_CooperativeMatrixLayoutRowMajor);
+        }
+      }
+      for (uint c = 0u; c < KB; ++c) {
+        if (k0 + c * MAT <= last_key) {
+          for (uint s = 0u; s < QA_N; ++s) {
+            coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> kb;
+            coopMatLoad(kb, k, k_base + (k0 + c * MAT) * ks + (qoff + s) * MAT, ks, gl_CooperativeMatrixLayoutColumnMajor);
+            for (uint p = 0u; p < uint(ROWP); ++p) {
+              sc[p][c] = coopMatMulAdd(qa[p][s], kb, sc[p][c]);
+            }
+          }
+        }
+      }
+    }
+    for (uint p = 0u; p < uint(ROWP); ++p) {
+      for (uint c = 0u; c < KB; ++c) {
+        ACCT scaled = sc[p][c] * params.alpha;
+        coopMatStore(scaled, s_s, (sbase + p) * (MAT * KT) + c * MAT, KT, gl_CooperativeMatrixLayoutRowMajor);
+      }
+    }
+#else
     ACCT sc[ROWP][KB];
     for (uint p = 0u; p < uint(ROWP); ++p) {
       for (uint c = 0u; c < KB; ++c) {
@@ -187,6 +235,7 @@ void main() {
         coopMatStore(scaled, s_s, (sbase + p) * (MAT * KT) + c * MAT, KT, gl_CooperativeMatrixLayoutRowMajor);
       }
     }
+#endif
     sync_subgroup();
 
     for (uint p = 0u; p < uint(ROWP); ++p) {
