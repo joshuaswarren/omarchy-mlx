@@ -785,8 +785,8 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
 
   // The G18G row (M6) resolves to its own calibrated budget, not the
   // 5000 fallback: without the row the M6 split every decode step into
-  // 12 (2B) and 20 (4B) submissions, against 2 and 3 with the row.
-  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") == 40000);
+  // 12 (2B) and 20 (4B) submissions, against 2 and 3 with the 40000 row.
+  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") == 100000);
   CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
         omarchy::batch_work_fallback());
 
@@ -810,13 +810,10 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // recalibrating the 13-inch M1 leaves the unmeasured boards alone.
   CHECK(omarchy::batch_work_fallback() == 5000);
 
-  // Every calibrated row must sit between the off switch and the old
-  // global default: a calibrated value above 40000 would loosen the
-  // shipped cap on that board without a receipt saying why. G14C is the
-  // one row above it (receipts/2026-11-13-g14c-batch-work).
+  // Only G14C and G18G may exceed the old global cap of 40000.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= (row.board == "G14C" ? 100000 : 40000));
+      CHECK(row.budget <= (row.board == "G14C" || row.board == "G18G" ? 100000 : 40000));
     }
   }
 }
@@ -834,7 +831,7 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
-  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 100000);
   CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its

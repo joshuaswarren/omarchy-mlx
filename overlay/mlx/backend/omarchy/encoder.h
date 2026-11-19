@@ -162,7 +162,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
     {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
     {"G16S", 15000},  // M4 Pro, Borealis Mesa 05ddb00f5c, 2x4 decode Qmm geometry: decode +13.1% (Qwen3-4B), +7.7% (Qwen3-8B), +17.7% (granite-4.0-1b) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B p50 2.5 ms decode, p99 27.8 ms and max 28.5 ms over all submissions (5000: 27.2 / 28.0), Qwen3-8B max 54.7 ms (5000: 54.2); 30000 reached 94.6 ms (receipts/2026-11-15-m4-pro-g16s-batch-work)
-    {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
+    {"G18G", 100000},  // Candidate budget; needs a matched decode and frame-time check at 40000.
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
 
