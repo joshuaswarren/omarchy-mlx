@@ -244,7 +244,11 @@ static bool have_tool(const char* tool) {
 static int compile_shader(const char* src, const char* defines,
     const char* out_spv) {
   // glslc preferred (repo rule where present), but a broken glslc shim
-  // must not kill the bench: fall back to glslangValidator.
+  // must not kill the bench: fall back to glslangValidator. The frozen
+  // base copy IS the production shader (drift gate), which includes
+  // omarchy_half.h, so every compile resolves includes from the
+  // production shader directory.
+  const char* inc = " -Ioverlay/mlx/backend/omarchy/shaders";
   const char* front = have_tool("glslc")
       ? "glslc -fshader-stage=compute --target-env=vulkan1.3 "
       : "glslangValidator -V --target-env vulkan1.3 ";
@@ -252,6 +256,7 @@ static int compile_shader(const char* src, const char* defines,
            "glslangValidator -V --target-env vulkan1.3 "}) {
     std::string cmd = front_try;
     cmd += defines;
+    cmd += inc;
     cmd += " ";
     cmd += src;
     cmd += " -o ";
