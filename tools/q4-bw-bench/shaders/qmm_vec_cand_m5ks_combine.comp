@@ -1,0 +1,65 @@
+#version 460
+
+// Combine stage for the G17C 4-way k-split q4 GEMV arm
+// (--m5ks; see qmm_vec_cand_m5ks.comp): one thread per output row sums
+// the row's four fp32 split partials (binding 18) left to right in
+// split order and stores the fp16 output. Dispatched by the bench right
+// after the split kernel in the same submit, so the GPU-timed median
+// covers main + combine. Fixed split order keeps the exact-sum property
+// of the bench eq fill (every partial is exact in fp32, so any fixed
+// order is exact and the arm stays at 0 bit mismatches against base).
+// Grid: ceil(matrix_n / 320) workgroups of 320 threads.
+
+#ifndef USE_FP16
+#error "the m5ks combine compiles with -DUSE_FP16=1 (fp16 activations)"
+#endif
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+
+const uint COMBINE_WG = 320u;
+
+layout(local_size_x = COMBINE_WG) in;
+
+layout(set = 0, binding = 18, std430) readonly buffer Partials {
+  float values[];
+} partials;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  if (row < params.matrix_n) {
+    float total = partials.values[row * 4u];
+    total += partials.values[row * 4u + 1u];
+    total += partials.values[row * 4u + 2u];
+    total += partials.values[row * 4u + 3u];
+    output_data.values[params.output_offset + row] = STORE_VALUE(total);
+  }
+}

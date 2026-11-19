@@ -1,0 +1,180 @@
+#version 460
+
+// G17C q4 GEMV 4-way k-split ceiling arm (--m5ks), second candidate on
+// the same ceiling shape as qmm_vec_cand_m5.comp (n=320, k=2560,
+// group 32). Measured verdict on the one-wave m5 mapping: 40-load
+// serial chain per thread leaves DRAM latency exposed. This variant
+// cuts the chain to length 1 and issues the whole weight payload in
+// flight:
+//   * workgroups      160 = 40 row-groups x 4 k-splits; workgroup w
+//                     owns row-group w/4 (8 rows) and split w%4
+//   * threads         160 per WG = 5 SIMD x 32; each of the 8 rows has
+//                     a 20-thread slice, and every thread owns exactly
+//                     ONE uint4 chunk: 32 nibbles plus that group's
+//                     fp16 scale and bias (80 groups / 4 splits / 20
+//                     lanes = 1)
+//   * in flight       160 x 160 = 25600 independent 16 B loads =
+//                     the whole 409600 B weight payload
+//   * reduction       the row-slice's 20 partials in threadgroup
+//                     memory (8 rows x 20 x 4 B = 640 B scratch, one
+//                     barrier, serial fold by slice lane 0 -- the
+//                     20-lane slice spans subgroups, same reasoning as
+//                     the m5 candidate)
+//   * epilogue        8 non-atomic fp32 scratch partials per WG, one
+//                     per (row, split): partials[column * 4 + split].
+//                     Every (row, split) has exactly one workgroup, so
+//                     no atomics. shaders/qmm_vec_cand_m5ks_combine.comp
+//                     sums the four splits of a row in fixed order and
+//                     writes the fp16 output; the bench dispatches it
+//                     right after this kernel so the GPU-timed median
+//                     covers main + combine.
+// Exactness: the bench eq fill (scale 1.0, bias 0) keeps every product
+// and partial sum exact in fp32, and the combine folds split 0..3 in a
+// fixed order, so the split arm stays at 0 bit mismatches against base.
+// The nibble decode and fp16 x-quad chains are the production Q4
+// macros verbatim.
+//
+// Contract: the single-weight transposed affine layout (flags bit 0
+// clear, batch shape[0] == 1, matrix_n the row count) and
+// matrix_k % (reduce_size * SPLITS) == 0 so every split owns exactly
+// groups_per_row / SPLITS whole groups; the --m5 family fill_params
+// provides exactly that (2560 = 32 x 4 x 20). Grid is
+// ceil(n / 8) x SPLITS workgroups.
+
+#ifndef USE_FP16
+#error "the m5ks arm compiles with -DUSE_FP16=1 (fp16 activations)"
+#endif
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+
+#ifndef ROWS_PER_WG
+#define ROWS_PER_WG 8u
+#endif
+#ifndef LANES_PER_SLICE
+#define LANES_PER_SLICE 20u
+#endif
+#ifndef SPLITS
+#define SPLITS 4u
+#endif
+const uint LOCAL_SIZE = ROWS_PER_WG * LANES_PER_SLICE;
+
+layout(local_size_x = LOCAL_SIZE) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  uvec4 values[];
+} input_x;
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uvec4 values[];
+} input_w;
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+// fp32 (row, split) scratch: rows x SPLITS entries, one writer each.
+layout(set = 0, binding = 18, std430) writeonly buffer Partials {
+  float values[];
+} partials;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float row_scratch[LOCAL_SIZE];
+
+// Exact float(n) for a nibble n in [0, 15] (see qmm_vec_base.comp).
+#define Q4_NIB(p, shift) \
+  (uintBitsToFloat((((p) >> (shift)) & 0xfu) | 0x4B000000u) - 8388608.0)
+// One x quad (four fp16 halves) against the low 16 bits of `packed`.
+#define Q4_QUAD(packed, a, b) { \
+  f16vec2 h01 = unpackFloat2x16(a); \
+  f16vec2 h23 = unpackFloat2x16(b); \
+  float16_t h0 = h01.x; \
+  float16_t h1 = h01.y; \
+  float16_t h2 = h23.x; \
+  float16_t h3 = h23.y; \
+  input_sum += float(((h0 + h1) + h2) + h3); \
+  float x0 = float(h0); \
+  float x1 = float(h1); \
+  float x2 = float(h2); \
+  float x3 = float(h3); \
+  uint p = (packed); \
+  dot += fma(x3, Q4_NIB(p, 12u), \
+      fma(x2, Q4_NIB(p, 8u), \
+          fma(x1, Q4_NIB(p, 4u), \
+              x0 * Q4_NIB(p, 0u)))); \
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint row_in_wg = lane / LANES_PER_SLICE;
+  uint slice_lane = lane % LANES_PER_SLICE;
+  uint split = gl_WorkGroupID.x % SPLITS;
+  uint column = (gl_WorkGroupID.x / SPLITS) * ROWS_PER_WG + row_in_wg;
+  bool column_active = column < params.matrix_n;
+  precise float accumulator = 0.0;
+  if (column_active) {
+    // Exactly one group of this row per thread.
+    uint groups_per_row = params.matrix_k / params.reduce_size;
+    uint g = split * (groups_per_row / SPLITS) + slice_lane;
+    uint w_quad_base = column * (params.matrix_k / 8u) / 4u;
+    uint scale_base = column * groups_per_row;
+    uint bias_base = params.aux_size + scale_base;
+    precise float dot = 0.0;
+    precise float input_sum = 0.0;
+    uvec4 quad = input_w.values[w_quad_base + g];
+    uvec4 x0 = input_x.values[g * 4u];
+    uvec4 x1 = input_x.values[g * 4u + 1u];
+    uvec4 x2 = input_x.values[g * 4u + 2u];
+    uvec4 x3 = input_x.values[g * 4u + 3u];
+    Q4_QUAD(quad.x, x0.x, x0.y)
+    Q4_QUAD(quad.x >> 16u, x0.z, x0.w)
+    Q4_QUAD(quad.y, x1.x, x1.y)
+    Q4_QUAD(quad.y >> 16u, x1.z, x1.w)
+    Q4_QUAD(quad.z, x2.x, x2.y)
+    Q4_QUAD(quad.z >> 16u, x2.z, x2.w)
+    Q4_QUAD(quad.w, x3.x, x3.y)
+    Q4_QUAD(quad.w >> 16u, x3.z, x3.w)
+    float scale = LOAD_VALUE(scales.values[scale_base + g]);
+    float bias = LOAD_VALUE(biases.values[bias_base + g]);
+    precise float bias_term = input_sum * bias;
+    accumulator = fma(scale, dot, bias_term);
+  }
+  // 20 partials per row-slice through threadgroup memory: one barrier,
+  // then slice lane 0 folds its 20 entries left to right and stores
+  // the fp32 (row, split) partial. Rows past matrix_n store nothing;
+  // the combine guards those rows out, so no slot is read unwritten.
+  row_scratch[lane] = accumulator;
+  barrier();
+  if (column_active && slice_lane == 0u) {
+    float total = 0.0;
+    uint slice_base = row_in_wg * LANES_PER_SLICE;
+    for (uint i = 0u; i < LANES_PER_SLICE; ++i) {
+      total += row_scratch[slice_base + i];
+    }
+    partials.values[column * SPLITS + split] = total;
+  }
+}

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Q4 decode GEMV bandwidth bench, G17C (M5 Max) window: the ceiling-table
 # shape (n=320, k=2560, affine group 32) with the production general
-# affine kernel as base against the 40 WG x 320-thread ceiling mapping in
-# shaders/qmm_vec_cand_m5.comp. Run under
+# affine kernel as base against the ceiling mappings in
+# shaders/qmm_vec_cand_m5.comp (40 WG x 320 threads) and
+# shaders/qmm_vec_cand_m5ks.comp (4-way k-split, 160 WG x 160 threads +
+# combine). Run under
 #   flock -w 2400 /tmp/m1-gpu.lock timeout 900 bash tools/q4-bw-bench/run-m5.sh
 # from the checkout root (an independent /tmp/m1-gpu.lock per physical
 # host). Produces NDJSON logs under tools/q4-bw-bench/out/.
@@ -28,11 +30,14 @@ diff -q tools/q4-bw-bench/shaders/qmm_vec_base.comp \
 
 g++ -std=c++17 -O2 -o /tmp/q4-bw-bench-m5 tools/q4-bw-bench/bench.cpp
 
-# Two independent legs for repeatability; each leg times base and the m5
-# ceiling mapping on identical input buffers with bit-exactness compares
-# against the base. The subgroup base requires subgroupSize == 32 (the
-# G17C); on a screening box run --m5 --tree directly instead.
+# Two independent legs per arm for repeatability; each leg times base
+# and the ceiling mappings on identical input buffers with
+# bit-exactness compares against the base. --m5ks runs BOTH mappings
+# (base, m5, m5ks sides) in one pass. The subgroup base requires
+# subgroupSize == 32 (the G17C); on a screening box run --tree directly.
 /tmp/q4-bw-bench-m5 --m5 2>&1 | tee "tools/q4-bw-bench/out/bench-m5-a-$stamp.ndjson"
 /tmp/q4-bw-bench-m5 --m5 2>&1 | tee "tools/q4-bw-bench/out/bench-m5-b-$stamp.ndjson"
+/tmp/q4-bw-bench-m5 --m5ks 2>&1 | tee "tools/q4-bw-bench/out/bench-m5ks-a-$stamp.ndjson"
+/tmp/q4-bw-bench-m5 --m5ks 2>&1 | tee "tools/q4-bw-bench/out/bench-m5ks-b-$stamp.ndjson"
 
 echo "RUN_M5_DONE" | tee -a "tools/q4-bw-bench/out/session-m5-$stamp.txt"

@@ -36,10 +36,15 @@
 // shaders/qmm_vec_cand_m5.comp (40 WG x 320 threads, uint4 = one
 // group per load) against it; the cand's group-dot form changes the
 // summation order vs the base's per-element chain, which the exact
-// eq fill (scale 1.0, bias 0) folds to 0 mismatches.
+// eq fill (scale 1.0, bias 0) folds to 0 mismatches. "--m5ks" adds
+// the 4-way k-split arm alongside it: 160 WG x 160 threads, one uint4
+// chunk per thread, 8 fp32 (row, split) partials per WG into the
+// binding-18 scratch, and shaders/qmm_vec_cand_m5ks_combine.comp
+// dispatched right after the split kernel inside the same timestamp
+// bracket (the median covers main + combine).
 //
 // Build: g++ -std=c++17 -O2 -o /tmp/q4-bw-bench tools/q4-bw-bench/bench.cpp
-// Run (repo root): /tmp/q4-bw-bench [--tree] [--quick] [--m5]
+// Run (repo root): /tmp/q4-bw-bench [--tree] [--quick] [--m5] [--m5ks]
 // Output: NDJSON on stdout.
 
 #include <vulkan/vulkan.h>
@@ -445,6 +450,10 @@ static bool g_gap_bf16 = false;
 // --m5: the G17C ceiling table (kShapesM5) with the group-32 general
 // affine base against shaders/qmm_vec_cand_m5.comp; the iso bench only.
 static bool g_m5_mode = false;
+// --m5ks: the same table and base with BOTH ceiling mappings as
+// candidates -- the m5 one-wave arm and the 4-way k-split arm
+// (split kernel + combine kernel, timed together).
+static bool g_m5ks_mode = false;
 // Sized for the 2B table (10 entries); the 0.5B table uses the first 4.
 static constexpr uint32_t kNumShapes = 10;
 static constexpr uint32_t kNumShapes05B = 4;
@@ -468,6 +477,14 @@ static uint32_t shape_groups(const Shape& s, uint32_t columns) {
   for (uint32_t i = 0; i < s.dims; ++i) {
     total += (s.n[i] + columns - 1u) / columns;
   }
+  return total;
+}
+
+// Total output rows across the shape's weights (the m5ks combine
+// dispatches one thread per row).
+static uint32_t shape_rows(const Shape& s) {
+  uint32_t total = 0;
+  for (uint32_t i = 0; i < s.dims; ++i) total += s.n[i];
   return total;
 }
 
@@ -568,6 +585,13 @@ struct Side {
   VkDescriptorSetLayout dsl{VK_NULL_HANDLE};
   VkPipelineLayout layout{VK_NULL_HANDLE};
   VkPipeline pipe{VK_NULL_HANDLE};
+  // Optional second stage (the m5ks combine kernel) dispatched right
+  // after `pipe` inside the same timestamp bracket, on the SAME
+  // descriptor set and layout (it reads the partials filler binding
+  // and writes the output binding).
+  VkShaderModule mod2{VK_NULL_HANDLE};
+  VkPipeline pipe2{VK_NULL_HANDLE};
+  uint32_t combine_groups{0u};
 };
 
 static void make_pipeline(Side& side) {
@@ -610,6 +634,12 @@ static void make_pipeline(Side& side) {
   if (g_vk.CreateComputePipelines(g_vk.dev, VK_NULL_HANDLE, 1, &cpci,
           nullptr, &side.pipe) != VK_SUCCESS)
     die("CreateComputePipelines");
+  if (side.mod2 != VK_NULL_HANDLE) {
+    cpci.stage.module = side.mod2;
+    if (g_vk.CreateComputePipelines(g_vk.dev, VK_NULL_HANDLE, 1, &cpci,
+            nullptr, &side.pipe2) != VK_SUCCESS)
+      die("CreateComputePipelines combine");
+  }
 }
 
 struct SetBufs {
@@ -618,6 +648,10 @@ struct SetBufs {
   Buf scales[kMaxDims];
   Buf biases[kMaxDims];
   Buf out[kMaxDims];
+  // fp32 (row, split) scratch for the m5ks arm; bound at the dead
+  // filler binding 18. Null elsewhere (binding 18 stays the out[0]
+  // filler it always was).
+  Buf partials{};
 };
 
 static VkDescriptorSet make_set(VkDescriptorPool pool, VkDescriptorSetLayout dsl,
@@ -654,6 +688,9 @@ static VkDescriptorSet make_set(VkDescriptorPool pool, VkDescriptorSetLayout dsl
       }
     }
   }
+  if (bufs.partials.buf != VK_NULL_HANDLE) {
+    info(kBindings - 1, const_cast<SetBufs&>(bufs).partials);
+  }
   for (uint32_t i = 0; i < kBindings; ++i) {
     w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w[i].dstSet = set;
@@ -675,8 +712,8 @@ static void fill_params(Params& p, const Shape& s, uint32_t groups) {
   p.matrix_k = s.k;
   p.dims = s.dims;
   for (uint32_t i = 0; i < s.dims; ++i) p.shape[i] = s.n[i];
-  if (g_m5_mode) {
-    // The m5 base compiles the single-weight general main (no
+  if (g_m5_mode || g_m5ks_mode) {
+    // The m5 bases compile the single-weight general main (no
     // QMM_VEC_MULTI), which reads matrix_n as the row count and
     // shape[0] as the batch count.
     p.matrix_n = s.n[0];
@@ -764,7 +801,9 @@ static uint64_t read_ticks(const DeviceCtx& ctx, CmdRes& r, uint32_t count,
   return ticks[0];
 }
 
-// One isolated dispatch per submit; returns gpu ns across the dispatch.
+// One isolated dispatch per submit (plus the m5ks combine stage when
+// the side carries one, inside the same timestamp bracket); returns
+// gpu ns across the dispatch.
 static uint64_t dispatch_isolated(const DeviceCtx& ctx, const Side& side,
     CmdRes& r, VkDescriptorSet set, const Params& params, uint32_t groups) {
   begin(r);
@@ -775,6 +814,13 @@ static uint64_t dispatch_isolated(const DeviceCtx& ctx, const Side& side,
   g_vk.CmdPushConstants(r.cmd, side.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
       sizeof(Params), &params);
   g_vk.CmdDispatch(r.cmd, groups, 1, 1);
+  if (side.pipe2 != VK_NULL_HANDLE) {
+    g_vk.CmdBindPipeline(
+        r.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, side.pipe2);
+    g_vk.CmdPushConstants(r.cmd, side.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+        0, sizeof(Params), &params);
+    g_vk.CmdDispatch(r.cmd, side.combine_groups, 1, 1);
+  }
   g_vk.CmdWriteTimestamp(r.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, r.qpool, 1);
   g_vk.EndCommandBuffer(r.cmd);
   submit_and_wait(ctx, r.cmd);
@@ -1827,6 +1873,11 @@ int main(int argc, char** argv) {
       g_num_shapes = std::uint32_t{sizeof(kShapesM5) / sizeof(kShapesM5[0])};
       g_m5_mode = true;
     }
+    if (std::string(argv[i]) == "--m5ks") {
+      g_shapes = kShapesM5;
+      g_num_shapes = std::uint32_t{sizeof(kShapesM5) / sizeof(kShapesM5[0])};
+      g_m5ks_mode = true;
+    }
     if (std::string(argv[i]) == "--grid-cap" && i + 1 < argc)
       g_grid_cap = (uint32_t)std::atoi(argv[++i]);
     if (std::string(argv[i]) == "--cand-def" && i + 1 < argc)
@@ -1841,17 +1892,19 @@ int main(int argc, char** argv) {
     }
   }
   const int reps = quick ? 7 : 21;
-  if (g_m5_mode && (bf16_eq || gap_mode || roof_mode))
-    die("--m5 runs the default iso bench only (tree screening allowed)");
+  const bool m5_family = g_m5_mode || g_m5ks_mode;
+  if (m5_family && (bf16_eq || gap_mode || roof_mode))
+    die("--m5/--m5ks run the default iso bench only (tree screening allowed)");
 
   const char* q4_defines =
       "-DUSE_FP16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1";
-  // The m5 cand reduces in threadgroup memory and ignores USE_SUBGROUP;
-  // --tree --m5 swaps the base to the tree reduction for lavapipe
-  // screening (subgroupSize != 32 makes the subgroup base wrong there).
+  // The m5 candidates reduce in threadgroup memory and ignore
+  // USE_SUBGROUP; --tree swaps the base to the tree reduction for
+  // lavapipe screening (subgroupSize != 32 makes the subgroup base
+  // wrong there).
   const char* m5_defines = tree_mode ? "-DUSE_FP16=1"
                                      : "-DUSE_FP16=1 -DUSE_SUBGROUP=1";
-  const char* variant_defines = g_m5_mode
+  const char* variant_defines = m5_family
       ? m5_defines
       : tree_mode
       ? q4_defines
@@ -1864,6 +1917,11 @@ int main(int argc, char** argv) {
     const char* src;
     const char* spv;
     uint32_t columns;
+    // Optional combine stage (m5ks) and k-split multiplier for the
+    // main grid: main groups = ceil(n/columns) * splits.
+    const char* combine_src{nullptr};
+    const char* combine_spv{nullptr};
+    uint32_t splits{1u};
   };
   std::vector<SideSpec> specs = {
       {"base", "tools/q4-bw-bench/shaders/qmm_vec_base.comp",
@@ -1881,13 +1939,22 @@ int main(int argc, char** argv) {
                   : "tools/q4-bw-bench/shaders/qmm_vec_cand_xpack.comp",
           bf16_eq ? "/tmp/q4cand_x2.spv" : "/tmp/q4cand_x.spv", 8u},
   };
-  if (g_m5_mode) {
+  if (g_m5_mode || g_m5ks_mode) {
     // The word-path candidates do not apply to the group-32 table:
     // the production general-affine base (8 x 32-lane slots) against
-    // the G17C 40 WG x 320-thread ceiling mapping.
+    // the G17C ceiling mappings. --m5 keeps the one-wave arm alone;
+    // --m5ks adds the 4-way k-split arm alongside it so both stay
+    // comparable in one run (base ratio per side, same eq screen).
     specs.resize(1);
     specs.push_back({"m5", "tools/q4-bw-bench/shaders/qmm_vec_cand_m5.comp",
         "/tmp/q4cand_m5.spv", 8u});
+  }
+  if (g_m5ks_mode) {
+    specs.push_back({"m5ks",
+        "tools/q4-bw-bench/shaders/qmm_vec_cand_m5ks.comp",
+        "/tmp/q4cand_m5ks.spv", 8u,
+        "tools/q4-bw-bench/shaders/qmm_vec_cand_m5ks_combine.comp",
+        "/tmp/q4cand_m5ks_comb.spv", 4u});
   }
   if (!g_cand_src.empty()) {
     specs.resize(1);
@@ -1904,6 +1971,10 @@ int main(int argc, char** argv) {
         (std::string(specs[i].tag) == "cand" ? g_cand_defs : std::string());
     if (compile_shader(specs[i].src, sdefs.c_str(), specs[i].spv) != 0)
       die("compile %s", specs[i].tag);
+    if (specs[i].combine_src != nullptr &&
+        compile_shader(specs[i].combine_src, sdefs.c_str(),
+            specs[i].combine_spv) != 0)
+      die("compile %s combine", specs[i].tag);
   }
 
   if (vk_init() != 0) return 1;
@@ -1917,8 +1988,9 @@ int main(int argc, char** argv) {
   }
   std::printf(
       "{\"k\":\"mode\",\"variant\":\"%s\",\"reps\":%d}\n",
-      g_m5_mode ? (tree_mode ? "m5-tree" : "m5")
-                : tree_mode ? "tree" : "subgroup",
+      g_m5ks_mode ? (tree_mode ? "m5ks-tree" : "m5ks")
+                  : g_m5_mode ? (tree_mode ? "m5-tree" : "m5")
+                  : tree_mode ? "tree" : "subgroup",
       reps);
   if (gap_mode) {
     run_gap_mode(ctx, quick);
@@ -1935,6 +2007,11 @@ int main(int argc, char** argv) {
   for (int i = 0; i < num_sides; ++i) {
     sides[i].tag = specs[i].tag;
     sides[i].mod = make_module(read_file(specs[i].spv));
+    if (specs[i].combine_src != nullptr) {
+      sides[i].mod2 = make_module(read_file(specs[i].combine_spv));
+      sides[i].combine_groups =
+          (shape_rows(g_shapes[0]) + 319u) / 320u;
+    }
     make_pipeline(sides[i]);
   }
 
@@ -1947,6 +2024,8 @@ int main(int argc, char** argv) {
   for (uint32_t s = 0; s < g_num_shapes; ++s) {
     const Shape& sh = g_shapes[s];
     inputs[s].x = make_buf(g_vk.dev, ctx.mp, (uint64_t)sh.k * 2u, false);
+    inputs[s].partials = make_buf(g_vk.dev, ctx.mp,
+        (uint64_t)shape_rows(sh) * 4u * 4u, false);
     for (uint32_t d = 0; d < sh.dims; ++d) {
       inputs[s].w[d] = make_buf(g_vk.dev, ctx.mp,
           (uint64_t)sh.n[d] * (sh.k / 8u) * 4u, false);
@@ -1961,7 +2040,8 @@ int main(int argc, char** argv) {
         outs[s][i].out[d] =
             make_buf(g_vk.dev, ctx.mp, (uint64_t)n * 2u, true);
       }
-      groups_v[s][i] = shape_groups(sh, specs[i].columns);
+      groups_v[s][i] = shape_groups(sh, specs[i].columns) *
+          specs[i].splits;
     }
     fill_params(shape_params[s], sh, groups_v[s][0]);
   }
