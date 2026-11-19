@@ -109,6 +109,7 @@ struct VkTable {
   VK_FN(CmdBindPipeline);
   VK_FN(CmdBindDescriptorSets);
   VK_FN(CmdDispatch);
+  VK_FN(CmdPipelineBarrier);
   VK_FN(CmdPushConstants);
   VK_FN(CreateFence);
   VK_FN(DestroyFence);
@@ -205,6 +206,7 @@ static void vk_load_device() {
   LOAD_DEV(CmdBindPipeline);
   LOAD_DEV(CmdBindDescriptorSets);
   LOAD_DEV(CmdDispatch);
+  LOAD_DEV(CmdPipelineBarrier);
   LOAD_DEV(CmdPushConstants);
   LOAD_DEV(CreateFence);
   LOAD_DEV(DestroyFence);
@@ -815,6 +817,18 @@ static uint64_t dispatch_isolated(const DeviceCtx& ctx, const Side& side,
       sizeof(Params), &params);
   g_vk.CmdDispatch(r.cmd, groups, 1, 1);
   if (side.pipe2 != VK_NULL_HANDLE) {
+    // The combine reads the (row, split) scratch the split dispatch
+    // just wrote: same-bracket write -> read needs a memory dependency
+    // (llvmpipe executes serially and masks its absence; real devices
+    // do not). Global memory barrier, compute -> compute, covering the
+    // binding-18 scratch.
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    g_vk.CmdPipelineBarrier(r.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
+        nullptr);
     g_vk.CmdBindPipeline(
         r.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, side.pipe2);
     g_vk.CmdPushConstants(r.cmd, side.layout, VK_SHADER_STAGE_COMPUTE_BIT,
@@ -2176,6 +2190,10 @@ int main(int argc, char** argv) {
         snprintf(nm, 64, "/tmp/q4dump_o_%s_%u.bin", specs[i].tag, d);
         dumpbuf(outs[s][i].out[d], nm);
       }
+    // The (row, split) scratch as the LAST dispatch left it (the m5ks
+    // combine's input): device-side proof the combine read fresh
+    // partials, not stale filler memory.
+    dumpbuf(inputs[s].partials, "/tmp/q4dump_partials.bin");
     std::printf("{\"k\":\"dumped\"}\n");
   }
   // ---- Isolated per-shape timings, sides interleaved per rep ----
