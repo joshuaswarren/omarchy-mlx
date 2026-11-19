@@ -30,10 +30,16 @@
 // (-DUSE_SUBGROUP=1, requires subgroupSize == 32 - the M1); "--tree"
 // compiles the tree-reduction variants for lavapipe screening
 // (lavapipe subgroupSize != 32 would make the subgroup variant wrong
-// by design; llvmpipe dispatches the tree variant).
+// by design; llvmpipe dispatches the tree variant). "--m5" swaps in
+// the G17C ceiling table (one shape: n=320, k=2560, affine group 32),
+// compiles the production GENERAL affine kernel as base, and screens
+// shaders/qmm_vec_cand_m5.comp (40 WG x 320 threads, uint4 = one
+// group per load) against it; the cand's group-dot form changes the
+// summation order vs the base's per-element chain, which the exact
+// eq fill (scale 1.0, bias 0) folds to 0 mismatches.
 //
 // Build: g++ -std=c++17 -O2 -o /tmp/q4-bw-bench tools/q4-bw-bench/bench.cpp
-// Run (repo root): /tmp/q4-bw-bench [--tree] [--quick]
+// Run (repo root): /tmp/q4-bw-bench [--tree] [--quick] [--m5]
 // Output: NDJSON on stdout.
 
 #include <vulkan/vulkan.h>
@@ -364,6 +370,10 @@ struct Shape {
   uint32_t k;
   uint32_t dims;
   uint32_t n[kMaxDims];
+  // Affine group size (reduce_size). The decode tables run the group-64
+  // word path; the --m5 ceiling table runs the production general
+  // affine path at mlx's group 32.
+  uint32_t group{64u};
   // Per-token shapes (lm_head) run once per token, not once per layer:
   // the gap arms cycle per-layer sets x24, which cannot afford 24 copies
   // of a 286 MB weight, so they skip these (iso mode still benches them;
@@ -409,6 +419,14 @@ static const Shape kShapes2B[] = {
     {"ab", 2048, 2, {16, 16, 0}},
     {"lm_head", 2048, 1, {248320, 0, 0}, true},
 };
+// The --m5 table: the G17C (M5 Max) q4 GEMV ceiling shape, one dispatch,
+// single transposed affine weight at mlx's group 32 (fp16 scale + bias).
+// Ceiling-table floors at 165 GB/s copy peak: 2.52 us payload-only,
+// 3.14 us with the group-32 metadata (payload 409600 B + scales/biases
+// 102400 B + x 5120 B + out 640 B = 517760 B).
+static const Shape kShapesM5[] = {
+    {"m5", 2560, 1, {320, 0, 0}, 32u},
+};
 static const Shape* g_shapes = kShapes;
 // --cand <path>[:columns]: screen ONE candidate shader against base (default
 // mode: iso timing + bit compare; gap mode: iso4/widedep arms) instead of the
@@ -424,6 +442,9 @@ static uint32_t g_grid_cap = 0u;
 // --2b also switches the gap-mode compile to the production bf16 x-load
 // mix (the 2B decode chain runs QmmVecQ4*BF16, not FP16).
 static bool g_gap_bf16 = false;
+// --m5: the G17C ceiling table (kShapesM5) with the group-32 general
+// affine base against shaders/qmm_vec_cand_m5.comp; the iso bench only.
+static bool g_m5_mode = false;
 // Sized for the 2B table (10 entries); the 0.5B table uses the first 4.
 static constexpr uint32_t kNumShapes = 10;
 static constexpr uint32_t kNumShapes05B = 4;
@@ -436,7 +457,7 @@ static uint64_t shape_bytes(const Shape& s) {
   uint64_t words = 0, params = 0, outs = 0;
   for (uint32_t i = 0; i < s.dims; ++i) {
     words += (uint64_t)s.n[i] * (s.k / 8u) * 4u;
-    params += 2ull * s.n[i] * (s.k / 64u) * 2u;
+    params += 2ull * s.n[i] * (s.k / s.group) * 2u;
     outs += s.n[i] * 2u;
   }
   return words + params + (uint64_t)s.k * 2u + outs;
@@ -649,11 +670,18 @@ static void fill_params(Params& p, const Shape& s, uint32_t groups) {
   std::memset(&p, 0, sizeof(p));
   p.count = groups;
   p.operation = 4u;
-  p.reduce_size = 64u;
+  p.reduce_size = s.group;
   p.matrix_m = 1u;
   p.matrix_k = s.k;
   p.dims = s.dims;
   for (uint32_t i = 0; i < s.dims; ++i) p.shape[i] = s.n[i];
+  if (g_m5_mode) {
+    // The m5 base compiles the single-weight general main (no
+    // QMM_VEC_MULTI), which reads matrix_n as the row count and
+    // shape[0] as the batch count.
+    p.matrix_n = s.n[0];
+    p.shape[0] = 1u;
+  }
 }
 
 struct CmdRes {
@@ -1059,8 +1087,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
       g.x = gap_alloc(ctx, (uint64_t)sh.k * 2u);
       for (uint32_t d = 0; d < sh.dims; ++d) {
         g.w[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * (sh.k / 8u) * 4u);
-        g.scales[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * (sh.k / 64u) * 2u);
-        g.biases[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * (sh.k / 64u) * 2u);
+        g.scales[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * (sh.k / sh.group) * 2u);
+        g.biases[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * (sh.k / sh.group) * 2u);
         g.out[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * 2u);
       }
     }
@@ -1677,9 +1705,9 @@ static void run_roof_mode(const DeviceCtx& ctx, bool quick,
       inputs[s].w[d] = make_buf(g_vk.dev, ctx.mp,
           (uint64_t)sh.n[d] * (sh.k / 8u) * 4u, false);
       inputs[s].scales[d] = make_buf(g_vk.dev, ctx.mp,
-          (uint64_t)sh.n[d] * (sh.k / 64u) * 2u, false);
+          (uint64_t)sh.n[d] * (sh.k / sh.group) * 2u, false);
       inputs[s].biases[d] = make_buf(g_vk.dev, ctx.mp,
-          (uint64_t)sh.n[d] * (sh.k / 64u) * 2u, false);
+          (uint64_t)sh.n[d] * (sh.k / sh.group) * 2u, false);
       outs[s].out[d] = make_buf(g_vk.dev, ctx.mp,
           (uint64_t)sh.n[d] * 2u, true);
     }
@@ -1794,6 +1822,11 @@ int main(int argc, char** argv) {
       g_num_shapes = std::uint32_t{sizeof(kShapes2B) / sizeof(kShapes2B[0])};
       g_gap_bf16 = true;
     }
+    if (std::string(argv[i]) == "--m5") {
+      g_shapes = kShapesM5;
+      g_num_shapes = std::uint32_t{sizeof(kShapesM5) / sizeof(kShapesM5[0])};
+      g_m5_mode = true;
+    }
     if (std::string(argv[i]) == "--grid-cap" && i + 1 < argc)
       g_grid_cap = (uint32_t)std::atoi(argv[++i]);
     if (std::string(argv[i]) == "--cand-def" && i + 1 < argc)
@@ -1808,10 +1841,19 @@ int main(int argc, char** argv) {
     }
   }
   const int reps = quick ? 7 : 21;
+  if (g_m5_mode && (bf16_eq || gap_mode || roof_mode))
+    die("--m5 runs the default iso bench only (tree screening allowed)");
 
   const char* q4_defines =
       "-DUSE_FP16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1";
-  const char* variant_defines = tree_mode
+  // The m5 cand reduces in threadgroup memory and ignores USE_SUBGROUP;
+  // --tree --m5 swaps the base to the tree reduction for lavapipe
+  // screening (subgroupSize != 32 makes the subgroup base wrong there).
+  const char* m5_defines = tree_mode ? "-DUSE_FP16=1"
+                                     : "-DUSE_FP16=1 -DUSE_SUBGROUP=1";
+  const char* variant_defines = g_m5_mode
+      ? m5_defines
+      : tree_mode
       ? q4_defines
       : bf16_eq ? "-DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 "
                 "-DQMM_VEC_MULTI=1"
@@ -1839,6 +1881,14 @@ int main(int argc, char** argv) {
                   : "tools/q4-bw-bench/shaders/qmm_vec_cand_xpack.comp",
           bf16_eq ? "/tmp/q4cand_x2.spv" : "/tmp/q4cand_x.spv", 8u},
   };
+  if (g_m5_mode) {
+    // The word-path candidates do not apply to the group-32 table:
+    // the production general-affine base (8 x 32-lane slots) against
+    // the G17C 40 WG x 320-thread ceiling mapping.
+    specs.resize(1);
+    specs.push_back({"m5", "tools/q4-bw-bench/shaders/qmm_vec_cand_m5.comp",
+        "/tmp/q4cand_m5.spv", 8u});
+  }
   if (!g_cand_src.empty()) {
     specs.resize(1);
     specs.push_back({"cand", g_cand_src.c_str(), "/tmp/q4cand_c.spv",
@@ -1867,7 +1917,9 @@ int main(int argc, char** argv) {
   }
   std::printf(
       "{\"k\":\"mode\",\"variant\":\"%s\",\"reps\":%d}\n",
-      tree_mode ? "tree" : "subgroup", reps);
+      g_m5_mode ? (tree_mode ? "m5-tree" : "m5")
+                : tree_mode ? "tree" : "subgroup",
+      reps);
   if (gap_mode) {
     run_gap_mode(ctx, quick);
     std::printf("{\"k\":\"done\"}\n");
@@ -1899,9 +1951,9 @@ int main(int argc, char** argv) {
       inputs[s].w[d] = make_buf(g_vk.dev, ctx.mp,
           (uint64_t)sh.n[d] * (sh.k / 8u) * 4u, false);
       inputs[s].scales[d] = make_buf(g_vk.dev, ctx.mp,
-          (uint64_t)sh.n[d] * (sh.k / 64u) * 2u, false);
+          (uint64_t)sh.n[d] * (sh.k / sh.group) * 2u, false);
       inputs[s].biases[d] = make_buf(g_vk.dev, ctx.mp,
-          (uint64_t)sh.n[d] * (sh.k / 64u) * 2u, false);
+          (uint64_t)sh.n[d] * (sh.k / sh.group) * 2u, false);
     }
     for (int i = 0; i < num_sides; ++i) {
       for (uint32_t d = 0; d < kMaxDims; ++d) {
