@@ -9,14 +9,16 @@ name: Omarchy backend syntax gate
 #
 # Measured on a 16-core dev box: prepare 7.6 s, configure 6.2 s, shaders
 # 8.7 s (~80 s CPU), syntax 12.5 s (~46 s CPU) — a 4-vCPU runner fits the
-# whole job in roughly 2-3 minutes including apt.
+# gate job in roughly 2-3 minutes including apt.
 #
-# The same job then runs the omarchy_custom_kernel_translate_tests unit
+# The `tests` job runs the omarchy_custom_kernel_translate_tests unit
 # suite for the MSL->GLSL translator, which the syntax-only gate cannot
 # execute (no link): CPU-only libmlx plus the test target, then the suite.
-# Merged into one job (2026-11) so checkout/apt/prepare/configure/shaders
-# run once instead of twice — the two-job split paid that setup twice per
-# run for no isolation benefit (same runner, same toolchain, no secrets).
+# It needs the gate to pass first, so a broken backend stops in minutes
+# instead of burning a full libmlx build. The cost of `needs:` is the
+# ~2-minute shared setup run twice per push that passes the gate — the
+# two jobs ran merged from 2026-11 until this re-split, and the 30-day CI
+# baseline showed the merged job averaging ~68 min wall per run.
 #
 # Preprocessor-state limitation: the backend's bf16 direct GEMM path is
 # enabled only when the configured shader compiler accepts GL_EXT_bfloat16
@@ -28,7 +30,16 @@ name: Omarchy backend syntax gate
 on:
   push:
     branches: [main]
+    paths: &backend-paths
+      - 'overlay/**'
+      - 'patches/**'
+      - 'mlx.lock'
+      - 'scripts/prepare-mlx.sh'
+      - 'scripts/ci/omarchy_syntax_check.py'
+      - 'tests/test_omarchy_syntax_check.py'
+      - '.github/workflows/omarchy-syntax.yml'
   pull_request:
+    paths: *backend-paths
   workflow_dispatch:
 
 concurrency:
@@ -41,11 +52,9 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-24.04
-    # The merged job serializes what used to be two parallel jobs; the last 20
-    # runs measured 6.3-17.5 min on success and one run was killed at the old
-    # 20-minute limit mid-build (PR 510, run 44257862769). 30 covers the
-    # measured worst case with margin and still catches a real hang.
-    timeout-minutes: 30
+    # Fast part only: checkout through the -fsyntax-only sweep. Measured
+    # 2-3 min end to end; 10 catches a real hang without holding a runner.
+    timeout-minutes: 10
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
@@ -80,6 +89,44 @@ jobs:
         run: cmake --build .work/build --target omarchy_shaders
       - name: Syntax-check omarchy translation units
         run: python3 scripts/ci/omarchy_syntax_check.py .work/build --jobs 2
+
+  tests:
+    needs: gate
+    runs-on: ubuntu-24.04
+    # Long part: CPU-only libmlx plus the translator/vocab test targets.
+    # Last 20 merged-job runs measured 6.3-17.5 min for this half on top of
+    # shared setup; 30 covers the worst case with margin.
+    timeout-minutes: 30
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache pinned MLX source archive
+        uses: actions/cache@v4
+        with:
+          path: .work/mlx-*.tar.gz
+          key: mlx-archive-${{ hashFiles('mlx.lock') }}
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build glslang-tools libvulkan-dev \
+            libopenblas-dev libblas-dev liblapack-dev liblapacke-dev mesa-vulkan-drivers
+      - name: Prepare patched MLX tree
+        run: bash scripts/prepare-mlx.sh
+      - name: Configure (CPU-only, omarchy backend, tests on)
+        env:
+          CMAKE_INCLUDE_PATH: /usr/include/openblas
+        run: |
+          cmake -S .work/mlx -B .work/build -G Ninja \
+            -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON \
+            -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF \
+            -DMLX_BUILD_TESTS=ON -DMLX_BUILD_EXAMPLES=OFF \
+            -DMLX_BUILD_BENCHMARKS=OFF -DMLX_BUILD_PYTHON_BINDINGS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build embedded shader headers
+        run: cmake --build .work/build --target omarchy_shaders
       - name: Build translator and vocabulary-tail unit tests
         run: |
           cmake --build .work/build --target omarchy_custom_kernel_translate_tests omarchy_vocab_tail_tests
