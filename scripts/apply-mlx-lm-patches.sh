@@ -84,6 +84,7 @@ SERIES_PATCHES=(
   mlx-lm-last-logits-qwen3.patch
   mlx-lm-prefill-step-memory.patch
   mlx-lm-kv-presize.patch
+  mlx-lm-bitlinear-cpu-fallback.patch
   mlx-lm-speculative-verify.patch
 )
 series_already_applied() {
@@ -281,6 +282,13 @@ apply mlx-lm-prefill-step-memory.patch
 # completed with the cache allocated once. Quantized KV and other cache classes are unchanged.
 # Kill switch MLX_OMARCHY_KV_PRESIZE=0.
 apply mlx-lm-kv-presize.patch
+# BitNet ternary matmul: upstream calls the Metal kernel unconditionally
+# (ml-explore/mlx-lm #219), so any non-Metal build hard-fails BitNet. Gate it:
+# Metal builds keep the kernel, everything else takes a pure-MLX unpack +
+# matmul fallback. Same fix shape as the mlx-audio mossformer depthwise
+# gate below. Upstream-submittable; tests/test_bitlinear_cpu_fallback.py
+# pins the numerics against a NumPy reference.
+apply mlx-lm-bitlinear-cpu-fallback.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the
