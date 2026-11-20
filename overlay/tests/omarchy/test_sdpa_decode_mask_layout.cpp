@@ -1,9 +1,6 @@
 #include "sdpa_decode_mask_layout.h"
 
-// Card-free host checks for the checked mask-layout helper shipped in PR 521.
-// Broadcast, positive strides, sliced base offsets, and unsigned/span overflow
-// run here; the dispatch-level gates (width, batch, dtype, sinks, LSE) need a
-// device and stay with wAN's GPU suite.
+// Host-only layout checks; they do not exercise GPU dispatch.
 
 using mlx::core::omarchy::sdpa_decode_mask_layout;
 
@@ -36,7 +33,7 @@ int main() {
       sdpa_decode_mask_layout(0, 100, 0, 7, 1, 4, 32, 2)) {
     return 5;
   }
-  // Positive strides with an exact-fit boundary, one byte short must refuse.
+  // Positive strides: the exact fit passes, one element short fails.
   const auto strided = sdpa_decode_mask_layout(7, 13, 3, 5, 2, 2, 2, 3);
   if (!strided || strided->offset != 7 || strided->batch != 3 ||
       strided->head != 5 || strided->key != 2) {
@@ -69,7 +66,7 @@ int main() {
   if (sdpa_decode_mask_layout(0, uint64_t{1} << 40, UINT32_MAX, 0, 1, 3, 1, 1)) {
     return 8;
   }
-  // Degenerate shapes: no accessible bytes or a zero extent anywhere refuses.
+  // Reject an empty accessible window or any zero dimension.
   if (sdpa_decode_mask_layout(0, 0, 1, 1, 1, 2, 2, 2) ||
       sdpa_decode_mask_layout(5, 10, 1, 1, 1, 0, 2, 2) ||
       sdpa_decode_mask_layout(5, 10, 1, 1, 1, 2, 0, 2) ||
