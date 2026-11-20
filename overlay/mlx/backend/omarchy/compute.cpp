@@ -321,6 +321,7 @@
 #include "sdpa_decode_native_bf16_hd32.h"
 #include "sdpa_decode_native_bf16_hd96.h"
 #include "sdpa_decode_native_bf16_hd128.h"
+#include "sdpa_decode_masked_bf16_hd128.h"
 #include "sdpa_decode_rows_bf16_hd128.h"
 #include "sdpa_prefill_flash_bf16_hd128.h"
 #include "sdpa_decode_native_bf16_hd160.h"
@@ -1870,6 +1871,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_native_bf16_hd96, sdpa_decode_native_bf16_hd96_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd128:
       return {sdpa_decode_native_bf16_hd128, sdpa_decode_native_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeMaskedBF16Hd128:
+      return {sdpa_decode_masked_bf16_hd128, sdpa_decode_masked_bf16_hd128_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd160:
       return {sdpa_decode_native_bf16_hd160, sdpa_decode_native_bf16_hd160_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd192:

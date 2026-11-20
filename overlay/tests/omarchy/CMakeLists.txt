@@ -634,6 +634,12 @@ target_link_options(omarchy_qmm_geometry_tests
                     PRIVATE ${SANITIZER_LINK_FLAGS})
 add_test(NAME omarchy_qmm_geometry_tests COMMAND omarchy_qmm_geometry_tests)
 
+add_executable(omarchy_sdpa_decode_mask_layout_tests test_sdpa_decode_mask_layout.cpp)
+target_include_directories(omarchy_sdpa_decode_mask_layout_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+add_test(NAME omarchy_sdpa_decode_mask_layout_tests
+         COMMAND omarchy_sdpa_decode_mask_layout_tests)
+
 # Bf16FusedDecode: the fused single-query decode SDPA stays one dispatch,
 # agrees with the f32-score composition it replaced, and refuses uncovered
 # decode shapes by falling through to that composition.

@@ -444,6 +444,8 @@ omarchy_shader(sdpa_decode_native_bf16_hd256 shaders/sdpa_decode_native.comp -DB
 omarchy_shader(sdpa_decode_native_bf16_hd32 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=32)
 omarchy_shader(sdpa_decode_native_bf16_hd96 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=96)
 omarchy_shader(sdpa_decode_native_bf16_hd128 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=128)
+omarchy_shader(sdpa_decode_masked_bf16_hd128 shaders/sdpa_decode_native.comp
+               -DBF16_IO=1 -DSDPA_DIM=128 -DSDPA_MASK=1)
 # Multi-token verify rows (q_len 2..16, causal, bf16): one workgroup per
 # (head, row); each row runs the single-query arm over its visible key
 # prefix, so every row is bit-identical to that row decoded alone.

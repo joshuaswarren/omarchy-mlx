@@ -36,6 +36,7 @@
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
+#include "mlx/backend/omarchy/sdpa_decode_mask_layout.h"
 #include "mlx/distributed/primitives.h"
 #include "mlx/fast_primitives.h"
 #include "mlx/backend/gpu/copy.h"
@@ -16346,8 +16347,29 @@ void ScaledDotProductAttention::eval_gpu(
       }
     }
   }
+  std::optional<omarchy::SdpaDecodeMaskLayout> decode_mask;
+  omarchy::ComputeBinding mask_binding{};
+  if (inputs.size() == 4 && !has_sinks_ && !do_causal_ &&
+      batch == 2 && q_len == 1 && head_dim == 128 && decode_bf16_probe &&
+      !bf16_fast && encoder.device().compute().binding_limit() >= 5 &&
+      decode_path_override("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK") > 0) {
+    const auto& mask = inputs[3];
+    if (mask.dtype() == bfloat16 && mask.ndim() == 4 &&
+        mask.shape(0) == batch && mask.shape(1) == heads &&
+        mask.shape(2) == 1 && mask.shape(3) == k_len && k_len > 0 &&
+        mask.offset() >= 0 && mask.offset() % mask.itemsize() == 0) {
+      const auto offset = static_cast<uint64_t>(mask.offset());
+      mask_binding = binding(mask);
+      if (offset < mask_binding.range) {
+        decode_mask = omarchy::sdpa_decode_mask_layout(
+            offset / mask.itemsize(), (mask_binding.range - offset) / mask.itemsize(),
+            mask.strides()[0], mask.strides()[1], mask.strides()[3],
+            batch, heads, k_len);
+      }
+    }
+  }
   if ((decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
-      decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
+      decode_route_ready && (inputs.size() == 3 || decode_mask) && !has_sinks_ &&
       !output_logsumexp_ && decode_batch_ok &&
       (q_len == 1 || sdpa_rows_route) &&
       (q.dtype() == float16 || q.dtype() == bfloat16) &&
@@ -16520,6 +16542,18 @@ void ScaledDotProductAttention::eval_gpu(
     params.out_strides[3] = checked_u32(out.strides()[0], tag, out);
     params.lhs_size = checked_u32(k.strides()[0], tag, out);
     params.rhs_size = checked_u32(v.strides()[0], tag, out);
+    if (decode_mask) {
+      params.aux_size = decode_mask->offset;
+      params.reduce_size = decode_mask->batch;
+      params.output_size = decode_mask->head;
+      params.operation = decode_mask->key;
+      std::array<omarchy::ComputeBinding, 5> masked_bindings{
+          bindings[0], bindings[1], bindings[2], bindings[3], mask_binding};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaDecodeMaskedBF16Hd128,
+          masked_bindings, params, params.matrix_m, 1u, static_cast<uint32_t>(batch));
+      return;
+    }
     encoder.dispatch_compute(
         one_pass_kernel(),
         bindings,

@@ -663,6 +663,54 @@ TEST_CASE("batched bf16 decode is one dispatch and per-row bit-identical") {
   }
 }
 
+TEST_CASE("masked batch-2 BF16 decode keeps the composed score semantics") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!hd_route_ready(stream) ||
+      omarchy::get_command_encoder(stream).device().compute().binding_limit() < 5) {
+    return;
+  }
+  constexpr int keys = 263;
+  auto in = make_hd_cache(bfloat16, keys, 320, stream);
+  auto two_rows = [&](const array& a) {
+    return concatenate({a, a}, 0, stream);
+  };
+  auto q = two_rows(in.q);
+  auto k = two_rows(in.k);
+  auto v = two_rows(in.v);
+  const auto allowed = greater_equal(arange(keys, stream), array{17}, stream);
+  auto mask = reshape(
+      concatenate({allowed, zeros({keys}, bool_, stream)}, 0, stream),
+      {2, 1, 1, keys}, stream);
+  auto additive = where(
+      mask, array(0.0f, bfloat16), array(-0x1.fep127f, bfloat16), stream);
+  q.eval();
+  k.eval();
+  v.eval();
+  mask.eval();
+  additive.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  auto sdpa = [&](const array& m) {
+    return fast::scaled_dot_product_attention(
+        q, k, v, 1.0f / std::sqrt(128.0f), "", m, std::nullopt, false, stream);
+  };
+  setenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK", "0", 1);
+  const auto composed_dispatches = dispatches_for([&] { return sdpa(mask); }, stream);
+  auto composed = sdpa(mask);
+  composed.eval();
+  setenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK", "1", 1);
+  const auto dispatches = dispatches_for([&] { return sdpa(additive); }, stream);
+  const auto bool_dispatches = dispatches_for([&] { return sdpa(mask); }, stream);
+  auto fused = sdpa(mask);
+  fused.eval();
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK");
+  CHECK_EQ(dispatches, 1);
+  CHECK_LT(bool_dispatches, composed_dispatches);
+  require_hd_bit_identical(fused, composed, stream);
+}
+
 TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") {
   if (!compute_available()) {
     return;

@@ -68,6 +68,11 @@ layout(set = 0, binding = 3, std430) writeonly buffer Output {
   float16_t values[];
 } output_data;
 #endif
+#ifdef SDPA_MASK
+layout(set = 0, binding = 4, std430) readonly buffer Mask {
+  uint16_t values[];
+} mask_data;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -233,6 +238,9 @@ void main() {
   }
   barrier();
 
+#ifdef SDPA_MASK
+  uint mask_base = params.aux_size + batch * params.reduce_size + head * params.output_size;
+#endif
   // Scores over every key: ascending-d accumulation, matmul.comp order.
   for (uint key = thread; key < key_end; key += 256u) {
     uint k_base = k_batch + kv_head * params.shape[1] +
@@ -250,6 +258,9 @@ void main() {
       }
     }
     s_stream[key] = 1.0 * accumulator;
+#ifdef SDPA_MASK
+    s_stream[key] += bf16_load(mask_data.values[mask_base + key * params.operation]);
+#endif
   }
   barrier();
 
