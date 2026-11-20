@@ -147,3 +147,42 @@ else:
     r = subprocess.run([sys.executable, "-c", code], env=env,
                        capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, f"behavior check failed on {version}:\n{r.stderr[-400:]}"
+
+
+@pytest.mark.parametrize("venv", ["0.31.3"], indirect=True)
+def test_legacy_cache_constructs_with_only_the_offset_patch(venv, tmp_path):
+    """Do not let the preceding SSM patch supply imports to this patch."""
+    site, _ = venv
+    (wheel,) = (site / "dl").glob("mlx_lm-*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        for name in ("cache.py", "base.py"):
+            archive.extract(f"mlx_lm/models/{name}", tmp_path)
+    for package in (tmp_path / "mlx_lm", tmp_path / "mlx_lm/models"):
+        (package / "__init__.py").write_text("")
+    subprocess.run(
+        ["patch", "-p1", "-i", str(REPO / "patches/mlx-lm-kv-host-offset.patch")],
+        cwd=tmp_path, check=True, capture_output=True, text=True, timeout=30,
+    )
+    code = """
+import os
+import mlx.core as mx
+from mlx_lm.models.cache import BatchKVCache
+mx.set_default_device(mx.cpu)
+for flag in (None, "1"):
+    if flag is None:
+        os.environ.pop("MLX_OMARCHY_KV_HOST_OFFSET", None)
+    else:
+        os.environ["MLX_OMARCHY_KV_HOST_OFFSET"] = flag
+    cache = BatchKVCache([0, 1])
+    keys = mx.zeros((2, 2, 2, 8))
+    cache.update_and_fetch(keys, keys)
+    cache.filter([1, 0])
+    assert cache.offset.tolist() == [1, 2]
+    assert cache._host_offset == ([1, 2] if flag else None)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path,
+        env=dict(os.environ, PYTHONPATH=str(tmp_path)), check=False,
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr

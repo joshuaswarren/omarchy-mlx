@@ -1,12 +1,13 @@
 --- a/mlx_lm/models/cache.py
 +++ b/mlx_lm/models/cache.py
-@@ -988,10 +988,29 @@
+@@ -988,10 +988,30 @@
          self.keys = None
          self.values = None
          self.left_padding = mx.array(left_padding)
 -        self.offset = mx.array([-l for l in left_padding])
++        from os import getenv
 +        values = [-l for l in left_padding]
-+        enabled = os.environ.get("MLX_OMARCHY_KV_HOST_OFFSET") == "1"
++        enabled = getenv("MLX_OMARCHY_KV_HOST_OFFSET") == "1"
 +        self._store_offset(mx.array(values), values if enabled else None)
          self._idx = 0
  
@@ -31,7 +32,7 @@
  
      def update_and_fetch(self, keys, values):
          prev = self._idx
-@@ -1012,7 +1031,7 @@
+@@ -1012,7 +1032,7 @@
              else:
                  self.keys, self.values = new_k, new_v
  
@@ -40,7 +41,7 @@
          self._idx += keys.shape[2]
          self.keys[..., prev : self._idx, :] = keys
          self.values[..., prev : self._idx, :] = values
-@@ -1059,7 +1078,7 @@
+@@ -1059,7 +1079,7 @@
      def trim(self, n):
          n = min(self._idx, n)
          self._idx -= n
@@ -49,7 +50,7 @@
          return n
  
      def make_mask(self, N: int, return_array: bool = False, **kwargs):
-@@ -1074,7 +1093,11 @@
+@@ -1074,7 +1094,11 @@
          if self.keys is not None:
              self.keys = self.keys[batch_indices]
              self.values = self.values[batch_indices]
@@ -62,7 +63,7 @@
          self.left_padding = self.left_padding[batch_indices]
  
          # Shift left to reduce padding
-@@ -1166,7 +1189,7 @@
+@@ -1166,7 +1190,7 @@
          cache = cls(padding)
          cache.keys = keys
          cache.values = values
