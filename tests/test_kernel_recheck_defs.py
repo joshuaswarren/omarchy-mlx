@@ -550,7 +550,7 @@ def test_ref_cbq_grad_d_and_x_small_case(monkeypatch):
     gx = defs.ref_cbq_gx(inp)[0]
     assert gd.shape == (2, 4, 1) and gx.shape == (1, 256)
 
-    # independent: grad paths read the grid bytes UNSIGNED (unlike mm)
+    # Differentiate the signed LUT coefficients used by dequant_ref.
     gd_want = np.zeros((2, 4, 1))
     gx_want = np.zeros((1, 256))
     for r in range(2):
@@ -567,7 +567,7 @@ def test_ref_cbq_grad_d_and_x_small_case(monkeypatch):
                 for l in range(4):
                     gi = int(qs[e, o, sb * 4 + l]) | (((word >> (3 * l)) & 7) << 8)
                     for b in range(8):
-                        gbyte = int(grid[gi, b]) & 0xFF
+                        gbyte = int(grid[gi, b])
                         xk = float(x[tok, sb * 32 + l * 8 + b])
                         p32 += (gbyte + delta) * xk
                         gx_want[tok, (sb * 4 + l) * 8 + b] += \
@@ -576,6 +576,29 @@ def test_ref_cbq_grad_d_and_x_small_case(monkeypatch):
     assert np.array_equal(gd, gd_want)
     assert np.array_equal(gx, gx_want)
     assert gx_want[0, :].any() and gd_want.any()
+
+
+def test_ref_cbq_gradients_sign_extend_lut_bytes(monkeypatch):
+    monkeypatch.setattr(defs, "CBQ", dict(E=1, O=1, K=256, R=2, N=1))
+    grid = np.zeros((2048, 8), dtype=np.int8)
+    grid[0, :4] = [-128, -1, 0, 127]
+    x = np.zeros((1, 256), dtype=np.float32)
+    x[0, :2] = [1.0, 2.0]
+    inp = dict(
+        x=x, cot=np.array([[2.0], [4.0]], dtype=np.float32),
+        eidx=np.zeros(2, dtype=np.uint32), tokidx=np.zeros(2, dtype=np.uint32),
+        cb_qs=np.zeros((1, 1, 32), dtype=np.uint8),
+        cb_qh=np.full((1, 1, 8), 0x9000, dtype=np.uint16),
+        cb_d=np.full((1, 1, 1), 0.5, dtype=np.float32),
+        grid=grid.reshape(-1),
+    )
+    # Shipped `(char)` and dequant_ref's int8 LUT both give [-128, -1, 0, 127].
+    # The header selects multiplier 3 and delta -1/8; both routes add to
+    # the same expert and token. dW/dd = 3*(g-1/8); W = 0.5*dW/dd.
+    assert defs.ref_cbq_gd(inp)[0].item() == -2346.75
+    gx = defs.ref_cbq_gx(inp)[0]
+    assert np.array_equal(gx[0, :4], [-1153.125, -10.125, -1.125, 1141.875])
+    assert np.array_equal(gx[0, 4:8], [-1.125] * 4)
 
 
 # ------------------------------------------------------- kda glue (small)
