@@ -157,5 +157,8 @@ jobs:
           .work/build/tests/omarchy/omarchy_sdpa_decode_fused_tests \
             --test-case="masked batch-2 BF16 decode keeps the composed score semantics" \
             | tee .work/sdpa-decode-masked.out
-          ! grep -q 'Skipping:' .work/sdpa-decode-masked.out
+          if grep -q 'Skipping:' .work/sdpa-decode-masked.out; then
+            exit 1
+          fi
           grep -Eq 'test cases: *1 \| *1 passed \| 0 failed' .work/sdpa-decode-masked.out
+          grep -Eq 'assertions: *[1-9][0-9]* \| *[1-9][0-9]* passed \| 0 failed' .work/sdpa-decode-masked.out
