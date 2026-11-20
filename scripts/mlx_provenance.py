@@ -270,20 +270,39 @@ def _loaded_macos_binaries():
     return sorted(paths)
 
 
-def native_provenance():
-    """Hash the loaded macOS extension and MLX libraries against package RECORDs."""
+def _loaded_linux_cpu_binaries():
+    import mlx.core as mx
+
+    libraries = set()
+    for line in Path("/proc/self/maps").read_text().splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) != 6:
+            continue
+        path = Path(fields[5])
+        if path.name == "libmlx.so (deleted)":
+            raise ProvenanceRefusal("The loaded libmlx.so was deleted or replaced")
+        if path.name == "libmlx.so":
+            libraries.add(path.resolve())
+    if len(libraries) != 1:
+        raise ProvenanceRefusal("Expected exactly one mapped libmlx.so")
+    return Path(mx.__spec__.origin).resolve(), libraries.pop()
+
+
+def native_provenance(*, upstream_cpu=False):
+    """Hash loaded upstream binaries against their installed wheel RECORDs."""
     import mlx.core as mx
 
     result = {"dist": "mlx", "dist_version": None,
               "mx_version": getattr(mx, "__version__", None),
               "version_match": None, "files": [], "verified": "unverified",
               "mismatch": None, "note": None, "packages": {}}
-    loaded = _loaded_macos_binaries()
+    loaded = _loaded_linux_cpu_binaries() if upstream_cpu else _loaded_macos_binaries()
+    owners = dict(zip(loaded, ("mlx", "mlx-cpu"))) if upstream_cpu else {}
     wanted = {path.name for path in loaded}
     records = {}
     problems = []
-    # Native pip wheels can split the extension and Metal library across packages.
-    for name in ("mlx", "mlx-metal", "mlx-cpu"):
+    names = ("mlx", "mlx-cpu") if upstream_cpu else ("mlx", "mlx-metal", "mlx-cpu")
+    for name in names:
         try:
             dist = importlib.metadata.distribution(name)
         except importlib.metadata.PackageNotFoundError:
@@ -301,6 +320,8 @@ def native_provenance():
             if Path(rel).name not in wanted:
                 continue
             path = Path(dist.locate_file(rel)).resolve()
+            if owners and owners.get(path) != name:
+                continue
             records.setdefault(path, []).append(digest)
     for path in loaded:
         actual = sha256_file(path)
