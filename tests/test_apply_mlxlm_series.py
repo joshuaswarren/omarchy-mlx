@@ -152,6 +152,7 @@ else:
 @pytest.mark.parametrize("venv", ["0.31.3"], indirect=True)
 def test_legacy_cache_constructs_with_only_the_offset_patch(venv, tmp_path):
     """Do not let the preceding SSM patch supply imports to this patch."""
+    pytest.importorskip("mlx.core")
     site, _ = venv
     (wheel,) = (site / "dl").glob("mlx_lm-*.whl")
     with zipfile.ZipFile(wheel) as archive:
