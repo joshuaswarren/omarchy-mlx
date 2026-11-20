@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -18,7 +19,10 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
+#include <iterator>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -53,9 +57,19 @@ struct Parameter {
   bool constant_space;
 };
 
+enum CbqPort { CbqNone, CbqGather, CbqSitu, CbqGlu, CbqGradD, CbqGradX };
+
+struct CbqDispatch {
+  CbqPort port = CbqNone;
+  int k = 0;
+  int o = 0;
+  int r = 0;
+};
+
 struct Translation {
   std::string glsl;
   std::vector<Parameter> parameters;
+  CbqDispatch cbq;
 };
 
 struct TemporaryFile {
@@ -2536,6 +2550,14 @@ void map_numeric_limits(std::string& code) {
   code = std::move(rewritten);
 }
 
+constexpr std::string_view bf16_glsl_helpers =
+    "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
+    "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); if ((bits & 0x7fffffffu) > 0x7f800000u) return uint16_t((bits & 0xffffu) == 0u ? bits >> 16 : 0x7fc0u); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
+    "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n"
+    "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
+
+#include "custom_kernel_cbq.h"
+
 Translation translate_msl(
     const std::string& source,
     const std::tuple<int, int, int>& grid,
@@ -2554,10 +2576,15 @@ Translation translate_msl(
     throw std::runtime_error("generated MSL kernel body is missing");
   }
   const auto body_close = matching_delimiter(source, body_open, '{', '}');
-  const auto parameters = parse_parameters(
+  auto parameters = parse_parameters(
       source.substr(arguments_open + 1, arguments_close - arguments_open - 1));
   if (output_count == 0 || output_count > parameters.size()) {
     throw std::runtime_error("generated MSL output arity is invalid");
+  }
+  if (auto cbq = translate_cbq(
+          source, marker, arguments_open, arguments_close, body_open, body_close,
+          parameters, grid, threadgroup, output_count)) {
+    return std::move(*cbq);
   }
 
   std::string header;
@@ -3260,10 +3287,7 @@ Translation translate_msl(
        << ", local_size_z=" << local_z << ") in;\n";
   glsl << declarations << hoisted_consts << shared_declarations;
   if (needs_bfloat) {
-    glsl << "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
-         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); if ((bits & 0x7fffffffu) > 0x7f800000u) return uint16_t((bits & 0xffffu) == 0u ? bits >> 16 : 0x7fc0u); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
-         << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n"
-         << "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
+    glsl << bf16_glsl_helpers;
   }
   glsl << header << "\n" << element_helpers << vector_alias_helpers
        << condition_helpers << bool_and_helpers << macros;
@@ -3272,7 +3296,7 @@ Translation translate_msl(
        << "u || gl_GlobalInvocationID.y >= " << grid_y
        << "u || gl_GlobalInvocationID.z >= " << grid_z << "u) return;\n"
        << body << "\n}\n";
-  return {glsl.str(), parameters};
+  return {glsl.str(), std::move(parameters), {}};
 }
 std::string find_executable(const std::string& name) {
   const char* path_value = std::getenv("PATH");
@@ -3556,9 +3580,9 @@ const std::vector<uint32_t>& cached_compile(const std::string& glsl) {
 // Parakeet mel frontend pays ~100 ms there across its seven kernels), so the
 // memo is backed by the same disk layer the SPIR-V cache uses. The material
 // version must be bumped whenever any translate_* pass changes its output.
-constexpr char kTranslationCacheMagic[] = "MLXOTR1";
+constexpr char kTranslationCacheMagic[] = "MLXOTR2";
 constexpr size_t kTranslationCacheMagicSize = 8;
-constexpr char kTranslationCacheVersion[] = "2";
+constexpr char kTranslationCacheVersion[] = "3";
 
 // Stamp of the translation pipeline itself, generated at build time from
 // the SHA-256 of this source file (see omarchy_shader translation_version
@@ -3700,6 +3724,13 @@ std::string serialize_translation(const Translation& translation) {
     payload.push_back(parameter.scalar ? 1 : 0);
     payload.push_back(parameter.atomic ? 1 : 0);
   }
+  const auto [port, k, o, r] = translation.cbq;
+  put_u64(payload, port);
+  if (port != CbqNone) {
+    put_u64(payload, k);
+    put_u64(payload, o);
+    put_u64(payload, r);
+  }
   std::string blob(kTranslationCacheMagic, kTranslationCacheMagicSize);
   blob += payload;
   return blob;
@@ -3730,6 +3761,22 @@ bool parse_translation(const std::string& blob, Translation& translation) {
     parameter.atomic = blob[cursor + 1] != 0;
     cursor += 2;
     remaining -= 2;
+  }
+  uint64_t port = 0;
+  if (!get_u64(blob, cursor, remaining, port) || port > CbqGradX) {
+    return false;
+  }
+  translation.cbq = {};
+  if (port != CbqNone) {
+    uint64_t k = 0, o = 0, r = 0;
+    if (!get_u64(blob, cursor, remaining, k) || k == 0 || k > INT32_MAX ||
+        k % 256 != 0 ||
+        !get_u64(blob, cursor, remaining, o) || o == 0 || o > INT32_MAX ||
+        !get_u64(blob, cursor, remaining, r) || r == 0 || r > INT32_MAX) {
+      return false;
+    }
+    translation.cbq = {static_cast<CbqPort>(port), static_cast<int>(k),
+                       static_cast<int>(o), static_cast<int>(r)};
   }
   if (remaining != 0) {
     return false;
@@ -4055,6 +4102,21 @@ void CustomKernel::eval_gpu(
         m2v_prefix + "generated binding count mismatch",
         out_for_error);
   }
+  const bool cbq = translation->cbq.port != CbqNone;
+  if (cbq && !cbq_dispatch_matches(
+          translation->cbq, checked_inputs, outputs, init_value_.has_value())) {
+    omarchy::unsupported(
+        m2v_prefix + "unsupported CBQ kernel buffer shape, layout or initialization",
+        out_for_error);
+  }
+  if (cbq) {
+    const auto& caps = encoder.device().hardware_capabilities();
+    if (!caps.shader_int16 || !caps.storage_buffer_16bit_access) {
+      omarchy::unsupported(
+          m2v_prefix + "CBQ requires shaderInt16 and storageBuffer16BitAccess",
+          out_for_error);
+    }
+  }
 
   const std::vector<uint32_t>* spirv = nullptr;
   try {
@@ -4070,9 +4132,10 @@ void CustomKernel::eval_gpu(
       *spirv,
       bindings,
       params,
-      groups_x,
-      groups_y,
-      groups_z);
+      cbq ? static_cast<uint32_t>((outputs.front().size() + kCbqThreads - 1) /
+                                  kCbqThreads) : groups_x,
+      cbq ? 1u : groups_y,
+      cbq ? 1u : groups_z);
   if (m2v_active) {
     m2v::record_route(base_name, m2v::Route::Translator);
   }
