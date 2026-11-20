@@ -755,6 +755,48 @@ void dispatch_matmul(
       bound_c, use_c ? params.aux_size : out.size(), name, out);
   params.output_offset = checked_item_offset(out, out.size(), name, out);
 
+  uint64_t a_inner = params.matrix_m == 0u || params.matrix_k == 0u
+      ? 0u
+      : (a_transposed
+            ? static_cast<uint64_t>(params.matrix_k - 1) * a_gap +
+                params.matrix_m
+            : static_cast<uint64_t>(params.matrix_m - 1) * a_gap +
+                params.matrix_k);
+  uint64_t b_inner = params.matrix_k == 0u || params.matrix_n == 0u
+      ? 0u
+      : (b_transposed
+            ? static_cast<uint64_t>(params.matrix_n - 1) * b_gap +
+                params.matrix_k
+            : static_cast<uint64_t>(params.matrix_k - 1) * b_gap +
+                params.matrix_n);
+  if (!omarchy::compute_index_span_fits(
+          params.lhs_offset, a_span + a_inner) ||
+      !omarchy::compute_index_span_fits(
+          params.rhs_offset, b_span + b_inner)) {
+    omarchy::unsupported(name + " index span", out);
+  }
+
+  if (!use_c && !sdpa && causal.second == CausalSkip::None && alpha == 1.0f &&
+      out.dtype() == bfloat16 && !a_transposed && b_transposed &&
+      a->ndim() == 2 && !a_materialized && !b_materialized &&
+      a_gap == k && b_gap == k && k != 0 && k % 16u == 0u &&
+      m % 32u == 0u && n % 64u == 0u &&
+      m / 32u <= omarchy::kMaxComputeGroupCountX &&
+      n / 64u <= omarchy::kMaxComputeGroupCountX &&
+      ((params.lhs_offset | params.rhs_offset | params.output_offset) & 1u) ==
+          0u &&
+      omarchy::env_flag("MLX_OMARCHY_MATMUL_BM32")) {
+    const std::array<omarchy::ComputeBinding, 3> bindings{
+        binding(bound_a), binding(bound_b), binding(out)};
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::MatmulBf16Bm32,
+        bindings,
+        params,
+        params.matrix_n / 64u,
+        params.matrix_m / 32u);
+    return;
+  }
+
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(bound_a), binding(bound_b), binding(bound_c), binding(out)};
   auto kernel = out.dtype() == complex64
@@ -971,26 +1013,6 @@ void dispatch_matmul(
   }
   const uint32_t tile =
       direct ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
-  uint64_t a_inner = params.matrix_m == 0u || params.matrix_k == 0u
-      ? 0u
-      : (a_transposed
-            ? static_cast<uint64_t>(params.matrix_k - 1) * a_gap +
-                params.matrix_m
-            : static_cast<uint64_t>(params.matrix_m - 1) * a_gap +
-                params.matrix_k);
-  uint64_t b_inner = params.matrix_k == 0u || params.matrix_n == 0u
-      ? 0u
-      : (b_transposed
-            ? static_cast<uint64_t>(params.matrix_n - 1) * b_gap +
-                params.matrix_k
-            : static_cast<uint64_t>(params.matrix_k - 1) * b_gap +
-                params.matrix_n);
-  if (!omarchy::compute_index_span_fits(
-          params.lhs_offset, a_span + a_inner) ||
-      !omarchy::compute_index_span_fits(
-          params.rhs_offset, b_span + b_inner)) {
-    omarchy::unsupported(name + " index span", out);
-  }
   bool bf16_vec_aligned = ((params.lhs_offset | params.rhs_offset |
       params.rhs_gap) & 3u) == 0u;
   for (uint32_t axis = 0; bf16_vec_aligned && axis < params.dims; ++axis) {

@@ -7870,3 +7870,80 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
             omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16));
   }
 }
+
+TEST_CASE("BM32 BF16 NT matmul records a dedicated Vulkan dispatch") {
+  if (!compute_available()) {
+    return;
+  }
+  const Stream stream = gpu_stream();
+  constexpr int rows = 64, k = 32, n = 128;
+  std::vector<bfloat16_t> x_host(rows * k);
+  std::vector<bfloat16_t> w_host((n + 1) * k);
+  for (int i = 0; i < rows * k; ++i) {
+    x_host[i] = bfloat16_t(static_cast<float>((i * 13) % 23 - 11) / 16.0f);
+  }
+  for (int i = 0; i < (n + 1) * k; ++i) {
+    w_host[i] = bfloat16_t(static_cast<float>((i * 7) % 31 - 15) / 16.0f);
+  }
+  std::fill_n(x_host.begin(), k, bfloat16_t(0.0f));
+  x_host[0] = x_host[1] = x_host[15] = x_host[16] = bfloat16_t(1.0f);
+  std::fill_n(w_host.begin() + k, 3 * k, bfloat16_t(0.0f));
+  w_host[k] = bfloat16_t(1.0f);
+  w_host[k + 1] = w_host[2 * k + 1] = bfloat16_t(0x1p-8f);
+  w_host[2 * k] = bfloat16_t(1.0f + 0x1p-7f);
+  w_host[3 * k] = bfloat16_t(256.0f);
+  w_host[3 * k + 15] = bfloat16_t(1.0f);
+  w_host[3 * k + 16] = bfloat16_t(-256.0f);
+
+  array x(x_host.begin(), Shape{2, 32, k}, bfloat16);
+  array w(w_host.begin(), Shape{n + 1, k}, bfloat16);
+  array wt = transpose(slice(w, {1, 0}, {n + 1, k}, stream), {1, 0}, stream);
+  wt.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+
+  constexpr auto flag = "MLX_OMARCHY_MATMUL_BM32";
+  const char* old_flag = std::getenv(flag);
+  const auto saved_flag =
+      old_flag ? std::optional<std::string>(old_flag) : std::nullopt;
+  auto& trace = omarchy::trace::counters();
+  setenv(flag, "0", 1);
+  const auto baseline = evaluation_error(matmul(x, wt, stream));
+  const auto old_kernel = trace.last_dispatched_kernel.load();
+  const auto before = trace.vk_compute_dispatches.load();
+  setenv(flag, "1", 1);
+  array out = matmul(x, wt, stream);
+  const auto candidate = evaluation_error(out);
+  if (saved_flag) {
+    setenv(flag, saved_flag->c_str(), 1);
+  } else {
+    unsetenv(flag);
+  }
+
+  REQUIRE(baseline.empty());
+  REQUIRE(candidate.empty());
+  REQUIRE_NE(trace.last_dispatched_kernel.load(), old_kernel);
+  CHECK_EQ(
+      trace.last_dispatched_kernel.load(),
+      static_cast<int64_t>(omarchy::ComputeKernel::MatmulBf16Bm32));
+  CHECK_EQ(trace.vk_compute_dispatches.load() - before, 1u);
+  CHECK((out.shape() == Shape{2, 32, n}));
+  CHECK(out.dtype() == bfloat16);
+  const auto got = readback_f32(stream, out);
+  REQUIRE_EQ(got.size(), rows * n);
+  CHECK_EQ(got[0], 1.0f);
+  CHECK_EQ(got[1], 1.0f + 0x1p-6f);
+  CHECK_EQ(got[2], 1.0f);
+  for (int row = 0; row < rows; ++row) {
+    for (int col = 0; col < n; ++col) {
+      double acc = 0.0;
+      for (int t = 0; t < k; ++t) {
+        acc += static_cast<float>(x_host[row * k + t]) *
+            static_cast<double>(static_cast<float>(w_host[(col + 1) * k + t]));
+      }
+      INFO("row=" << row << ", col=" << col);
+      CHECK_EQ(
+          got[row * n + col],
+          static_cast<float>(bfloat16_t(static_cast<float>(acc))));
+    }
+  }
+}

@@ -1156,6 +1156,7 @@ enum class ComputeKernel : uint16_t {
   // routes are unavailable. Appended to keep profile kernel ids stable.
   MatmulRbF32,
   SdpaDecodeMaskedBF16Hd128,
+  MatmulBf16Bm32,
   Count,
 };
 

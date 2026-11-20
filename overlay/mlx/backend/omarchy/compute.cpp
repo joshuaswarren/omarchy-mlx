@@ -458,7 +458,7 @@
 #include "qmm_fma_f16.h"
 #include "qmm_fma_bf16.h"
 #include "qmm_fma_precise_bf16.h"
-#include "matmul_fma_bf16.h"
+#include "matmul_bm32_bf16.h"
 #include "binary_vec_f16.h"
 #include "binary_vec_bf16.h"
 #include "unary_vec_f16.h"
@@ -1745,6 +1745,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_fma_precise_bf16, qmm_fma_precise_bf16_size};
     case ComputeKernel::MatmulBf16Fma:
       return {matmul_fma_bf16, matmul_fma_bf16_size};
+    case ComputeKernel::MatmulBf16Bm32:
+      return {matmul_bm32_bf16, matmul_bm32_bf16_size};
     case ComputeKernel::QmmTileBF16:
       return {qmm_tile_bf16, qmm_tile_bf16_size};
     case ComputeKernel::FusedChainF32:

@@ -73,6 +73,8 @@ The backend must implement MLX storage and arithmetic semantics with Vulkan pack
 A missing native format does not permit CPU fallback.
 Each storage-buffer binding covers its array's bytes, not the binned allocation behind it (up to 12.5% larger), and a binding past the device's `maxStorageBufferRange` (2 GiB - 1 on Honeykrisp) is refused by name before the driver sees it.
 
+`MLX_OMARCHY_MATMUL_BM32=1` selects the Vulkan 32×64×16 tile for eligible dense BF16 projections (`x @ weight.T`). It reads packed BF16 words, accumulates in FP32, and rounds to BF16 at the store. Other shapes and layouts keep the normal Vulkan matmul selection.
+
 The [Vulkan decode execution guide](decode-execution.md) maps graph evaluation,
 descriptor updates, submission, synchronization, and host costs to their source paths.
 
