@@ -60,7 +60,8 @@ class UpstreamCpuProvenanceTests(unittest.TestCase):
             }
             with (
                 patch.dict(sys.modules, {"mlx": mlx, "mlx.core": mlx.core}),
-                patch.object(prov, "_loaded_linux_cpu_binaries", return_value=(core, lib)),
+                patch.object(prov, "_loaded_linux_cpu_binaries",
+                             return_value=(core.resolve(), lib.resolve())),
                 patch.object(prov.importlib.metadata, "distribution", side_effect=dists.__getitem__),
                 patch.object(prov, "_record_hashes", side_effect=lambda dist: hashes[
                     "mlx" if dist is dists["mlx"] else "mlx-cpu"]),
