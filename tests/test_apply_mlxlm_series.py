@@ -12,8 +12,8 @@ each supported line and pins the contract:
 
 - the first run exits 0 and selects the right series for the tree;
 - a second run exits 0 (idempotent: "already patched" is reported, not an error);
-- per-line markers: the 0.31.3 series ships ssm-maskless and NOT the 0.32-only
-  patchers; the 0.32 series carries all of them;
+- per-line markers: both series carry the host-offset switch, while the
+  0.31.3 series leaves the 0.32-only masking and greedy patches out;
 - where mlx.core is importable (CPU is enough), the patched trees behave:
   0.32 BatchKVCache.make_mask(1) drops the all-valid decode mask and keeps the
   prefill mask; 0.31.3 keeps the upstream array mask for both.
@@ -93,12 +93,9 @@ def test_series_markers_per_line(venv):
         assert "MLX_OMARCHY_KV_HOST_OFFSET" in cache
         assert "MLX_OMARCHY_BATCH_GREEDY" in generate
     else:
-        # The shipped 0.31.3 series intentionally omits the 0.32-only
-        # BatchKVCache/generate patchers; their anchors are the 0.32 API
-        # (prepare/finalize right-padding mirror, tolist filter) and refuse
-        # on 0.31.3's older BatchKVCache.
+        # The legacy port changes offset placement only, not masking or greedy decode.
         assert "MLX_OMARCHY_KV_MASKLESS" not in cache
-        assert "MLX_OMARCHY_KV_HOST_OFFSET" not in cache
+        assert "MLX_OMARCHY_KV_HOST_OFFSET" in cache
         assert "MLX_OMARCHY_BATCH_GREEDY" not in generate
 
 
@@ -131,9 +128,22 @@ if "{version}" == "0.32.0":
 else:
     assert decode is not None, "0.31.3 keeps the upstream array decode mask"
     assert prefill is not None
+    m = BatchKVCache([0, 1])
+    keys = mx.zeros((2, 2, 2, 8))
+    m.update_and_fetch(keys, keys)
+    m.filter([1, 0])
+    assert m.offset.tolist() == [1, 2]
+    m.update_and_fetch(keys, keys)
+    assert m.offset.tolist() == [3, 4]
+    assert m._host_offset == [3, 4], "prompt split must keep the host mirror"
+    m.offset = mx.array([8, 9])
+    m.update_and_fetch(keys, keys)
+    assert m.offset.tolist() == [10, 11]
+    assert m._host_offset is None, "outside assignment must not reuse the stale mirror"
 """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(tmp_path) + os.pathsep + env.get("PYTHONPATH", "")
+    env["MLX_OMARCHY_KV_HOST_OFFSET"] = "1"
     r = subprocess.run([sys.executable, "-c", code], env=env,
                        capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, f"behavior check failed on {version}:\n{r.stderr[-400:]}"
