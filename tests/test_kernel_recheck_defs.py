@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.kernel_recheck import defs  # noqa: E402
+from tools.kernel_recheck.dump_msl import generated_msl  # noqa: E402
 
 SOURCES_DIR = REPO_ROOT / "tools" / "kernel_recheck" / "sources"
 
@@ -431,6 +432,14 @@ def test_ref_phonon_base5_unpack():
 
 
 # ------------------------------------------------------------ cbq (small)
+
+
+def test_cbq_dump_closes_every_builtin_attribute():
+    assert (
+        "  uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],\n"
+        "  uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]) {\n"
+    ) in generated_msl("cbq_gather_mm_v2")
+
 
 CBQ_SMALL = dict(E=2, O=4, K=256, R=2, N=1)
 
