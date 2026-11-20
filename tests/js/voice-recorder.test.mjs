@@ -268,6 +268,22 @@ function micWorld({ gum, contextError, workletError } = {}) {
   } finally { world.restore(); }
 }
 
+// Arming before start() — the production order in app.js onMicStart —
+// ends the capture on speech then silence.
+{
+  const stopsArm = [];
+  const armed = new Recorder({ onStop: (s) => stopsArm.push(s) });
+  armed.setHandsFree({ silenceMs: 160, floorRms: 0.01 });
+  await armed.start();
+  for (let i = 0; i < 5; i++) node.port.onmessage({ data: frame() });
+  for (let i = 0; i < 60; i++) node.port.onmessage({ data: silent() });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stopsArm.length, 1,
+    "an armed-before-start recording must stop on speech-then-silence");
+  assert.equal(stopsArm[0].reason, "silence");
+  assert.equal(armed.state, "idle");
+}
+
 console.log("voice-recorder hands-free checks passed");
 
 console.log("voice recorder js tests passed");

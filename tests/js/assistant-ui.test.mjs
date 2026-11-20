@@ -627,4 +627,86 @@ function collectText(node, out) {
   assert.equal(bubbles[0].querySelector("button"), null);
 }
 
+{
+  // Wake word: page-load baseline vs the first new detection. The status
+  // poller replays whatever the server-side listener remembers, so the
+  // first status after load — detection or none — is the baseline, never
+  // a trigger; only a detection that arrives after it opens the mic.
+  globalThis.window = { __MLX_UI_FIXTURE__: true, addEventListener() {} };
+  const { App } = await import(
+    "../../serve/mlx_omarchy_assistant/static/js/app.js");
+  const wakeStatus = (last) => ({ wake: { last_detection: last } });
+  const stubApp = (started) => ({
+    _wakeSeen: undefined,
+    activeTurn: null,
+    speakerSpeaking: false,
+    voiceStates: { recognition: "ready", synthesis: "ready" },
+    live: document.createElement("div"),
+    composer: { startHandsFree: async () => { started.push(1); return true; } },
+  });
+  const hear = (app, status) => App.prototype._handleWake.call(app, status);
+
+  // Empty initial status, a new detection, then the same detection again:
+  // exactly one recording.
+  const fresh = [];
+  const freshApp = stubApp(fresh);
+  hear(freshApp, wakeStatus(null));
+  hear(freshApp, wakeStatus("2026-11-21T00:00:01+00:00"));
+  hear(freshApp, wakeStatus("2026-11-21T00:00:01+00:00"));
+  assert.equal(fresh.length, 1,
+    "a detection after an empty baseline must start exactly one recording");
+
+  // A reload whose first status already carries an old detection: none.
+  const reload = [];
+  const reloadApp = stubApp(reload);
+  hear(reloadApp, wakeStatus("2026-11-20T23:40:00+00:00"));
+  hear(reloadApp, wakeStatus("2026-11-20T23:40:00+00:00"));
+  assert.equal(reload.length, 0,
+    "a detection older than page load is history, not a trigger");
+  hear(reloadApp, wakeStatus("2026-11-21T00:00:02+00:00"));
+  assert.equal(reload.length, 1,
+    "the first new detection after the baseline must start recording");
+}
+
+{
+  // Hands-free must reach the recorder: composer.startHandsFree passes
+  // { handsFree: true } through onMicStart so the recorder arms its
+  // silence auto-stop; push-to-talk passes no flag and keeps its
+  // semantics.
+  const starts = [];
+  let recording = false;
+  const composer = buildComposer({
+    onSend: () => true,
+    onCancel: () => {},
+    onStopSpeaking: () => {},
+    onDraft: () => {},
+    onOpenContext: () => {},
+    onMicStart: async (opts) => { starts.push(opts); recording = true; },
+    onMicStop: async () => { recording = false; },
+    onMicCancel: async () => { recording = false; },
+    onMicResult: () => {},
+    voiceStates: { recognition: "ready", synthesis: "ready" },
+    onConversationModeChange: () => {},
+    isRecording: () => recording,
+    isBusy: () => false,
+    isSpeaking: () => false,
+  });
+  const micBtn = composer.wrap.querySelector("#mic-btn");
+
+  const started = await composer.startHandsFree();
+  assert.equal(started, true, "startHandsFree must report the mic opened");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0] && starts[0].handsFree, true,
+    "hands-free start must arm the recorder's silence stop");
+
+  // The silence auto-stop ends the turn like a user stop; a later
+  // push-to-talk start passes no hands-free flag.
+  recording = false;
+  composer.resetMicUi();
+  micBtn._fire("click", { detail: 0 });
+  assert.equal(starts.length, 2);
+  assert.ok(!(starts[1] && starts[1].handsFree),
+    "push-to-talk must not arm the silence stop");
+}
+
 console.log("assistant ui js tests passed");
