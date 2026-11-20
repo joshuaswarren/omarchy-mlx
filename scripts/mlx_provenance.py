@@ -273,19 +273,33 @@ def _loaded_macos_binaries():
 def _loaded_linux_cpu_binaries():
     import mlx.core as mx
 
+    origin = getattr(getattr(mx, "__spec__", None), "origin", None)
+    if not origin:
+        raise ProvenanceRefusal("mlx.core has no loaded file origin")
+    core_path = Path(origin).resolve()
+    deleted_core = f"{core_path.name} (deleted)"
+    core_mapped = set()
     libraries = set()
     for line in Path("/proc/self/maps").read_text().splitlines():
         fields = line.split(maxsplit=5)
         if len(fields) != 6:
             continue
-        path = Path(fields[5])
+        path = Path(fields[5].strip())
         if path.name == "libmlx.so (deleted)":
             raise ProvenanceRefusal("The loaded libmlx.so was deleted or replaced")
+        if path.name == deleted_core:
+            raise ProvenanceRefusal(f"The loaded {core_path.name} was deleted or replaced")
         if path.name == "libmlx.so":
             libraries.add(path.resolve())
+        elif path.name == core_path.name:
+            core_mapped.add(path.resolve())
+    if core_mapped != {core_path}:
+        raise ProvenanceRefusal(
+            f"Expected {core_path} to be the sole mapped {core_path.name}"
+        )
     if len(libraries) != 1:
         raise ProvenanceRefusal("Expected exactly one mapped libmlx.so")
-    return Path(mx.__spec__.origin).resolve(), libraries.pop()
+    return core_path, libraries.pop()
 
 
 def native_provenance(*, upstream_cpu=False):
