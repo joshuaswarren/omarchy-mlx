@@ -85,6 +85,7 @@ SERIES_PATCHES=(
   mlx-lm-prefill-step-memory.patch
   mlx-lm-kv-presize.patch
   mlx-lm-speculative-verify.patch
+  mlx-lm-kv-host-offset.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -203,14 +204,9 @@ if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
   python3 "$ROOT/scripts/patch-mlx-lm-rotkv-host-offset.py" "$VENV"
   python3 "$ROOT/scripts/patch-mlx-lm-gemma4-rope-offset.py" "$VENV"
 else
-  # All these patchers anchor on the mlx-lm 0.32 batched-cache API (prepare/
-  # finalize right-padding mirrors, host-list filter); 0.31.3's older BatchKVCache
-  # predates them (its filter even syncs via .min().item()) and upstream
-  # reworked the class in 0.32, so there is nothing to port onto. The served
-  # mlx-lm route is single-concurrency; a batched 0.31.3 user falls back to
-  # the upstream array mask and lazy offset (slower, never wrong). See
-  # docs/kernel-flags.md.
-  echo "kv-maskless/kv-host-offset/rotkv-maskless: 0.32 series only; skipped on $SERIES"
+  # Keep the legacy array mask. Only the opt-in host offset is ported to 0.31.3.
+  apply mlx-lm-kv-host-offset.patch
+  echo "kv-maskless/rotkv-maskless: 0.32 series only; skipped on $SERIES"
   echo "rotkv-host-offset/gemma4-rope-offset: 0.32 series only; skipped on $SERIES"
 fi
 apply mlx-lm-greedy-prune.patch
