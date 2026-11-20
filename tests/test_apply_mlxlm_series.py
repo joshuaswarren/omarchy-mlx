@@ -207,11 +207,18 @@ def test_host_offset_mirror_tracks_device_through_transitions(venv, tmp_path):
     code = """
 import os
 import mlx.core as mx
-from importlib.metadata import version
 from mlx_lm.models import cache
 from mlx_lm.models.cache import BatchKVCache, KVCache
 mx.set_default_device(mx.cpu)
-print(f"mlx={version('mlx')} binding={mx.__file__} device={mx.default_device()} "
+if os.environ.get("MLX_TEST_UPSTREAM_CPU") == "1":
+    from mlx_provenance import native_provenance, provenance_line
+
+    prov = native_provenance(upstream_cpu=True)
+    print(provenance_line(prov))
+    for binary in prov["files"]:
+        print(f"{binary['path']} sha256={binary['sha256']} RECORD={binary['record_sha256']}")
+    assert prov["verified"] == "match", prov["mismatch"] or prov["note"]
+print(f"mlx={mx.__version__} binding={mx.__file__} device={mx.default_device()} "
       f"mlx-lm={os.environ['TEST_MLX_LM_VERSION']} cache={cache.__file__}")
 keys = mx.zeros((2, 2, 2, 8))
 
@@ -290,9 +297,9 @@ for flag in ("1", None):
 """
     result = subprocess.run(
         [sys.executable, "-c", code], cwd=tmp_path,
-        env=dict(os.environ, TEST_MLX_LM_VERSION=venv[1], PYTHONPATH=str(tmp_path)
-                 + os.pathsep + os.environ.get("PYTHONPATH", "")),
+        env=dict(os.environ, TEST_MLX_LM_VERSION=venv[1], PYTHONPATH=os.pathsep.join(
+            [str(tmp_path), str(REPO / "scripts"), os.environ.get("PYTHONPATH", "")])),
         capture_output=True, text=True, timeout=120,
     )
-    assert result.returncode == 0, result.stderr[-800:]
+    assert result.returncode == 0, result.stdout + result.stderr
     print(result.stdout, end="")
