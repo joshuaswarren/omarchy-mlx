@@ -1155,6 +1155,7 @@ enum class ComputeKernel : uint16_t {
   // equal it. dispatch_matmul takes it for f32 at matrix_m >= 32 without bias when the f32 direct and cooperative-matrix
   // routes are unavailable. Appended to keep profile kernel ids stable.
   MatmulRbF32,
+  SdpaDecodeMaskedBF16Hd128,
   Count,
 };
 
