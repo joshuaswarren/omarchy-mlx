@@ -1,5 +1,10 @@
 #include "sdpa_decode_mask_layout.h"
 
+// Card-free host checks for the checked mask-layout helper shipped in PR 521.
+// Broadcast, positive strides, sliced base offsets, and unsigned/span overflow
+// run here; the dispatch-level gates (width, batch, dtype, sinks, LSE) need a
+// device and stay with wAN's GPU suite.
+
 using mlx::core::omarchy::sdpa_decode_mask_layout;
 
 int main() {
@@ -20,5 +25,55 @@ int main() {
       sdpa_decode_mask_layout(0, 720, -360, 0, 1, 2, 32, 319) ||
       sdpa_decode_mask_layout(UINT32_MAX, 720, 360, 0, 1, 2, 32, 319)) {
     return 4;
+  }
+  // Broadcast: zero batch and head strides fan one key row across every row.
+  const auto broadcast = sdpa_decode_mask_layout(4, 319, 0, 0, 1, 2, 32, 319);
+  if (!broadcast || broadcast->offset != 4 || broadcast->batch != 0 ||
+      broadcast->head != 0 || broadcast->key != 1) {
+    return 5;
+  }
+  if (sdpa_decode_mask_layout(4, 318, 0, 0, 1, 2, 32, 319) ||
+      sdpa_decode_mask_layout(0, 100, 0, 7, 1, 4, 32, 2)) {
+    return 5;
+  }
+  // Positive strides with an exact-fit boundary, one byte short must refuse.
+  const auto strided = sdpa_decode_mask_layout(7, 13, 3, 5, 2, 2, 2, 3);
+  if (!strided || strided->offset != 7 || strided->batch != 3 ||
+      strided->head != 5 || strided->key != 2) {
+    return 6;
+  }
+  if (sdpa_decode_mask_layout(7, 12, 3, 5, 2, 2, 2, 3)) {
+    return 6;
+  }
+  // Sliced base offsets: the accessible window is counted from the offset.
+  if (!sdpa_decode_mask_layout(1000, 250, 0, 0, 1, 1, 1, 250) ||
+      sdpa_decode_mask_layout(1000, 249, 0, 0, 1, 1, 1, 250)) {
+    return 7;
+  }
+  // The uint32 span window clamps what a huge accessible count can promise.
+  if (!sdpa_decode_mask_layout(UINT32_MAX - 5, uint64_t{1} << 40, 0, 0, 1, 1, 1, 6) ||
+      sdpa_decode_mask_layout(UINT32_MAX - 5, uint64_t{1} << 40, 0, 0, 1, 1, 1, 7)) {
+    return 7;
+  }
+  // Unsigned overflow: offsets and strides past uint32 must refuse...
+  if (sdpa_decode_mask_layout(uint64_t{UINT32_MAX} + 1, uint64_t{1} << 40, 360, 0, 1, 2, 32, 319) ||
+      sdpa_decode_mask_layout(0, uint64_t{1} << 40, uint64_t{UINT32_MAX} + 1, 0, 1, 2, 1, 1)) {
+    return 8;
+  }
+  // ...while a uint32-max stride with no extent is exact and must pass...
+  const auto wide_stride = sdpa_decode_mask_layout(0, 1, UINT32_MAX, 0, 0, 1, 1, 1);
+  if (!wide_stride || wide_stride->batch != UINT32_MAX) {
+    return 8;
+  }
+  // ...and the same stride over two spans must refuse.
+  if (sdpa_decode_mask_layout(0, uint64_t{1} << 40, UINT32_MAX, 0, 1, 3, 1, 1)) {
+    return 8;
+  }
+  // Degenerate shapes: no accessible bytes or a zero extent anywhere refuses.
+  if (sdpa_decode_mask_layout(0, 0, 1, 1, 1, 2, 2, 2) ||
+      sdpa_decode_mask_layout(5, 10, 1, 1, 1, 0, 2, 2) ||
+      sdpa_decode_mask_layout(5, 10, 1, 1, 1, 2, 0, 2) ||
+      sdpa_decode_mask_layout(5, 10, 1, 1, 1, 2, 2, 0)) {
+    return 9;
   }
 }

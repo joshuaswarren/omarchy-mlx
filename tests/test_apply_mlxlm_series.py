@@ -187,3 +187,108 @@ for flag in (None, "1"):
         capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("venv", ["0.31.3"], indirect=True)
+def test_host_offset_mirror_tracks_device_through_transitions(venv, tmp_path):
+    """Regression for the shipped kv-host-offset patch on mlx-lm 0.31.3: the
+    host mirror must equal the device offset after every transition - mixed
+    left-padding, update/extend, list and device-index filter, row retirement,
+    external assignment, and the merge state restore. A device-index filter or
+    an outside assignment must drop the mirror instead of reusing stale rows.
+    Runs the patch alone on pristine wheel files, on CPU."""
+    pytest.importorskip("mlx.core")
+    site, _ = venv
+    (wheel,) = (site / "dl").glob("mlx_lm-*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        for name in ("cache.py", "base.py"):
+            archive.extract(f"mlx_lm/models/{name}", tmp_path)
+    for package in (tmp_path / "mlx_lm", tmp_path / "mlx_lm/models"):
+        (package / "__init__.py").write_text("")
+    subprocess.run(
+        ["patch", "-p1", "-i", str(REPO / "patches/mlx-lm-kv-host-offset.patch")],
+        cwd=tmp_path, check=True, capture_output=True, text=True, timeout=30,
+    )
+    code = """
+import os
+import mlx.core as mx
+from mlx_lm.models.cache import BatchKVCache
+mx.set_default_device(mx.cpu)
+keys = mx.zeros((2, 2, 2, 8))
+
+for flag in ("1", None):
+    if flag is None:
+        os.environ.pop("MLX_OMARCHY_KV_HOST_OFFSET", None)
+    else:
+        os.environ["MLX_OMARCHY_KV_HOST_OFFSET"] = flag
+    def mirror(c, want):
+        got = c.offset.tolist()
+        assert got == want, f"device {got} != {want}"
+        # the flag-off arm tracks device-only: the mirror must be None there
+        expected_host = want if flag == "1" else None
+        assert c._host_offset == expected_host, f"host {c._host_offset} != {expected_host}"
+
+    # mixed left-padding
+    c = BatchKVCache([0, 1, 3])
+    mirror(c, [0, -1, -3])
+    # extend through two updates
+    c.update_and_fetch(keys, keys)
+    mirror(c, [2, 1, -1])
+    c.update_and_fetch(keys, keys)
+    mirror(c, [4, 3, 1])
+    # filter with a list rewrites the mirror in the new row order
+    c.filter([2, 0])
+    mirror(c, [1, 4])
+    c.update_and_fetch(keys, keys)
+    mirror(c, [3, 6])
+    # filter with a device index array must drop the mirror, not stale it
+    c.filter(mx.array([1, 0]))
+    assert c.offset.tolist() == [6, 3], c.offset.tolist()
+    assert c._host_offset is None, "device-index filter must drop the mirror"
+    # once dropped, trim and update keep tracking device-only
+    assert c.trim(2) == 2
+    assert c.offset.tolist() == [4, 1], c.offset.tolist()
+    assert c._host_offset is None, "trim must not resurrect a dropped mirror"
+    c.update_and_fetch(keys, keys)
+    assert c.offset.tolist() == [6, 3], c.offset.tolist()
+    assert c._host_offset is None
+    # retirement clamps at the consumed length, still device-only
+    assert c.trim(100) == 6
+    assert c.offset.tolist() == [0, -3], c.offset.tolist()
+    assert c._host_offset is None
+
+    # external assignment invalidates; later updates must not resurrect it
+    e = BatchKVCache([1, 0])
+    e.update_and_fetch(keys, keys)
+    mirror(e, [1, 2])
+    e.offset = mx.array([8, 9])
+    assert e.offset.tolist() == [8, 9]
+    assert e._host_offset is None, "outside assignment must drop the mirror"
+    e.update_and_fetch(keys, keys)
+    assert e.offset.tolist() == [10, 11]
+    assert e._host_offset is None
+    assert e.trim(100) == 4
+    assert e.offset.tolist() == [6, 7]
+    assert e._host_offset is None
+
+    # state restore through the state setter must drop, not stale, the mirror.
+    # (BatchKVCache.merge is unusable on 0.31.3, patched or pristine: the
+    # merge body slices with the (B,) offset array and raises ValueError even
+    # for one cache, so the only working restore path is the state setter.)
+    r = BatchKVCache([1, 0])
+    r.update_and_fetch(keys, keys)
+    saved = r.state
+    r.state = saved
+    assert r.offset.tolist() == [1, 2], r.offset.tolist()
+    assert r._host_offset is None, "state restore assigns offset and drops the mirror"
+    r.update_and_fetch(keys, keys)
+    assert r.offset.tolist() == [3, 4], r.offset.tolist()
+    assert r._host_offset is None
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path,
+        env=dict(os.environ, PYTHONPATH=str(tmp_path) + os.pathsep
+                 + os.environ.get("PYTHONPATH", "")), check=False,
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr[-800:]
