@@ -1,7 +1,14 @@
 diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
 --- a/mlx/io/safetensors.cpp
 +++ b/mlx/io/safetensors.cpp
-@@ -6,6 +6,8 @@
+@@ -1,11 +1,15 @@
+ // Copyright © 2023 Apple Inc.
+ 
++#include <cstdlib>
++#include <filesystem>
+ #include <json.hpp>
+ #include <memory>
+ #include <sstream>
  #include <stack>
  
  #include "mlx/backend/cuda/cuda.h"
@@ -10,6 +17,33 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
  #include "mlx/io.h"
  #include "mlx/io/load.h"
  #include "mlx/ops.h"
+@@ -110,9 +114,24 @@
+ }
+ 
++#ifdef MLX_OMARCHY_BACKEND
++static bool is_inference_checkpoint(const std::string& file) {
++  const char* root = std::getenv("MLX_OMARCHY_VRAM_WEIGHTS");
++  if (!root || !std::filesystem::path(root).is_absolute()) {
++    return false;
++  }
++  auto directory = std::filesystem::path(root).lexically_normal();
++  if (directory.filename().empty() && directory.has_relative_path()) {
++    directory = directory.parent_path();
++  }
++  return std::filesystem::absolute(file).lexically_normal().parent_path() == directory;
++}
++#endif
++
+ /** Load array from reader in safetensor format */
+-SafetensorsLoad load_safetensors(
++static SafetensorsLoad load_safetensors_impl(
+     std::shared_ptr<io::Reader> in_stream,
+-    StreamOrDevice s) {
++    StreamOrDevice s,
++    bool inference_weight) {
+   ////////////////////////////////////////////////////////
+   // Open and check file
+   if (!in_stream->good() || !in_stream->is_open()) {
 @@ -119,7 +121,14 @@
      throw std::runtime_error(msg.str());
    }
@@ -26,6 +60,35 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
  
    uint64_t jsonHeaderLength = 0;
    // This is the same limit as in the original Rust Safetensors code.
+@@ -207,14 +233,26 @@
+              shape,
+              type,
+              std::make_shared<Load>(
+-                 stream, in_stream, offset + data_offsets.at(0), false),
++                 stream, in_stream, offset + data_offsets.at(0), false,
++                 inference_weight),
+              std::vector<array>{})});
+   }
+   return {res, metadata_map};
+ }
+ 
++SafetensorsLoad load_safetensors(
++    std::shared_ptr<io::Reader> in_stream,
++    StreamOrDevice s) {
++  return load_safetensors_impl(std::move(in_stream), s, false);
++}
++
+ SafetensorsLoad load_safetensors(const std::string& file, StreamOrDevice s) {
+-  return load_safetensors(std::make_shared<io::ParallelFileReader>(file), s);
++  bool inference_weight = false;
++#ifdef MLX_OMARCHY_BACKEND
++  inference_weight = is_inference_checkpoint(file);
++#endif
++  return load_safetensors_impl(
++      std::make_shared<io::ParallelFileReader>(file), s, inference_weight);
+ }
+ 
+ void save_safetensors(
 diff --git a/mlx/io/load.cpp b/mlx/io/load.cpp
 --- a/mlx/io/load.cpp
 +++ b/mlx/io/load.cpp
@@ -54,3 +117,58 @@ diff --git a/mlx/io/load.cpp b/mlx/io/load.cpp
  
    ////////////////////////////////////////////////////////
    // Read header and prepare array details
+diff --git a/mlx/primitives.h b/mlx/primitives.h
+--- a/mlx/primitives.h
++++ b/mlx/primitives.h
+@@ -1296,11 +1296,13 @@
+       Stream stream,
+       std::shared_ptr<io::Reader> reader,
+       size_t offset,
+-      bool swap_endianness = false)
++      bool swap_endianness = false,
++      bool inference_weight = false)
+       : UnaryPrimitive(stream),
+         reader_(std::move(reader)),
+         offset_(offset),
+-        swap_endianness_(swap_endianness) {}
++        swap_endianness_(swap_endianness),
++        inference_weight_(inference_weight) {}
+ 
+   void eval_cpu(const std::vector<array>& inputs, array& out) override;
+   void eval_gpu(const std::vector<array>& inputs, array& out) override;
+@@ -1311,6 +1313,7 @@
+   std::shared_ptr<io::Reader> reader_;
+   size_t offset_;
+   bool swap_endianness_;
++  [[maybe_unused]] bool inference_weight_;
+ };
+ 
+ class Log : public UnaryPrimitive {
+diff --git a/mlx/array.h b/mlx/array.h
+--- a/mlx/array.h
++++ b/mlx/array.h
+@@ -241,12 +241,13 @@
+   struct Data {
+     allocator::Buffer buffer;
+     Deleter d;
++    bool donatable{true};
+     Data(allocator::Buffer buffer, Deleter d = allocator::free)
+         : buffer(buffer), d(d) {}
+     // Not copyable
+     Data(const Data& d) = delete;
+     Data& operator=(const Data& d) = delete;
+-    Data(Data&& o) : buffer(o.buffer), d(o.d) {
++    Data(Data&& o) : buffer(o.buffer), d(o.d), donatable(o.donatable) {
+       o.buffer = allocator::Buffer(nullptr);
+       o.d = [](allocator::Buffer) {};
+     }
+@@ -302,7 +303,8 @@
+ 
+   /** True indicates the arrays buffer is safe to reuse */
+   bool is_donatable() const {
+-    return array_desc_.use_count() == 1 && (array_desc_->data.use_count() == 1);
++    return array_desc_.use_count() == 1 && array_desc_->data.use_count() == 1 &&
++        array_desc_->data->donatable;
+   }
+ 
+   /** The array's siblings. */

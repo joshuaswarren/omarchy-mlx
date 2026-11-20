@@ -1328,6 +1328,7 @@ Device::Device(uint32_t physical_device_index) {
   // actually have.
   caps_ = info.caps;
   hardware_caps_ = info.hardware;
+  physical_type_ = info.type;
   const CapabilityReport& hw = hardware_caps_;
   VkPhysicalDevice pd = info.handle;
   auto& it = vk::instance_table();
@@ -1600,6 +1601,11 @@ Device::~Device() {
     }
     if (completions_) {
       completions_->shutdown();
+    }
+    if (weight_staging_ != VK_NULL_HANDLE) {
+      dt.UnmapMemory(device_, weight_staging_memory_);
+      dt.DestroyBuffer(device_, weight_staging_, nullptr);
+      dt.FreeMemory(device_, weight_staging_memory_, nullptr);
     }
     compute_.reset();
     if (dt.DestroyDevice) {

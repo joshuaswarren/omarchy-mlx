@@ -1,3 +1,9 @@
+add_executable(omarchy_inference_weight_tests test_inference_weights.cpp)
+target_include_directories(omarchy_inference_weight_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy
+                           ${Vulkan_INCLUDE_DIRS})
+add_test(NAME omarchy_inference_weight_tests COMMAND omarchy_inference_weight_tests)
+
 add_executable(omarchy_runtime_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime.cpp)
 target_link_libraries(omarchy_runtime_tests PRIVATE mlx doctest)

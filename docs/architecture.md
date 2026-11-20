@@ -59,7 +59,7 @@ flowchart TB
 The Vulkan backend owns these responsibilities:
 
 - Honeykrisp device discovery and capability checks
-- Host-visible unified-memory allocation
+- Mapped tensor allocation and [opt-in VRAM placement for inference weights](ANY-GPU.md#discrete-gpu-checkpoint-placement)
 - MLX streams, events, command buffers, queues, and fences
 - Copies, views, aliasing, and lifetime rules
 - SPIR-V kernels for each `eval_gpu` primitive

@@ -24,6 +24,10 @@
 #include "mlx/api.h"
 #include "mlx/backend/omarchy/coopmat_select.h"
 
+namespace mlx::core::io {
+class Reader;
+}
+
 namespace mlx::core::omarchy {
 
 // Vendor ID for Apple Silicon GPUs on Omarchy Linux. Honeykrisp is the Mesa
@@ -382,6 +386,17 @@ class Device {
     return mem_props_;
   }
 
+  VkPhysicalDeviceType physical_type() const {
+    return physical_type_;
+  }
+
+  void upload_weights(
+      CommandEncoder& encoder,
+      VkBuffer destination,
+      size_t bytes,
+      io::Reader& reader,
+      size_t file_offset);
+
   const CapabilityReport& capabilities() const {
     return caps_;
   }
@@ -438,6 +453,13 @@ class Device {
   CapabilityReport caps_;
   CapabilityReport hardware_caps_{};
   VkPhysicalDeviceMemoryProperties mem_props_{};
+  VkPhysicalDeviceType physical_type_{VK_PHYSICAL_DEVICE_TYPE_OTHER};
+  std::mutex weight_upload_mutex_;
+  VkBuffer weight_staging_{VK_NULL_HANDLE};
+  VkDeviceMemory weight_staging_memory_{VK_NULL_HANDLE};
+  void* weight_staging_data_{nullptr};
+  bool weight_staging_coherent_{false};
+  bool weight_staging_in_flight_{false};
   VkDevice device_{VK_NULL_HANDLE};
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
@@ -14,7 +15,10 @@
 #include <thread>
 
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/inference_weights.h"
 #include "mlx/backend/omarchy/vulkan.h"
+#include "mlx/io/load.h"
 #include "mlx/memory.h"
 
 namespace mlx::core {
@@ -93,6 +97,113 @@ bool consume_test_oom() {
   return true;
 }
 
+namespace {
+
+VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
+  auto& dt = vk::device_table();
+  const auto handle = dev.handle();
+  VulkanBuffer buf{};
+  buf.size = size;
+  buf.inference_weight = !staging;
+  VkBufferCreateInfo create{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  create.size = size;
+  create.usage = staging ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                         : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VKX_CHECK(dt.CreateBuffer(handle, &create, nullptr, &buf.buffer));
+  try {
+    VkMemoryRequirements requirements{};
+    dt.GetBufferMemoryRequirements(handle, buf.buffer, &requirements);
+    const auto& memory = dev.memory_properties();
+    const uint32_t type = staging
+        ? staging_memory_type(memory, requirements.memoryTypeBits)
+        : weight_memory_type(dev.physical_type(), memory, requirements.memoryTypeBits);
+    if (type == UINT32_MAX) {
+      throw std::runtime_error(staging
+          ? "[omarchy] no compatible host memory for weight staging"
+          : "[omarchy] no compatible device-local memory for inference weights");
+    }
+    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = type;
+    if (staging && allocation.allocationSize > kWeightStagingBytes) {
+      throw std::runtime_error("[omarchy] weight staging allocation exceeds 4 MiB");
+    }
+    const VkResult result = dt.AllocateMemory(handle, &allocation, nullptr, &buf.memory);
+    if (result != VK_SUCCESS) {
+      throw std::runtime_error(std::string("[omarchy] ") +
+          (staging ? "weight staging" : "device-local inference weight") +
+          " allocation failed (" + std::to_string(requirements.size) + " bytes): " +
+          vk::result_string(result));
+    }
+    VKX_CHECK(dt.BindBufferMemory(handle, buf.buffer, buf.memory, 0));
+    if (staging) {
+      buf.coherent = memory.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      void* data = nullptr;
+      VKX_CHECK(dt.MapMemory(handle, buf.memory, 0, VK_WHOLE_SIZE, 0, &data));
+      buf.data = data;
+    }
+    if (env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
+      std::fprintf(stderr, "[omarchy-weights] placement=%s heap=%u bytes=%llu mapped=%d\n",
+          staging ? "staging" : "device-local",
+          memory.memoryTypes[type].heapIndex,
+          static_cast<unsigned long long>(requirements.size),
+          staging);
+    }
+  } catch (...) {
+    dt.DestroyBuffer(handle, buf.buffer, nullptr);
+    if (buf.memory != VK_NULL_HANDLE) {
+      dt.FreeMemory(handle, buf.memory, nullptr);
+    }
+    throw;
+  }
+  return buf;
+}
+
+} // namespace
+
+void Device::upload_weights(
+    CommandEncoder& encoder,
+    VkBuffer destination,
+    size_t bytes,
+    io::Reader& reader,
+    size_t file_offset) {
+  std::lock_guard lk(weight_upload_mutex_);
+  if (weight_staging_in_flight_) {
+    throw std::runtime_error("[omarchy] previous weight upload did not complete");
+  }
+  if (weight_staging_ == VK_NULL_HANDLE) {
+    const auto staging = make_weight_buffer(*this, kWeightStagingBytes, true);
+    weight_staging_ = staging.buffer;
+    weight_staging_memory_ = staging.memory;
+    weight_staging_data_ = staging.data;
+    weight_staging_coherent_ = staging.coherent;
+  }
+  auto* data = static_cast<char*>(weight_staging_data_);
+  size_t copies = 0;
+  for (size_t offset = 0; offset < bytes;) {
+    const auto chunk = weight_upload_chunk(bytes, offset);
+    reader.read(data, chunk.read_bytes, file_offset + offset);
+    std::memset(data + chunk.read_bytes, 0, chunk.copy_bytes - chunk.read_bytes);
+    if (!weight_staging_coherent_) {
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+      range.memory = weight_staging_memory_;
+      range.size = VK_WHOLE_SIZE;
+      VKX_CHECK(vk::device_table().FlushMappedMemoryRanges(device_, 1, &range));
+    }
+    weight_staging_in_flight_ = true;
+    encoder.copy_buffer(weight_staging_, destination, chunk.copy_bytes, 0, offset);
+    encoder.synchronize("inference weight upload");
+    weight_staging_in_flight_ = false;
+    offset += chunk.read_bytes;
+    ++copies;
+  }
+  if (env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
+    std::fprintf(stderr, "[omarchy-weights] uploaded_bytes=%zu copies=%zu\n", bytes, copies);
+  }
+}
+
 uint32_t VulkanAllocator::find_memory_type(
     uint32_t type_bits,
     VkMemoryPropertyFlags required) const {
@@ -160,7 +271,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
       buf->recycled = true;
       live_by_handle_[buf->buffer] = buf;
       active_memory_ += buf->size;
-      peak_memory_ = std::max(active_memory_, peak_memory_);
+      peak_memory_ = std::max(active_memory_ + weight_memory_, peak_memory_);
       lk.unlock();
       return Buffer{buf};
     }
@@ -299,12 +410,27 @@ Buffer VulkanAllocator::malloc(size_t size) {
   lk.lock();
   live_by_handle_[buf->buffer] = buf;
   active_memory_ += buf->size;
-  peak_memory_ = std::max(active_memory_, peak_memory_);
+  peak_memory_ = std::max(active_memory_ + weight_memory_, peak_memory_);
   if (!buf->coherent) {
     noncoherent_.push_back(buf);
   }
   lk.unlock();
   return Buffer{buf};
+}
+
+Buffer VulkanAllocator::malloc_weight(size_t size) {
+  auto buf = std::make_unique<VulkanBuffer>();
+  *buf = make_weight_buffer(device(), (size + 3) & ~size_t{3}, false);
+  std::unique_lock lk(mutex_);
+  try {
+    live_by_handle_.emplace(buf->buffer, buf.get());
+  } catch (...) {
+    destroy_buffer(buf.release());
+    throw;
+  }
+  weight_memory_ += buf->size;
+  peak_memory_ = std::max(active_memory_ + weight_memory_, peak_memory_);
+  return Buffer{buf.release()};
 }
 
 void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
@@ -314,12 +440,14 @@ void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
   std::erase(noncoherent_, buf);
   auto& dt = vk::device_table();
   live_by_handle_.erase(buf->buffer);
-  if (buf->memory != VK_NULL_HANDLE) {
+  if (buf->data) {
     dt.UnmapMemory(device().handle(), buf->memory);
-    dt.FreeMemory(device().handle(), buf->memory, nullptr);
   }
   if (buf->buffer != VK_NULL_HANDLE) {
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+  }
+  if (buf->memory != VK_NULL_HANDLE) {
+    dt.FreeMemory(device().handle(), buf->memory, nullptr);
   }
   delete buf;
 }
@@ -331,7 +459,7 @@ void VulkanAllocator::free(Buffer buffer) {
   }
   size_t sz = buf->size;
   std::unique_lock lk(mutex_);
-  active_memory_ -= sz;
+  (buf->inference_weight ? weight_memory_ : active_memory_) -= sz;
   // A buffer stamped with a completion value has recorded GPU work that
   // may still touch it (kPendingCompletion = an open batch). Freeing the
   // array drops the accounting here — upstream Metal semantics — but the
@@ -347,14 +475,16 @@ void VulkanAllocator::free(Buffer buffer) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
       }
-      quarantine_bytes_ += sz;
+      if (!buf->inference_weight) {
+        quarantine_bytes_ += sz;
+      }
       quarantine_.push_back(buf);
       return;
     }
     buf->completion = 0;
   }
-  if (sz > 0 && !tape_no_reuse() && !buffer_cache_disabled() &&
-      buffer_cache_.cache_size() + sz <= cache_limit_) {
+  if (!buf->inference_weight && sz > 0 && !tape_no_reuse() &&
+      !buffer_cache_disabled() && buffer_cache_.cache_size() + sz <= cache_limit_) {
     // Buffers stay mapped for their whole lifetime (malloc maps at
     // creation and only destroy_buffer unmaps), so the poison is a
     // plain host memset. Non-coherent buffers are flushed at the next
@@ -398,9 +528,11 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
     }
     buf->completion = 0;
     size_t sz = buf->size;
-    quarantine_bytes_ -= sz;
-    if (sz > 0 && !tape_no_reuse() && !buffer_cache_disabled() &&
-        buffer_cache_.cache_size() + sz <= cache_limit_) {
+    if (!buf->inference_weight) {
+      quarantine_bytes_ -= sz;
+    }
+    if (!buf->inference_weight && sz > 0 && !tape_no_reuse() &&
+        !buffer_cache_disabled() && buffer_cache_.cache_size() + sz <= cache_limit_) {
       if (poison_freed()) {
         poison_freed_buffer(buf->data, sz);
       }
@@ -544,7 +676,11 @@ void* Buffer::raw_ptr() {
   if (!ptr_) {
     return nullptr;
   }
-  return static_cast<omarchy::VulkanBuffer*>(ptr_)->data;
+  auto* buffer = static_cast<omarchy::VulkanBuffer*>(ptr_);
+  if (buffer->inference_weight) {
+    throw std::runtime_error("[omarchy] device-local inference weights are not host-accessible");
+  }
+  return buffer->data;
 }
 
 bool can_reuse_alien_buffer(void*) {

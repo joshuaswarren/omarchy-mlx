@@ -34,6 +34,7 @@
 #include "mlx/backend/omarchy/qmm_prefill_select.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/inference_weights.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
 #include "mlx/distributed/primitives.h"
@@ -7307,6 +7308,28 @@ void LessEqual::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_comparison(name(), CompareLessEqual, inputs, out);
 }
 void Load::eval_gpu(const std::vector<array>& inputs, array& out) {
+  if (inference_weight_ && out.nbytes() != 0) {
+    auto& encoder = omarchy::get_command_encoder(stream());
+    auto& dev = encoder.device();
+    if (omarchy::weight_memory_type(
+            dev.physical_type(), dev.memory_properties(), UINT32_MAX) != UINT32_MAX) {
+      if (&dev != &omarchy::device()) {
+        throw std::runtime_error(
+            "[omarchy] inference weights require the selected Vulkan device");
+      }
+      auto buffer = omarchy::allocator().malloc_weight(out.nbytes());
+      out.set_data(buffer);
+      out.data_shared_ptr()->donatable = false;
+      auto* weight = static_cast<omarchy::VulkanBuffer*>(buffer.ptr());
+      dev.upload_weights(encoder, weight->buffer, out.nbytes(), *reader_, offset_);
+      return;
+    }
+    if (omarchy::env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
+      static const int logged =
+          std::fputs("[omarchy-weights] placement=mapped copies=0\n", stderr);
+      (void)logged;
+    }
+  }
   out.set_data(allocate_omarchy(out.nbytes()));
   // The allocator is host-visible (coherent where the memory type allows),
   // so the reader fills the output buffer directly and the data is ready
