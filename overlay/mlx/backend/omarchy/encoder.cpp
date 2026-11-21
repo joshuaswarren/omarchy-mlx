@@ -13,6 +13,7 @@
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/gpu_profiler.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -204,6 +205,8 @@ void CommandEncoder::reset_dependency_tracking() {
 }
 
 CommandEncoder::CommandEncoder(Device& device) : device_(device) {
+  static std::atomic<uint16_t> next_encoder_id{1};
+  encoder_id_ = next_encoder_id.fetch_add(1, std::memory_order_relaxed);
   auto& dt = vk::device_table();
   VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
@@ -261,11 +264,23 @@ void CommandEncoder::join_last_completion(const char* reason) {
     return;
   }
   uint64_t value = last_completion_;
+  timeline::ScopedEvent tl_join(
+      timeline::Kind::Readback,
+      timeline::SubKind::SyncJoin,
+      encoder_id_,
+      value);
   uint64_t join_t0 = prof::get().profiling() ? prof::host_ns() : 0;
   device_.completions().wait(value);
   uint64_t wait_t1 = prof::get().profiling() ? prof::host_ns() : 0;
   last_completion_ = 0;
-  omarchy::allocator().invalidate_noncoherent(device_.handle());
+  {
+    timeline::ScopedEvent tl_inv(
+        timeline::Kind::Readback,
+        timeline::SubKind::InvalidateNoncoherent,
+        encoder_id_,
+        value);
+    omarchy::allocator().invalidate_noncoherent(device_.handle());
+  }
   uint64_t inval_t2 = prof::get().profiling() ? prof::host_ns() : 0;
   prof::get().on_join(this, value, join_t0, wait_t1, inval_t2, reason);
 }
@@ -297,18 +312,32 @@ void CommandEncoder::ensure_recording() {
     }
   }
   if (chosen < 0) {
-    completions.wait(oldest_value);
+    {
+      timeline::ScopedEvent tl_slot(
+          timeline::Kind::CmdBegin,
+          timeline::SubKind::SlotWait,
+          encoder_id_,
+          oldest_value);
+      completions.wait(oldest_value);
+    }
     slots_[oldest].in_flight = 0;
     chosen = oldest;
   }
   current_slot_ = chosen;
   cmd_ = slots_[chosen].cmd;
-  completions.reset_progress_event(slots_[chosen].started);
-  VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  VKX_CHECK(vk::device_table().BeginCommandBuffer(cmd_, &bi));
-  vk::device_table().CmdSetEvent(
-      cmd_, slots_[chosen].started, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+  {
+    timeline::ScopedEvent tl_begin(
+        timeline::Kind::CmdBegin,
+        timeline::SubKind::Begin,
+        encoder_id_,
+        static_cast<uint64_t>(chosen));
+    completions.reset_progress_event(slots_[chosen].started);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKX_CHECK(vk::device_table().BeginCommandBuffer(cmd_, &bi));
+    vk::device_table().CmdSetEvent(
+        cmd_, slots_[chosen].started, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+  }
   prof::get().on_begin(
       this, chosen, cmd_, begin_t0 != 0 ? prof::host_ns() - begin_t0 : 0);
   recording_ = true;
@@ -420,6 +449,8 @@ void CommandEncoder::fill_buffer(
 // values increase along the queue).
 VkDescriptorSet CommandEncoder::acquire_descriptor_set(
     ComputeRuntime& compute) {
+  timeline::ScopedEvent tl_desc(
+      timeline::Kind::DescUpdate, timeline::SubKind::DescAlloc, encoder_id_);
   auto& dt = vk::device_table();
   // MLX_OMARCHY_TAPE_NO_REUSE (diagnostic, docs/install-omarchy.md):
   // every dispatch gets its own descriptor pool with exactly one set, so
@@ -427,6 +458,7 @@ VkDescriptorSet CommandEncoder::acquire_descriptor_set(
   // The pool retires into the current submission's temporaries with the
   // same lifetime rule as a retired cached pool below.
   if (tape_no_reuse()) {
+    tl_desc.set_subkind(timeline::SubKind::DescPoolCreate);
     VkDescriptorPoolSize pool_size{};
     pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_size.descriptorCount = compute.binding_limit();
@@ -456,6 +488,7 @@ VkDescriptorSet CommandEncoder::acquire_descriptor_set(
     return descriptor_set;
   }
   if (desc_pool_ == VK_NULL_HANDLE || desc_pool_remaining_ == 0) {
+    tl_desc.set_subkind(timeline::SubKind::DescPoolCreate);
     if (desc_pool_ != VK_NULL_HANDLE) {
       retired_pools_.push_back(std::shared_ptr<VkDescriptorPool>(
           new VkDescriptorPool(desc_pool_),
@@ -643,12 +676,19 @@ void CommandEncoder::dispatch_compute_pipeline(
     writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &buffer_info[index];
   }
-  dt.UpdateDescriptorSets(
-      device_.handle(),
-      static_cast<uint32_t>(bindings.size()),
-      writes.data(),
-      0,
-      nullptr);
+  {
+    timeline::ScopedEvent tl_write(
+        timeline::Kind::DescUpdate,
+        timeline::SubKind::DescWrite,
+        encoder_id_,
+        static_cast<uint64_t>(bindings.size()));
+    dt.UpdateDescriptorSets(
+        device_.handle(),
+        static_cast<uint32_t>(bindings.size()),
+        writes.data(),
+        0,
+        nullptr);
+  }
   trace::counters().vk_descriptor_update_writes += bindings.size();
 
   if (wave_sched()) {
@@ -689,6 +729,11 @@ void CommandEncoder::dispatch_compute_pipeline(
   }
 
   ensure_recording();
+  timeline::ScopedEvent tl_dispatch(
+      timeline::Kind::CmdRecord,
+      timeline::SubKind::Dispatch,
+      encoder_id_,
+      static_cast<uint64_t>(profile_kernel));
   uint64_t host_t0 = prof::get().profiling() ? prof::host_ns() : 0;
   // MLX_OMARCHY_TAPE_FULL_BARRIERS (diagnostic, docs/install-omarchy.md):
   // the heaviest correct dependency - all commands, all memory access,
@@ -875,7 +920,15 @@ void CommandEncoder::emit_pending() {
   for (const auto& p : pending_) {
     nodes.push_back({{p.rd.data(), p.nr}, {p.wr.data(), p.nw}});
   }
-  const std::vector<uint32_t> levels = wave_levels(nodes);
+  std::vector<uint32_t> levels;
+  {
+    timeline::ScopedEvent tl_sched(
+        timeline::Kind::CmdRecord,
+        timeline::SubKind::WaveSchedule,
+        encoder_id_,
+        static_cast<uint64_t>(pending_.size()));
+    levels = wave_levels(nodes);
+  }
   uint32_t waves = 0;
   for (uint32_t l : levels) {
     waves = std::max(waves, l);
@@ -940,7 +993,13 @@ void CommandEncoder::emit_pending() {
   const bool head_needs_barrier = !head_synced_;
   const std::string_view submit_prim = trace::current_prim();
 
-  for (uint32_t w = 0; w <= waves; ++w) {
+  {
+    timeline::ScopedEvent tl_emit(
+        timeline::Kind::CmdRecord,
+        timeline::SubKind::WaveEmit,
+        encoder_id_,
+        static_cast<uint64_t>(waves + 1));
+    for (uint32_t w = 0; w <= waves; ++w) {
     bool barrier_owed = (w > 0) || head_needs_barrier;
     for (size_t i = 0; i < pending_.size(); ++i) {
       if (levels[i] != w) {
@@ -1046,6 +1105,7 @@ void CommandEncoder::emit_pending() {
         tracker_.add_write(node.wr[r]);
       }
     }
+    }
   }
   pending_.clear();
 }
@@ -1064,6 +1124,11 @@ void CommandEncoder::commit() {
 }
 
 void CommandEncoder::synchronize(const char* reason) {
+  timeline::ScopedEvent tl_sync(
+      timeline::Kind::StepEnd,
+      timeline::SubKind::Synchronize,
+      encoder_id_,
+      static_cast<uint64_t>(node_count_));
   commit();
   join_last_completion(reason);
 }
@@ -1102,6 +1167,11 @@ void CommandEncoder::submit() {
   uint64_t submitted = 0;
 
   if (recording_) {
+    timeline::ScopedEvent tl_end(
+        timeline::Kind::CmdRecord,
+        timeline::SubKind::CmdEnd,
+        encoder_id_,
+        static_cast<uint64_t>(node_count_));
     if (gated_barriers()) {
       VkMemoryBarrier readback{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
       readback.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
@@ -1189,10 +1259,23 @@ void CommandEncoder::submit() {
     // assignment (timeline signals must increase along the queue) through
     // QueueSubmit and the dispatcher enqueue. It is never held across a
     // host wait.
-    std::lock_guard<std::mutex> lk(device_.queue_mutex());
+    std::unique_lock<std::mutex> lk(device_.queue_mutex(), std::defer_lock);
+    {
+      timeline::ScopedEvent tl_qlock(
+          timeline::Kind::QueueSubmit,
+          timeline::SubKind::QueueLockWait,
+          encoder_id_);
+      lk.lock();
+    }
     // Khronos guidance: HOST_VISIBLE memory without HOST_COHERENT needs an
     // explicit flush before submission.
-    omarchy::allocator().flush_noncoherent(device_.handle());
+    {
+      timeline::ScopedEvent tl_flush(
+          timeline::Kind::Readback,
+          timeline::SubKind::FlushNoncoherent,
+          encoder_id_);
+      omarchy::allocator().flush_noncoherent(device_.handle());
+    }
     uint64_t completion_value = device_.completions().reserve();
     // GPU work is now in flight: keep the CPU complex out of the deep idle
     // state while it runs (T8103 GPU performance state; cpu_pd_hold.h).
@@ -1202,7 +1285,14 @@ void CommandEncoder::submit() {
     // allocator quarantine; release_quarantine recycles them one
     // generation later. Semaphore keepalives still move into the
     // dispatcher payload below.
-    omarchy::allocator().stamp_batch(batch_buffers_, completion_value);
+    {
+      timeline::ScopedEvent tl_stamp(
+          timeline::Kind::QueueSubmit,
+          timeline::SubKind::StampBatch,
+          encoder_id_,
+          static_cast<uint64_t>(batch_buffers_.size()));
+      omarchy::allocator().stamp_batch(batch_buffers_, completion_value);
+    }
     batch_buffers_.clear();
     VkSemaphore completion_sem = device_.completions().semaphore();
     signal_sems.push_back(completion_sem);
@@ -1278,6 +1368,11 @@ void CommandEncoder::submit() {
         fprintf(stderr, "[rtmod] TEST-STRIP tid=%lu cv=%lu\n",
                 (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
       } else {
+        timeline::ScopedEvent tl_qsub(
+            timeline::Kind::QueueSubmit,
+            timeline::SubKind::VkQueueSubmit,
+            encoder_id_,
+            completion_value);
         VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, submit_fence));
       }
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;

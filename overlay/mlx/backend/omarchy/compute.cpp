@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/vulkan.h"
 
 #include "arange_u32.h"
@@ -2299,8 +2300,14 @@ VkPipeline ComputeRuntime::pipeline(ComputeKernel kernel) {
   if (index >= pipelines_.size()) {
     throw std::invalid_argument("[omarchy] invalid compute kernel.");
   }
+  timeline::ScopedEvent tl(
+      timeline::Kind::PipelineLookup,
+      timeline::SubKind::PipelineHit,
+      0,
+      static_cast<uint64_t>(index));
   std::lock_guard<std::mutex> lock(mutex_);
   if (pipelines_[index] == VK_NULL_HANDLE) {
+    tl.set_subkind(timeline::SubKind::PipelineMiss);
     pipelines_[index] = create_pipeline(kernel);
   }
   return pipelines_[index];
@@ -2317,9 +2324,15 @@ VkPipeline ComputeRuntime::pipeline(
     std::span<const uint32_t> spirv,
     const std::string& entry_name,
     const VkSpecializationInfo* spec) {
+  timeline::ScopedEvent tl(
+      timeline::Kind::PipelineLookup,
+      timeline::SubKind::PipelineHit,
+      0,
+      static_cast<uint64_t>(spirv.size()));
   std::lock_guard<std::mutex> lock(mutex_);
   auto [entry, inserted] = dynamic_pipelines_.try_emplace(cache_key);
   if (inserted) {
+    tl.set_subkind(timeline::SubKind::PipelineMiss);
     try {
       entry->second = create_pipeline(spirv, entry_name, spec);
     } catch (...) {
@@ -2408,6 +2421,8 @@ static ComputeRuntime::BindingAccess reflect_binding_access(
 }
 
 ComputeRuntime::BindingAccess ComputeRuntime::binding_access(VkPipeline pipeline) {
+  timeline::ScopedEvent tl(
+      timeline::Kind::PipelineLookup, timeline::SubKind::BindingAccess);
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = access_.find(pipeline);
   return it == access_.end() ? BindingAccess{} : it->second;

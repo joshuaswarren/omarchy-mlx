@@ -4,6 +4,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/cpu_uclamp.h"
+#include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/trace.h"
 
 #include "mlx/backend/omarchy/compute.h"
@@ -1609,8 +1610,11 @@ Device::~Device() {
 }
 
 uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
+  timeline::ScopedEvent tl_sig(
+      timeline::Kind::QueueSubmit, timeline::SubKind::HostSignalTimeline);
   std::lock_guard<std::mutex> lk(queue_mutex_);
   uint64_t completion_value = completions().reserve();
+  tl_sig.set_detail(completion_value);
   // Host-signal both timelines. This used to be an empty signal-only
   // QueueSubmit (no command buffer, no waits); Honeykrisp swallows that
   // shape - the semaphores are never signaled and the reserved
@@ -1918,6 +1922,8 @@ void wait_for_timeline_progress(
   info.pSemaphores = &semaphore;
   info.pValues = &target_value;
 
+  timeline::ScopedEvent tl_wait(
+      timeline::Kind::Wait, timeline::SubKind::TimelineWait, 0, target_value);
   for (;;) {
     VkResult res = vk::device_table().WaitSemaphores(
         device, &info, kHangWatchPollNs);
@@ -2105,10 +2111,16 @@ void CompletionDispatcher::wait(uint64_t value) {
   // use the same no-progress interval as the watchdog ceiling.
   const auto join_deadline = std::chrono::steady_clock::now() +
       std::chrono::nanoseconds(submit_hang_no_progress_ns());
+  timeline::ScopedEvent tl_cv(
+      timeline::Kind::Wait, timeline::SubKind::DispatcherCvWait, 0, value);
   std::unique_lock<std::mutex> lk(mutex_);
-  cv_.wait_until(
-      lk, join_deadline,
-      [this, value] { return stop_ || drained_value_ >= value; });
+  if (stop_ || drained_value_ >= value) {
+    tl_cv.cancel();
+  } else {
+    cv_.wait_until(
+        lk, join_deadline,
+        [this, value] { return stop_ || drained_value_ >= value; });
+  }
   if (drained_value_ < value) {
     throw std::runtime_error(
         std::string(
@@ -2256,6 +2268,8 @@ CompletionDispatcher::take_resubmit_batches(uint64_t through_value) {
 }
 
 void CompletionDispatcher::drain_through(uint64_t max_value) {
+  timeline::ScopedEvent tl_drain(
+      timeline::Kind::Wait, timeline::SubKind::DrainThrough, 0, max_value);
   std::lock_guard<std::mutex> drain_lk(drain_mutex_);
   std::vector<Completion> ready;
   {
@@ -2271,12 +2285,21 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
         resubmitable_.begin(), resubmitable_.upper_bound(max_value));
   }
   if (ready.empty()) {
+    tl_drain.cancel();
     return;
   }
   // Completion boundary: make noncoherent host-visible writes from the
   // GPU visible before handlers and later host reads observe results.
-  omarchy::allocator().invalidate_noncoherent(device_);
+  {
+    timeline::ScopedEvent tl_inv(
+        timeline::Kind::Readback,
+        timeline::SubKind::InvalidateNoncoherent,
+        0,
+        ready.back().value);
+    omarchy::allocator().invalidate_noncoherent(device_);
+  }
   uint64_t ready_value = ready.back().value;
+  tl_drain.set_detail(ready_value);
   for (auto& completion : ready) {
     for (auto& handler : completion.handlers) {
       handler();
@@ -2321,6 +2344,8 @@ uint64_t CompletionDispatcher::drained_value() {
 }
 
 VkFence CompletionDispatcher::acquire_execution_fence() {
+  timeline::ScopedEvent tl_fence(
+      timeline::Kind::FenceOp, timeline::SubKind::FenceAcquire);
   std::lock_guard<std::mutex> lk(execution_mutex_);
   if (!execution_fence_pool_.empty()) {
     VkFence fence = execution_fence_pool_.back();
@@ -2328,6 +2353,7 @@ VkFence CompletionDispatcher::acquire_execution_fence() {
     VKX_CHECK(vk::device_table().ResetFences(device_, 1, &fence));
     return fence;
   }
+  tl_fence.set_detail(1);
   VkFence fence = VK_NULL_HANDLE;
   VkFenceCreateInfo ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   VKX_CHECK(vk::device_table().CreateFence(device_, &ci, nullptr, &fence));
@@ -2357,8 +2383,14 @@ void CompletionDispatcher::detach_execution_fence(
 }
 
 bool CompletionDispatcher::tick_execution_fences() {
+  timeline::ScopedEvent tl_poll(
+      timeline::Kind::FenceOp, timeline::SubKind::FencePoll);
   std::lock_guard<std::mutex> lk(execution_mutex_);
   bool due = !execution_fences_.empty();
+  if (!due) {
+    tl_poll.cancel();
+    return false;
+  }
   uint64_t retired_through = 0;
   while (!execution_fences_.empty() &&
          vk::device_table().GetFenceStatus(
@@ -2372,12 +2404,16 @@ bool CompletionDispatcher::tick_execution_fences() {
         std::max(execution_done_through_, retired_through);
     due = true;
   }
+  tl_poll.set_detail(retired_through);
   return due;
 }
 
 bool CompletionDispatcher::execution_complete(uint64_t value) {
+  timeline::ScopedEvent tl_poll(
+      timeline::Kind::FenceOp, timeline::SubKind::FencePoll, 0, value);
   std::lock_guard<std::mutex> lk(execution_mutex_);
   if (value <= execution_done_through_) {
+    tl_poll.cancel();
     return true;
   }
   while (!execution_fences_.empty() &&

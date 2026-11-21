@@ -640,6 +640,21 @@ target_include_directories(omarchy_sdpa_decode_mask_layout_tests PRIVATE
 add_test(NAME omarchy_sdpa_decode_mask_layout_tests
          COMMAND omarchy_sdpa_decode_mask_layout_tests)
 
+# Whole-step host timeline ring: header-only, pure C++, no GPU and no mlx
+# linkage. Covers disabled zero-clock cost, ring wrap-around, concurrency,
+# and env-gated atexit NDJSON dump.
+find_package(Threads REQUIRED)
+add_executable(omarchy_step_timeline_tests test_step_timeline.cpp)
+target_include_directories(omarchy_step_timeline_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+target_link_libraries(omarchy_step_timeline_tests PRIVATE Threads::Threads)
+target_compile_options(omarchy_step_timeline_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_step_timeline_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_step_timeline_tests
+         COMMAND omarchy_step_timeline_tests)
+
 # Bf16FusedDecode: the fused single-query decode SDPA stays one dispatch,
 # agrees with the f32-score composition it replaced, and refuses uncovered
 # decode shapes by falling through to that composition.
