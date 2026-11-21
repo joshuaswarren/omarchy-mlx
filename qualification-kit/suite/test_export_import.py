@@ -359,6 +359,24 @@ class TestExportImport(mlx_tests.MLXTestCase):
             for e, o in zip(expected, out):
                 self.assertTrue(mx.array_equal(e, o))
 
+    def test_export_unique_indices_before_counts(self):
+        path = os.path.join(self.test_dir, "unique-indices-before-counts.mlxfn")
+        x = mx.array([3, 1, 2, 1, 3, 2, 1, 0, 2, 1])
+
+        def fun(a):
+            return mx.unique(a, 10, return_index=True, return_inverse=True, return_counts=True)
+
+        mx.export_function(path, fun, x)
+        expected = [1, 4, 3, 2, 0, 0, 0, 0, 0, 0]
+        wrong = []
+        for trial in range(100):
+            out = mx.import_function(path)(x)
+            out[1].tolist()
+            actual = out[3].tolist()
+            if actual != expected:
+                wrong.append((trial, actual))
+        self.assertFalse(wrong, f"{len(wrong)}/100 wrong counts; first: {wrong[:1]}")
+
     def test_export_conv(self):
         path = os.path.join(self.test_dir, "fn.mlxfn")
 
