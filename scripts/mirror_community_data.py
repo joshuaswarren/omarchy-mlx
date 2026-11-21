@@ -92,6 +92,17 @@ def fmt(value):
     return "-" if value is None else str(value)
 
 
+def has_archive(record):
+    """True when the record is expected to have a downloadable archive.
+
+    Honors an explicit `archive` field when present; otherwise treats
+    `quick` rows as archive-less.
+    """
+    if "archive" in record:
+        return bool(record["archive"])
+    return q.record_kind(record) not in ("quick", "mlx-omarchy-quick")
+
+
 def write_summary(path, base, records, index):
     lines = [
         "# Community hardware data snapshot",
@@ -109,14 +120,18 @@ def write_summary(path, base, records, index):
     for record in records:
         sha = q.record_sha(record) or "unknown"
         short = sha[:12]
+        bench_count = len(q.record_benchmarks(record))
+        bench = (
+            f"[{bench_count}]({base}/v1/results/{sha}/archive)"
+            if has_archive(record) else str(bench_count)
+        )
         lines.append(
             f"| [{short}]({base}/v1/results/{sha}) "
             f"| {q.record_kind(record)} | {fmt(q.record_chip(record))} "
             f"| {fmt(q.record_kernel(record))} "
             f"| {fmt(q.record_mesa(record))} "
             f"| {fmt(q.record_mlx_version(record))} "
-            f"| [{len(q.record_benchmarks(record))}]"
-            f"({base}/v1/results/{sha}/archive) |")
+            f"| {bench} |")
     lines += [
         "",
         "Query this snapshot:",
