@@ -330,6 +330,9 @@ struct PhysicalDeviceInfo {
 // VkDevices are created lazily per used index.
 std::atomic<bool> g_runtime_destroyed{false};
 
+struct Runtime;
+Runtime* g_runtime_instance{nullptr};
+
 struct Runtime {
   std::mutex mutex;
   VkInstance instance{VK_NULL_HANDLE};
@@ -409,13 +412,27 @@ struct Runtime {
 
   bool init_impl();
 
-  ~Runtime() {
+  void teardown() {
     g_runtime_destroyed.store(true, std::memory_order_release);
     devices.clear();
     if (instance != VK_NULL_HANDLE) {
       if (auto& it = vk::instance_table(); it.DestroyInstance) {
         it.DestroyInstance(instance, nullptr);
       }
+      instance = VK_NULL_HANDLE;
+    }
+  }
+
+  // Teardown ran here from a static destructor until PR 519: on the NVIDIA
+  // stack the Vulkan loader unloads the ICD before shared-library static
+  // destruction, and Device::~Device then calls into unloaded code. init()
+  // registers teardown with std::atexit instead, and exit handlers run
+  // before every static destructor, so the driver is still loaded.
+  ~Runtime() = default;
+
+  static void teardown_at_exit() {
+    if (g_runtime_instance) {
+      g_runtime_instance->teardown();
     }
   }
 };
@@ -996,6 +1013,12 @@ bool Runtime::init_impl() {
   // vector directly, so it must match |supported| before ready flips.
   devices.resize(supported.size());
   ready = true;
+  static bool exit_registered = false;
+  if (!exit_registered) {
+    exit_registered = true;
+    g_runtime_instance = this;
+    std::atexit(&Runtime::teardown_at_exit);
+  }
   return true;
 }
 
@@ -1336,6 +1359,7 @@ Device::Device(uint32_t physical_device_index) {
   // actually have.
   caps_ = info.caps;
   hardware_caps_ = info.hardware;
+  physical_type_ = info.type;
   const CapabilityReport& hw = hardware_caps_;
   VkPhysicalDevice pd = info.handle;
   auto& it = vk::instance_table();
@@ -1608,6 +1632,11 @@ Device::~Device() {
     }
     if (completions_) {
       completions_->shutdown();
+    }
+    if (weight_staging_ != VK_NULL_HANDLE) {
+      dt.UnmapMemory(device_, weight_staging_memory_);
+      dt.DestroyBuffer(device_, weight_staging_, nullptr);
+      dt.FreeMemory(device_, weight_staging_memory_, nullptr);
     }
     compute_.reset();
     if (dt.DestroyDevice) {

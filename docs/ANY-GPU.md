@@ -116,6 +116,17 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/<driver>_icd.json \
   when you bisect a decode difference. [kernel-flags.md](kernel-flags.md)
   lists the rest.
 
+## Discrete GPU checkpoint placement
+
+Set `MLX_OMARCHY_VRAM_WEIGHTS` to the absolute path of a local checkpoint directory.
+Direct Safetensors loads from that directory use unmapped VRAM on discrete GPUs with a separate host memory heap.
+Other loads and Apple GPUs keep the default mapped path.
+The backend reuses one mapped 4 MiB upload buffer per device.
+If VRAM allocation fails, the load reports the error without moving weights to host memory.
+
+Host access to these arrays is unsupported.
+Set `MLX_OMARCHY_VRAM_WEIGHTS_LOG=1` to see allocation heaps, upload sizes, and copy counts on stderr.
+
 ## Reading a pass/fail
 
 doctest prints the summary at the end:

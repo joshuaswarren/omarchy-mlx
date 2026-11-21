@@ -30,6 +30,7 @@ struct VulkanBuffer {
   VkDeviceMemory memory{VK_NULL_HANDLE};
   void* data{nullptr};
   size_t size{0};
+  bool inference_weight{false};
   // False when the memory type lacks HOST_COHERENT.
   bool coherent{true};
   // Completion-timeline stamp of the submission that references this
@@ -96,12 +97,13 @@ inline size_t default_batch_limit(size_t memory_limit, size_t heap_bytes) {
 class VulkanAllocator : public allocator::Allocator {
  public:
   Buffer malloc(size_t size) override;
+  Buffer malloc_weight(size_t size);
   void free(Buffer buffer) override;
   size_t size(Buffer buffer) const override;
 
   size_t get_active_memory() const {
     std::unique_lock lk(mutex_);
-    return active_memory_;
+    return active_memory_ + weight_memory_;
   }
   size_t get_peak_memory() const {
     std::unique_lock lk(mutex_);
@@ -239,6 +241,7 @@ class VulkanAllocator : public allocator::Allocator {
   // working set.
   size_t gc_limit_;
   size_t active_memory_{0};
+  size_t weight_memory_{0};
   size_t peak_memory_{0};
   mutable BufferCache<VulkanBuffer> buffer_cache_;
   // Live blocks by VkBuffer handle (encoder-level transfer stamping).
