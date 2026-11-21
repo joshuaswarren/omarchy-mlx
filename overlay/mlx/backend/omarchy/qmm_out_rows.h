@@ -92,7 +92,7 @@ inline QmmOutChunk qmm_out_chunk(
   QmmOutChunk c;
   c.binding_offset = out_byte_start + uint64_t(r0) * row_bytes;
   c.binding_range = std::min<uint64_t>(
-      (uint64_t(rows) * row_bytes + 3u) & ~3ull, range_limit);
+      (uint64_t(rows) * row_bytes + 3ull) & ~3ull, range_limit);
   c.rows = rows;
   c.lhs_offset_add = static_cast<uint32_t>(uint64_t(r0) * matrix_k);
   c.count = static_cast<uint32_t>(uint64_t(rows) * matrix_n);

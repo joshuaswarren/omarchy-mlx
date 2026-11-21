@@ -7995,7 +7995,7 @@ void dispatch_qmm_out_rows(
     Fire&& fire) {
   const auto& caps = encoder.device().capabilities();
   const uint64_t align = std::max<uint64_t>(
-      16u, caps.min_storage_buffer_offset_alignment);
+      16ull, caps.min_storage_buffer_offset_alignment);
   const uint64_t row_bytes = uint64_t(params.matrix_n) * out.itemsize();
   const uint64_t out_byte_start =
       bindings.empty()
@@ -8007,6 +8007,8 @@ void dispatch_qmm_out_rows(
       out_byte_start,
       caps.max_storage_buffer_range,
       align);
+  // Batched calls (shape[0] > 1) address output by batch strides, not rows, so row
+  // chunking cannot apply; they fall through to the unsplit dispatch below.
   if (rows_per == 0u || params.shape[0] > 1u || bindings.empty()) {
     fire(bindings, params);
     return;
