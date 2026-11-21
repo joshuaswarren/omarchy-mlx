@@ -1,3 +1,7 @@
+Backport of the BitLinear non-Metal gate and FP32 accumulation from
+https://github.com/joshuaswarren/mlx-lm/commit/4ff89aa5fbbf9d8d009c9b052d7e36405ca433f7
+(ml-explore/mlx-lm#2088), adapted to the pinned BitLinear class.
+
 --- a/mlx_lm/models/bitlinear_layers.py	2026-11-20 17:47:54.905534948 -0600
 +++ b/mlx_lm/models/bitlinear_layers.py	2026-11-20 17:47:54.935534678 -0600
 @@ -88,6 +88,22 @@
@@ -13,11 +17,11 @@
 +    output order.
 +    """
 +    fields = mx.stack([(packed_weights >> s) & 3 for s in (0, 2, 4, 6)])
-+    weights = (fields.astype(x.dtype) - 1).reshape(-1, x.shape[-1])
-+    scale = weight_scale[0]
++    weights = (fields.astype(mx.float32) - 1).reshape(out_features, x.shape[-1])
++    scale = weight_scale[0].astype(mx.float32)
 +    if invert_weight_scales:
 +        scale = mx.reciprocal(scale)
-+    return (x @ weights.T * scale).astype(weight_scale.dtype)
++    return (x.astype(mx.float32) @ weights.T * scale).astype(weight_scale.dtype)
 +
 +
  class BitLinear(nn.Module):
