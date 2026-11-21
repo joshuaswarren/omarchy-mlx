@@ -855,6 +855,85 @@ TEST_CASE("uncovered buffer pointer arithmetic still refuses by name") {
   CHECK_THROWS_AS(translate(source_inc, 1), std::runtime_error);
 }
 
+TEST_CASE("postfix ++ is not an add in a dereference operand") {
+  // `x++ + tid` increments the pointer then adds — the `+` scanner must
+  // not split on the `++` and emit `x[(+ + tid)]` (glslang accepts it,
+  // silently reading a wrong index). It is uncovered pointer arithmetic:
+  // refuse by name.
+  const char* source =
+      "[[kernel]] void post(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = *(x++ + i);\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source, 1), std::runtime_error);
+  const char* source_cast =
+      "[[kernel]] void post_cast(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = (float)(*((const device int64_t*)grid++ + i));\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source_cast, 1), std::runtime_error);
+}
+
+TEST_CASE("a trailing dot keeps multiply binary") {
+  // `2.` is a float literal — `2. * x[i]` is multiply, not a unary `*`.
+  const char* source =
+      "[[kernel]] void dot_mul(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  uint n = i;\n"
+      "  y[i] = 2. * x[i] + 2. * n;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("2. * _mlx_arg0[i]") != std::string::npos);
+  CHECK(glsl.find("2. * n") != std::string::npos);
+}
+
+TEST_CASE("dereference after a control header or cast still lowers") {
+  // `)` closes `if (...)` / `for (...)` conditions and `(T)` casts — the
+  // `*` after them is unary, not binary.
+  const char* source =
+      "[[kernel]] void after_paren(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  if (i < 4) *(y + i) = 1.0f;\n"
+      "  for (int k = 0; k < 2; ++k) *(y + k) = 2.0f;\n"
+      "  y[i] += (float)*(x + i);\n"
+      "  y[i] += (float)*x;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(i)] = float(1.0f)") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(k)] = float(2.0f)") != std::string::npos);
+  CHECK(glsl.find("float(_mlx_arg0[(i)])") != std::string::npos);
+  CHECK(glsl.find("float(_mlx_arg0[(0)])") != std::string::npos);
+}
+
+TEST_CASE("unshaped dereference operands on buffers refuse by name") {
+  // `*(++x)`, `*++x`, `*((x) - 1)`, `*(1 + x)` touch a buffer pointer but
+  // fit no lowering shape — refuse instead of emitting `*(_b0.data...)`.
+  const auto kernel = [](const char* expr) {
+    static std::string body;
+    body = std::string(
+               "[[kernel]] void bad(\n"
+               "    const device float* x [[buffer(0)]],\n"
+               "    device float* y [[buffer(1)]],\n"
+               "    uint i [[thread_position_in_grid]]) {\n"
+               "  y[i] = ") +
+        expr + ";\n}\n";
+    return body.c_str();
+  };
+  CHECK_THROWS_AS(translate(kernel("*(++x)"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*++x"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*((x) - 1)"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*(1 + x)"), 1), std::runtime_error);
+}
+
 TEST_CASE("statement keywords do not register local arrays") {
   // `else z[0]` is else-statement indexing — the declaration scan must
   // not register `z` as an `else`-typed array. If it did, `*z` below
