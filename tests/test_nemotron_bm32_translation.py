@@ -37,6 +37,17 @@ def translate(translator, tmp_path, source, *, grid=None, threadgroup=None, tag=
     )
 
 
+def test_bm32_fixture_signature_matches_runtime_abi():
+    """The replica must sign the upstream attribute types — uint for the
+    simdgroup/thread indices, uint3 for the threadgroup position — or the
+    whole suite checks a different ABI than metal_kernel emits at runtime
+    (the PR 562 r3 refusal came from exactly this drift)."""
+    msl = generated_msl(NAME)
+    assert "  uint simdgroup_index_in_threadgroup [[simdgroup_index_in_threadgroup]]" in msl
+    assert "  uint thread_index_in_simdgroup [[thread_index_in_simdgroup]]" in msl
+    assert "  uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]" in msl
+
+
 def test_bm32_translates_and_compiles(translator, tmp_path):
     result = translate(translator, tmp_path, generated_msl(NAME), tag="ok")
     assert result.returncode == 0, result.stdout + result.stderr

@@ -171,9 +171,9 @@ std::optional<Translation> translate_bm32(
     glsl << buffer_declaration(p, out);
     glsl << "#define " << aliases[i] << " _b" << i << ".data\n";
   }
-  signature << "  uint3 simdgroup_index_in_threadgroup "
+  signature << "  uint simdgroup_index_in_threadgroup "
                "[[simdgroup_index_in_threadgroup]],\n"
-            << "  uint3 thread_index_in_simdgroup "
+            << "  uint thread_index_in_simdgroup "
                "[[thread_index_in_simdgroup]],\n"
             << "  uint3 threadgroup_position_in_grid "
                "[[threadgroup_position_in_grid]]";
