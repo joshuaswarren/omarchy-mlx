@@ -153,7 +153,11 @@ jobs:
           set -o pipefail
           icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
           [[ ${#icds[@]} -eq 1 && -f ${icds[0]} ]]
-          export VK_DRIVER_FILES="${icds[0]}"
+          export VK_DRIVER_FILES=/nonexistent/no-such-icd.json
           .work/build/tests/omarchy/omarchy_matmul_family_tests -tc='*BM32*' \
             | tee .work/bm32-probe.out
-          ! grep -q 'Skipping:' .work/bm32-probe.out
+          if grep -q 'Skipping:' .work/bm32-probe.out; then
+            exit 1
+          fi
+          grep -Eq 'assertions: *[1-9][0-9]* \| *[1-9][0-9]* passed \| 0 failed' .work/bm32-probe.out
+          grep -Eq 'test cases: *2 \| *2 passed \| 0 failed' .work/bm32-probe.out
