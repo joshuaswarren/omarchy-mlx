@@ -25,8 +25,9 @@ from tools.kernel_recheck import run  # noqa: E402
 
 
 class _FakeSpec:
-    def __init__(self, origin):
-        self.origin = str(origin)
+    def __init__(self, origin, locations=None):
+        self.origin = str(origin) if origin else None
+        self.submodule_search_locations = locations
 
 
 def _fake_mlx(tmp_path):
@@ -51,6 +52,25 @@ def test_provenance_names_libmlx_and_sha(tmp_path, monkeypatch, capsys):
     assert f"libmlx_sha256={want_sha}" in out
     assert "translator_source_sha=abc123" in out
     assert "spirv_cache=/tmp/krcache-test" in out
+
+
+def test_provenance_namespace_package(tmp_path, monkeypatch, capsys):
+    # The lab wheel exposes mlx as a namespace package: spec.origin is None
+    # and the dir lives in submodule_search_locations. The first PROVENANCE
+    # version only read origin and printed libmlx=missing on the real host.
+    pkg = tmp_path / "mlx"
+    lib = pkg / "lib"
+    lib.mkdir(parents=True)
+    payload = b"namespace-package libmlx"
+    (lib / "libmlx.so").write_bytes(payload)
+    spec = _FakeSpec(None, [str(pkg)])
+    monkeypatch.setattr(run.importlib.util, "find_spec", lambda name: spec)
+
+    run._provenance()
+    out = capsys.readouterr().out
+
+    assert f"libmlx_sha256={hashlib.sha256(payload).hexdigest()}" in out
+    assert f"mlx_dir={pkg}" in out
 
 
 def test_provenance_survives_missing_mlx(monkeypatch, capsys):
