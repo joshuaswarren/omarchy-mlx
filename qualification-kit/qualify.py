@@ -19,12 +19,12 @@ from pathlib import Path
 from qualification_reference import comparison
 
 ROOT = Path(__file__).resolve().parent
-PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '900'))
-TAG = 'v0.7.47'
-SOURCE = '83cf322bb3c238ed9781434573b3f133f84273e6'
-WHEEL = 'mlx_omarchy-0.32.4.dev202611181701+83cf322-cp314-cp314-linux_aarch64.whl'
+PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
+TAG = 'qualification-r4'
+SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
+WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
-ASSETS = {WHEEL: 'b7cb0244e300e518450af635995629aa9e52c7cde7e7613b53ee9a8e819752e1',
+ASSETS = {WHEEL: '05a4802bc4c547aa77a6478612e103a7bfcedc3878f9049e502b37aba8eefb14',
           VENDOR: '31a9ed2075865d41e84729b850c1bdf9f66530f9b12df7bfb50cd80c472555f4'}
 MODEL = 'mlx-community/Qwen3-4B-Instruct-2507-4bit'
 REV = '50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b'
@@ -114,7 +114,8 @@ def benchmark_result(result):
 def asset(work, cached, name):
     path = cached / name if cached else work / name
     if not cached:
-        url = f'https://github.com/joshuaswarren/omarchy-mlx/releases/download/{TAG}/{name.replace("+", "%2B")}'
+        release = 'v0.7.47' if name == VENDOR else TAG
+        url = f'https://github.com/joshuaswarren/omarchy-mlx/releases/download/{release}/{name.replace("+", "%2B")}'
         subprocess.run(['curl', '-fLsS', '--max-time', '300', '-o', path, url],
                        check=True, timeout=310)
     if sha(path) != ASSETS[name]:
