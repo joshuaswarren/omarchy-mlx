@@ -17,6 +17,7 @@ namespace mlx::core::omarchy {
 
 inline constexpr uint32_t kComputeThreadsPerGroup = 256;
 inline constexpr uint32_t kMaxComputeGroupCountX = 65535;
+inline constexpr uint32_t kFloatPowerOperation = 37;
 // Vulkan's guaranteed floor for storage-buffer descriptors in one compute
 // descriptor set layout. Any kernel may assume this many binding slots.
 inline constexpr uint32_t kComputeBindingFloor = 4;
@@ -1157,6 +1158,9 @@ enum class ComputeKernel : uint16_t {
   MatmulRbF32,
   SdpaDecodeMaskedBF16Hd128,
   MatmulBf16Bm32,
+  ElementwisePowerF32,
+  ElementwisePowerF16,
+  ElementwisePowerBF16,
   Count,
 };
 
