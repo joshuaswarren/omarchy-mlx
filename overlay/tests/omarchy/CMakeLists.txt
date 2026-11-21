@@ -4,6 +4,15 @@ target_include_directories(omarchy_inference_weight_tests PRIVATE
                            ${Vulkan_INCLUDE_DIRS})
 add_test(NAME omarchy_inference_weight_tests COMMAND omarchy_inference_weight_tests)
 
+# PR 519: a small Vulkan op and then a clean exit(0). The crash lived in the
+# static Runtime destructor after main returned; a segfault at exit fails
+# the test, so the process itself is the assertion.
+add_executable(omarchy_exit_teardown_tests test_exit_teardown.cpp)
+target_link_libraries(omarchy_exit_teardown_tests PRIVATE mlx)
+target_compile_options(omarchy_exit_teardown_tests PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_exit_teardown_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_exit_teardown_tests COMMAND omarchy_exit_teardown_tests)
+
 add_executable(omarchy_runtime_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime.cpp)
 target_link_libraries(omarchy_runtime_tests PRIVATE mlx doctest)
