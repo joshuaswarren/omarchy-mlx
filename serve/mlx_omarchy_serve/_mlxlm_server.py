@@ -136,10 +136,14 @@ def verify_serve_copies_against_record(directory=None):
     """Content-verify every serve copy against the installed wheel RECORD.
 
     True when every .py copy hashes to the value the installed
-    mlx-omarchy dist-info RECORD lists for the same package path. A copy
-    missing from the RECORD, a hash mismatch, or no RECORD hashes at all
-    is False: unverifiable content must not pass a missing-stamp check.
+    mlx-omarchy dist-info RECORD lists for the same package path. The
+    RECORD hash arrives as a FileHash with a mode string and an encoded
+    value; only sha256 values are compared, anything else fails closed.
+    A copy missing from the RECORD, a hash mismatch, an undecodable
+    value, an unreadable copy, or no RECORD hashes at all is False:
+    unverifiable content must not pass a missing-stamp check.
     """
+    import base64
     import hashlib
     import importlib.metadata as md
 
@@ -150,8 +154,8 @@ def verify_serve_copies_against_record(directory=None):
     recorded = {}
     try:
         for entry in md.files("mlx-omarchy") or []:
-            if entry.hash and entry.hash.name == "sha256":
-                recorded[str(entry)] = entry.hash
+            if entry.hash and entry.hash.mode == "sha256":
+                recorded[str(entry)] = entry.hash.value
     except Exception:
         return False
     if not recorded:
@@ -163,8 +167,15 @@ def verify_serve_copies_against_record(directory=None):
             digest = hashlib.sha256(copy.read_bytes()).digest()
         except OSError:
             return False
-        expected = recorded.get(f"{prefix}/{rel.as_posix()}")
-        if expected is None or expected.digest() != digest:
+        encoded = recorded.get(f"{prefix}/{rel.as_posix()}")
+        if not encoded:
+            return False
+        try:
+            want = base64.urlsafe_b64decode(
+                encoded + "=" * (-len(encoded) % 4))
+        except Exception:
+            return False
+        if want != digest:
             return False
     return True
 
