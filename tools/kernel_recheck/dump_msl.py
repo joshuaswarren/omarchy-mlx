@@ -32,7 +32,7 @@ DTYPE_STR = {
     "float32": "float",
     "float16": "float16_t",
     "bfloat16": "bfloat16_t",
-    "uint32": "uint",
+    "uint32": "uint32_t",
     "uint64": "uint64_t",
     "int32": "int",
     "int64": "int64_t",
@@ -144,19 +144,8 @@ def generated_msl(name):
             t = f"atomic<{t}>"
         params.append(f"  device {t}* {on} [[buffer({index})]]")
         index += 1
-    attrs = [a for a in METAL_ATTRS if a in source]
-    rendered = []
-    for k, p in enumerate(params):
-        last = k == len(params) - 1
-        rendered.append(p + ("" if last and not attrs else ","))
-    if attrs:
-        rendered[-1] = rendered[-1].rstrip(",") + ","
-        for k, a in enumerate(attrs):
-            end = "]]) {" if k == len(attrs) - 1 else "],"
-            rendered.append(f"  uint3 {a} [[{a}{end}")
-    else:
-        rendered[-1] = rendered[-1] + ") {"
-    pieces.append("\n".join(rendered) + "\n")
+    params.extend(f"  uint3 {a} [[{a}]]" for a in METAL_ATTRS if a in source)
+    pieces.extend((",\n".join(params), ") {\n"))
     pieces.append(source)
     pieces.append("\n}\n")
     if spec.get("header"):

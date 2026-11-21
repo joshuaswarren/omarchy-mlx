@@ -571,7 +571,7 @@ def build_cbq_common(seed=12):
 def _cbq_w(inp, e):
     """Dequantize expert e's rows to (O,K) fp64 per dequant_ref semantics."""
     qs, qh, dd = inp["cb_qs"], inp["cb_qh"], inp["cb_d"]
-    grid = _grid_lut()
+    grid = inp["grid"].reshape(2048, 8)
     O, K8 = qs.shape[1], qs.shape[2]
     K = K8 * 8
     hi = np.stack([(qh[e] >> s) & 7 for s in (0, 3, 6, 9)], axis=-1)   # (O,K/32,4)
@@ -645,12 +645,11 @@ def build_cbq_gd(seed=15):
 
 def ref_cbq_gd(inp):
     cot = inp["cot"].astype(np.float64)
-    grid64 = _grid_lut().reshape(-1).view(np.int64)       # (2048,)
+    grid = inp["grid"].reshape(2048, 8)
     qs, qh = inp["cb_qs"], inp["cb_qh"]
     x = inp["x"].astype(np.float64)
     K, O = CBQ["K"], CBQ["O"]
     gd = np.zeros((CBQ["E"], O, K // 256))
-    byte_shifts = 8 * np.arange(8)
     for r_i in range(CBQ["R"]):
         e = int(inp["eidx"][r_i])
         tok = int(inp["tokidx"][r_i])
@@ -666,8 +665,7 @@ def ref_cbq_gd(inp):
                 dele = np.where((hs & 0x8000) != 0, -0.125, 0.125)
                 gi = qs[e, o, sbs[:, None] * 4 + np.arange(4)].astype(np.int64)
                 gi |= (((hs[:, None] >> (3 * np.arange(4))) & 7) << 8)
-                gv = grid64[gi]                                           # (8,4)
-                gbytes = ((gv[..., None] >> byte_shifts) & 0xFF).astype(np.int64)
+                gbytes = grid[gi].astype(np.float64)                      # (8,4,8)
                 xs = np.stack([xv_base[s * 32 + np.arange(4)[:, None] * 8 + np.arange(8)]
                                for s in sbs])                             # (8,4,8)
                 p32 = ((gbytes + dele[..., None, None]) * xs).sum(axis=(1, 2))
@@ -677,12 +675,11 @@ def ref_cbq_gd(inp):
 
 def ref_cbq_gx(inp):
     cot = inp["cot"].astype(np.float64)
-    grid64 = _grid_lut().reshape(-1).view(np.int64)
+    grid = inp["grid"].reshape(2048, 8)
     qs, qh, dd = inp["cb_qs"], inp["cb_qh"], inp["cb_d"]
     K, O = CBQ["K"], CBQ["O"]
     n_tok = int(inp["tokidx"].max()) + 1
     gx = np.zeros((n_tok, K))
-    byte_shifts = 8 * np.arange(8)
     for r_i in range(CBQ["R"]):
         e = int(inp["eidx"][r_i])
         tok = int(inp["tokidx"][r_i])
@@ -694,8 +691,7 @@ def ref_cbq_gx(inp):
             dele = np.where((hs & 0x8000) != 0, -0.125, 0.125)
             gi = qs[e, :, sb * 4 + l].astype(np.int64) | \
                 (((hs >> (3 * l)) & 7) << 8)
-            gv = grid64[gi]
-            gj = ((gv[:, None] >> byte_shifts) & 0xFF).astype(np.int64)    # (O,8)
+            gj = grid[gi].astype(np.float64)                              # (O,8)
             dsc = dd[e, :, sup].astype(np.float64) * \
                 (2 * ((hs >> 12) & 7) + 1).astype(np.float64)
             wgt = np.where(nz, ct * dsc, 0.0)

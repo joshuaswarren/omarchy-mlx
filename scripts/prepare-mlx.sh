@@ -44,6 +44,33 @@ rm -f /tmp/overlay_files.tmp
 # 2026-09-02. Staged files must always look newer than prior build output.
 cp -r --preserve=mode "$ROOT/overlay/." "$STAGING_DIR/"
 find "$STAGING_DIR" -newermt '@0' -exec touch {} +
+python3 - "$ROOT/tools/kernel_recheck/sources" "$STAGING_DIR" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+source, staging = map(Path, sys.argv[1:])
+# These are the bodies reviewed for the bounded Vulkan port. A corpus update
+# must not silently add or change a body that the port will execute.
+approved = {
+    "cbq_gather_mm": "cca4774325d1d8712c12e7573b61d0d21c0c757fe7b13aaa3b5e2e6937a15ba8",
+    "cbq_gather_mm_v2": "3ebe0518b0c56cc89fa8d965cd4ee8c65a8933cce34a64b42679f4807f1f1866",
+    "cbq_gather_mm_v3": "e11a132336ba95a2b3cd0e2b49917d8e1da38cf455fa4d08a2a4f423fe362392",
+    "cbq_gather_mm_v4": "3c485fab0e3a69619ec864f5f3cc6d8b2572de8e65aafcfc51f5f16ceeed7e0c",
+    "cbq_gather_mm_v3_situ": "ba67a289405a7c9429e901d1610a248427e8a3926a156cf13a26ecc631a7d2fa",
+    "cbq_gather_mm_v4_situ": "eddfb4ca8b75afed2b58a4c3aca2c93d40c56a371b2707d2767211eb788086e6",
+    "cbq_gather_mm_glu": "98a09fba2bb8b84ae27f478c044d4dd95ed0f496fc17ecca7cab85192158c3ed",
+    "cbq_grad_d": "6862fc437daabeb3c8761e25651452ad966e2eabdb48a7634688f3e66ed81afa",
+    "cbq_grad_x": "b45ab8c9cb585cd605b25cc99d6a936df21377112bf3f15f5fae6afd8a5d0cb5",
+}
+rows = []
+for name, digest in approved.items():
+    body = (source / f"{name}.msl").read_bytes()
+    if hashlib.sha256(body).hexdigest() != digest:
+        sys.exit(f"prepare-mlx: CBQ port body changed: {name}")
+    rows.append(f'constexpr std::string_view {name} = R"CBQ({body.decode("utf-8")})CBQ";\n')
+(staging / "mlx/backend/omarchy/cbq_msl.inc").write_bytes("".join(rows).encode("utf-8"))
+PY
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-build.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
