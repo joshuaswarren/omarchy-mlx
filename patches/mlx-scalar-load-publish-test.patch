@@ -24,7 +24,7 @@
 +  auto fun = [](const std::vector<array>& args) -> std::vector<array> {
 +    // The scalar constant bakes into the export as a size-1 load; the
 +    // broadcast fill is the scalar-copy path that host-reads it.
-+    return {astype(broadcast(array(2.0f, float32), {10}), int32)};
++    return {astype(broadcast_to(array(2.0f, float32), Shape{10}), int32)};
 +  };
 +  export_function(file_path, fun, {array({0})});
 +  auto imported = import_function(file_path);
