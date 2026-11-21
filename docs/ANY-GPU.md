@@ -111,6 +111,10 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/<driver>_icd.json \
 - More than one GPU: `MLX_OMARCHY_DEVICE_INDEX=<n>` picks the device.
 - With several drivers installed, name one with `VK_DRIVER_FILES` so
   the suite measures the device you mean.
+- The fused masked batch-2 decode route is on by default;
+  `MLX_OMARCHY_SDPA_DECODE_BOOL_MASK=0` restores the composed route
+  when you bisect a decode difference. [kernel-flags.md](kernel-flags.md)
+  lists the rest.
 
 ## Reading a pass/fail
 

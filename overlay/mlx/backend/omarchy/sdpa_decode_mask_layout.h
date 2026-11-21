@@ -44,4 +44,11 @@ inline std::optional<SdpaDecodeMaskLayout> sdpa_decode_mask_layout(
                               static_cast<uint32_t>(key_stride)};
 }
 
+// MLX_OMARCHY_SDPA_DECODE_BOOL_MASK: the fused masked batch-2 route is on
+// by default. A literal "0" selects the composed route; unset, empty and
+// every other value keep the fused route.
+inline bool sdpa_decode_mask_fused_enabled(const char* value) {
+  return value == nullptr || value[0] != '0' || value[1] != '\0';
+}
+
 } // namespace mlx::core::omarchy

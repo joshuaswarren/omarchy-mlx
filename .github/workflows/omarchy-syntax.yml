@@ -135,6 +135,10 @@ jobs:
         run: ctest --test-dir .work/build -R omarchy_custom_kernel_translate_tests --output-on-failure
       - name: Run standalone mask-layout unit tests
         run: ctest --test-dir .work/build -R '^omarchy_sdpa_decode_mask_layout_tests$' --no-tests=error --output-on-failure
+      - name: Build and run the mask-route option test
+        run: |
+          cmake --build .work/build --target omarchy_sdpa_decode_mask_flag_tests
+          ctest --test-dir .work/build -R '^omarchy_sdpa_decode_mask_flag_tests$' --no-tests=error --output-on-failure
       - name: Run vocabulary-tail parity tests (software Vulkan)
         env:
           MLX_OMARCHY_ALLOW_NON_APPLE: "1"

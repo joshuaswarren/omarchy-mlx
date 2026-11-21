@@ -16352,7 +16352,8 @@ void ScaledDotProductAttention::eval_gpu(
   if (inputs.size() == 4 && !has_sinks_ && !do_causal_ &&
       batch == 2 && q_len == 1 && head_dim == 128 && decode_bf16_probe &&
       !bf16_fast && encoder.device().compute().binding_limit() >= 5 &&
-      decode_path_override("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK") > 0) {
+      omarchy::sdpa_decode_mask_fused_enabled(
+          std::getenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK"))) {
     const auto& mask = inputs[3];
     if (mask.dtype() == bfloat16 && mask.ndim() == 4 &&
         mask.shape(0) == batch && mask.shape(1) == heads &&
