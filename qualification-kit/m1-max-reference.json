@@ -1,5 +1,5 @@
 {
-  "capture_sha256": "8e55f76d26e19a9468e4595192459c9ff24d0e9c2d90f376673f62c6ef2be998",
+  "capture_sha256": "ddf83a68e1a0437d2e23ce5b6ec9b1e3187192ec36f4abdcd407502015e03df4",
   "counts": {
     "failed": 80,
     "passed": 13212,
@@ -94,8 +94,44 @@
     "test_vmap.py::TestVmap::test_vmap_view": "vulkan_refusal"
   },
   "icd_manifest_sha256": "c335b523edea89c8b71fe6e5e871f0ad8285b298319c4c29b6b512df1b49052b",
-  "release": "v0.7.47",
+  "release": "qualification-r4",
   "schema": "omarchy-mlx-m1-max-reference-v1",
+  "seconds_per_file": {
+    "test_array.py": 3.1,
+    "test_autograd.py": 0.7,
+    "test_bf16.py": 0.4,
+    "test_blas.py": 13.9,
+    "test_compile.py": 1.8,
+    "test_constants.py": 0.2,
+    "test_conv.py": 0.4,
+    "test_conv_transpose.py": 0.2,
+    "test_device.py": 0.3,
+    "test_double.py": 0.3,
+    "test_einsum.py": 0.4,
+    "test_eval.py": 9.2,
+    "test_export_import.py": 0.5,
+    "test_fast.py": 1.0,
+    "test_fast_gated_delta.py": 0.4,
+    "test_fast_sdpa.py": 6.6,
+    "test_fft.py": 9.7,
+    "test_graph.py": 0.3,
+    "test_init.py": 0.3,
+    "test_linalg.py": 0.6,
+    "test_load.py": 1.0,
+    "test_losses.py": 0.3,
+    "test_memory.py": 0.3,
+    "test_nn.py": 0.5,
+    "test_ops.py": 5.6,
+    "test_optimizers.py": 0.4,
+    "test_quantized.py": 15.4,
+    "test_random.py": 0.4,
+    "test_reduce.py": 3.1,
+    "test_threads.py": 1.6,
+    "test_tree.py": 0.3,
+    "test_upsample.py": 0.3,
+    "test_vmap.py": 0.6,
+    "test_zero_copy.py": 0.3
+  },
   "skips": [
     "test_array.py::TestArray::test_buffer_protocol_tf",
     "test_array.py::TestArray::test_from_dlpack_torch_mps_copy_false_shares_updates",
@@ -179,14 +215,14 @@
     "test_zero_copy.py::TestZeroCopy::test_source_lifetime",
     "test_zero_copy.py::TestZeroCopy::test_synchronize_releases_gil"
   ],
-  "suite_source": "83cf322bb3c238ed9781434573b3f133f84273e6",
-  "utc": "2026-11-20T22:59:35.026555+00:00",
+  "suite_source": "3b9d20b503a8ceca57f7e11d0877d06e2032442d",
+  "utc": "2026-11-21T02:55:21.807474+00:00",
   "versions": {
-    "mlx": "0.32.4.dev202611181701+83cf322",
+    "mlx": "0.32.4.dev202611210237+3b9d20b50",
     "mlx_lm": "0.31.3",
     "os": "7.1.12-2-20261103.2-lab-ARCH",
     "python": "3.14.7",
     "verified": "match"
   },
-  "wheel_sha256": "b7cb0244e300e518450af635995629aa9e52c7cde7e7613b53ee9a8e819752e1"
+  "wheel_sha256": "05a4802bc4c547aa77a6478612e103a7bfcedc3878f9049e502b37aba8eefb14"
 }

@@ -42,6 +42,7 @@ def test_kit_import_survives_another_reference_module(monkeypatch):
 
 @pytest.fixture()
 def kit(tmp_path, monkeypatch):
+    monkeypatch.delenv('QUALIFY_PER_FILE_TIMEOUT', raising=False)
     mod = load_kit(monkeypatch)
     suite_dir = tmp_path / 'suite'
     suite_dir.mkdir()
@@ -70,16 +71,13 @@ def run_suite(kit, tmp_path):
     return result, calls
 
 
-def test_generous_limit_and_recorded_seconds(kit, tmp_path):
-    mod, calls, scripts = kit
+def test_measured_default_and_recorded_seconds(kit, tmp_path):
+    _, _, scripts = kit
     for name in ('test_a.py', 'test_b.py'):
         scripts[name] = {'rc': 0}
     result, calls = run_suite(kit, tmp_path)
-    assert calls, 'the suite must run its files'
-    for call in calls:
-        assert call['seconds'] >= 900, 'per-file limit must be generous, not 35 s'
-    for row in result['files'].values():
-        assert 'seconds' in row, 'each file needs its recorded wall time'
+    assert [call['seconds'] for call in calls] == [300, 300]
+    assert all(row['seconds'] >= 0 for row in result['files'].values())
 
 
 def test_timeout_recorded_and_suite_continues(kit, tmp_path):

@@ -1,4 +1,4 @@
-# omarchy-mlx v0.7.47 qualification
+# omarchy-mlx qualification kit r4
 
 Run these two commands on **the same physical Mac**, once per OS. Use a different random ID for each Mac (generate it with `openssl rand -hex 8`); use the same ID in both commands. Do not use a serial number or hostname. Share both JSON files even if a command exits nonzero. Nothing is uploaded automatically.
 
@@ -16,9 +16,11 @@ On Aurora or a nonstandard Vulkan install, add `--icd /path/to/apple-icd.json` f
 python3.12 qualify.py --machine-id 0123456789abcdef --out macos.json
 ```
 
-Have network access and at least 6 GiB free on the receipt and Hugging Face cache filesystems. The runner uses disposable venvs; Linux downloads and verifies the original GitHub wheel and vendor tar. Optional `--asset-dir` uses previously downloaded copies with the same mandatory hashes. Both sides use MLX-LM 0.31.3 and the same pinned Qwen3-4B-Instruct-2507 4-bit snapshot, fixed prompt, seed, four warmup tokens, and 64 scored greedy tokens. Compare prefill/decode rates only when model revision, prompt count, and token ID digest agree. These are MLX GPU numbers, not ANE throughput.
+Have network access and at least 6 GiB free on the result and Hugging Face cache filesystems. The runner creates a disposable virtual environment. Linux verifies the r4 wheel and reuses the hash-pinned v0.7.47 dependency archive. Use `--asset-dir` if you already have both files. Both systems use MLX-LM 0.31.3 and the pinned Qwen3-4B-Instruct-2507 4-bit snapshot, with the same prompt, seed, four warmup tokens, and 64 scored greedy tokens. Compare prefill and decode rates only when the model revision, prompt count, and token ID digest agree. These rates measure the GPU.
 
-The receipt includes six MLX correctness checks, results per Python test file (all 34 files used by the release's Python-wheel suite), and ANE smoke results. This suite targets the runtime in the wheel; the C++ source-build suite and multi-host distributed tests are outside its scope. macOS uses native MLX 0.32.3 and a Core ML add smoke with CPU+Neural Engine allowed; the macOS smoke does not independently prove ANE placement and is not a like-for-like ANE performance test. Never count a skipped, unavailable, or interrupted run as a pass.
+The result lists six MLX correctness checks, all 34 Python test files, and the ANE smoke test. It records the time and exit status for each file. A timeout or abort leaves that file incomplete and the suite runs the remaining files. The C++ build suite and multi-host tests are outside this kit. macOS uses native MLX 0.32.3 and allows CPU or Neural Engine placement for its Core ML smoke test. That smoke test does not prove Neural Engine placement. A skipped or incomplete test never counts as a pass.
+
+The per-file limit is 300 seconds. The slowest M1 Max r4 reference file took 15.4 seconds. An M4 Pro file took 47 seconds in r3. The limit leaves room for both.
 
 Linux compares exact failing test/subtest IDs and failure classes with `m1-max-reference.json`. The receipt keeps the raw failures and skips, plus the matched and new lists. `qualified` means the release wheel was verified, MLX and Linux ANE checks passed, decode finished, all suite IDs were captured, and there are zero new failures or skips. A matched reference failure is not a pass. The macOS receipt is a baseline and reports its own outcomes without the Linux allowlist.
 
