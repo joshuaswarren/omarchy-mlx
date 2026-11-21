@@ -1,3 +1,5 @@
+#include <stdexcept>
+
 #include "inference_weights.h"
 
 using namespace mlx::core::omarchy;
@@ -28,5 +30,37 @@ int main() {
   if (first.read_bytes != kWeightStagingBytes || first.copy_bytes != kWeightStagingBytes ||
       tail.read_bytes != 3 || tail.copy_bytes != 4 || weight_upload_chunk(0, 0).copy_bytes != 0) {
     return 3;
+  }
+  bool threw = false;
+  try {
+    require_card_memory_upload(true, true);
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  if (!threw) {
+    return 4;
+  }
+  require_card_memory_upload(true, false);
+  require_card_memory_upload(false, true);
+  require_card_memory_upload(false, false);
+  bool in_flight = false;
+  {
+    InFlightFlag guard(in_flight);
+    if (!in_flight) {
+      return 5;
+    }
+  }
+  if (in_flight) {
+    return 6;
+  }
+  try {
+    {
+      InFlightFlag guard(in_flight);
+      throw std::runtime_error("upload failed mid-copy");
+    }
+  } catch (const std::exception&) {
+  }
+  if (in_flight) {
+    return 7;
   }
 }

@@ -421,6 +421,7 @@ struct Runtime {
       }
       instance = VK_NULL_HANDLE;
     }
+    g_runtime_instance = nullptr;
   }
 
   // Teardown ran here from a static destructor until PR 519: on the NVIDIA
@@ -1017,7 +1018,12 @@ bool Runtime::init_impl() {
   if (!exit_registered) {
     exit_registered = true;
     g_runtime_instance = this;
-    std::atexit(&Runtime::teardown_at_exit);
+    if (std::atexit(&Runtime::teardown_at_exit) != 0) {
+      std::fprintf(
+          stderr,
+          "[omarchy] atexit registration failed; Vulkan teardown will not"
+          " run before driver unload\n");
+    }
   }
   return true;
 }

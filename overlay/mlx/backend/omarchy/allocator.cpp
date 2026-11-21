@@ -192,10 +192,9 @@ void Device::upload_weights(
       range.size = VK_WHOLE_SIZE;
       VKX_CHECK(vk::device_table().FlushMappedMemoryRanges(device_, 1, &range));
     }
-    weight_staging_in_flight_ = true;
+    InFlightFlag in_flight(weight_staging_in_flight_);
     encoder.copy_buffer(weight_staging_, destination, chunk.copy_bytes, 0, offset);
     encoder.synchronize("inference weight upload");
-    weight_staging_in_flight_ = false;
     offset += chunk.read_bytes;
     ++copies;
   }
