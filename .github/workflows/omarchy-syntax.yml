@@ -140,7 +140,7 @@ jobs:
       - name: Install CBQ shader toolchain
         run: |
           sudo apt-get install -y --no-install-recommends \
-            glslc spirv-tools python3-pytest
+            glslc spirv-tools python3-pytest python3-numpy
       - name: Check CBQ translation prerequisites
         run: |
           test -x .work/build/tests/omarchy/omarchy_custom_kernel_translate_dump
