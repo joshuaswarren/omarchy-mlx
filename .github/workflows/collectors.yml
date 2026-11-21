@@ -63,17 +63,21 @@ jobs:
         env:
           MLX_TEST_UPSTREAM_CPU: "1"
         run: |
-          python -m pip install 'mlx[cpu]==0.32.4'
+          python -m pip install 'mlx[cpu]==0.32.4' transformers
           python -m pytest -q -rP \
             tests/test_apply_mlxlm_series.py::test_host_offset_mirror_tracks_device_through_transitions \
             tests/test_apply_mlxlm_series.py::test_bitlinear_fallback_on_upstream_cpu \
+            tests/test_mlxlm_speculative_lookup.py \
             --junitxml="$RUNNER_TEMP/installer-cpu.xml"
-          # pytest returns success for an all-skipped run.
+          # pytest returns success for an all-skipped run. The speculative
+          # file gates its TOY/ROUTE subprocess cases on mlx.core and
+          # transformers — without them the four lookups skip silently and a
+          # faulty verify port passes CI (the #582 escape).
           python - "$RUNNER_TEMP/installer-cpu.xml" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
 
           cases = ET.parse(sys.argv[1]).findall(".//testcase")
-          if len(cases) != 3 or any(case.find("skipped") is not None for case in cases):
-              sys.exit("Expected one host-offset and two BitLinear CPU regressions")
+          if len(cases) != 13 or any(case.find("skipped") is not None for case in cases):
+              sys.exit("Expected one host-offset, two BitLinear and ten speculative-lookup CPU regressions")
           PY
