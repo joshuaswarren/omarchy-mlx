@@ -1887,13 +1887,7 @@ namespace {
 
 // Bounded dispatcher wait granularity (plan R16): a wedged queue delays
 // shutdown and handler dispatch by at most one interval, never forever.
-constexpr uint64_t kCompletionPollNs = 100ull * 1000 * 1000;
-
-// No-progress watchdog poll cadence. Must be a small fraction of the
-// no-progress interval so a stalled counter is detected quickly. 100 ms
-// matches kCompletionPollNs (the dispatcher background loop) and gives
-// 100 samples per no-progress interval at the 10 s default.
-constexpr uint64_t kHangWatchPollNs = kCompletionPollNs;
+constexpr uint64_t kCompletionPollNs = kHangWatchPollNs;
 
 // Parsed env override. Returns the default when the env var is unset or
 // invalid; positive non-zero values only. Negative or zero values would

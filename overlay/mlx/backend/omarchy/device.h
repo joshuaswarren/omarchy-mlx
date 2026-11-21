@@ -213,6 +213,10 @@ inline constexpr uint64_t kSubmitHangNoProgressNsDefault =
     10ull * 1000 * 1000 * 1000;
 inline constexpr uint64_t kSubmitMaxWallNsDefault =
     30ull * 60 * 1000 * 1000 * 1000;
+// Bounded watchdog/transfer poll cadence (100 ms): 100 samples per default
+// 10 s no-progress window. Shared by timeline progress waits and staging
+// transfer fence waits.
+inline constexpr uint64_t kHangWatchPollNs = 100ull * 1000 * 1000;
 
 // Parsed overrides. Resolved lazily on first call so unit tests can
 // override the env before the process reads it.
