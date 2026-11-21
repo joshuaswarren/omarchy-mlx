@@ -26,6 +26,8 @@ Coverage for #524 at `3a4e7c999f981072d1c5711913bd92c483d95264`, 2026-11-21 UTC,
 
 `binary-provenance.txt` identifies the retained standalone extensions. These builds link MLX statically. The hashes were collected after the runs; they are not execution-time attestations.
 
+The guarded `5ebf207d` rerun reproduced the nine pre-fix refusals and all nine fixed-head results. `cbq-provenance-5ebf207d.txt` records the SHA-256 of the extension imported by each child. Each child checked that no separate `libmlx.so` was mapped. The two gradient relative-L2 values were `3.64844704e-08` and `3.57092598e-08`.
+
 Pass rules follow the upstream source (`k3_cbq.py`, HF `avlp12/Kimi-K3-Alis-MLX-Dynamic-2.10bpw`): the seven gather kernels keep the harness per-element rule; the two grad kernels, which upstream declares `atomic_outputs=True` and which carry no upstream numeric self-test, are judged at upstream's own bar, relative-L2 at most 1e-5 for fp32, with the per-element figure reported beside as information.
 
 The binary outputs give maximum absolute errors of `0.00237640738` (`grad_d`) and `0.000386312502` (`grad_x`) against the f64 reference. The f32 and f64 CPU references differ. This comparison does not isolate the source of the GPU error.
@@ -45,3 +47,15 @@ The binary outputs give maximum absolute errors of `0.00237640738` (`grad_d`) an
 `ref32-cpu-reference.txt` lists the elements over the per-element threshold and their float32 ULP distances. The worst relative errors occur at `(6, 266, 9)` for `grad_d` and `(0, 2440)` for `grad_x`. These elements differ by 2,307,888 and 920 ULPs from the rounded f64 reference. Neither element is the max-absolute-error index printed by the harness.
 
 The `524-fixed-rows-ca7d5c52.txt` and `524-fixed-grad-rerun-5ebf207d.log` logs record the two boots. The rerun repeats the same reported summary across four samples per gradient kernel. The two `.npy` files preserve the rerun outputs used for the numeric comparison. `SHA256SUMS` covers the published files.
+
+## Nemotron BF16 BM32 projection
+
+On boot `5ebf207d`, the 16-inch M1 Max ran the PR #523 implementation and PR #530 probe from `97bcab6a325c0a582622c6bed84bc00bea68e7c0`. The driver was Mesa `26.3.0-devel (git-69bde15340)`. The test executable links MLX statically; `bm32-5ebf207d.txt` records its hash and the timing executable hash.
+
+| Kernel | Status | Max absolute difference | Dense wall time, opt-in |
+|---|---|---:|---:|
+| `nemotron_bm32_steel_linear_nt` | Pass on the Vulkan BM32 projection route | 0 vs BF16 integer RNE oracle | 2.548 ms |
+
+The 32 × 4096 × 14336 projection matched the oracle with one dense dispatch and four chunked dispatches. Both probe cases passed (8,227 assertions). The route-off control did not use BM32.
+
+The dense timing control was 1.785 ms. Each route used three processes and eight synchronized wall-time samples per process after discarding the first iteration. The table reports the pooled median; it is not a GPU timestamp. Three earlier probes also passed on boot `ca7d5c52`.
