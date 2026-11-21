@@ -33,7 +33,7 @@ Subcommands:
       Every non-glibc member in its transitive NEEDED chain must be in
       the same directory. GCC runtime licence texts (COPYING3,
       COPYING.RUNTIME, and COPYING.LIB where applicable) are copied from
-      the toolchain licence directory into mlx/lib/licences/.
+      MLX_OMARCHY_GCC_LICENSE_DIR or the installed toolchain licence directory.
   check WHEEL [WHEEL ...]
       Exit nonzero if any wheel still carries the bare soname or an
       inconsistent vendored entry. Pure ELF parsing, no patchelf needed.
@@ -167,15 +167,17 @@ def vendor_runtime_additions(openblas_src, blas_needed):
         data = dep_path.read_bytes()
         additions[f"mlx/lib/{dep}"] = data
         try:
-            child_needed = parse_elf_needed(data)[0]
+            parsed = parse_elf_needed(data)
         except ValueError as exc:
             raise SystemExit(f"cannot inspect runtime library {dep_path}: {exc}")
-        if child_needed is None:
+        if parsed is None:
             raise SystemExit(f"runtime library is not ELF: {dep_path}")
-        pending.extend(n for n in runtime_libraries(child_needed) if n not in seen)
+        pending.extend(n for n in runtime_libraries(parsed[0]) if n not in seen)
 
     license_dirs = (src_dir / "licences", Path("/usr/share/licenses/gcc-libs"),
                     Path("/usr/share/doc/gcc"))
+    if licence_dir := os.environ.get("MLX_OMARCHY_GCC_LICENSE_DIR"):
+        license_dirs = (Path(licence_dir),)
     required = set()
     if any(n.startswith(("libgfortran.", "libgomp.", "libgcc_s.")) for n in seen):
         required.update(("COPYING3", "COPYING.RUNTIME"))
@@ -342,12 +344,6 @@ def check(wheel_path):
             return []
         needed, runpath, _ = parsed
         members = {n for n in names if n.startswith("mlx/lib/libopenblas-")}
-        member_deps = {}
-        for member in sorted(members):
-            try:
-                member_deps[member] = parse_elf_needed(zf.read(member))[0]
-            except ValueError:
-                member_deps[member] = None
 
     failures = []
     if BARE_SONAME in needed:

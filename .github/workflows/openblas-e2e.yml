@@ -1,7 +1,16 @@
 name: OpenBLAS wheel isolation
 on:
   push:
+    paths: &wheel_paths
+      - '.github/workflows/openblas-e2e.yml'
+      - 'scripts/build-wheel.sh'
+      - 'scripts/openblas_isolation.py'
+      - 'scripts/test-openblas-e2e.sh'
+      - 'tests/test_openblas*.py'
   pull_request:
+    paths: *wheel_paths
+permissions:
+  contents: read
 jobs:
   openblas-e2e:
     runs-on: ubuntu-latest
