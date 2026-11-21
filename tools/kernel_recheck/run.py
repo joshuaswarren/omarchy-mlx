@@ -205,8 +205,11 @@ def _provenance():
     if spec and spec.origin:
         libdir = Path(spec.origin).parent / "lib"
         if libdir.is_dir():
-            found = sorted(libdir.glob("libmlx*.so"))
-            so = found[0] if found else None
+            for pattern in ("libmlx.so", "libmlx*.so", "libmlx*.dylib"):
+                found = sorted(libdir.glob(pattern))
+                if found:
+                    so = found[0]
+                    break
     if so:
         sha = hashlib.sha256(so.read_bytes()).hexdigest()
         lib = str(so)
