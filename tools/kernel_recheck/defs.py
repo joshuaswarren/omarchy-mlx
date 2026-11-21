@@ -35,6 +35,7 @@ UPSTREAM = {
     "moe_route_fused": "moe_route_fused.msl",
     "situ_fused": "situ_fused.msl",
     "situ_pair_fused": "situ_pair_fused.msl",
+    "nemotron_bm32_steel_linear_nt": "nemotron_bm32_steel_linear_nt.msl",
 }
 
 # Static prediction from reading custom_kernel.cpp at 09da0917a, recorded in
@@ -66,6 +67,7 @@ PREDICT = {
     "moe_route_fused": "crash",           # `constant int* mp`
     "situ_fused": "crash",
     "situ_pair_fused": "crash",
+    "nemotron_bm32_steel_linear_nt": "pass",   # named BM32 hand port
 }
 
 
@@ -933,12 +935,32 @@ IN_DTYPES = {
     "cbq_gather_mm_glu": [BF16, U32, U32, U8, U16, BF16, U8, U16, BF16, I8],
     "cbq_grad_d": [BF16, BF16, U32, U32, U8, U16, I8],
     "cbq_grad_x": [BF16, U32, U32, U8, U16, BF16, I8],
+    "nemotron_bm32_steel_linear_nt": [BF16, BF16],
     "kda_glue_pre": [BF16, BF16, BF16, BF16, BF16, BF16, BF16, BF16, FP32, FP32, FP32],
     "kda_glue_post": [BF16, BF16, BF16, FP32],
     "moe_route_fused": [BF16, BF16, I32, I32, I32],
     "situ_fused": [BF16, FP32],
     "situ_pair_fused": [BF16, BF16, FP32],
 }
+
+
+# nemotron_bm32_steel_linear_nt: seq-32 NT projection x @ weight.T through
+# Steel GEMMKernel<BM=32, BN=64, BK=16>; upstream launch is grid
+# (128*O/64, rows/32, 1), threadgroup (128,1,1), BF16 in/out.
+BM32 = {"rows": 32, "K": 2048, "O": 512}
+
+
+def build_bm32(seed=16):
+    r = rng(seed)
+    x = bf16(r.standard_normal((BM32["rows"], BM32["K"])) * 0.5)
+    weight = bf16(r.standard_normal((BM32["O"], BM32["K"])) * 0.5)
+    return {"x": x, "weight": weight}
+
+
+def ref_bm32(inp):
+    x = inp["x"].astype(np.float64)
+    w = inp["weight"].astype(np.float64)
+    return [bf16(np.float32(x @ w.T))]
 
 SPECS = [
     dict(name="bitlinear_matmul", builder=build_bitlinear, ref=ref_bitlinear,
@@ -1059,6 +1081,12 @@ SPECS = [
          tol=[("rel", 1e-4)], atomic_outputs=True, init_value=0,
          template=[("InT", BF16), ("DT", BF16), ("K", 4096), ("O", 512), ("R", 8)],
          grid=(512, 8, 1), threadgroup=(64, 1, 1)),
+    dict(name="nemotron_bm32_steel_linear_nt", builder=build_bm32, ref=ref_bm32,
+         inputs=("x", "weight"), outputs=("out",),
+         out_shapes=[(32, 512)], out_dtypes=[BF16], tol=[REL],
+         header="nemotron_bm32_steel_linear_nt.header.msl",
+         template=[("T", BF16), ("K", 2048), ("O", 512)],
+         grid=(128 * (512 // 64), 1, 1), threadgroup=(128, 1, 1)),
     dict(name="kda_glue_pre", builder=build_glue_pre, ref=ref_glue_pre,
          inputs=("hp", "z", "s0", "s1", "s2", "wq", "wk", "wv", "dtb", "alog", "cons"),
          outputs=("q", "k", "v", "g", "beta", "ns0", "ns1", "ns2"),

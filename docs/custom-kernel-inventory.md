@@ -87,14 +87,19 @@ unique kernels.
 | 12 | `mlx_audio_phonon_unpack_base5_v1` | mlx-audio `stt/models/phonon/packed.py` | Load-time base-5 → 2-bit-plane unpack (bit twiddling, no float math) | XS | Phonon-1 decoder cannot load; a numpy port runs once at load, no GPU kernel needed. |
 | 13 | CBQ family: `cbq_gather_mm{,_v2,_v3,_v4,_v3_situ,_v4_situ,_glu}` + `kda_glue_{pre,post}` + `moe_route_fused` + `situ_fused` + `cbq_grad_{d,x}` (15, incl. 2 training-only `atomic_outputs` kernels) | HF `avlp12/Kimi-K3-Alis-MLX-Dynamic-2.10bpw` (`k3_cbq.py`, `k3_fuse.py`) — the **only** HF repo of 822 shipping custom kernels | Custom 1.5625bpw codebook gather-MM for a third-party K3 quant; `dequant_ref` (pure-MLX vectorized) exists as parity reference | L (as one group) | Third-party quant (3.2k downloads); no runtime fallback. Self-contained: hand-port against `dequant_ref`, not a compiler. |
 
-### (c) Genuinely needs arbitrary MSL compilation: 1 kernel
+### (c) Genuinely needed arbitrary MSL compilation: 1 kernel — now hand-ported
 
 `nemotron_bm32_steel_linear_nt` (mlx-vlm `nemotron_labs_diffusion/language.py`)
 builds its `header=` by inlining `mlx/backend/metal/kernels/steel/gemm/gemm.h`
 — Apple's internal Metal headers, `using namespace mlx::steel`, simdgroup
 matrix GEMM throughout. It is gated (`_HAS_METAL`, native fallback), so nobody
-is broken; but a hand port means reimplementing steel GEMM, which is a project,
-not a kernel. This is the shape of the long tail a translator would serve.
+is broken. As of this change the kernel has a named hand port:
+`translate_bm32` (`overlay/mlx/backend/omarchy/custom_kernel_bm32.h`) matches
+the exact shipped body, ABI and launch (grid `128·O/64 × rows/32 × 1`,
+threadgroup 128, BF16 `x[rows,K]`, `weight[O,K]` → `out[rows,O]`) and emits
+the same 32×64 BF16 tile in GLSL — the tile already shipped for the
+`MLX_OMARCHY_MATMUL_BM32` primitive. Only the steel internals were a project;
+the wrapped launch contract is one kernel.
 
 ## MSL-to-SPIR-V survey (honest, with links)
 
