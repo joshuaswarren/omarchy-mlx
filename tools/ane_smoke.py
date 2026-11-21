@@ -51,8 +51,10 @@ NO_JSON = "the driver smoke printed no JSON"
 ACCEL_PREFIX = "/dev/accel/accel"
 
 
-def pick_node(candidates: tuple[str, ...] = NODE_CANDIDATES) -> str | None:
+def pick_node(candidates: tuple[str, ...] | None = None) -> str | None:
     """The first ANE device node that exists, else None."""
+    if candidates is None:
+        candidates = NODE_CANDIDATES
     for node in candidates:
         if Path(node).exists():
             return node
@@ -112,7 +114,9 @@ def run_smoke(timeout: int, env: dict) -> dict:
     payload = smoke_json(proc.stdout.splitlines())
     if payload.get("reason") == NO_JSON:
         err = proc.stderr.strip().splitlines()
-        payload["reason"] = err[-1] if err else NO_JSON
+        payload["reason"] = (
+            err[-1] if err else f"{SMOKE} exited {proc.returncode} with no output"
+        )
     return payload
 
 
@@ -126,6 +130,8 @@ def check(node: str | None = None, smoke_runner=None, timeout: int = RUN_TIMEOUT
         if soc:
             answer["chip"] = soc
         return answer
+    if node is not None and not Path(node).exists():
+        return {"ane": "absent", "node": node, "nodes": [node]}
     answer: dict[str, object] = {"ane": "unavailable", "node": node}
     device = device_index(node)
     if device is None:
@@ -144,22 +150,25 @@ def check(node: str | None = None, smoke_runner=None, timeout: int = RUN_TIMEOUT
     except Exception as err:  # noqa: BLE001 - one line, named, exit 1
         answer["error"] = f"{SMOKE} failed: {type(err).__name__}: {err}"
         return answer
+    if not isinstance(payload, dict):
+        answer["error"] = "the driver smoke printed no JSON object"
+        return answer
     soc = payload.get("chip")
     if soc:
         answer["chip"] = soc
     if not payload.get("available", False):
         answer["error"] = payload.get("reason", "the driver smoke reports no available ANE")
         return answer
-    hashes = payload.get("sha256") or []
-    answer["calls"] = len(hashes)
+    hashes = payload.get("sha256")
+    answer["calls"] = len(hashes) if isinstance(hashes, list) else 0
     errors = payload.get("errors")
-    if not isinstance(errors, int) or isinstance(errors, bool):
+    if not isinstance(errors, int) or isinstance(errors, bool) or errors < 0:
         answer["error"] = payload.get(
             "reason", "the driver smoke reported no errors count"
         )
         return answer
     answer["errors"] = errors
-    if not hashes:
+    if not isinstance(hashes, list) or not hashes:
         answer["error"] = payload.get(
             "reason", "the driver smoke reported no calls"
         )
@@ -180,7 +189,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--ane-node",
         default=None,
-        help="probe this node instead of the known candidates",
+        help=(
+            "probe this node instead of the known candidates; forwarded to "
+            "the driver as ANE_DEVICE when it is an /dev/accel/accelN path"
+        ),
     )
     parser.add_argument(
         "--timeout",
