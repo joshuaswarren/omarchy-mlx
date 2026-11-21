@@ -273,7 +273,11 @@ def apply_patch_series(venv, env):
     """
     script = patch_series_script()
     if not script.is_file():
-        raise RuntimeError('mlx_lm_patch_series_missing')
+        raise RuntimeError(
+            'mlx_lm_patch_series_missing: stage the sealed archive '
+            '(scripts/seal-qualification-kit.sh), or copy scripts/ and '
+            'patches/ beside the kit; or set MLX_OMARCHY_PATCH_SERIES to '
+            'scripts/apply-mlx-lm-patches.sh')
     rc, _ = command(['bash', str(script), str(venv)], env, 180)
     if rc:
         raise RuntimeError(f'mlx_lm_patch_series_exit_{rc}')
