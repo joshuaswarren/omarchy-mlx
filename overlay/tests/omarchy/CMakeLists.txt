@@ -878,3 +878,23 @@ set_tests_properties(omarchy_exl3_decode_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                      TIMEOUT 600)
+
+# Issue 537: a size-1 Load must publish its bytes before eval_cpu returns,
+# because the evaluator fences cross-stream consumers right after it. The
+# test itself is CPU only; library start-up still opens a Vulkan device,
+# so software Vulkan (lavapipe) is enough.
+add_executable(omarchy_load_scalar_publish_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_load_scalar_publish.cpp)
+target_link_libraries(omarchy_load_scalar_publish_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_load_scalar_publish_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_load_scalar_publish_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_load_scalar_publish_tests)
+add_test(NAME omarchy_load_scalar_publish_tests
+         COMMAND omarchy_load_scalar_publish_tests)
+set_tests_properties(omarchy_load_scalar_publish_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 120)
