@@ -310,6 +310,8 @@
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s8.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
