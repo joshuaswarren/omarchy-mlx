@@ -52,6 +52,9 @@ from pathlib import Path
 
 LIBMLX_MEMBER = "mlx/lib/libmlx.so"
 BARE_SONAME = "libopenblas.so.0"
+# Sonames glibc always provides; never ship these in the wheel.
+GIBC_SONAMES = {"libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2",
+                "librt.so.1"}
 MACHO_MAGICS = {
     b"\xfe\xed\xfa\xce",
     b"\xfe\xed\xfa\xcf",
@@ -132,6 +135,30 @@ def parse_elf_needed(buf):
         elif d_tag == DT_SONAME:
             soname = _cstr(buf, strtab_off + d_val)
     return needed, runpath, soname
+
+
+def runtime_libraries(needed):
+    """NEEDED entries not provided by glibc, so they must ship in the wheel
+    (libgfortran.so.5, libgomp.so.1, libgcc_s.so.1, ...)."""
+    return [n for n in needed
+            if n not in GIBC_SONAMES and not n.startswith("ld-linux")]
+
+
+def vendor_runtime_additions(openblas_src, blas_needed):
+    """Payloads to ship beside the hashed OpenBLAS: its runtime libraries,
+    copied unchanged from the directory the OpenBLAS came from."""
+    additions = {}
+    src_dir = Path(openblas_src).parent
+    for dep in runtime_libraries(blas_needed):
+        dep_path = src_dir / dep
+        if not dep_path.is_file():
+            raise SystemExit(
+                f"runtime library of the vendored OpenBLAS not found: {dep_path}; "
+                "the gcc runtime (libgfortran, libgomp) must live beside the "
+                "OpenBLAS passed to --openblas"
+            )
+        additions[f"mlx/lib/{dep}"] = dep_path.read_bytes()
+    return additions
 
 
 def _fixed_info(info):
@@ -248,10 +275,12 @@ def vendor(wheel_path, openblas_src, patchelf):
         if not runpath or "$ORIGIN" not in runpath.split(":"):
             raise SystemExit(f"patched RUNPATH wrong: {runpath!r}")
 
+        additions = {f"mlx/lib/{vendored_name}": patched_blas.read_bytes()}
+        additions.update(vendor_runtime_additions(src, blas_needed))
         _rewrite_wheel(
             wheel_path,
             replace={LIBMLX_MEMBER: patched_mlx.read_bytes()},
-            additions={f"mlx/lib/{vendored_name}": patched_blas.read_bytes()},
+            additions=additions,
         )
 
     failures = check(wheel_path)
@@ -277,6 +306,12 @@ def check(wheel_path):
             return []
         needed, runpath, _ = parsed
         members = {n for n in names if n.startswith("mlx/lib/libopenblas-")}
+        member_deps = {}
+        for member in sorted(members):
+            try:
+                member_deps[member] = parse_elf_needed(zf.read(member))[0]
+            except ValueError:
+                member_deps[member] = None
 
     failures = []
     if BARE_SONAME in needed:
@@ -296,6 +331,13 @@ def check(wheel_path):
         failures.append(
             f"{wheel_path.name}: carries {sorted(members)} but nothing NEEDS them"
         )
+    for member, member_needed in member_deps.items():
+        for dep in runtime_libraries(member_needed or ()):
+            if f"mlx/lib/{dep}" not in names:
+                failures.append(
+                    f"{wheel_path.name}: {member} NEEDS {dep} but "
+                    f"mlx/lib/{dep} is not in the wheel"
+                )
     return failures
 
 
