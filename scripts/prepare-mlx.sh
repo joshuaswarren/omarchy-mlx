@@ -245,6 +245,12 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # against the fully patched fast.h / fast.cpp.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-gdn-conv-delta.patch"
+# Scalar loads publish synchronously: the evaluator fences cross-stream
+# consumers immediately after Load::eval_cpu returns, and a deferred I/O
+# read leaves that fence lying about the bytes (issue 537: a scalar copy
+# host-read the constant before the I/O worker wrote it).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-load-scalar-publish.patch"
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
 trap - EXIT
