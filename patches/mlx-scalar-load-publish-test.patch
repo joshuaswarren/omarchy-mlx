@@ -1,6 +1,6 @@
 --- a/tests/export_import_tests.cpp
 +++ b/tests/export_import_tests.cpp
-@@ -3,5 +3,8 @@
+@@ -3,6 +3,9 @@
  #include <filesystem>
  #include <stdexcept>
  #include <vector>
@@ -9,6 +9,7 @@
 +#include <thread>
  
  #include "doctest/doctest.h"
+
 @@ -189,3 +192,63 @@
    }
    CHECK(import_function(file_path).metadata() == metadata);
