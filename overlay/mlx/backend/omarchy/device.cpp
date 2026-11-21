@@ -1616,6 +1616,7 @@ Device::Device(uint32_t physical_device_index) {
   VKX_LOAD_DEVICE_FN(ResetCommandBuffer, vkResetCommandBuffer)
   VKX_LOAD_DEVICE_FN(CmdCopyBuffer, vkCmdCopyBuffer)
   VKX_LOAD_DEVICE_FN(CmdFillBuffer, vkCmdFillBuffer)
+  VKX_LOAD_DEVICE_FN(CmdUpdateBuffer, vkCmdUpdateBuffer)
   VKX_LOAD_DEVICE_FN(CreateShaderModule, vkCreateShaderModule)
   VKX_LOAD_DEVICE_FN(DestroyShaderModule, vkDestroyShaderModule)
   VKX_LOAD_DEVICE_FN(CreateDescriptorSetLayout, vkCreateDescriptorSetLayout)

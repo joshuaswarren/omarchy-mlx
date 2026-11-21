@@ -371,15 +371,76 @@ void CommandEncoder::upload_device_local_if_needed(
     return;
   }
   if (vb->host_shadow != nullptr) {
-    uint64_t comp = omarchy::allocator().buffer_completion(vb);
-    if (comp == kPendingCompletion) {
-      synchronize("vram host upload");
-      comp = omarchy::allocator().buffer_completion(vb);
+    auto& dt = vk::device_table();
+    if (can_inline_update_device_local(vb->size) &&
+        dt.CmdUpdateBuffer != nullptr) {
+      uint64_t comp = omarchy::allocator().buffer_completion(vb);
+      if (comp == kPendingCompletion) {
+        // Same-stream pending work is already recorded in this encoder, so
+        // program order plus the barrier tracker/wave scheduler orders the
+        // inline vkCmdUpdateBuffer after it without flushing. Only flush if
+        // another encoder holds the uncommitted use of vb.
+        const bool on_this_encoder =
+            std::find(batch_buffers_.begin(), batch_buffers_.end(), vb) !=
+            batch_buffers_.end();
+        if (!on_this_encoder) {
+          synchronize_pending_encoders();
+          comp = omarchy::allocator().buffer_completion(vb);
+        }
+      }
+      if (needs_inline_update_semaphore_wait(
+              comp,
+              kPendingCompletion,
+              last_completion_,
+              device_.completions().drained_value())) {
+        add_semaphore_wait(device_.completions().semaphore(), comp, nullptr);
+      }
+      if (auto* noted = omarchy::allocator().note_buffer_handle(vb->buffer)) {
+        batch_buffers_.push_back(noted);
+      }
+      if (wave_sched()) {
+        PendingNode& node = pending_.emplace_back();
+        node.kind = PendingNode::Kind::Update;
+        node.prim = trace::current_prim();
+        node.dst = vb->buffer;
+        node.size = vb->size;
+        node.write_offset = 0;
+        const auto* src = static_cast<const uint8_t*>(vb->host_shadow);
+        node.update_data.assign(src, src + vb->size);
+        node.wr[node.nw++] = {vb->buffer, 0, vb->size};
+      } else {
+        ensure_recording();
+        if (tape_full_barriers()) {
+          record_dependency_barrier();
+        }
+        if (gated_barriers()) {
+          TrackedRange wr{vb->buffer, 0, vb->size};
+          if (!head_synced_ || tracker_.needs_barrier({}, {&wr, 1})) {
+            record_dependency_barrier();
+            trace::counters().barriers_emitted++;
+            prof::get().on_barrier(true);
+          } else {
+            trace::counters().barriers_skipped++;
+            prof::get().on_barrier(false);
+          }
+          tracker_.add_write(wr);
+        }
+        dt.CmdUpdateBuffer(cmd_, vb->buffer, 0, vb->size, vb->host_shadow);
+        if (!gated_barriers()) {
+          record_dependency_barrier();
+        }
+      }
+    } else {
+      uint64_t comp = omarchy::allocator().buffer_completion(vb);
+      if (comp == kPendingCompletion) {
+        synchronize("vram host upload");
+        comp = omarchy::allocator().buffer_completion(vb);
+      }
+      if (comp != 0 && comp != kPendingCompletion) {
+        device_.completions().wait(comp);
+      }
+      device_.upload_host_to_device(vb->buffer, vb->host_shadow, vb->size);
     }
-    if (comp != 0 && comp != kPendingCompletion) {
-      device_.completions().wait(comp);
-    }
-    device_.upload_host_to_device(vb->buffer, vb->host_shadow, vb->size);
   }
   vb->sync_state.commit_gpu_upload();
 }
@@ -1233,9 +1294,16 @@ void CommandEncoder::emit_pending() {
         region.dstOffset = node.dst_offset;
         region.size = node.size;
         dt.CmdCopyBuffer(cmd_, node.src, node.dst, 1, &region);
-      } else {
+      } else if (node.kind == PendingNode::Kind::Fill) {
         dt.CmdFillBuffer(
             cmd_, node.dst, node.write_offset, node.size, node.value);
+      } else {
+        dt.CmdUpdateBuffer(
+            cmd_,
+            node.dst,
+            node.write_offset,
+            node.update_data.size(),
+            node.update_data.data());
       }
       for (uint32_t r = 0; r < node.nr; ++r) {
         tracker_.add_read(node.rd[r]);
