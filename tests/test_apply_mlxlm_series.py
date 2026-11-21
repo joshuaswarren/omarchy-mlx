@@ -82,7 +82,7 @@ def test_second_run_is_idempotent(venv):
 
 @pytest.mark.parametrize("version", VERSIONS)
 def test_bitlinear_fallback_on_upstream_cpu(tmp_path, version):
-    """Unpatched BitLinear refuses; both installer series produce finite FP16 output."""
+    """The installer upgrades an existing non-Metal gate without losing FP16 range."""
     pytest.importorskip("mlx.core")
     from importlib.metadata import PackageNotFoundError, version as dist_version
 
@@ -131,13 +131,23 @@ print("BitLinear FP16: finite output in both scale modes")
     assert unpatched.returncode != 0 and "[metal_kernel] No Metal back-end." in unpatched.stderr, (
         unpatched.stdout + unpatched.stderr
     )
+    series = REPO / ("patches" if version == "0.31.3" else "patches/mlx-lm-0.32")
+    legacy = subprocess.run(
+        ["patch", "--batch", "--fuzz=0", "-p1", "-i",
+         str(series / "mlx-lm-bitlinear-cpu-fallback.patch")],
+        cwd=module.parents[2], capture_output=True, text=True, timeout=30,
+    )
+    assert legacy.returncode == 0, legacy.stdout + legacy.stderr
+    overflow = run()
+    assert overflow.returncode != 0 and "inf" in overflow.stderr, overflow.stdout + overflow.stderr
+
     applied = _apply(root)
     assert applied.returncode == 0, applied.stdout + applied.stderr
     patched = run()
     assert patched.returncode == 0, patched.stdout + patched.stderr
     repeated = _apply(root)
     assert repeated.returncode == 0, repeated.stdout + repeated.stderr
-    assert "already applied: mlx-lm-bitlinear-cpu-fallback.patch" in repeated.stdout
+    assert "already applied: mlx-lm-bitlinear-fp32.patch" in repeated.stdout
 
 
 def test_series_markers_per_line(venv):
