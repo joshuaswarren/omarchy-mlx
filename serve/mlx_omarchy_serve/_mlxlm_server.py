@@ -18,7 +18,9 @@ Build-stamp match: the venv carries this package as unpackaged copies
 shim against a new wheel. main() refuses to launch (exit 4) unless the
 .build-commit stamp written by install.sh matches the installed
 mlx-omarchy wheel version; MLX_OMARCHY_ALLOW_SERVE_DRIFT=1 downgrades the
-refusal to a loud warning.
+refusal to a loud warning. A missing stamp does not refuse when every
+copy hashes byte-identical to the installed wheel's dist-info RECORD:
+content-verified copies are the same build by definition.
 
 Fail-closed pinning: the shim supports exactly the pinned mlx-lm version.
 A different mlx_lm.__version__ refuses to launch unless
@@ -67,14 +69,16 @@ def _wheel_commit(version: str | None) -> str | None:
 
 
 def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
-                           installed=True):
+                           installed=True, record_verified=False):
     """Compare the serve copies' build stamp with the installed wheel.
 
     Returns (refusal, warning): refusal is a loud error string when the
     launch must not proceed, warning when the check cannot bite or drift
     is allowed but named. `installed` marks the copies as living in a
     site-packages venv; a checkout only ever warns, so dev runs and the
-    subprocess tests stay unaffected.
+    subprocess tests stay unaffected. `record_verified` marks the copies
+    as hash-identical to the wheel's dist-info RECORD, which replaces a
+    missing stamp instead of refusing byte-identical content.
     """
     build = _wheel_commit(wheel_version)
     demote = not installed
@@ -97,6 +101,10 @@ def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
                     + ("; continuing on " + STAMP_ENV + "=1"
                        if drift_allowed else "; refusing only applies to "
                        "installed copies"))
+        if record_verified:
+            return (None, "this venv's serve copies carry no build "
+                    "stamp; content verified byte-identical to the "
+                    "installed mlx-omarchy wheel's RECORD")
         return ("this venv's serve copies carry no build stamp; "
                 "reinstall with install.sh so the wheel and the serve "
                 f"copies come from one build, or set {STAMP_ENV}=1 to "
@@ -124,6 +132,54 @@ def read_build_stamp(directory=None):
         return None
 
 
+def verify_serve_copies_against_record(directory=None):
+    """Content-verify every serve copy against the installed wheel RECORD.
+
+    True when every .py copy hashes to the value the installed
+    mlx-omarchy dist-info RECORD lists for the same package path. The
+    RECORD hash arrives as a FileHash with a mode string and an encoded
+    value; only sha256 values are compared, anything else fails closed.
+    A copy missing from the RECORD, a hash mismatch, an undecodable
+    value, an unreadable copy, or no RECORD hashes at all is False:
+    unverifiable content must not pass a missing-stamp check.
+    """
+    import base64
+    import hashlib
+    import importlib.metadata as md
+
+    packages = Path(directory) if directory else Path(__file__).parent
+    copies = sorted(packages.rglob("*.py"))
+    if not copies:
+        return False
+    recorded = {}
+    try:
+        for entry in md.files("mlx-omarchy") or []:
+            if entry.hash and entry.hash.mode == "sha256":
+                recorded[str(entry)] = entry.hash.value
+    except Exception:
+        return False
+    if not recorded:
+        return False
+    prefix = packages.name
+    for copy in copies:
+        rel = copy.relative_to(packages)
+        try:
+            digest = hashlib.sha256(copy.read_bytes()).digest()
+        except OSError:
+            return False
+        encoded = recorded.get(f"{prefix}/{rel.as_posix()}")
+        if not encoded:
+            return False
+        try:
+            want = base64.urlsafe_b64decode(
+                encoded + "=" * (-len(encoded) % 4))
+        except Exception:
+            return False
+        if want != digest:
+            return False
+    return True
+
+
 def check_build_stamp(wheel_version=None):
     """Refuse to launch when serve copies and wheel disagree.
 
@@ -136,10 +192,13 @@ def check_build_stamp(wheel_version=None):
     except Exception:
         version = wheel_version if wheel_version is not None else None
     installed = "site-packages" in str(Path(__file__).resolve())
+    stamp = read_build_stamp()
+    record_verified = not stamp and verify_serve_copies_against_record()
     refusal, warning = resolve_stamp_mismatch(
-        read_build_stamp(), version,
+        stamp, version,
         drift_allowed=os.environ.get(STAMP_ENV) == "1",
-        installed=installed)
+        installed=installed,
+        record_verified=record_verified)
     if warning:
         print(f"warning: {warning}", file=sys.stderr, flush=True)
     if refusal:
