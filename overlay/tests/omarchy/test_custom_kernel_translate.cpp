@@ -876,6 +876,26 @@ TEST_CASE("postfix ++ is not an add in a dereference operand") {
       "  y[i] = (float)(*((const device int64_t*)grid++ + i));\n"
       "}\n";
   CHECK_THROWS_AS(translate(source_cast, 1), std::runtime_error);
+  // Parenthesized forms reach base_offset, which must not split on the
+  // `++` either: `*((x++ + i))` is not `x[(+ + i)]`, and `*((x++))` is
+  // not `x[(+)]`.
+  const auto kernel = [](const char* expr) {
+    static std::string body;
+    body = std::string(
+               "[[kernel]] void post_paren(\n"
+               "    const device float* x [[buffer(0)]],\n"
+               "    const device int8_t* grid [[buffer(1)]],\n"
+               "    device float* y [[buffer(2)]],\n"
+               "    uint i [[thread_position_in_grid]]) {\n"
+               "  y[i] = ") +
+        expr + ";\n}\n";
+    return body.c_str();
+  };
+  CHECK_THROWS_AS(translate(kernel("*((x++ + i))"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*((x++))"), 1), std::runtime_error);
+  CHECK_THROWS_AS(
+      translate(kernel("*((const device int64_t*)(grid++ + i))"), 1),
+      std::runtime_error);
 }
 
 TEST_CASE("a trailing dot keeps multiply binary") {
