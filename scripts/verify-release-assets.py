@@ -252,10 +252,15 @@ def wheel_metadata(wheel_path):
         distinfos = sorted({n.split("/")[0] for n in names
                             if n.split("/")[0].endswith(".dist-info")})
         meta = None
+        distinfo_version = None
         for di in distinfos:
-            if di.startswith("mlx_omarchy-"):
-                meta = zf.read(f"{di}/METADATA").decode(errors="replace")
-                distinfo_version = di[len("mlx_omarchy-"):-len(".dist-info")]
+            for prefix in ("mlx_omarchy-", "mlx-"):
+                if di.startswith(prefix):
+                    meta = zf.read(f"{di}/METADATA").decode(
+                        errors="replace")
+                    distinfo_version = di[len(prefix):-len(".dist-info")]
+                    break
+            if meta is not None:
                 break
     metadata_version = None
     if meta:

@@ -120,6 +120,44 @@ class StampTests(unittest.TestCase):
             self.assertTrue((partial / "METADATA").exists())
 
 
+class PipedInstallTests(unittest.TestCase):
+    """curl|bash path: ROOT is empty, so install.sh must stamp with its
+    inline fallback — no fetch of scripts/mlx_dist_alias.py from the
+    release tag (which 404s on every pre-alias tag, w8E rc=22 repro)."""
+
+    def test_no_tag_fetch_for_alias_script(self):
+        text = (REPO_ROOT / "install.sh").read_text()
+        self.assertNotIn("scripts/mlx_dist_alias.py\" -o", text,
+                         "piped path must not curl the helper script")
+        self.assertNotIn("$VERSION/scripts/mlx_dist_alias.py", text)
+
+    def test_inline_stamper_runs_in_fresh_venv(self):
+        import re
+        text = (REPO_ROOT / "install.sh").read_text()
+        m = re.search(r"<<'PYEOF'\n(.*?)\nPYEOF", text, re.S)
+        self.assertIsNotNone(m, "stamp_mlx_alias inline block missing")
+        with tempfile.TemporaryDirectory() as td:
+            env = Path(td) / "venv"
+            venv.create(env, with_pip=True)
+            vpy = env / "bin" / "python"
+            site = next((env / "lib").glob("python3*/site-packages"))
+            dist = site / "mlx_omarchy-0.32.4.dist-info"
+            dist.mkdir()
+            (dist / "METADATA").write_text(
+                "Metadata-Version: 2.1\nName: mlx-omarchy\nVersion: 0.32.4\n")
+            script = Path(td) / "stamp.py"
+            script.write_text(m.group(1))
+            subprocess.run([str(vpy), str(script)], check=True,
+                           capture_output=True, text=True)
+            meta = (site / "mlx-0.32.4.dist-info" / "METADATA").read_text()
+            self.assertIn("Name: mlx\n", meta)
+            out = subprocess.run(
+                [str(vpy), "-c",
+                 "import importlib.metadata as m;print(m.version('mlx'))"],
+                check=True, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(out, "0.32.4")
+
+
 class RealInstallTests(unittest.TestCase):
     """pip and uv both install the wheel pair on a fresh venv (PEP 427)."""
 

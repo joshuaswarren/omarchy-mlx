@@ -82,17 +82,49 @@ fetch_patch_assets() {
 }
 
 # scripts/mlx_dist_alias.py lives in the checkout, but the default install
-# runs under `curl | bash` where $ROOT is empty. Fetch it from the release
-# tag the same way fetch_patch_assets resolves its helpers.
-mlx_alias_script() {
+# runs under `curl | bash` where $ROOT is empty — and fetching it from
+# $VERSION fails on every tag older than its first ship (w8E: rc=22 on
+# v0.7.49). With no checkout the same stamper runs inline, so piped
+# installs have zero tag-fetch dependency.
+stamp_mlx_alias() {
+  local py="$1"
   if [[ -n $ROOT && -f $ROOT/scripts/mlx_dist_alias.py ]]; then
-    printf '%s\n' "$ROOT/scripts/mlx_dist_alias.py"
+    "$py" "$ROOT/scripts/mlx_dist_alias.py" --self
     return
   fi
-  mkdir -p "$PREFIX/scripts"
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/scripts/mlx_dist_alias.py" \
-    -o "$PREFIX/scripts/mlx_dist_alias.py"
-  printf '%s\n' "$PREFIX/scripts/mlx_dist_alias.py"
+  "$py" - <<'PYEOF'
+import os, re, shutil, sysconfig
+site = sysconfig.get_path("purelib")
+infos = sorted(n for n in os.listdir(site)
+               if re.fullmatch(r"mlx_omarchy-.+\.dist-info", n))
+if not infos:
+    raise SystemExit("no mlx_omarchy-*.dist-info in " + site)
+info = infos[-1]
+version = re.fullmatch(r"mlx_omarchy-(.+)\.dist-info", info).group(1)
+alias_name = f"mlx-{version}.dist-info"
+for entry in os.listdir(site):
+    if not re.fullmatch(r"mlx-.+\.dist-info", entry):
+        continue
+    try:
+        if open(os.path.join(site, entry, "INSTALLER"),
+                "rb").read().strip() != b"omarchy-mlx":
+            continue
+    except OSError:
+        continue
+    if entry != alias_name:
+        shutil.rmtree(os.path.join(site, entry))
+alias = os.path.join(site, alias_name)
+if not os.path.exists(os.path.join(alias, "METADATA")):
+    meta = open(os.path.join(site, info, "METADATA"), "rb").read().decode()
+    meta = re.sub(r"(?m)^Name: .+$", "Name: mlx", meta, count=1)
+    os.makedirs(alias, exist_ok=True)
+    open(os.path.join(alias, "METADATA"), "w").write(meta)
+    open(os.path.join(alias, "INSTALLER"), "wb").write(b"omarchy-mlx\n")
+    open(os.path.join(alias, "RECORD"), "w").write(
+        f"{alias_name}/METADATA,,\n{alias_name}/INSTALLER,,\n"
+        f"{alias_name}/RECORD,,\n")
+print("stamped " + alias)
+PYEOF
 }
 
 # --patch-venv: apply the vendored mlx-lm serve patches to an EXISTING venv.
@@ -112,7 +144,7 @@ apply_to_existing_venv() {
   # Stamp the `mlx` metadata alias into pre-alias installs
   # (omarchy-mlx#566); a foreign venv without mlx-omarchy just notes.
   if [[ -x $target/bin/python ]]; then
-    "$target/bin/python" "$(mlx_alias_script)" --self \
+    stamp_mlx_alias "$target/bin/python" \
       || echo "note: no mlx-omarchy dist-info in $target; skipped the mlx metadata alias"
   fi
 }
@@ -223,7 +255,7 @@ install_system() {
   # Stamp the `mlx` metadata alias for wheels that predate it
   # (omarchy-mlx#566); a missing mlx-omarchy dist-info means a broken
   # wheel and should fail the staging here.
-  "$venv/bin/python" "$(mlx_alias_script)" --self
+  stamp_mlx_alias "$venv/bin/python"
 
   say "Installing launchers into $bindir"
   mkdir -p "$bindir" "$system_root"
@@ -509,9 +541,8 @@ python3 -m venv --clear "$VENV"
 "$VENV/bin/pip" install --quiet "$tmp/$wheel"
 # Wheels built before the alias existed carry only the mlx-omarchy
 # dist-info; stamp the plain-name metadata alias so version lookups by
-# the module name resolve (omarchy-mlx#566). --self resolves the venv's
-# own site-packages via sysconfig.
-"$VENV/bin/python" "$(mlx_alias_script)" --self
+# the module name resolve (omarchy-mlx#566).
+stamp_mlx_alias "$VENV/bin/python"
 # mlx-lm declares a dependency on upstream mlx, which provides the same module
 # and would conflict, so it is installed without dependencies and its real
 # runtime dependencies are pinned explicitly.

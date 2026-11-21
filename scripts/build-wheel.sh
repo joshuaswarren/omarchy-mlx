@@ -3,7 +3,8 @@
 # This is the U5 packaging gate: scripts/build-wheel.sh
 #
 # Prepares the pinned upstream tree with the Omarchy-only backend, builds the
-# python bindings, and writes exactly one wheel into dist/ at the repo root.
+# python bindings, and writes the main wheel plus the companion
+# mlx-<ver> metadata-alias wheel into dist/ at the repo root.
 #
 # A release build from an unpacked tarball tree (no git metadata) must export
 # DEV_RELEASE=1 and set MLX_OMARCHY_SOURCE_COMMIT=<short sha>; the stamp guard
