@@ -84,7 +84,6 @@ SERIES_PATCHES=(
   mlx-lm-last-logits-qwen3.patch
   mlx-lm-prefill-step-memory.patch
   mlx-lm-kv-presize.patch
-  mlx-lm-bitlinear-cpu-fallback.patch
   mlx-lm-speculative-verify.patch
   mlx-lm-kv-host-offset.patch
 )
@@ -103,7 +102,7 @@ series_already_applied() {
   return 1
 }
 apply() {
-  local name="$1"
+  local name="$1" successor="${2:-}"
   if [[ ! -f "$ROOT/$SERIES/$name" ]]; then
     echo "error: patch file missing: $ROOT/$SERIES/$name" >&2
     exit 5
@@ -121,7 +120,10 @@ apply() {
   elif patch --dry-run --directory="$SITE" --strip=1 --reverse \
       < "$ROOT/$SERIES/$name" >/dev/null 2>&1; then
     echo "already applied: $name"
-  elif series_already_applied "$name"; then
+  elif [[ -n "$successor" ]] && patch --dry-run --directory="$SITE" --strip=1 \
+      --reverse --force --fuzz=0 < "$ROOT/$SERIES/$successor" >/dev/null 2>&1; then
+    echo "already applied: $name (updated by $successor)"
+  elif [[ $# == 1 ]] && series_already_applied "$name"; then
     echo "already applied: $name (hunks rewritten by later patches in this series)"
   else
     echo "patch does not apply (mlx-lm version mismatch?): $name" >&2
@@ -278,13 +280,10 @@ apply mlx-lm-prefill-step-memory.patch
 # completed with the cache allocated once. Quantized KV and other cache classes are unchanged.
 # Kill switch MLX_OMARCHY_KV_PRESIZE=0.
 apply mlx-lm-kv-presize.patch
-# BitNet ternary matmul: upstream calls the Metal kernel unconditionally
-# (ml-explore/mlx-lm #219), so any non-Metal build hard-fails BitNet. Gate it:
-# Metal builds keep the kernel, everything else takes a pure-MLX unpack +
-# matmul fallback. Same fix shape as the mlx-audio mossformer depthwise
-# gate below. Upstream-submittable; tests/test_bitlinear_cpu_fallback.py
-# pins the numerics against a NumPy reference.
-apply mlx-lm-bitlinear-cpu-fallback.patch
+# Both pins carry the non-Metal BitLinear gate from ml-explore/mlx-lm #2088.
+# Apply the precision correction separately so existing venvs get it too.
+apply mlx-lm-bitlinear-cpu-fallback.patch mlx-lm-bitlinear-fp32.patch
+apply mlx-lm-bitlinear-fp32.patch ""
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the

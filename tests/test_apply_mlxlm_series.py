@@ -80,6 +80,76 @@ def test_second_run_is_idempotent(venv):
     assert "already patched:" in r.stdout
 
 
+@pytest.mark.parametrize("version", VERSIONS)
+def test_bitlinear_fallback_on_upstream_cpu(tmp_path, version):
+    """The installer upgrades an existing non-Metal gate without losing FP16 range."""
+    pytest.importorskip("mlx.core")
+    from importlib.metadata import PackageNotFoundError, version as dist_version
+
+    try:
+        dist_version("mlx-cpu")
+    except PackageNotFoundError:
+        pytest.skip("requires the upstream MLX CPU wheel")
+    root = _pristine_venv(tmp_path, version)
+    module = root / "lib/python3.11/site-packages/mlx_lm/models/bitlinear_layers.py"
+    code = """
+import importlib.util
+import sys
+import mlx.core as mx
+from mlx_provenance import native_provenance, provenance_line
+
+prov = native_provenance(upstream_cpu=True)
+print(provenance_line(prov), flush=True)
+assert prov["verified"] == "match", prov
+mx.set_default_device(mx.cpu)
+assert not mx.metal.is_available()
+spec = importlib.util.spec_from_file_location("bitlinear_layers", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+for invert, scale in ((False, 0.5), (True, 2.0)):
+    layer = module.BitLinear(1024, 8, bias=False, invert_weight_scales=invert)
+    layer.weight = mx.stack([mx.full((1024,), 0b10_01_00_10, dtype=mx.uint8),
+                             mx.full((1024,), 0b00_10_01_00, dtype=mx.uint8)])
+    layer.weight_scale = mx.array([scale], dtype=mx.float16)
+    result = layer(mx.full((1, 2, 1024), 100, dtype=mx.float16))
+    assert result.dtype == mx.float16
+    want = [51200, -51200, -51200, 0, 0, 51200, 51200, -51200]
+    assert result.tolist() == [[want, want]], result
+print("BitLinear FP16: finite output in both scale modes")
+"""
+
+    def run():
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(module)],
+            env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+            capture_output=True, text=True, timeout=30,
+        )
+        print(result.stdout, end="")
+        return result
+
+    unpatched = run()
+    assert unpatched.returncode != 0 and "[metal_kernel] No Metal back-end." in unpatched.stderr, (
+        unpatched.stdout + unpatched.stderr
+    )
+    series = REPO / ("patches" if version == "0.31.3" else "patches/mlx-lm-0.32")
+    legacy = subprocess.run(
+        ["patch", "--batch", "--fuzz=0", "-p1", "-i",
+         str(series / "mlx-lm-bitlinear-cpu-fallback.patch")],
+        cwd=module.parents[2], capture_output=True, text=True, timeout=30,
+    )
+    assert legacy.returncode == 0, legacy.stdout + legacy.stderr
+    overflow = run()
+    assert overflow.returncode != 0 and "inf" in overflow.stderr, overflow.stdout + overflow.stderr
+
+    applied = _apply(root)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    patched = run()
+    assert patched.returncode == 0, patched.stdout + patched.stderr
+    repeated = _apply(root)
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    assert "already applied: mlx-lm-bitlinear-fp32.patch" in repeated.stdout
+
+
 def test_series_markers_per_line(venv):
     venv_root, version = venv
     models = venv_root / "lib" / "python3.11" / "site-packages" / "mlx_lm" / "models"
