@@ -1,0 +1,2 @@
+ae55fb1ba3d68b36b43ad85dfac88e7bbd2715dd2e66ba30ca14cfdce0fc7fe0  receipts/2026-11-21-bm32-pr562-gpu/recheck-out.txt
+554d6878b0da06a6e8765a84bbd26b0d9d7f75f533192850c7101ce439a0a623  receipts/2026-11-21-bm32-pr562-gpu/bm32-recheck-job.sh
