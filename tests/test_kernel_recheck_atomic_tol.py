@@ -72,6 +72,53 @@ def test_non_atomic_outputs_keep_per_element_gate():
     assert "rel-L2" not in detail
 
 
+def test_atomic_outputs_nan_fails():
+    """Regression (w8E review): rel_l2 was NaN on NaN input and
+    `nan > bar` is False, so a NaN output passed at "rel-L2 nan".
+    `not (rel_l2 <= bar)` fails it, and the isclose gate now catches
+    the NaN element too."""
+    ref = np.linspace(-3.0, 3.0, 4096)
+    out = ref.copy()
+    out[7] = np.nan
+    ok, _, detail = run.check("synthetic", _spec(atomic=True), {}, [ref], [out])
+    assert not ok
+    assert "nan" in detail.lower()
+
+
+def test_non_atomic_nan_fails():
+    """Regression: an isolated NaN bypassed `err > limit` (NaN compares
+    False everywhere); the isclose gate flags it for every kernel."""
+    ref = np.linspace(-3.0, 3.0, 4096)
+    out = ref.copy()
+    out[7] = np.nan
+    ok, _, detail = run.check("synthetic", _spec(atomic=False), {}, [ref], [out])
+    assert not ok
+    assert "bad" in detail
+
+
+def test_equal_inf_elements_not_bad():
+    """Guard against over-tightening: equal ±inf elements are legitimate
+    (mask kernels); isclose treats inf == inf as close."""
+    ref = np.linspace(-3.0, 3.0, 4096)
+    ref[7] = np.inf
+    out = ref.copy()
+    ok, _, detail = run.check("synthetic", _spec(atomic=False), {}, [ref], [out])
+    assert ok, detail
+
+
+def test_committed_output_with_nan_fails():
+    """w8E's reproduction: the committed cbq_grad_d npy with one element
+    set to NaN must not pass at 'rel-L2 nan'."""
+    spec = defs.get_spec("cbq_grad_d")
+    inputs = run.build_inputs(spec)
+    ref = spec["ref"](inputs)[0]
+    out = np.load(RECEIPTS / "cbq_grad_d.out0.npy").astype(np.float64)
+    out[0, 0, 0] = np.nan
+    ok, _, detail = run.check("cbq_grad_d", spec, inputs, [ref], [out])
+    assert not ok
+    assert "nan" in detail.lower()
+
+
 @pytest.mark.parametrize("name,bad_count", [("cbq_grad_d", 33), ("cbq_grad_x", 1)])
 def test_committed_gpu_outputs_pass_at_rel_l2(name, bad_count):
     """Replay the M1 Max receipt npys (bit-identical to the M1 dumps) against

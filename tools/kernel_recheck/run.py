@@ -78,9 +78,10 @@ def check(name, spec, inputs, refs, outs_np):
         else:
             rtol = tol[1]
             atol = tol[2] if len(tol) > 2 else 0.0
-            err = np.abs(out.astype(np.float64) - ref)
-            limit = atol + rtol * np.abs(ref)
-            bad = err > limit
+            with np.errstate(invalid="ignore"):
+                err = np.abs(out.astype(np.float64) - ref)
+            bad = ~np.isclose(out.astype(np.float64), ref.astype(np.float64),
+                              rtol=rtol, atol=atol, equal_nan=True)
             diff = float(np.max(err / np.maximum(np.abs(ref), 1e-300))) if out.size else 0.0
         worst = max(worst, diff if diff == diff else 1e308)
         if bad.any():
@@ -94,7 +95,7 @@ def check(name, spec, inputs, refs, outs_np):
                 rel_l2 = (float(np.linalg.norm(out.astype(np.float64) - ref64) / denom)
                           if denom else float("inf"))
                 bar = f"rel-L2 {rel_l2:.4g} vs upstream fp32 bar {ATOMIC_REL_L2_BAR:g}"
-                if rel_l2 > ATOMIC_REL_L2_BAR:
+                if not rel_l2 <= ATOMIC_REL_L2_BAR:
                     return False, worst, f"out[{i}] {bar}; per-element info: {detail}"
                 infos.append(f"out[{i}] {bar}; per-element info: {detail}")
                 continue
