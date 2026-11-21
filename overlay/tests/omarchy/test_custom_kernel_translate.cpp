@@ -1855,3 +1855,37 @@ TEST_CASE("compound assignments on bf16 locals round like Metal") {
   CHECK(glsl.find("acc +=") == std::string::npos);
   CHECK(glsl.find("acc *=") == std::string::npos);
 }
+
+TEST_CASE("bool buffer input stores as uint8 and reads compare to zero") {
+  // Inkling 2 short_convolution: mask is (B,L) bool; upstream refused at
+  // buffer_declaration with "unsupported buffer type `bool`". MLX bool is
+  // one byte per element, so it lowers to uint8_t storage and each read
+  // becomes an explicit != 0 comparison.
+  const char* source =
+      "[[kernel]] void bool_mask(\n"
+      "    const device bool* mask [[buffer(0)]],\n"
+      "    const device float* x [[buffer(1)]],\n"
+      "    device float* out [[buffer(2)]],\n"
+      "    uint thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint i = thread_position_in_grid;\n"
+      "  out[i] = !mask[i] ? 0.0f : x[i];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("uint8_t data[]") != std::string::npos);
+  CHECK(glsl.find("(_b0.data[i] != 0)") != std::string::npos);
+  CHECK(glsl.find("!(_b0.data[i] != 0)") != std::string::npos);
+}
+
+TEST_CASE("bool buffer output stores through a uint8 cast") {
+  const char* source =
+      "[[kernel]] void bool_out(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device bool* mask [[buffer(1)]],\n"
+      "    uint thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint i = thread_position_in_grid;\n"
+      "  mask[i] = x[i] > 0.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("uint8_t data[]") != std::string::npos);
+  CHECK(glsl.find("= uint8_t(") != std::string::npos);
+}

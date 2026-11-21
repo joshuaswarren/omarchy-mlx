@@ -229,6 +229,9 @@ std::string glsl_type(const std::string& msl_type) {
       {"uint16_t", "uint16_t"},
       {"uint32_t", "uint"},
       {"uint64_t", "uint64_t"},
+      // MLX bool is one byte per element; GLSL has no bool buffer type, so
+      // it stores as uint8_t and every read compares against zero.
+      {"bool", "uint8_t"},
   };
   const auto found = types.find(msl_type);
   if (found == types.end()) {
@@ -3122,6 +3125,30 @@ Translation translate_msl(
         rewritten.append(body, last, std::string::npos);
         body = std::move(rewritten);
       }
+      // bool buffer reads need an explicit comparison: the element is
+      // uint8_t storage, and GLSL has no integer-to-bool promotion
+      // (Inkling 2 short_convolution's mask, 2026-11-21 recheck refusal
+      // "unsupported buffer type `bool`"). Output-side reads stay the
+      // macro path; a `mask[i]` store target is a uint8_t lvalue.
+      if (parameter.type == "bool" && !output) {
+        const auto escaped_bool = regex_escape(parameter.name);
+        const std::string storage =
+            "_b" + std::to_string(parameter.binding) + ".data[";
+        const std::regex read_pattern(
+            "\\b" + escaped_bool + R"(\s*\[([^\]]+)\])");
+        std::string rewritten;
+        size_t last = 0;
+        for (std::sregex_iterator it(body.begin(), body.end(), read_pattern), stop;
+             it != stop;
+             ++it) {
+          const size_t begin = static_cast<size_t>(it->position(0));
+          rewritten.append(body, last, begin - last);
+          rewritten += "(" + storage + (*it)[1].str() + "] != 0)";
+          last = begin + static_cast<size_t>(it->length(0));
+        }
+        rewritten.append(body, last, std::string::npos);
+        body = std::move(rewritten);
+      }
       // A small array bound in the constant space that the body never
       // indexes is used as a value: mlx-audio's phonon unpack divides
       // `in_features / 16` directly (2026-10-08 KernelRecheck). Mark it
@@ -3152,6 +3179,8 @@ Translation translate_msl(
         // half storage widened at the macro: int/f16 arithmetic compiles as
         // int/float (Metal promotes half math to fp32)
         macros += "float(_b" + std::to_string(parameter.binding) + ".data[0])";
+      } else if (parameter.type == "bool" && parameter.scalar) {
+        macros += "bool(_b" + std::to_string(parameter.binding) + ".data[0])";
       } else {
         macros += "_b" + std::to_string(parameter.binding) + ".data";
         if (parameter.scalar) {
@@ -3161,7 +3190,7 @@ Translation translate_msl(
       macros += "\n";
     }
     needs_int8 = needs_int8 || parameter.type == "int8_t" ||
-        parameter.type == "uint8_t";
+        parameter.type == "uint8_t" || parameter.type == "bool";
     needs_int16 = needs_int16 || parameter.type == "int16_t" ||
         parameter.type == "uint16_t" || parameter.type == "bfloat16_t";
     needs_int64 = needs_int64 || parameter.type == "int64_t" ||
