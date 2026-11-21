@@ -273,18 +273,23 @@ class StepTimelineRing {
     mask_ = capacity_ - 1;
     slots_ = std::make_unique<Slot[]>(static_cast<size_t>(capacity_));
     t0_origin_ns_ = monotonic_ns();
-    active_.store(true, std::memory_order_release);
+    gate_.store(0, std::memory_order_release);
   }
 
   StepTimelineRing(const StepTimelineRing&) = delete;
   StepTimelineRing& operator=(const StepTimelineRing&) = delete;
 
   bool enabled() const noexcept {
-    return active_.load(std::memory_order_relaxed);
+    return (gate_.load(std::memory_order_relaxed) & kGateStoppedBit) == 0;
   }
 
-  void stop() noexcept {
-    active_.store(false, std::memory_order_release);
+  // Stop admitting new records and wait for every in-flight producer inside
+  // record() to finish before any dump reads slots_ or stats_.
+  void stop() const noexcept {
+    gate_.fetch_or(kGateStoppedBit, std::memory_order_acq_rel);
+    while ((gate_.load(std::memory_order_acquire) & ~kGateStoppedBit) != 0) {
+      std::this_thread::yield();
+    }
   }
 
   uint64_t capacity() const noexcept {
@@ -300,6 +305,10 @@ class StepTimelineRing {
     return w > capacity_ ? w - capacity_ : 0;
   }
 
+  uint64_t busy_dropped() const noexcept {
+    return busy_dropped_.load(std::memory_order_acquire);
+  }
+
   void record(
       Kind kind,
       SubKind subkind,
@@ -307,20 +316,47 @@ class StepTimelineRing {
       uint64_t dur_ns,
       uint16_t stream_id,
       uint64_t detail) noexcept {
-    if (!active_.load(std::memory_order_relaxed)) {
-      return;
+    uint64_t g = gate_.load(std::memory_order_relaxed);
+    for (;;) {
+      if ((g & kGateStoppedBit) != 0) {
+        return;
+      }
+      if (gate_.compare_exchange_weak(
+              g, g + 1, std::memory_order_acquire, std::memory_order_relaxed)) {
+        break;
+      }
     }
+    struct GateGuard {
+      std::atomic<uint64_t>& gate;
+      ~GateGuard() noexcept {
+        gate.fetch_sub(1, std::memory_order_release);
+      }
+    } guard{gate_};
+
     const uint64_t idx = write_index_.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t target_seq = idx + 1;
     Slot& slot = slots_[static_cast<size_t>(idx & mask_)];
-    slot.seq.store(0, std::memory_order_release);
-    slot.ev.t0_ns = t0_ns;
-    slot.ev.dur_ns = dur_ns;
-    slot.ev.detail = detail;
-    slot.ev.tid = current_tid();
-    slot.ev.stream_id = stream_id;
-    slot.ev.kind = static_cast<uint8_t>(kind);
-    slot.ev.subkind = static_cast<uint8_t>(subkind);
-    slot.seq.store(idx + 1, std::memory_order_release);
+    uint64_t cur = slot.state.load(std::memory_order_acquire);
+    if ((cur & kSlotBusyBit) != 0 || cur > target_seq ||
+        !slot.state.compare_exchange_strong(
+            cur,
+            cur | kSlotBusyBit,
+            std::memory_order_acq_rel,
+            std::memory_order_relaxed)) {
+      // Another writer owns this wrapped slot or a newer sequence already
+      // published here. Drop the ring entry without touching slot.ev; whole-run
+      // summary totals below still account for the event.
+      busy_dropped_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      slot.ev.t0_ns = t0_ns;
+      slot.ev.dur_ns = dur_ns;
+      slot.ev.detail = detail;
+      slot.ev.tid = current_tid();
+      slot.ev.stream_id = stream_id;
+      slot.ev.kind = static_cast<uint8_t>(kind);
+      slot.ev.subkind = static_cast<uint8_t>(subkind);
+      slot.state.store(target_seq, std::memory_order_release);
+    }
 
     const size_t sub_idx = static_cast<size_t>(subkind);
     if (sub_idx < stats_.size()) {
@@ -339,14 +375,18 @@ class StepTimelineRing {
     if (out == nullptr || capacity_ == 0 || !slots_) {
       return false;
     }
+    // Quiesce all in-flight producers so slots_, write_index_, busy_dropped_,
+    // and stats_ are immutable for the entire snapshot.
+    stop();
     const uint64_t total = write_index_.load(std::memory_order_acquire);
     const uint64_t start = total > capacity_ ? total - capacity_ : 0;
     const uint64_t drop = total > capacity_ ? total - capacity_ : 0;
+    const uint64_t busy_drop = busy_dropped_.load(std::memory_order_acquire);
     std::fprintf(
         out,
         "{\"k\":\"meta\",\"clock\":\"%s\",\"t0_ns\":%" PRIu64
         ",\"capacity\":%" PRIu64 ",\"written\":%" PRIu64
-        ",\"dropped\":%" PRIu64 "}\n",
+        ",\"dropped\":%" PRIu64 ",\"busy_dropped\":%" PRIu64 "}\n",
 #if defined(__linux__)
         "CLOCK_MONOTONIC",
 #else
@@ -355,16 +395,14 @@ class StepTimelineRing {
         t0_origin_ns_,
         capacity_,
         total,
-        drop);
+        drop,
+        busy_drop);
     for (uint64_t i = start; i < total; ++i) {
       const Slot& slot = slots_[static_cast<size_t>(i & mask_)];
-      if (slot.seq.load(std::memory_order_acquire) != i + 1) {
+      if (slot.state.load(std::memory_order_acquire) != i + 1) {
         continue;
       }
-      const Event ev = slot.ev;
-      if (slot.seq.load(std::memory_order_acquire) != i + 1) {
-        continue;
-      }
+      const Event& ev = slot.ev;
       std::fprintf(
           out,
           "{\"k\":\"e\",\"seq\":%" PRIu64 ",\"kind\":\"%s\",\"sub\":\"%s\""
@@ -422,8 +460,11 @@ class StepTimelineRing {
   }
 
  private:
+  static constexpr uint64_t kGateStoppedBit = uint64_t{1} << 63;
+  static constexpr uint64_t kSlotBusyBit = uint64_t{1} << 63;
+
   struct Slot {
-    std::atomic<uint64_t> seq{0};
+    std::atomic<uint64_t> state{0};
     Event ev{};
   };
 
@@ -438,7 +479,8 @@ class StepTimelineRing {
   uint64_t t0_origin_ns_{0};
   std::unique_ptr<Slot[]> slots_;
   std::atomic<uint64_t> write_index_{0};
-  std::atomic<bool> active_{false};
+  std::atomic<uint64_t> busy_dropped_{0};
+  mutable std::atomic<uint64_t> gate_{kGateStoppedBit};
   std::array<SubStats, static_cast<size_t>(SubKind::Count)> stats_{};
 };
 

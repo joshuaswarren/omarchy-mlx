@@ -237,6 +237,192 @@ int test_concurrent_recording() {
   return 0;
 }
 
+bool extract_u64_field(
+    const std::string& line,
+    const char* key,
+    uint64_t& out) {
+  const auto pos = line.find(key);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  char* end = nullptr;
+  const char* start = line.c_str() + pos + std::strlen(key);
+  out = std::strtoull(start, &end, 10);
+  return end != start;
+}
+
+int test_concurrent_wrap_ownership() {
+  constexpr int kThreads = 4;
+  constexpr uint64_t kPerThread = 4000;
+  constexpr uint64_t kCap = 8;
+  StepTimelineRing ring(kCap);
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      const uint16_t st = static_cast<uint16_t>(t + 1);
+      for (uint64_t i = 0; i < kPerThread; ++i) {
+        const uint64_t t0 = 1000000ull + i * 10ull;
+        const uint64_t detail = (static_cast<uint64_t>(st) << 32) | i;
+        ring.record(Kind::CmdRecord, SubKind::Dispatch, t0, i, st, detail);
+      }
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+  const uint64_t expected_total = static_cast<uint64_t>(kThreads) * kPerThread;
+  if (ring.written() != expected_total) {
+    return fail(25, "wrapping concurrency test lost admitted count");
+  }
+
+  char tmpl[] = "/tmp/omarchy-tl-wrapmt-XXXXXX";
+  int fd = ::mkstemp(tmpl);
+  if (fd < 0) {
+    return fail(26, "mkstemp failed");
+  }
+  ::close(fd);
+  const std::string path(tmpl);
+  if (!ring.dump_to_file(path.c_str())) {
+    ::unlink(path.c_str());
+    return fail(26, "wrapping concurrent dump failed");
+  }
+  const std::string out = read_all(path);
+  ::unlink(path.c_str());
+
+  if (out.find("\"written\":16000") == std::string::npos ||
+      out.find("\"busy_dropped\":") == std::string::npos ||
+      out.find("{\"kind\":\"cmd_record\",\"sub\":\"dispatch\",\"count\":16000,") ==
+          std::string::npos) {
+    return fail(27, "wrapping concurrent dump missing exact meta/summary totals");
+  }
+
+  std::istringstream iss(out);
+  std::string line;
+  uint64_t prev_seq = 0;
+  bool have_seq = false;
+  uint64_t retained = 0;
+  while (std::getline(iss, line)) {
+    if (line.rfind("{\"k\":\"e\",", 0) != 0) {
+      continue;
+    }
+    uint64_t seq = 0, t0 = 0, dur = 0, st = 0, detail = 0;
+    if (!extract_u64_field(line, "\"seq\":", seq) ||
+        !extract_u64_field(line, "\"t0\":", t0) ||
+        !extract_u64_field(line, "\"dur\":", dur) ||
+        !extract_u64_field(line, "\"st\":", st) ||
+        !extract_u64_field(line, "\"d\":", detail)) {
+      return fail(28, "malformed event line in wrapping dump");
+    }
+    if (seq < expected_total - kCap || seq >= expected_total) {
+      return fail(28, "retained seq outside tail window");
+    }
+    if (have_seq && seq <= prev_seq) {
+      return fail(28, "retained seq not strictly increasing");
+    }
+    // Verify fields were never mixed across threads or iterations.
+    if (st < 1 || st > static_cast<uint64_t>(kThreads) ||
+        t0 != 1000000ull + dur * 10ull ||
+        detail != ((st << 32) | dur)) {
+      return fail(29, "torn or mixed event fields detected under wrap");
+    }
+    prev_seq = seq;
+    have_seq = true;
+    ++retained;
+  }
+  if (retained > kCap) {
+    return fail(29, "retained more events than ring capacity");
+  }
+  return 0;
+}
+
+int test_concurrent_stop_and_dump() {
+  constexpr int kThreads = 4;
+  constexpr uint64_t kCap = 16;
+  StepTimelineRing ring(kCap);
+  std::atomic<bool> keep_running{true};
+  std::atomic<int> started{0};
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      const uint16_t st = static_cast<uint16_t>(t + 1);
+      started.fetch_add(1, std::memory_order_release);
+      uint64_t i = 0;
+      while (keep_running.load(std::memory_order_relaxed)) {
+        const uint64_t t0 = 2000000ull + i * 7ull;
+        const uint64_t detail = (static_cast<uint64_t>(st) << 32) | i;
+        ring.record(Kind::Wait, SubKind::DrainThrough, t0, i, st, detail);
+        ++i;
+      }
+    });
+  }
+  while (started.load(std::memory_order_acquire) < kThreads ||
+         ring.written() < 2000) {
+    std::this_thread::yield();
+  }
+
+  // Dump while producers are actively hammering record(); stop() inside dump()
+  // must quiesce all in-flight producers before reading slots or stats.
+  char tmpl[] = "/tmp/omarchy-tl-stop-XXXXXX";
+  int fd = ::mkstemp(tmpl);
+  if (fd < 0) {
+    keep_running.store(false, std::memory_order_relaxed);
+    for (auto& th : threads) {
+      th.join();
+    }
+    return fail(35, "mkstemp failed");
+  }
+  ::close(fd);
+  const std::string path(tmpl);
+  const bool ok = ring.dump_to_file(path.c_str());
+  const uint64_t written_after_dump = ring.written();
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  const uint64_t written_later = ring.written();
+  keep_running.store(false, std::memory_order_relaxed);
+  for (auto& th : threads) {
+    th.join();
+  }
+  const std::string out = read_all(path);
+  ::unlink(path.c_str());
+
+  if (!ok || ring.enabled() || written_after_dump != written_later) {
+    return fail(36, "stop/dump did not quiesce producers");
+  }
+
+  uint64_t meta_written = 0;
+  uint64_t summary_count = 0;
+  std::istringstream iss(out);
+  std::string line;
+  while (std::getline(iss, line)) {
+    if (line.rfind("{\"k\":\"meta\",", 0) == 0) {
+      if (!extract_u64_field(line, "\"written\":", meta_written)) {
+        return fail(37, "meta missing written");
+      }
+    } else if (line.rfind("{\"k\":\"summary\",", 0) == 0) {
+      if (!extract_u64_field(line, "\"count\":", summary_count)) {
+        return fail(37, "summary missing count");
+      }
+    } else if (line.rfind("{\"k\":\"e\",", 0) == 0) {
+      uint64_t t0 = 0, dur = 0, st = 0, detail = 0;
+      if (!extract_u64_field(line, "\"t0\":", t0) ||
+          !extract_u64_field(line, "\"dur\":", dur) ||
+          !extract_u64_field(line, "\"st\":", st) ||
+          !extract_u64_field(line, "\"d\":", detail)) {
+        return fail(38, "malformed event during concurrent stop/dump");
+      }
+      if (t0 != 2000000ull + dur * 7ull || detail != ((st << 32) | dur)) {
+        return fail(38, "torn event during concurrent stop/dump");
+      }
+    }
+  }
+  if (meta_written == 0 || meta_written != written_after_dump ||
+      summary_count != meta_written) {
+    return fail(39, "meta written and summary count diverged across stop/dump");
+  }
+  return 0;
+}
+
 int test_capacity_parsing() {
   if (parse_capacity(nullptr) != kDefaultCapacity ||
       parse_capacity("") != kDefaultCapacity ||
@@ -383,12 +569,18 @@ int main() {
   if (int rc = test_concurrent_recording()) {
     return rc;
   }
+  if (int rc = test_concurrent_wrap_ownership()) {
+    return rc;
+  }
+  if (int rc = test_concurrent_stop_and_dump()) {
+    return rc;
+  }
   if (int rc = test_capacity_parsing()) {
     return rc;
   }
   if (int rc = test_env_gate_and_atexit_dump()) {
     return rc;
   }
-  std::printf("test_step_timeline: 6/6 tests passed\n");
+  std::printf("test_step_timeline: 8/8 tests passed\n");
   return 0;
 }
