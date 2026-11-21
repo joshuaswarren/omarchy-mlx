@@ -52,7 +52,7 @@ Then run the `mlx-lm`, `transformers` and patch lines from
 
 ## 3. Make the driver file name pass the ICD check
 
-The backend accepts an ICD JSON only if its path contains `honeykrisp`,
+The backend accepts an ICD JSON only if its file name contains `honeykrisp`,
 `asahi_icd` or `libvulkan_asahi`
 ([Selection](install-omarchy.md#selection)). A driver file with another
 name fails with `Honeykrisp Vulkan ICD JSON was not found`, and on an M4

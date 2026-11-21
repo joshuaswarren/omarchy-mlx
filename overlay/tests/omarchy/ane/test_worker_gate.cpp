@@ -343,6 +343,94 @@ TEST_CASE("a Borealis-named user ICD is accepted like the Honeykrisp one") {
   std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("is_honeykrisp_icd matches only the file name and ignores parent directories") {
+  using namespace mlx::core::omarchy;
+  // Accepted Apple driver manifest and library names under a neutral directory
+  // (case-insensitive, including bare file names).
+  for (const char* accepted : {
+           "/tmp/neutral/asahi_icd.json",
+           "/tmp/neutral/asahi_icd.aarch64.json",
+           "/tmp/neutral/honeykrisp_icd.aarch64.json",
+           "/tmp/neutral/borealis_icd.aarch64.json",
+           "/tmp/neutral/libvulkan_asahi.so",
+           "/tmp/neutral/libvulkan_borealis.so",
+           "/tmp/neutral/HONEYKRISP_ICD.AARCH64.JSON",
+           "/tmp/neutral/Borealis_ICD.aarch64.json",
+           "/tmp/neutral/ASAHI_ICD.AARCH64.JSON",
+           "asahi_icd.aarch64.json",
+       }) {
+    CAPTURE(accepted);
+    CHECK(is_honeykrisp_icd(accepted));
+  }
+  // A foreign manifest under a parent directory carrying any trigger token is
+  // refused, as are empty and trailing-slash directory paths.
+  for (const char* trigger : {
+           "honeykrisp",
+           "borealis",
+           "asahi_icd",
+           "libvulkan_asahi",
+           "libvulkan_borealis",
+           "BOREALIS",
+       }) {
+    const std::string foreign =
+        std::string("/tmp/") + trigger + "-test/lvp_icd.json";
+    CAPTURE(foreign);
+    CHECK_FALSE(is_honeykrisp_icd(foreign));
+  }
+  CHECK_FALSE(is_honeykrisp_icd(""));
+  CHECK_FALSE(is_honeykrisp_icd("/tmp/borealis/"));
+  CHECK(find_honeykrisp_icd_in_list(
+            "/tmp/borealis-test/lvp_icd.json:/tmp/neutral/asahi_icd.json") ==
+        "/tmp/neutral/asahi_icd.json");
+  CHECK(find_honeykrisp_icd_in_list(
+            "/tmp/borealis-test/lvp_icd.json:/tmp/honeykrisp-test/nvidia_icd.json")
+            .empty());
+  CHECK(find_honeykrisp_icd_in_list("::/tmp/neutral/asahi_icd.json:") ==
+        "/tmp/neutral/asahi_icd.json");
+  CHECK(find_honeykrisp_icd_in_list(":").empty());
+
+  // End-to-end resolution and fallback refuse a foreign manifest even when its
+  // parent directory names the driver, while still selecting an Apple ICD
+  // later in a colon-separated override.
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("runtimegate-icd-honeykrisp-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(directory);
+  REQUIRE(std::filesystem::create_directory(directory));
+  const auto foreign_icd = directory / "lvp_icd.json";
+  const auto apple_icd = directory / "asahi_icd.aarch64.json";
+  for (const auto& path : {foreign_icd, apple_icd}) {
+    const int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    REQUIRE(fd >= 0);
+    REQUIRE(::close(fd) == 0);
+  }
+  try {
+    resolve_honeykrisp_icd(
+        {foreign_icd.string()}, foreign_icd.string().c_str());
+    FAIL("expected foreign ICD override refusal");
+  } catch (const std::runtime_error& error) {
+    CHECK(
+        std::string(error.what()) ==
+        "Honeykrisp ICD selection refused: user Vulkan ICD value excludes"
+        " Honeykrisp: " +
+            foreign_icd.string());
+  }
+  CHECK_THROWS_AS(
+      resolve_honeykrisp_icd({foreign_icd.string()}, nullptr),
+      std::runtime_error);
+  CHECK(system_icd_fallback(
+            {foreign_icd.string()},
+            {"/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json",
+             true,
+             false})
+            .empty());
+  const std::string mixed = foreign_icd.string() + ":" + apple_icd.string();
+  CHECK(
+      resolve_honeykrisp_icd(
+          {foreign_icd.string(), apple_icd.string()}, mixed.c_str()) ==
+      apple_icd.string());
+  std::filesystem::remove_all(directory);
+}
+
 TEST_CASE("the packaged ICD resolves under either file name") {
   using namespace mlx::core::omarchy;
   const auto prefix = std::filesystem::temp_directory_path() /

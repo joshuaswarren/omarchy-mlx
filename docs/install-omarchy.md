@@ -387,9 +387,9 @@ and
 
 Before Vulkan loads, the backend selects the ICD for this process
 (`configure_honeykrisp_icd` in `overlay/mlx/backend/omarchy/device.cpp`).
-`is_honeykrisp_icd` in `honeykrisp_identity.h` accepts a path whose name
-contains `honeykrisp` or `borealis` (Aurora's rename; both spellings work),
-in any case. It also accepts the stock system ICD
+`is_honeykrisp_icd` in `honeykrisp_identity.h` accepts an ICD whose file name
+(not a parent directory) contains `honeykrisp` or `borealis` (Aurora's rename;
+both spellings work), in any case. It also accepts the stock system ICD
 JSON and the driver library name. An explicit override of the system driver
 therefore still resolves. The packaged file
 `honeykrisp_icd.aarch64.json` matches.
