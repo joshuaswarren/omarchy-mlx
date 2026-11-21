@@ -73,6 +73,47 @@ def test_provenance_namespace_package(tmp_path, monkeypatch, capsys):
     assert f"mlx_dir={pkg}" in out
 
 
+def test_provenance_searches_all_namespace_locations(tmp_path, monkeypatch, capsys):
+    # Split namespace: the first sys.path location has no lib/, a later one
+    # does. Reading only the first location reports libmlx=missing on a
+    # wheel whose libmlx sits in a second site-packages dir.
+    first = tmp_path / "a-site" / "mlx"
+    second = tmp_path / "z-site" / "mlx"
+    first.mkdir(parents=True)
+    lib = second / "lib"
+    lib.mkdir(parents=True)
+    payload = b"libmlx in the second namespace location"
+    (lib / "libmlx.so").write_bytes(payload)
+    spec = _FakeSpec(None, [str(first), str(second)])
+    monkeypatch.setattr(run.importlib.util, "find_spec", lambda name: spec)
+
+    run._provenance()
+    out = capsys.readouterr().out
+
+    assert f"libmlx_sha256={hashlib.sha256(payload).hexdigest()}" in out
+    assert f"mlx_dir={second}" in out
+
+
+def test_provenance_keeps_sys_path_order(tmp_path, monkeypatch, capsys):
+    # Namespace locations arrive in sys.path order. When several hold a
+    # libmlx the first one wins — the alphabetically-first path does not.
+    resolves_first = tmp_path / "z-late" / "mlx"
+    resolves_second = tmp_path / "a-early" / "mlx"
+    for pkg, payload in ((resolves_first, b"first on sys.path"),
+                         (resolves_second, b"second on sys.path")):
+        lib = pkg / "lib"
+        lib.mkdir(parents=True)
+        (lib / "libmlx.so").write_bytes(payload)
+    spec = _FakeSpec(None, [str(resolves_first), str(resolves_second)])
+    monkeypatch.setattr(run.importlib.util, "find_spec", lambda name: spec)
+
+    run._provenance()
+    out = capsys.readouterr().out
+
+    assert f"libmlx_sha256={hashlib.sha256(b'first on sys.path').hexdigest()}" in out
+    assert f"mlx_dir={resolves_first}" in out
+
+
 def test_provenance_survives_missing_mlx(monkeypatch, capsys):
     monkeypatch.setattr(run.importlib.util, "find_spec", lambda name: None)
     monkeypatch.delenv("MLX_OMARCHY_TRANSLATOR_SOURCE_SHA", raising=False)

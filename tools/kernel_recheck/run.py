@@ -201,21 +201,28 @@ def _provenance():
     a current result. The PROVENANCE line makes the wheel identity part of
     every receipt."""
     spec = importlib.util.find_spec("mlx")
-    pkgdir = None
+    dirs = []
     if spec:
         if spec.origin:
-            pkgdir = Path(spec.origin).parent
+            dirs = [Path(spec.origin).parent]
         elif spec.submodule_search_locations:
-            pkgdir = Path(sorted(spec.submodule_search_locations)[0])
+            # Namespace package: locations arrive in sys.path order and any
+            # of them may hold lib/, so search each in order.
+            dirs = [Path(p) for p in spec.submodule_search_locations]
+    pkgdir = dirs[0] if dirs else None
     so = None
-    if pkgdir:
-        libdir = pkgdir / "lib"
-        if libdir.is_dir():
-            for pattern in ("libmlx.so", "libmlx*.so", "libmlx*.dylib"):
-                found = sorted(libdir.glob(pattern))
-                if found:
-                    so = found[0]
-                    break
+    for cand in dirs:
+        libdir = cand / "lib"
+        if not libdir.is_dir():
+            continue
+        for pattern in ("libmlx.so", "libmlx*.so", "libmlx*.dylib"):
+            found = sorted(libdir.glob(pattern))
+            if found:
+                so = found[0]
+                pkgdir = cand
+                break
+        if so:
+            break
     if so:
         sha = hashlib.sha256(so.read_bytes()).hexdigest()
         lib = str(so)
