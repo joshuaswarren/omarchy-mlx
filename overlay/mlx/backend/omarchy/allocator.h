@@ -46,6 +46,11 @@ struct VulkanBuffer {
   // open (not yet submitted) batch. Written by the encoder (add_temporary
   // and submit), consumed by the allocator quarantine (see free()).
   uint64_t completion{0};
+  // True while a private Device staging transfer (upload_host_to_device /
+  // download_device_to_host) has a command buffer referencing this VkBuffer
+  // in flight. Protected by VulkanAllocator::mutex_. Keeps free() and
+  // release_quarantine() from recycling or destroying the buffer on timeout.
+  bool transfer_in_flight{false};
   // True from the moment the reuse cache hands this block out until a
   // scalar fill drains it: a fill whose destination is freshly recycled
   // storage must drain prior work first, because its write provably
@@ -200,6 +205,9 @@ class VulkanAllocator : public allocator::Allocator {
   VulkanBuffer* lookup_buffer_handle(VkBuffer handle);
   // Thread-safe read of a live buffer's completion stamp.
   uint64_t buffer_completion(const VulkanBuffer* buf) const;
+  // Pin or unpin a buffer referenced by an in-flight private staging transfer
+  // so timeout/unwind preserves its VkBuffer/VkDeviceMemory lifetime.
+  void mark_transfer_in_flight(VkBuffer handle, bool in_flight);
 
   // Record a buffer referenced by an open batch (encoder add_temporary
   // and dispatch bindings). The stamp is unconditional: a buffer whose

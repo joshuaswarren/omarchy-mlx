@@ -3880,8 +3880,7 @@ array metadata_array(
       Strides{1},
       flags,
       0);
-  auto* buffer = static_cast<omarchy::VulkanBuffer*>(metadata.buffer().ptr());
-  std::memcpy(buffer->data, values.data(), metadata.nbytes());
+  std::memcpy(metadata.buffer().raw_ptr(), values.data(), metadata.nbytes());
   encoder.add_temporary(metadata);
   return metadata;
 }

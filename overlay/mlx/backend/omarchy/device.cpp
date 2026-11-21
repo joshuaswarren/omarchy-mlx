@@ -1627,31 +1627,42 @@ Device::~Device() {
     // Order is load-bearing: the queue finishes every submission first
     // (DeviceWaitIdle), then the dispatcher is shut down and drained while
     // the VkDevice and its semaphores are still valid, and only then is
-    // the VkDevice destroyed.
-    if (dt.DeviceWaitIdle) {
+    // the VkDevice destroyed. If a staging transfer previously timed out and
+    // is still in flight, skip DeviceWaitIdle and preserve the staging
+    // handles so teardown neither hangs nor destroys handles referenced by
+    // an unretired queue submission.
+    bool transfer_idle = !transfer_state_.in_flight;
+    if (!transfer_idle && transfer_fence_ != VK_NULL_HANDLE &&
+        dt.GetFenceStatus) {
+      transfer_idle =
+          dt.GetFenceStatus(device_, transfer_fence_) == VK_SUCCESS;
+    }
+    if (dt.DeviceWaitIdle && transfer_idle) {
       dt.DeviceWaitIdle(device_);
     }
     if (completions_) {
       completions_->shutdown();
     }
-    if (weight_staging_ != VK_NULL_HANDLE) {
+    if (weight_staging_ != VK_NULL_HANDLE && !weight_staging_in_flight_) {
       dt.UnmapMemory(device_, weight_staging_memory_);
       dt.DestroyBuffer(device_, weight_staging_, nullptr);
       dt.FreeMemory(device_, weight_staging_memory_, nullptr);
     }
-    if (transfer_fence_ != VK_NULL_HANDLE) {
-      dt.DestroyFence(device_, transfer_fence_, nullptr);
-    }
-    if (transfer_pool_ != VK_NULL_HANDLE) {
-      dt.DestroyCommandPool(device_, transfer_pool_, nullptr);
-    }
-    if (transfer_staging_ != VK_NULL_HANDLE) {
-      dt.UnmapMemory(device_, transfer_staging_memory_);
-      dt.DestroyBuffer(device_, transfer_staging_, nullptr);
-      dt.FreeMemory(device_, transfer_staging_memory_, nullptr);
+    if (transfer_idle) {
+      if (transfer_fence_ != VK_NULL_HANDLE) {
+        dt.DestroyFence(device_, transfer_fence_, nullptr);
+      }
+      if (transfer_pool_ != VK_NULL_HANDLE) {
+        dt.DestroyCommandPool(device_, transfer_pool_, nullptr);
+      }
+      if (transfer_staging_ != VK_NULL_HANDLE) {
+        dt.UnmapMemory(device_, transfer_staging_memory_);
+        dt.DestroyBuffer(device_, transfer_staging_, nullptr);
+        dt.FreeMemory(device_, transfer_staging_memory_, nullptr);
+      }
     }
     compute_.reset();
-    if (dt.DestroyDevice) {
+    if (dt.DestroyDevice && transfer_idle) {
       dt.DestroyDevice(device_, nullptr);
     }
   }

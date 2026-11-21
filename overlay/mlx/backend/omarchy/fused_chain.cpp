@@ -616,8 +616,7 @@ void dispatch_chain(
 
   const size_t program_bytes = chain.program.size() * sizeof(uint32_t);
   Buffer program_buffer = allocator().malloc(program_bytes);
-  auto* program_vk = static_cast<VulkanBuffer*>(program_buffer.ptr());
-  std::memcpy(program_vk->data, chain.program.data(), program_bytes);
+  std::memcpy(program_buffer.raw_ptr(), chain.program.data(), program_bytes);
   array program_keeper(
       Shape{static_cast<int>(chain.program.size())}, uint32, nullptr, {});
   array::Flags keeper_flags;

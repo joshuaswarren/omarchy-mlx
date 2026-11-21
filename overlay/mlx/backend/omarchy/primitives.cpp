@@ -1154,9 +1154,7 @@ std::optional<array> fill_broadcast_transport(
       Strides{1},
       flags,
       0);
-  auto* metadata_buffer =
-      static_cast<omarchy::VulkanBuffer*>(metadata.buffer().ptr());
-  std::memcpy(metadata_buffer->data, words.data(), metadata.nbytes());
+  std::memcpy(metadata.buffer().raw_ptr(), words.data(), metadata.nbytes());
   encoder.add_temporary(metadata);
   params.matrix_k = static_cast<uint32_t>(rank);
   return metadata;
@@ -2704,9 +2702,8 @@ void dispatch_reduce_general(
         Strides{1},
         flags,
         0);
-    auto* metadata_buffer = static_cast<omarchy::VulkanBuffer*>(
-        axis_metadata->buffer().ptr());
-    std::memcpy(metadata_buffer->data, words.data(), axis_metadata->nbytes());
+    std::memcpy(
+        axis_metadata->buffer().raw_ptr(), words.data(), axis_metadata->nbytes());
     encoder.add_temporary(*axis_metadata);
     params.matrix_k = static_cast<uint32_t>(collapsed_rank);
   }
@@ -6704,9 +6701,8 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
         Strides{1},
         flags,
         0);
-    auto* metadata_buffer = static_cast<omarchy::VulkanBuffer*>(
-        axis_metadata->buffer().ptr());
-    std::memcpy(metadata_buffer->data, words.data(), axis_metadata->nbytes());
+    std::memcpy(
+        axis_metadata->buffer().raw_ptr(), words.data(), axis_metadata->nbytes());
     encoder.add_temporary(*axis_metadata);
   }
   size_t slice_total = 1;
@@ -11201,9 +11197,8 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
         Strides{1},
         flags,
         0);
-    auto* metadata_buffer = static_cast<omarchy::VulkanBuffer*>(
-        axis_metadata->buffer().ptr());
-    std::memcpy(metadata_buffer->data, words.data(), axis_metadata->nbytes());
+    std::memcpy(
+        axis_metadata->buffer().raw_ptr(), words.data(), axis_metadata->nbytes());
     encoder.add_temporary(*axis_metadata);
     idx = &*packed_indices;
   }
@@ -12001,9 +11996,7 @@ void Select::eval_gpu(const std::vector<array>& inputs, array& out) {
           Strides{1},
           flags,
           0);
-      auto* metadata_buffer =
-          static_cast<omarchy::VulkanBuffer*>(metadata.buffer().ptr());
-      std::memcpy(metadata_buffer->data, words.data(), metadata.nbytes());
+      std::memcpy(metadata.buffer().raw_ptr(), words.data(), metadata.nbytes());
       encoder.add_temporary(metadata);
       axis_metadata = std::move(metadata);
       params.matrix_k = static_cast<uint32_t>(rank);
@@ -14289,22 +14282,16 @@ void exl3_debug_dump_stages(
   const char* dtype_tag = (out.dtype() == float32)   ? "f32"
       : (out.dtype() == float16)                     ? "f16"
                                                          : "bf16";
-  auto* dec_buf =
-      static_cast<const omarchy::VulkanBuffer*>(dec16.buffer().ptr());
-  auto* tmp_buf =
-      static_cast<const omarchy::VulkanBuffer*>(tmp.buffer().ptr());
-  auto* out_buf =
-      static_cast<const omarchy::VulkanBuffer*>(out.buffer().ptr());
   std::string base = std::string(dir) + "/call" + std::to_string(idx);
   auto write_all = [&](const std::string& path, const void* data,
                        size_t bytes) {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     f.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
   };
-  write_all(base + "_dec16_u32.bin", dec_buf->data, dec16.nbytes());
-  write_all(base + "_tmp_f32.bin", tmp_buf->data, tmp.nbytes());
+  write_all(base + "_dec16_u32.bin", dec16.data<uint8_t>(), dec16.nbytes());
+  write_all(base + "_tmp_f32.bin", tmp.data<uint8_t>(), tmp.nbytes());
   write_all(
-      base + "_out_" + dtype_tag + ".bin", out_buf->data, out.nbytes());
+      base + "_out_" + dtype_tag + ".bin", out.data<uint8_t>(), out.nbytes());
   std::ofstream manifest(
       std::string(dir) + "/manifest.txt", std::ios::app);
   manifest << "call=" << idx << " tag=" << tag << " in=" << in_features

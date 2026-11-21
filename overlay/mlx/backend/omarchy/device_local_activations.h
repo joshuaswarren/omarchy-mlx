@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -166,6 +167,106 @@ struct DeviceLocalSyncState {
   void on_recycle() {
     host_dirty = false;
     device_dirty = false;
+  }
+};
+
+// Outcome of a bounded wait on an activation staging transfer fence.
+enum class StagingTransferWaitResult : uint8_t {
+  Completed,
+  TimedOut,
+  DeviceError,
+};
+
+// Tracks whether the Device's private staging resources (transfer_staging_,
+// transfer_staging_memory_, transfer_pool_, transfer_cmd_, transfer_fence_)
+// are still referenced by an unretired GPU submission.
+//
+// While in_flight is true, callers MUST NOT reset/reuse transfer_cmd_, reset
+// transfer_fence_, overwrite transfer_staging_, or destroy any of those
+// handles. Subsequent calls poll GetFenceStatus; only VK_SUCCESS clears
+// in_flight and allows safe reuse/recovery.
+struct StagingTransferState {
+  bool in_flight{false};
+
+  template <typename GetStatusFn>
+  VkResult check_prior_in_flight(GetStatusFn&& get_fence_status) {
+    if (!in_flight) {
+      return VK_SUCCESS;
+    }
+    const VkResult st = get_fence_status();
+    if (st == VK_SUCCESS) {
+      in_flight = false;
+    }
+    return st;
+  }
+
+  void mark_submitted() {
+    in_flight = true;
+  }
+
+  // Poll wait_slice(slice_ns) until VK_SUCCESS, non-timeout error, or
+  // now_ns() - start_ns >= timeout_ns. Preserves in_flight=true on timeout
+  // or device error so in-flight resources are never reused or destroyed.
+  template <typename WaitSliceFn, typename NowNsFn>
+  StagingTransferWaitResult wait_bounded_with_clock(
+      uint64_t timeout_ns,
+      uint64_t poll_slice_ns,
+      WaitSliceFn&& wait_slice,
+      NowNsFn&& now_ns,
+      VkResult* out_error = nullptr) {
+    const uint64_t start_ns = now_ns();
+    const uint64_t slice_cap =
+        poll_slice_ns > 0 ? poll_slice_ns : (timeout_ns > 0 ? timeout_ns : 1);
+    for (;;) {
+      const uint64_t cur_ns = now_ns();
+      const uint64_t elapsed = cur_ns >= start_ns ? (cur_ns - start_ns) : 0;
+      const uint64_t remaining =
+          elapsed < timeout_ns ? (timeout_ns - elapsed) : 0;
+      const uint64_t step =
+          remaining == 0 ? 0 : std::min(remaining, slice_cap);
+      const VkResult res = wait_slice(step);
+      if (res == VK_SUCCESS) {
+        in_flight = false;
+        if (out_error) {
+          *out_error = VK_SUCCESS;
+        }
+        return StagingTransferWaitResult::Completed;
+      }
+      if (res != VK_TIMEOUT) {
+        if (out_error) {
+          *out_error = res;
+        }
+        return StagingTransferWaitResult::DeviceError;
+      }
+      const uint64_t after_ns = now_ns();
+      const uint64_t after_elapsed =
+          after_ns >= start_ns ? (after_ns - start_ns) : 0;
+      if (remaining == 0 || after_elapsed >= timeout_ns) {
+        if (out_error) {
+          *out_error = VK_TIMEOUT;
+        }
+        return StagingTransferWaitResult::TimedOut;
+      }
+    }
+  }
+
+  template <typename WaitSliceFn>
+  StagingTransferWaitResult wait_bounded(
+      uint64_t timeout_ns,
+      uint64_t poll_slice_ns,
+      WaitSliceFn&& wait_slice,
+      VkResult* out_error = nullptr) {
+    return wait_bounded_with_clock(
+        timeout_ns,
+        poll_slice_ns,
+        std::forward<WaitSliceFn>(wait_slice),
+        []() -> uint64_t {
+          return static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count());
+        },
+        out_error);
   }
 };
 

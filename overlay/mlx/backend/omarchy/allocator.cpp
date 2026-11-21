@@ -99,6 +99,28 @@ bool consume_test_oom() {
   return true;
 }
 
+// Test-only hook: simulate one or more bounded staging-transfer fence timeouts
+// so runtime tests can verify timeout handling, in-flight lifetime
+// preservation, and late-completion recovery on real Vulkan drivers.
+bool consume_test_staging_timeout() {
+  const char* env = std::getenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT");
+  if (env == nullptr || *env == '\0') {
+    return false;
+  }
+  char* end = nullptr;
+  long remaining = std::strtol(env, &end, 10);
+  if (end == env || remaining <= 0) {
+    return false;
+  }
+  if (remaining == 1) {
+    unsetenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT");
+  } else {
+    std::string next = std::to_string(remaining - 1);
+    setenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT", next.c_str(), 1);
+  }
+  return true;
+}
+
 namespace {
 
 VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
@@ -302,6 +324,71 @@ void Device::ensure_transfer_resources_locked() {
   }
 }
 
+void Device::check_prior_transfer_locked(const char* direction) {
+  if (!transfer_state_.in_flight) {
+    return;
+  }
+  auto& dt = vk::device_table();
+  const VkResult st = transfer_state_.check_prior_in_flight(
+      [&]() { return dt.GetFenceStatus(device_, transfer_fence_); });
+  if (st == VK_SUCCESS) {
+    if (transfer_in_flight_buffer_ != VK_NULL_HANDLE) {
+      omarchy::allocator().mark_transfer_in_flight(
+          transfer_in_flight_buffer_, false);
+      transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+    }
+    return;
+  }
+  if (st == VK_NOT_READY) {
+    throw std::runtime_error(
+        std::string("[omarchy] previous activation staging transfer is still "
+                    "in flight; cannot start ") +
+        direction + " (Timeout). In-flight staging resources preserved.");
+  }
+  throw std::runtime_error(
+      std::string("[omarchy] activation staging fence status failed before ") +
+      direction + " (" + vk::result_string(st) + ").");
+}
+
+void Device::wait_transfer_fence_locked(
+    VkBuffer target_buffer,
+    const char* direction) {
+  auto& dt = vk::device_table();
+  const uint64_t timeout_ns =
+      std::min(submit_hang_no_progress_ns(), submit_max_wall_ns());
+  VkResult err = VK_SUCCESS;
+  StagingTransferWaitResult wait_res = StagingTransferWaitResult::Completed;
+  if (consume_test_staging_timeout()) {
+    err = VK_TIMEOUT;
+    wait_res = StagingTransferWaitResult::TimedOut;
+  } else {
+    wait_res = transfer_state_.wait_bounded(
+        timeout_ns,
+        kHangWatchPollNs,
+        [&](uint64_t slice_ns) {
+          return dt.WaitForFences(
+              device_, 1, &transfer_fence_, VK_TRUE, slice_ns);
+        },
+        &err);
+  }
+  if (wait_res == StagingTransferWaitResult::Completed) {
+    omarchy::allocator().mark_transfer_in_flight(target_buffer, false);
+    transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+    return;
+  }
+  if (wait_res == StagingTransferWaitResult::TimedOut) {
+    throw std::runtime_error(
+        std::string("[omarchy] Vulkan activation staging ") + direction +
+        " timed out after " + std::to_string(timeout_ns / 1000000ull) +
+        " ms (Timeout). The device may be hung; in-flight staging resources"
+        " preserved.");
+  }
+  throw std::runtime_error(
+      std::string("[omarchy] Vulkan activation staging ") + direction +
+      " fence wait failed (" + vk::result_string(err) +
+      "). In-flight staging resources preserved.");
+}
+
 void Device::upload_host_to_device(
     VkBuffer destination,
     const void* src,
@@ -311,6 +398,7 @@ void Device::upload_host_to_device(
   }
   std::lock_guard lk(transfer_mutex_);
   ensure_transfer_resources_locked();
+  check_prior_transfer_locked("upload");
   auto& dt = vk::device_table();
   const auto* src_bytes = static_cast<const uint8_t*>(src);
   auto* stage = static_cast<uint8_t*>(transfer_staging_data_);
@@ -343,11 +431,18 @@ void Device::upload_host_to_device(
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &transfer_cmd_;
-    {
+    omarchy::allocator().mark_transfer_in_flight(destination, true);
+    transfer_in_flight_buffer_ = destination;
+    try {
       std::lock_guard qlk(queue_mutex_);
       VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, transfer_fence_));
+    } catch (...) {
+      omarchy::allocator().mark_transfer_in_flight(destination, false);
+      transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+      throw;
     }
-    VKX_CHECK(dt.WaitForFences(device_, 1, &transfer_fence_, VK_TRUE, UINT64_MAX));
+    transfer_state_.mark_submitted();
+    wait_transfer_fence_locked(destination, "upload");
     offset += chunk.byte_count;
   }
 }
@@ -361,6 +456,7 @@ void Device::download_device_to_host(
   }
   std::lock_guard lk(transfer_mutex_);
   ensure_transfer_resources_locked();
+  check_prior_transfer_locked("download");
   auto& dt = vk::device_table();
   auto* dst_bytes = static_cast<uint8_t*>(dst);
   const auto* stage = static_cast<const uint8_t*>(transfer_staging_data_);
@@ -396,11 +492,18 @@ void Device::download_device_to_host(
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &transfer_cmd_;
-    {
+    omarchy::allocator().mark_transfer_in_flight(source, true);
+    transfer_in_flight_buffer_ = source;
+    try {
       std::lock_guard qlk(queue_mutex_);
       VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, transfer_fence_));
+    } catch (...) {
+      omarchy::allocator().mark_transfer_in_flight(source, false);
+      transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+      throw;
     }
-    VKX_CHECK(dt.WaitForFences(device_, 1, &transfer_fence_, VK_TRUE, UINT64_MAX));
+    transfer_state_.mark_submitted();
+    wait_transfer_fence_locked(source, "download");
     if (!transfer_staging_coherent_) {
       VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
       range.memory = transfer_staging_memory_;
@@ -702,8 +805,9 @@ void VulkanAllocator::free(Buffer buffer) {
   // buffer whose generation drained at least one generation ago (a later
   // generation is observable) needs no wait; without this an idle
   // process parks every freed buffer until the next submission.
-  if (buf->completion != 0) {
-    if (buf->completion == kPendingCompletion || !runtime_alive() ||
+  if (buf->transfer_in_flight || buf->completion != 0) {
+    if (buf->transfer_in_flight ||
+        buf->completion == kPendingCompletion || !runtime_alive() ||
         buf->completion >= device().completions().drained_value() ||
         !device().completions().execution_complete(buf->completion)) {
       if (buf->completion == kPendingCompletion) {
@@ -762,9 +866,11 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   }
   std::vector<VulkanBuffer*> still_quarantined;
   for (auto* buf : quarantine_) {
-    if (buf->completion > cleanup_done_through ||
+    if (buf->transfer_in_flight ||
+        buf->completion > cleanup_done_through ||
         buf->completion == kPendingCompletion ||
-        !device().completions().execution_complete(buf->completion)) {
+        (buf->completion != 0 &&
+         !device().completions().execution_complete(buf->completion))) {
       still_quarantined.push_back(buf);
       continue;
     }
@@ -844,6 +950,26 @@ uint64_t VulkanAllocator::buffer_completion(const VulkanBuffer* buf) const {
   return buf ? buf->completion : 0;
 }
 
+void VulkanAllocator::mark_transfer_in_flight(
+    VkBuffer handle,
+    bool in_flight) {
+  if (handle == VK_NULL_HANDLE) {
+    return;
+  }
+  std::unique_lock lk(mutex_);
+  auto it = live_by_handle_.find(handle);
+  if (it != live_by_handle_.end() && it->second != nullptr) {
+    it->second->transfer_in_flight = in_flight;
+    return;
+  }
+  for (auto* buf : quarantine_) {
+    if (buf && buf->buffer == handle) {
+      buf->transfer_in_flight = in_flight;
+      return;
+    }
+  }
+}
+
 size_t VulkanAllocator::size(Buffer buffer) const {
   auto* buf = static_cast<VulkanBuffer*>(buffer.ptr());
   return buf ? buf->size : 0;
@@ -852,13 +978,14 @@ size_t VulkanAllocator::size(Buffer buffer) const {
 size_t VulkanAllocator::set_cache_limit(size_t limit) {
   std::unique_lock lk(mutex_);
   std::swap(cache_limit_, limit);
+  device_local_cache_limit_ = cache_limit_;
   if (buffer_cache_.cache_size() > cache_limit_) {
     buffer_cache_.release_cached_buffers(
         buffer_cache_.cache_size() - cache_limit_);
   }
-  if (device_local_cache_.cache_size() > cache_limit_) {
+  if (device_local_cache_.cache_size() > device_local_cache_limit_) {
     device_local_cache_.release_cached_buffers(
-        device_local_cache_.cache_size() - cache_limit_);
+        device_local_cache_.cache_size() - device_local_cache_limit_);
   }
   return limit;
 }

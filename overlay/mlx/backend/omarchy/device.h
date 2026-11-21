@@ -23,6 +23,7 @@
 
 #include "mlx/api.h"
 #include "mlx/backend/omarchy/coopmat_select.h"
+#include "mlx/backend/omarchy/device_local_activations.h"
 
 namespace mlx::core::io {
 class Reader;
@@ -476,6 +477,10 @@ class Device {
   uint64_t signal_timeline(VkSemaphore semaphore, uint64_t value);
 
   void ensure_transfer_resources_locked();
+  void check_prior_transfer_locked(const char* direction);
+  void wait_transfer_fence_locked(
+      VkBuffer target_buffer,
+      const char* direction);
 
   CapabilityReport caps_;
   CapabilityReport hardware_caps_{};
@@ -495,6 +500,8 @@ class Device {
   VkCommandPool transfer_pool_{VK_NULL_HANDLE};
   VkCommandBuffer transfer_cmd_{VK_NULL_HANDLE};
   VkFence transfer_fence_{VK_NULL_HANDLE};
+  StagingTransferState transfer_state_{};
+  VkBuffer transfer_in_flight_buffer_{VK_NULL_HANDLE};
   VkDevice device_{VK_NULL_HANDLE};
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;

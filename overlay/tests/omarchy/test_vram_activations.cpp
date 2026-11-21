@@ -171,6 +171,81 @@ int main() {
                    "committed sibling write sets device_dirty");
   }
 
+  // 5. Bounded staging-transfer fence state machine (timeout, in-flight preservation, recovery).
+  {
+    StagingTransferState ts{};
+    uint64_t now = 1000;
+    VkResult err = VK_SUCCESS;
+    int slices = 0;
+
+    // 5a. Normal completion on first slice clears in_flight.
+    ts.mark_submitted();
+    auto r = ts.wait_bounded_with_clock(
+        500, 100,
+        [&](uint64_t step) {
+          ++slices;
+          now += step;
+          return VK_SUCCESS;
+        },
+        [&]() { return now; },
+        &err);
+    fails += check(r == StagingTransferWaitResult::Completed && err == VK_SUCCESS &&
+                       !ts.in_flight && slices == 1,
+                   "normal staging wait clears in_flight on first slice");
+
+    // 5b. Multiple VK_TIMEOUT slices then VK_SUCCESS within budget completes cleanly.
+    slices = 0;
+    ts.mark_submitted();
+    r = ts.wait_bounded_with_clock(
+        500, 100,
+        [&](uint64_t step) {
+          ++slices;
+          now += step;
+          return slices < 3 ? VK_TIMEOUT : VK_SUCCESS;
+        },
+        [&]() { return now; },
+        &err);
+    fails += check(r == StagingTransferWaitResult::Completed && !ts.in_flight && slices == 3,
+                   "staging wait tolerates transient timeouts within wall budget");
+
+    // 5c. Exhausted wall budget returns TimedOut and preserves in_flight=true.
+    slices = 0;
+    ts.mark_submitted();
+    r = ts.wait_bounded_with_clock(
+        350, 100,
+        [&](uint64_t step) {
+          ++slices;
+          now += step;
+          return VK_TIMEOUT;
+        },
+        [&]() { return now; },
+        &err);
+    fails += check(r == StagingTransferWaitResult::TimedOut && err == VK_TIMEOUT &&
+                       ts.in_flight && slices == 4,
+                   "staging timeout preserves in_flight=true after bounded slices");
+
+    // 5d. Prior in-flight poll with VK_NOT_READY keeps in_flight=true (refuses reuse).
+    fails += check(ts.check_prior_in_flight([]() { return VK_NOT_READY; }) == VK_NOT_READY &&
+                       ts.in_flight,
+                   "VK_NOT_READY preserves in_flight so staging resources cannot be reused");
+
+    // 5e. Late completion poll with VK_SUCCESS clears in_flight (safe recovery).
+    fails += check(ts.check_prior_in_flight([]() { return VK_SUCCESS; }) == VK_SUCCESS &&
+                       !ts.in_flight,
+                   "VK_SUCCESS clears in_flight for safe recovery");
+
+    // 5f. Non-timeout device error preserves in_flight=true and surfaces VkResult.
+    ts.mark_submitted();
+    r = ts.wait_bounded_with_clock(
+        500, 100,
+        [&](uint64_t) { return VK_ERROR_DEVICE_LOST; },
+        [&]() { return now; },
+        &err);
+    fails += check(r == StagingTransferWaitResult::DeviceError &&
+                       err == VK_ERROR_DEVICE_LOST && ts.in_flight,
+                   "VK_ERROR_DEVICE_LOST preserves in_flight=true and returns exact error");
+  }
+
   if (fails != 0) {
     return 1;
   }

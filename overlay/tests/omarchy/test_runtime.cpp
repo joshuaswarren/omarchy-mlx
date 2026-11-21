@@ -1887,6 +1887,112 @@ TEST_CASE("device staging upload and download round trip across 4 MiB chunks") {
   }
 }
 
+TEST_CASE("device staging transfers bound timeout, pin in-flight buffer, and recover") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& dev = omarchy::device();
+  auto& alloc = omarchy::allocator();
+  constexpr size_t kBytes = 4096;
+  std::vector<uint8_t> src(kBytes);
+  for (size_t i = 0; i < kBytes; ++i) {
+    src[i] = static_cast<uint8_t>((i * 73u + 9u) & 0xFFu);
+  }
+
+  // Upload timeout: throws bounded Timeout, pins target buffer in quarantine on
+  // free(), then recovers once the real fence has signalled.
+  {
+    auto buf = alloc.malloc(kBytes);
+    auto* vb = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+    REQUIRE(vb != nullptr);
+    setenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT", "1", 1);
+    std::string msg;
+    try {
+      dev.upload_host_to_device(vb->buffer, src.data(), kBytes);
+    } catch (const std::exception& ex) {
+      msg = ex.what();
+    }
+    unsetenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT");
+    CHECK(msg.find("Timeout") != std::string::npos);
+    CHECK(msg.find("upload") != std::string::npos);
+
+    // Freeing while pinned must quarantine (preserve lifetime), never destroy/recycle.
+    alloc.free(buf);
+    CHECK(alloc.has_quarantined());
+    alloc.release_quarantine(UINT64_MAX);
+    CHECK(alloc.has_quarantined());
+
+    // Next transfer polls the real fence, clears in-flight + unpins prior buffer,
+    // and completes cleanly (retry briefly if software Vulkan is still retiring
+    // the real 4 KiB copy; that also verifies in-flight rejection while busy).
+    auto buf2 = alloc.malloc(kBytes);
+    auto* vb2 = static_cast<omarchy::VulkanBuffer*>(buf2.ptr());
+    REQUIRE(vb2 != nullptr);
+    std::vector<uint8_t> dst(kBytes, 0u);
+    const auto recover_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    for (;;) {
+      try {
+        dev.upload_host_to_device(vb2->buffer, src.data(), kBytes);
+        break;
+      } catch (const std::exception& ex) {
+        if (std::string(ex.what()).find("still in flight") ==
+                std::string::npos ||
+            std::chrono::steady_clock::now() >= recover_deadline) {
+          throw;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+    }
+    dev.download_device_to_host(vb2->buffer, dst.data(), kBytes);
+    CHECK(dst == src);
+
+    // Prior buffer is now unpinned and reclaimable.
+    alloc.release_quarantine(dev.completions().drained_value());
+    alloc.free(buf2);
+  }
+
+  // Download timeout: throws bounded Timeout, preserves resources, and recovers.
+  {
+    auto buf = alloc.malloc(kBytes);
+    auto* vb = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+    REQUIRE(vb != nullptr);
+    dev.upload_host_to_device(vb->buffer, src.data(), kBytes);
+    std::vector<uint8_t> dst(kBytes, 0u);
+    setenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT", "1", 1);
+    std::string msg;
+    try {
+      dev.download_device_to_host(vb->buffer, dst.data(), kBytes);
+    } catch (const std::exception& ex) {
+      msg = ex.what();
+    }
+    unsetenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT");
+    CHECK(msg.find("Timeout") != std::string::npos);
+    CHECK(msg.find("download") != std::string::npos);
+
+    // Retry recovers once the real fence retires and returns exact bytes.
+    std::fill(dst.begin(), dst.end(), 0u);
+    const auto recover_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    for (;;) {
+      try {
+        dev.download_device_to_host(vb->buffer, dst.data(), kBytes);
+        break;
+      } catch (const std::exception& ex) {
+        if (std::string(ex.what()).find("still in flight") ==
+                std::string::npos ||
+            std::chrono::steady_clock::now() >= recover_deadline) {
+          throw;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+    }
+    CHECK(dst == src);
+    alloc.free(buf);
+  }
+}
+
 TEST_CASE("events synchronize between streams") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
