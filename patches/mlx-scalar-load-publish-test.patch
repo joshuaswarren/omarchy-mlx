@@ -1,6 +1,15 @@
 --- a/tests/export_import_tests.cpp
 +++ b/tests/export_import_tests.cpp
-@@ -189,3 +189,51 @@
+@@ -3,5 +3,8 @@
+ #include <filesystem>
+ #include <stdexcept>
+ #include <vector>
++#include <chrono>
++#include <future>
++#include <thread>
+ 
+ #include "doctest/doctest.h"
+@@ -189,3 +192,63 @@
    }
    CHECK(import_function(file_path).metadata() == metadata);
  }
@@ -39,6 +48,15 @@
 +    export_function(file_path, fun, {x});
 +  }
 +  const int32_t expected[10] = {1, 4, 3, 2, 0, 0, 0, 0, 0, 0};
++  // Saturate the I/O pool: the deferred scalar fill then queues behind
++  // sleeping tasks and the consumer's host read always wins the race,
++  // instead of winning only on devices that lose it natively.
++  std::vector<std::future<void>> saturation;
++  for (int i = 0; i < 8; ++i) {
++    saturation.push_back(io::thread_pool().enqueue([]() {
++      std::this_thread::sleep_for(std::chrono::milliseconds(60));
++    }));
++  }
 +
 +  for (int trial = 0; trial < 100; ++trial) {
 +    StreamContext on_gpu(gpu_stream);
@@ -57,5 +75,8 @@
 +        break;
 +      }
 +    }
++  }
++  for (auto& pending : saturation) {
++    pending.get();
 +  }
 +}
