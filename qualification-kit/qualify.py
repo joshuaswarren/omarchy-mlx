@@ -18,6 +18,8 @@ from pathlib import Path
 
 from qualification_reference import comparison
 
+from scripts.bench_decode import ids_digest
+
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
 TAG = 'qualification-r5'
@@ -32,6 +34,9 @@ REV = '50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b'
 PROMPT = 'Explain how a transistor can function as a switch in a simple circuit.'
 TOKENS = 64
 BENCH = ROOT / 'scripts/bench_decode.py'
+SCHEMA = 'omarchy-mlx-qualification-v3'
+WORKLOAD = {'model': MODEL, 'revision': REV, 'prompt': PROMPT,
+            'tokens': TOKENS, 'warmup': 4, 'temp': 0, 'seed': 0}
 
 
 def sha(path):
@@ -98,18 +103,63 @@ def ane_result(rc, result, mac):
 
 
 def benchmark_result(result):
+    if not isinstance(result, dict):
+        return None
     device = result.get('device', '')
     digest = result.get('ids_sha256_16', '')
     if (result.get('generated') != TOKENS or not isinstance(device, str)
             or not re.match(r'^(Apple M[1-9]|Honey[Kk]risp)', device, re.I)
             or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{16}', digest)
-            or not isinstance(result.get('prompt_tokens'), int) or result['prompt_tokens'] <= 0):
+            or type(result.get('prompt_tokens')) is not int or result['prompt_tokens'] <= 0):
         return None
     metrics = ('decode_tps', 'prefill_tps', 'prefill_s')
-    if any(not isinstance(result.get(k), (int, float)) or not math.isfinite(result[k])
+    if any(type(result.get(k)) not in (int, float) or not math.isfinite(result[k])
            or result[k] <= 0 for k in metrics):
         return None
-    return {k: result[k] for k in (*metrics, 'generated', 'prompt_tokens', 'ids_sha256_16', 'device')}
+    row = {k: result[k] for k in (*metrics, 'generated', 'prompt_tokens', 'ids_sha256_16', 'device')}
+    if 'generated_ids' in result:
+        ids = result['generated_ids']
+        if (not isinstance(ids, list) or len(ids) != TOKENS
+                or any(type(i) is not int or i < 0 for i in ids) or ids_digest(ids) != digest):
+            return None
+        row['generated_ids'] = ids
+    return row
+
+
+def pair_benchmark(path, arm):
+    receipt = json.loads(path.read_text())
+    if not isinstance(receipt, dict) or receipt.get('schema') != SCHEMA:
+        raise ValueError('invalid_receipt')
+    if receipt.get('arm') != arm:
+        raise ValueError('expected_linux_then_macos')
+    if receipt.get('workload') != WORKLOAD:
+        raise ValueError('workloads_differ')
+    machine = receipt.get('machine_id')
+    if not isinstance(machine, str) or not re.fullmatch('[0-9a-f]{16,32}', machine):
+        raise ValueError('invalid_machine_id')
+    benchmark = benchmark_result(receipt.get('benchmark'))
+    if benchmark is None:
+        raise ValueError('invalid_benchmark (requires a generated-token digest)')
+    return machine, benchmark
+
+
+def compare_receipts(paths):
+    try:
+        linux, left = pair_benchmark(paths[0], 'linux-release-wheel')
+        mac, right = pair_benchmark(paths[1], 'macos-baseline')
+        if linux != mac:
+            raise ValueError('machine_ids_differ')
+        if left['prompt_tokens'] != right['prompt_tokens']:
+            raise ValueError('workloads_differ')
+        if (left['ids_sha256_16'] != right['ids_sha256_16']
+                or ('generated_ids' in left and 'generated_ids' in right
+                    and left['generated_ids'] != right['generated_ids'])):
+            raise ValueError('generated_ids_differ')
+    except (OSError, ValueError, OverflowError) as exc:
+        print(f'pair refused: {exc}')
+        return 1
+    print(f"matched: {TOKENS} generated IDs, digest {left['ids_sha256_16']}")
+    return 0
 
 
 def asset(work, cached, name):
@@ -251,6 +301,18 @@ def correctness_checks(rc, out, r):
     return checks['failures']
 
 
+def run_benchmark(args, work, env, py, wheel):
+    model = load_model(py, work, env, args.model_dir)
+    argv = [py, BENCH, '--model', model, '--prompt', PROMPT, '--tokens', str(TOKENS),
+            '--temp', str(WORKLOAD['temp']), '--seed', str(WORKLOAD['seed']),
+            '--warmup-tokens', str(WORKLOAD['warmup'])]
+    rc, out = command([*argv, *(['--wheel', wheel] if wheel else [])], env, 180, work)
+    result = benchmark_result(read_json(out)) if not rc else None
+    if result is None or 'generated_ids' not in result:
+        raise RuntimeError(f'decode_benchmark_exit_{rc}_or_invalid_token_evidence')
+    return result
+
+
 def run(args, work, mac, env, r):
     if args.icd:
         env.update(VK_DRIVER_FILES=str(args.icd), VK_ICD_FILENAMES=str(args.icd))
@@ -262,6 +324,9 @@ def run(args, work, mac, env, r):
                 r['icd_package'] = version
     py, wheel = setup(work, args, mac, env, r)
     r['versions'].update(verify(py, wheel, env))
+    if args.benchmark_only:
+        r['benchmark'] = run_benchmark(args, work, env, py, wheel)
+        return 'benchmark_complete'
     code = 'import mlx.core as mx; mx.set_default_device(mx.gpu); exec(open("correctness.py").read())'
     rc, out = command([py, '-c', code], env, 100, BENCH.parent)
     failed = correctness_checks(rc, out, r)
@@ -270,13 +335,7 @@ def run(args, work, mac, env, r):
     r['ane'] = ane_result(rc, read_json(out), mac)
     if rc not in (0, 1, 2, 127):
         raise RuntimeError('ane_timeout_or_signal')
-    model = load_model(py, work, env, args.model_dir)
-    argv = [py, BENCH, '--model', model, '--prompt', PROMPT, '--tokens', str(TOKENS),
-            '--temp', '0', '--seed', '0', '--warmup-tokens', '4']
-    rc, out = command([*argv, *(['--wheel', wheel] if wheel else [])], env, 180, work)
-    r['benchmark'] = benchmark_result(read_json(out)) if not rc else None
-    if not r['benchmark']:
-        raise RuntimeError(f'decode_benchmark_exit_{rc}')
+    r['benchmark'] = run_benchmark(args, work, env, py, wheel)
     verdict = suite_verdict(r, suite(py, work, env), mac)
     return 'gpu_correctness_failed' if failed else verdict
 
@@ -315,8 +374,12 @@ def suite_verdict(r, results, mac):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--machine-id', required=True, help='same random 16–32 hex characters on both OSes')
-    parser.add_argument('--out', type=Path, required=True, help='new JSON receipt path')
+    parser.add_argument('--machine-id', help='same random 16–32 hex characters on both OSes')
+    parser.add_argument('--out', type=Path, help='new JSON receipt path')
+    parser.add_argument('--compare', type=Path, nargs=2, metavar=('LINUX', 'MACOS'),
+                        help='check a matched-token pair without running a benchmark')
+    parser.add_argument('--benchmark-only', action='store_true',
+                        help='run only the shared GPU decode and prefill benchmark')
     parser.add_argument('--asset-dir', type=Path, help='optional cache of the two exact GitHub release assets')
     parser.add_argument('--icd', type=Path, help='installed Apple Vulkan ICD manifest (Linux only)')
     parser.add_argument('--model-dir', type=Path, help='existing directory for the exact pinned model snapshot')
@@ -324,6 +387,12 @@ def main():
                         help='macOS only: use the calling interpreter with exact pinned packages, no install')
     parser.add_argument('--diagnostics', type=Path, help='optional private failure log; do not share')
     args = parser.parse_args()
+    if args.compare:
+        if any(value for key, value in vars(args).items() if key != 'compare'):
+            parser.error('--compare cannot be combined with run options')
+        return compare_receipts(args.compare)
+    if not args.machine_id or not args.out:
+        parser.error('--machine-id and --out are required to run qualification')
     if not re.fullmatch('[0-9a-f]{16,32}', args.machine_id):
         parser.error('machine-id must be 16–32 lowercase hex characters; use a random ID, never a serial')
     if args.out.exists():
@@ -367,13 +436,12 @@ def main():
         compat = (dtroot / 'compatible').read_bytes().decode().split('\0') if dtroot.exists() else []
         machine = {'model': next((x for x in compat if re.fullmatch(r'apple,j\w+', x)), None),
                    'chip': next((x for x in compat if re.fullmatch(r'apple,t\d+', x)), None)}
-    r = {'schema': 'omarchy-mlx-qualification-v3', 'machine_id': args.machine_id,
+    r = {'schema': SCHEMA, 'machine_id': args.machine_id,
          'machine': machine, 'arm': 'macos-baseline' if mac else 'linux-release-wheel',
          'utc': dt.datetime.now(dt.timezone.utc).isoformat(),
          'release': TAG, 'suite_source': SOURCE,
          'versions': {'os': platform.mac_ver()[0] if mac else platform.release()},
-         'workload': {'model': MODEL, 'revision': REV, 'prompt': PROMPT,
-                      'tokens': TOKENS, 'warmup': 4, 'temp': 0, 'seed': 0},
+         'workload': WORKLOAD,
          'ane': None, 'mlx_checks': None, 'suite': None, 'benchmark': None}
     with tempfile.TemporaryDirectory(prefix='mlx-qualification-', dir=args.out.parent) as tmp:
         try:
@@ -388,7 +456,7 @@ def main():
         json.dump(r, f, indent=2, sort_keys=True, allow_nan=False)
         f.write('\n')
     print(f"{r['arm']}: {r['status']} — {args.out}")
-    return 0 if r['status'] in ('qualified', 'macos_baseline') else 1
+    return 0 if r['status'] in ('qualified', 'macos_baseline', 'benchmark_complete') else 1
 
 
 if __name__ == '__main__':

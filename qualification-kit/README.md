@@ -16,7 +16,7 @@ On Aurora or a nonstandard Vulkan install, add `--icd /path/to/apple-icd.json` f
 python3.12 qualify.py --machine-id 0123456789abcdef --out macos.json
 ```
 
-Have network access and at least 6 GiB free on the result and Hugging Face cache filesystems. The runner creates a disposable virtual environment. Linux verifies the r4 wheel and reuses the hash-pinned v0.7.47 dependency archive. Use `--asset-dir` if you already have both files. Both systems use MLX-LM 0.31.3 and the pinned Qwen3-4B-Instruct-2507 4-bit snapshot, with the same prompt, seed, four warmup tokens, and 64 scored greedy tokens. Compare prefill and decode rates only when the model revision, prompt count, and token ID digest agree. These rates measure the GPU.
+Have network access and at least 6 GiB free on the result and Hugging Face cache filesystems. The runner creates a disposable virtual environment. Linux verifies the r4 wheel and reuses the hash-pinned v0.7.47 dependency archive. Use `--asset-dir` if you already have both files. The same GPU benchmark runs on both systems with MLX-LM 0.31.3 and the pinned Qwen3-4B-Instruct-2507 4-bit snapshot: the same prompt, seed, four warmup tokens, and 64 generated token IDs. The receipt saves the IDs and their digest. Decode timing starts after the first token; time to first token, including prefill, is reported separately.
 
 The result lists six MLX correctness checks, all 34 Python test files, and the ANE smoke test. It records the time and exit status for each file. A timeout or abort leaves that file incomplete and the suite runs the remaining files. The C++ build suite and multi-host tests are outside this kit. macOS uses native MLX 0.32.3 and allows CPU or Neural Engine placement for its Core ML smoke test. That smoke test does not prove Neural Engine placement. A skipped or incomplete test never counts as a pass.
 
@@ -27,3 +27,11 @@ The per-file limit is 300 seconds. The slowest M1 Max r4 reference file took 15.
 Linux compares exact failing test/subtest IDs and failure classes with `m1-max-reference.json`. The receipt keeps the raw failures and skips, plus the matched and new lists. `qualified` means the release wheel was verified, MLX and Linux ANE checks passed, decode finished, all suite IDs were captured, and there are zero new failures or skips. A matched reference failure is not a pass. The macOS receipt is a baseline and reports its own outcomes without the Linux allowlist.
 
 For an already prepared offline macOS environment, use its Python executable and add `--reuse-runtime --model-dir /path/to/pinned/snapshot`. This mode does not install packages or fetch the model; it requires the versions pinned by this kit. The JSON is shareable; an optional `--diagnostics` log is private.
+
+Add `--benchmark-only` to either OS command to capture just the rates and token IDs, without the correctness suite or ANE smoke. Check the two receipts on either OS before comparing rates:
+
+```sh
+python3 qualify.py --compare linux.json macos.json
+```
+
+The comparison requires the same machine ID, pinned workload, prompt token count and generated-token digest. Missing or unequal digests fail the check. A token match does not qualify MLX correctness or ANE support.
