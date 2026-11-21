@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,145 @@ class ReceiptTest(unittest.TestCase):
         self.assertIsNone(benchmark_result(dict(r, generated=63)))
         self.assertIsNone(benchmark_result(dict(r, decode_tps=float('nan'))))
         self.assertIsNone(benchmark_result(dict(r, device='llvmpipe')))
+
+
+class PatchStateTest(unittest.TestCase):
+    """The kit must know whether the mlx-lm it benchmarks carries the series."""
+
+    def test_unpatched_tree_is_stock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm').mkdir()
+            (site / 'mlx_lm' / 'generate.py').write_text('x = 1\n')
+            state = qualify.patch_state(site)
+            self.assertEqual(state['state'], 'stock')
+            self.assertFalse(state['series_present'])
+            self.assertIsNone(state['record_sha256'])
+            self.assertEqual(state['eager_swiglu_markers'], 0)
+
+    def test_patched_tree_reports_record_and_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm' / 'models').mkdir(parents=True)
+            (site / 'mlx_lm' / 'models' / 'qwen3.py').write_text(
+                'flag = "_EAGER_SWIGLU"\nother = "_EAGER_SWIGLU"\n')
+            record = site / 'mlx_lm' / qualify.PATCH_RECORD
+            record.write_text('series patches\n')
+            state = qualify.patch_state(site)
+            self.assertEqual(state['state'], 'patched')
+            self.assertTrue(state['series_present'])
+            self.assertEqual(state['record_sha256'], qualify.sha(record))
+            self.assertEqual(state['eager_swiglu_markers'], 2)
+
+    def test_missing_site_is_unreadable(self):
+        state = qualify.patch_state(None)
+        self.assertEqual(state['state'], 'unreadable')
+        self.assertEqual(state['eager_swiglu_markers'], 0)
+
+    def test_record_without_markers_is_unreadable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm').mkdir()
+            (site / 'mlx_lm' / qualify.PATCH_RECORD).write_text('series patches\n')
+            state = qualify.patch_state(site)
+            self.assertEqual(state['state'], 'unreadable')
+            self.assertTrue(state['series_present'])
+            self.assertEqual(state['eager_swiglu_markers'], 0)
+
+    def test_stock_arm_refuses_a_patched_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm' / 'models').mkdir(parents=True)
+            (site / 'mlx_lm' / 'models' / 'qwen3.py').write_text('flag = "_EAGER_SWIGLU"\n')
+            (site / 'mlx_lm' / qualify.PATCH_RECORD).write_text('series patches\n')
+            with self.assertRaises(RuntimeError) as caught:
+                qualify.stock_state(site)
+            self.assertIn('patch_series', str(caught.exception))
+
+    def test_stock_arm_refuses_an_unreadable_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError) as caught:
+                qualify.stock_state(None)
+            self.assertIn('unreadable', str(caught.exception))
+
+    def test_stock_arm_reports_a_clean_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm').mkdir()
+            (site / 'mlx_lm' / 'generate.py').write_text('x = 1\n')
+            state = qualify.stock_state(site)
+            self.assertEqual(state['state'], 'stock')
+
+
+class ArchiveTest(unittest.TestCase):
+    """The sealed kit archive has to carry the patch series."""
+
+    def test_sealed_archive_holds_the_series_and_the_kit_finds_it(self):
+        root = Path(__file__).resolve().parent.parent
+        seal = root / 'scripts' / 'seal-qualification-kit.sh'
+        self.assertTrue(seal.is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            result = subprocess.run(['bash', str(seal), str(out), 'test-tag'],
+                                    capture_output=True, text=True, check=True)
+            self.assertIn('test-tag', result.stdout)
+            archive = out / 'omarchy-mlx-qualification-kit-test-tag.tar'
+            self.assertTrue(archive.is_file())
+            names = subprocess.run(['tar', '-tf', str(archive)], capture_output=True,
+                                   text=True, check=True).stdout.splitlines()
+            self.assertIn('omarchy-mlx-qualification-kit-test-tag/scripts/apply-mlx-lm-patches.sh', names)
+            self.assertIn('omarchy-mlx-qualification-kit-test-tag/qualification-kit/qualify.py', names)
+            self.assertTrue(any(name.endswith('patches/mlx-lm-last-logits.patch') for name in names))
+            self.assertFalse(any('__pycache__' in name for name in names))
+            extracted = out / 'extracted'
+            extracted.mkdir()
+            subprocess.run(['tar', '-xf', str(archive), '-C', str(extracted)], check=True)
+            kit_root = extracted / 'omarchy-mlx-qualification-kit-test-tag'
+            script = kit_root / 'scripts' / 'apply-mlx-lm-patches.sh'
+            self.assertTrue(script.is_file())
+            self.assertTrue((kit_root / 'patches').is_dir())
+            found = qualify.patch_series_script(kit_root / 'qualification-kit')
+            self.assertEqual(found, script)
+            self.assertTrue((found.parent.parent / 'patches').is_dir())
+
+    def test_archive_holds_every_helper_the_apply_script_names(self):
+        root = Path(__file__).resolve().parent.parent
+        apply_script = (root / 'scripts' / 'apply-mlx-lm-patches.sh').read_text()
+        named = set(re.findall(r'patch-mlx-lm-[a-z0-9-]+\.py', apply_script))
+        self.assertTrue(named, 'the apply script names no helper')
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            subprocess.run(['bash', str(root / 'scripts' / 'seal-qualification-kit.sh'),
+                            str(out), 'helper-tag'], capture_output=True, text=True, check=True)
+            archive = out / 'omarchy-mlx-qualification-kit-helper-tag.tar'
+            names = subprocess.run(['tar', '-tf', str(archive)], capture_output=True,
+                                   text=True, check=True).stdout.splitlines()
+            for helper in named:
+                self.assertIn(f'omarchy-mlx-qualification-kit-helper-tag/scripts/{helper}', names)
+
+    def test_sealed_archive_manifest_verifies(self):
+        root = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            subprocess.run(['bash', str(root / 'scripts' / 'seal-qualification-kit.sh'),
+                            str(out), 'manifest-tag'], capture_output=True, text=True, check=True)
+            archive = out / 'omarchy-mlx-qualification-kit-manifest-tag.tar'
+            extracted = out / 'extracted'
+            extracted.mkdir()
+            subprocess.run(['tar', '-xf', str(archive), '-C', str(extracted)], check=True)
+            kit_root = extracted / 'omarchy-mlx-qualification-kit-manifest-tag'
+            result = subprocess.run(['sha256sum', '-c', '--quiet', 'SHA256SUMS'],
+                                    cwd=kit_root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn('SHA256SUMS', result.stdout)
+
+    def test_archive_without_the_series_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_root = Path(tmp) / 'kit'
+            (kit_root / 'qualification-kit').mkdir(parents=True)
+            os.environ.pop('MLX_OMARCHY_PATCH_SERIES', None)
+            found = qualify.patch_series_script(kit_root / 'qualification-kit')
+            self.assertFalse(found.is_file())
 
 
 class PairTest(unittest.TestCase):

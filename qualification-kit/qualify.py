@@ -3,6 +3,7 @@
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -22,19 +23,23 @@ from scripts.bench_decode import ids_digest
 
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
-TAG = 'qualification-r5'
+TAG = 'qualification-r6'
 WHEEL_TAG = 'qualification-r4'
+VENDOR_RELEASE = 'v0.7.47'
 SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
 WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
 ASSETS = {WHEEL: '05a4802bc4c547aa77a6478612e103a7bfcedc3878f9049e502b37aba8eefb14',
           VENDOR: '31a9ed2075865d41e84729b850c1bdf9f66530f9b12df7bfb50cd80c472555f4'}
+PATCH_SERIES = ROOT.parent / 'scripts' / 'apply-mlx-lm-patches.sh'
+PATCH_RECORD = '.omarchy-serve-patches'
+PATCH_MARKER = '_EAGER_SWIGLU'
 MODEL = 'mlx-community/Qwen3-4B-Instruct-2507-4bit'
 REV = '50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b'
 PROMPT = 'Explain how a transistor can function as a switch in a simple circuit.'
 TOKENS = 64
 BENCH = ROOT / 'scripts/bench_decode.py'
-SCHEMA = 'omarchy-mlx-qualification-v3'
+SCHEMA = 'omarchy-mlx-qualification-v4'
 WORKLOAD = {'model': MODEL, 'revision': REV, 'prompt': PROMPT,
             'tokens': TOKENS, 'warmup': 4, 'temp': 0, 'seed': 0}
 
@@ -165,13 +170,127 @@ def compare_receipts(paths):
 def asset(work, cached, name):
     path = cached / name if cached else work / name
     if not cached:
-        release = 'v0.7.47' if name == VENDOR else WHEEL_TAG
+        release = VENDOR_RELEASE if name == VENDOR else WHEEL_TAG
         url = f'https://github.com/joshuaswarren/omarchy-mlx/releases/download/{release}/{name.replace("+", "%2B")}'
         subprocess.run(['curl', '-fLsS', '--max-time', '300', '-o', path, url],
                        check=True, timeout=310)
     if sha(path) != ASSETS[name]:
         raise RuntimeError('release_asset_hash_mismatch')
     return path
+
+
+def site_packages(venv):
+    """The site-packages tree of a venv that holds mlx_lm, or None."""
+    for path in sorted((Path(venv) / 'lib').glob('python3.*/site-packages')):
+        if (path / 'mlx_lm').is_dir():
+            return path
+    return None
+
+
+def interpreter_site():
+    """The site-packages tree of the running interpreter, or None."""
+    spec = importlib.util.find_spec('mlx_lm')
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    return Path(list(spec.submodule_search_locations)[0]).parent
+
+
+def patch_state(site):
+    """The mlx-lm patch state of one site-packages tree.
+
+    ``series_present`` says the completion record is there, and the marker
+    count says the patched code is really there. ``state`` says what the
+    row means: ``patched`` for the Linux release arm, which applies the
+    series, and ``stock`` for the macOS baseline arm, which does not.
+
+    Three cases are ``unreadable`` and the run is refused: a site the kit
+    cannot read, a file it cannot read, and a tree that carries markers
+    without the completion record. A record alone proves nothing either,
+    so a record without a single marker is ``unreadable`` too.
+    """
+    if site is None or not (site / 'mlx_lm').is_dir():
+        return {'state': 'unreadable', 'series_present': False, 'record_sha256': None,
+                'eager_swiglu_markers': 0}
+    record = site / 'mlx_lm' / PATCH_RECORD
+    markers = 0
+    for path in sorted((site / 'mlx_lm').rglob('*.py')):
+        try:
+            markers += path.read_text(errors='replace').count(PATCH_MARKER)
+        except OSError:
+            return {'state': 'unreadable', 'series_present': record.is_file(),
+                    'record_sha256': None, 'eager_swiglu_markers': markers}
+    present = record.is_file()
+    if present and markers == 0 or not present and markers:
+        state = 'unreadable'
+    else:
+        state = 'patched' if present else 'stock'
+    return {'state': state, 'series_present': present,
+            'record_sha256': sha(record) if present else None,
+            'eager_swiglu_markers': markers}
+
+
+def stock_state(site):
+    """The state of an arm that measures stock mlx-lm by design.
+
+    The macOS baseline arm does not apply the series, so its row says
+    ``stock``. A caller that hands the kit a patched interpreter is
+    refused: the row would claim a stock baseline for a patched
+    environment, and the two can never be compared.
+    """
+    state = patch_state(site)
+    if state['state'] == 'patched':
+        raise RuntimeError('reuse_runtime_carries_the_patch_series')
+    if state['state'] == 'unreadable':
+        raise RuntimeError('mlx_lm_patch_state_unreadable')
+    state['state'] = 'stock'
+    return state
+
+
+def patch_series_script(kit_root=None):
+    """The script that applies the vendored mlx-lm series.
+
+    It sits beside the kit in a repo checkout and in the sealed archive:
+    the archive holds the script and the patch files, so a Linux run
+    works from the archive alone. An explicit path wins over both.
+    """
+    override = os.environ.get('MLX_OMARCHY_PATCH_SERIES')
+    if override:
+        return Path(override)
+    root = Path(kit_root) if kit_root else ROOT
+    for base in (root.parent, root):
+        candidate = base / 'scripts' / 'apply-mlx-lm-patches.sh'
+        if candidate.is_file():
+            return candidate
+    return root.parent / 'scripts' / 'apply-mlx-lm-patches.sh'
+
+
+def apply_patch_series(venv, env):
+    """Apply the vendored mlx-lm serve patch series to a venv.
+
+    The kit benchmarks the installed mlx-lm. Without the series the venv
+    holds the stock wheel from the vendor set, so every decode number
+    understates what the packaged install gives.
+    """
+    script = patch_series_script()
+    if not script.is_file():
+        raise RuntimeError('mlx_lm_patch_series_missing')
+    rc, _ = command(['bash', str(script), str(venv)], env, 180)
+    if rc:
+        raise RuntimeError(f'mlx_lm_patch_series_exit_{rc}')
+
+
+def patched_state(venv, env):
+    """Apply the series to a venv and return the state it left behind.
+
+    A run whose state cannot be read is refused rather than measured: a
+    number without a known patch state cannot be compared with any other
+    row.
+    """
+    apply_patch_series(venv, env)
+    state = patch_state(site_packages(venv))
+    if state['state'] != 'patched':
+        raise RuntimeError('mlx_lm_patch_state_unreadable')
+    return state
 
 
 def setup(work, args, mac, env, receipt):
@@ -186,6 +305,7 @@ def setup(work, args, mac, env, receipt):
         rc, _ = command([sys.executable, '-c', code], env, 15)
         if rc:
             raise RuntimeError('existing_macos_runtime_versions_do_not_match')
+        receipt['mlx_lm_patches'] = stock_state(interpreter_site())
         return Path(sys.executable), None
     print('Setting up isolated Python environment.', flush=True)
     rc, _ = command([sys.executable, '-m', 'venv', work / 'venv'], env, 45)
@@ -210,6 +330,10 @@ def setup(work, args, mac, env, receipt):
         receipt['wheel'] = {'name': WHEEL, 'sha256': ASSETS[WHEEL], 'vendor_sha256': ASSETS[VENDOR]}
     if rc:
         raise RuntimeError(f'pip_install_exit_{rc}')
+    if mac:
+        receipt['mlx_lm_patches'] = stock_state(site_packages(work / 'venv'))
+    else:
+        receipt['mlx_lm_patches'] = patched_state(work / 'venv', env)
     return py, wheel
 
 
