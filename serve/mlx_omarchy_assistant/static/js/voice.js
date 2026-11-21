@@ -107,8 +107,11 @@ export class Recorder {
       return await this._startup();
     } catch (err) {
       // A failure after getUserMedia would leave the microphone and audio
-      // context live: release whatever was acquired, then rethrow.
+      // context live: release whatever was acquired, then rethrow. The
+      // hands-free arming is consumed with it so the next plain start
+      // keeps its own semantics.
       this._cancelPending = false;
+      this._hf = null;
       await this._cleanup();
       throw err;
     } finally {
@@ -200,8 +203,10 @@ export class Recorder {
     }
     if (this._cancelPending) {
       // cancel() arrived while acquisition was pending: release the mic
-      // instead of going into recording.
+      // instead of going into recording. The hands-free arming is
+      // consumed with the start it belonged to.
       this._cancelPending = false;
+      this._hf = null;
       await this._cleanup();
       return false;
     }
