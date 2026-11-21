@@ -60,13 +60,24 @@ def test_cbq_near_match_keeps_named_refusal(translator, tmp_path):
     assert "as_type<char4>" in result.stdout
 
 
-@pytest.mark.parametrize("mutation", ["dtype", "atomic", "layout", "launch", "header"])
+def test_cbq_accepts_uint_alias_for_index_buffers(translator, tmp_path):
+    name = "cbq_gather_mm"
+    source = generated_msl(name).replace("uint32_t* ", "uint* ")
+    result = translate(translator, tmp_path, name, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "mutation", ["dtype", "index_dtype", "atomic", "layout", "launch", "header"]
+)
 def test_cbq_exact_body_rejects_unsupported_contract(translator, tmp_path, mutation):
     name = "cbq_grad_d"
     source = generated_msl(name)
     tg = None
     if mutation == "dtype":
         source = source.replace("uint8_t* cb_qs", "int8_t* cb_qs")
+    elif mutation == "index_dtype":
+        source = source.replace("uint32_t* eidx", "int32_t* eidx")
     elif mutation == "atomic":
         source = source.replace("atomic<float>* grad_d", "float* grad_d")
     elif mutation == "layout":

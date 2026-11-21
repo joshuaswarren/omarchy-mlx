@@ -32,7 +32,7 @@ DTYPE_STR = {
     "float32": "float",
     "float16": "float16_t",
     "bfloat16": "bfloat16_t",
-    "uint32": "uint",
+    "uint32": "uint32_t",
     "uint64": "uint64_t",
     "int32": "int",
     "int64": "int64_t",

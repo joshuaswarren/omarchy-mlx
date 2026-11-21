@@ -304,13 +304,17 @@ std::optional<Translation> translate_cbq(
     const auto& p = parameters[i];
     const auto& a = abi[i];
     const bool out = i >= inputs, atomic = out && (gd || gx);
-    if (p.scalar || p.atomic != atomic || p.name != a.name || p.type != a.type ||
+    // MLX spells the two uint32 index types uint32_t in live signatures.
+    const bool type_matches =
+        p.type == a.type ||
+        (std::string_view(a.type) == "uint" && p.type == "uint32_t");
+    if (p.scalar || p.atomic != atomic || p.name != a.name || !type_matches ||
         (out && p.constant_space)) {
       refuse();
     }
     signature << "  " << (out ? "" : "const ")
               << (p.constant_space ? "constant " : "device ")
-              << (atomic ? "atomic<" : "") << a.type << (atomic ? ">" : "")
+              << (atomic ? "atomic<" : "") << p.type << (atomic ? ">" : "")
               << "* " << a.name << " [[buffer(" << i << ")]],\n";
     if (p.type == "int8_t" || p.type == "uint8_t") {
       // The logical device does not enable storageBuffer8BitAccess.
