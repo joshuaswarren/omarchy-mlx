@@ -23,6 +23,7 @@
 
 #include "mlx/api.h"
 #include "mlx/backend/omarchy/coopmat_select.h"
+#include "mlx/backend/omarchy/device_local_activations.h"
 
 namespace mlx::core::io {
 class Reader;
@@ -212,6 +213,10 @@ inline constexpr uint64_t kSubmitHangNoProgressNsDefault =
     10ull * 1000 * 1000 * 1000;
 inline constexpr uint64_t kSubmitMaxWallNsDefault =
     30ull * 60 * 1000 * 1000 * 1000;
+// Bounded watchdog/transfer poll cadence (100 ms): 100 samples per default
+// 10 s no-progress window. Shared by timeline progress waits and staging
+// transfer fence waits.
+inline constexpr uint64_t kHangWatchPollNs = 100ull * 1000 * 1000;
 
 // Parsed overrides. Resolved lazily on first call so unit tests can
 // override the env before the process reads it.
@@ -281,7 +286,7 @@ class CompletionDispatcher {
   uint64_t drained_value();
   void reset_progress_event(VkEvent event);
   bool has_active_submission(uint64_t through_value);
-  void shutdown();
+  void shutdown(bool destroy_vulkan_handles = true);
 
   // Everything a submission put on the queue, retained so the watchdog's
   // recovery ladder can resubmit it when Honeykrisp drops the batch (the
@@ -407,6 +412,21 @@ class Device {
       io::Reader& reader,
       size_t file_offset);
 
+  // Chunked staging transfers (<= 4 MiB host-visible staging buffer) for
+  // opt-in device-local activation buffers on discrete GPUs. Runs on a
+  // private transfer command buffer + fence serialized through queue_mutex_,
+  // so callers never disturb any CommandEncoder's open command buffer.
+  void upload_host_to_device(
+      VkBuffer destination,
+      const void* src,
+      size_t bytes);
+  void download_device_to_host(
+      VkBuffer source,
+      void* dst,
+      size_t bytes);
+
+  size_t device_local_heap_bytes() const;
+
   const CapabilityReport& capabilities() const {
     return caps_;
   }
@@ -460,6 +480,22 @@ class Device {
 
   uint64_t signal_timeline(VkSemaphore semaphore, uint64_t value);
 
+  void ensure_transfer_resources_locked();
+  void check_prior_transfer_locked(const char* direction);
+  void wait_transfer_fence_locked(
+      VkBuffer target_buffer,
+      const char* direction);
+
+  struct TeardownOutcome {
+    bool device_destroyed{true};
+    bool completion_handles_destroyed{true};
+    bool compute_handles_destroyed{true};
+  };
+  // Retire or preserve this device's Vulkan handles coherently. Idempotent;
+  // called by Runtime::teardown() before deciding whether VkInstance may be
+  // destroyed, and again as a no-op from ~Device().
+  TeardownOutcome teardown_vulkan();
+
   CapabilityReport caps_;
   CapabilityReport hardware_caps_{};
   VkPhysicalDeviceMemoryProperties mem_props_{};
@@ -470,11 +506,23 @@ class Device {
   void* weight_staging_data_{nullptr};
   bool weight_staging_coherent_{false};
   bool weight_staging_in_flight_{false};
+  std::mutex transfer_mutex_;
+  VkBuffer transfer_staging_{VK_NULL_HANDLE};
+  VkDeviceMemory transfer_staging_memory_{VK_NULL_HANDLE};
+  void* transfer_staging_data_{nullptr};
+  bool transfer_staging_coherent_{false};
+  VkCommandPool transfer_pool_{VK_NULL_HANDLE};
+  VkCommandBuffer transfer_cmd_{VK_NULL_HANDLE};
+  VkFence transfer_fence_{VK_NULL_HANDLE};
+  StagingTransferState transfer_state_{};
+  VkBuffer transfer_in_flight_buffer_{VK_NULL_HANDLE};
   VkDevice device_{VK_NULL_HANDLE};
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;
   std::unique_ptr<ComputeRuntime> compute_;
   std::unique_ptr<CompletionDispatcher> completions_;
+  bool teardown_done_{false};
+  TeardownOutcome teardown_outcome_{};
 };
 
 // --- Process-wide runtime -------------------------------------------------

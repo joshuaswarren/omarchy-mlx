@@ -1274,6 +1274,11 @@ class ComputeRuntime {
   };
   BindingAccess binding_access(VkPipeline pipeline);
 
+  // Drop ownership of Vulkan pipeline/layout handles without calling
+  // vkDestroy* so teardown can free the host object while keeping handles
+  // alive alongside an unretired VkDevice.
+  void abandon_vulkan_handles();
+
  private:
   VkPipeline create_pipeline(ComputeKernel kernel);
   VkPipeline create_pipeline(

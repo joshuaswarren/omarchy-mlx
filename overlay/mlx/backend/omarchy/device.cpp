@@ -415,12 +415,58 @@ struct Runtime {
 
   void teardown() {
     g_runtime_destroyed.store(true, std::memory_order_release);
+    size_t devices_destroyed = 0;
+    size_t devices_preserved = 0;
+    size_t completions_handles_destroyed = 0;
+    size_t compute_handles_destroyed = 0;
+    for (auto& dev : devices) {
+      if (!dev) {
+        continue;
+      }
+      const auto outcome = dev->teardown_vulkan();
+      if (outcome.device_destroyed) {
+        ++devices_destroyed;
+      } else {
+        ++devices_preserved;
+      }
+      if (outcome.completion_handles_destroyed) {
+        ++completions_handles_destroyed;
+      }
+      if (outcome.compute_handles_destroyed) {
+        ++compute_handles_destroyed;
+      }
+    }
     devices.clear();
+    bool instance_destroyed = false;
     if (instance != VK_NULL_HANDLE) {
-      if (auto& it = vk::instance_table(); it.DestroyInstance) {
-        it.DestroyInstance(instance, nullptr);
+      // Vulkan requires every child VkDevice to be destroyed before its parent
+      // VkInstance. Keep the instance alive whenever any device preserved its
+      // VkDevice for an unretired transfer.
+      if (devices_preserved == 0) {
+        if (auto& it = vk::instance_table(); it.DestroyInstance) {
+          it.DestroyInstance(instance, nullptr);
+          instance_destroyed = true;
+        }
       }
       instance = VK_NULL_HANDLE;
+    }
+    if (const char* out_path = std::getenv("MLX_OMARCHY_TEST_TEARDOWN_OUT");
+        out_path != nullptr && out_path[0] != '\0') {
+      if (FILE* f = std::fopen(out_path, "w")) {
+        std::fprintf(
+            f,
+            "devices_destroyed=%zu\n"
+            "devices_preserved=%zu\n"
+            "instance_destroyed=%d\n"
+            "completions_handles_destroyed=%zu\n"
+            "compute_handles_destroyed=%zu\n",
+            devices_destroyed,
+            devices_preserved,
+            instance_destroyed ? 1 : 0,
+            completions_handles_destroyed,
+            compute_handles_destroyed);
+        std::fclose(f);
+      }
     }
     g_runtime_instance = nullptr;
   }
@@ -1626,30 +1672,101 @@ Device::Device(uint32_t physical_device_index) {
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 
-Device::~Device() {
+Device::TeardownOutcome Device::teardown_vulkan() {
+  if (teardown_done_) {
+    return teardown_outcome_;
+  }
+  teardown_done_ = true;
   cpu_pd_hold_device_destroyed(*this);
-  if (device_ != VK_NULL_HANDLE) {
-    auto& dt = vk::device_table();
-    // Order is load-bearing: the queue finishes every submission first
-    // (DeviceWaitIdle), then the dispatcher is shut down and drained while
-    // the VkDevice and its semaphores are still valid, and only then is
-    // the VkDevice destroyed.
-    if (dt.DeviceWaitIdle) {
-      dt.DeviceWaitIdle(device_);
+  if (device_ == VK_NULL_HANDLE) {
+    teardown_outcome_ = {true, false, false};
+    return teardown_outcome_;
+  }
+
+  auto& dt = vk::device_table();
+  // Order is load-bearing: when idle, the queue finishes every submission
+  // first (DeviceWaitIdle), then the dispatcher stops and destroys its
+  // semaphore, then staging and compute handles retire, and only then is
+  // VkDevice destroyed (followed by VkInstance in Runtime::teardown). When a
+  // staging or weight transfer is still unretired, keep VkDevice and all
+  // dependent Vulkan handles alive together (still joining the dispatcher
+  // thread cleanly) and report device_destroyed=false so Runtime::teardown
+  // preserves the parent VkInstance too.
+  DeviceTeardownPlan plan{};
+  {
+    std::unique_lock<std::mutex> tlk(transfer_mutex_, std::try_to_lock);
+    std::unique_lock<std::mutex> wlk(weight_upload_mutex_, std::try_to_lock);
+    const bool transfer_in_flight =
+        !tlk.owns_lock() || transfer_state_.in_flight;
+    const bool weight_in_flight =
+        !wlk.owns_lock() || weight_staging_in_flight_;
+    VkResult fence_status = VK_SUCCESS;
+    if (transfer_in_flight) {
+      if (!tlk.owns_lock() || transfer_fence_ == VK_NULL_HANDLE ||
+          !dt.GetFenceStatus ||
+          env_flag("MLX_OMARCHY_TEST_STAGING_FENCE_BUSY")) {
+        fence_status = VK_NOT_READY;
+      } else {
+        fence_status = dt.GetFenceStatus(device_, transfer_fence_);
+      }
     }
-    if (completions_) {
-      completions_->shutdown();
+    plan = plan_device_teardown(
+        transfer_in_flight, fence_status, weight_in_flight);
+  }
+
+  TeardownOutcome outcome{false, false, false};
+  if (dt.DeviceWaitIdle && plan.wait_device_idle) {
+    dt.DeviceWaitIdle(device_);
+  }
+  if (completions_) {
+    completions_->shutdown(plan.destroy_completion_semaphore);
+    outcome.completion_handles_destroyed = plan.destroy_completion_semaphore;
+  }
+  if (plan.destroy_weight_staging && weight_staging_ != VK_NULL_HANDLE) {
+    dt.UnmapMemory(device_, weight_staging_memory_);
+    dt.DestroyBuffer(device_, weight_staging_, nullptr);
+    dt.FreeMemory(device_, weight_staging_memory_, nullptr);
+    weight_staging_ = VK_NULL_HANDLE;
+    weight_staging_memory_ = VK_NULL_HANDLE;
+    weight_staging_data_ = nullptr;
+  }
+  if (plan.destroy_transfer_staging) {
+    if (transfer_fence_ != VK_NULL_HANDLE) {
+      dt.DestroyFence(device_, transfer_fence_, nullptr);
+      transfer_fence_ = VK_NULL_HANDLE;
     }
-    if (weight_staging_ != VK_NULL_HANDLE) {
-      dt.UnmapMemory(device_, weight_staging_memory_);
-      dt.DestroyBuffer(device_, weight_staging_, nullptr);
-      dt.FreeMemory(device_, weight_staging_memory_, nullptr);
+    if (transfer_pool_ != VK_NULL_HANDLE) {
+      dt.DestroyCommandPool(device_, transfer_pool_, nullptr);
+      transfer_pool_ = VK_NULL_HANDLE;
+      transfer_cmd_ = VK_NULL_HANDLE;
     }
-    compute_.reset();
-    if (dt.DestroyDevice) {
-      dt.DestroyDevice(device_, nullptr);
+    if (transfer_staging_ != VK_NULL_HANDLE) {
+      dt.UnmapMemory(device_, transfer_staging_memory_);
+      dt.DestroyBuffer(device_, transfer_staging_, nullptr);
+      dt.FreeMemory(device_, transfer_staging_memory_, nullptr);
+      transfer_staging_ = VK_NULL_HANDLE;
+      transfer_staging_memory_ = VK_NULL_HANDLE;
+      transfer_staging_data_ = nullptr;
     }
   }
+  if (compute_) {
+    if (!plan.destroy_compute_pipelines) {
+      compute_->abandon_vulkan_handles();
+    }
+    compute_.reset();
+    outcome.compute_handles_destroyed = plan.destroy_compute_pipelines;
+  }
+  if (dt.DestroyDevice && plan.destroy_device) {
+    dt.DestroyDevice(device_, nullptr);
+    device_ = VK_NULL_HANDLE;
+    outcome.device_destroyed = true;
+  }
+  teardown_outcome_ = outcome;
+  return teardown_outcome_;
+}
+
+Device::~Device() {
+  (void)teardown_vulkan();
 }
 
 uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
@@ -1871,13 +1988,7 @@ namespace {
 
 // Bounded dispatcher wait granularity (plan R16): a wedged queue delays
 // shutdown and handler dispatch by at most one interval, never forever.
-constexpr uint64_t kCompletionPollNs = 100ull * 1000 * 1000;
-
-// No-progress watchdog poll cadence. Must be a small fraction of the
-// no-progress interval so a stalled counter is detected quickly. 100 ms
-// matches kCompletionPollNs (the dispatcher background loop) and gives
-// 100 samples per no-progress interval at the 10 s default.
-constexpr uint64_t kHangWatchPollNs = kCompletionPollNs;
+constexpr uint64_t kCompletionPollNs = kHangWatchPollNs;
 
 // Parsed env override. Returns the default when the env var is unset or
 // invalid; positive non-zero values only. Negative or zero values would
@@ -2204,7 +2315,7 @@ bool CompletionDispatcher::wait_settled(
   }
 }
 
-void CompletionDispatcher::shutdown() {
+void CompletionDispatcher::shutdown(bool destroy_vulkan_handles) {
   {
     std::lock_guard<std::mutex> lk(mutex_);
     stop_ = true;
@@ -2235,7 +2346,9 @@ void CompletionDispatcher::shutdown() {
       std::make_move_iterator(retired_temporaries_.end()));
   retired_temporaries_.clear();
   if (semaphore_ != VK_NULL_HANDLE) {
-    vk::device_table().DestroySemaphore(device_, semaphore_, nullptr);
+    if (destroy_vulkan_handles) {
+      vk::device_table().DestroySemaphore(device_, semaphore_, nullptr);
+    }
     semaphore_ = VK_NULL_HANDLE;
   }
 }
