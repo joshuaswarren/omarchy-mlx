@@ -350,8 +350,7 @@ TEST_CASE("the packaged ICD resolves under either file name") {
   std::filesystem::remove_all(prefix);
   const auto legacy = packaged_honeykrisp_icd_path(prefix.string());
   std::filesystem::create_directories(legacy);
-  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) ==
-        legacy.string());
+  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) == legacy);
   std::filesystem::remove_all(prefix);
   const auto renamed =
       prefix / "vulkan" / "borealis_icd.aarch64.json";
