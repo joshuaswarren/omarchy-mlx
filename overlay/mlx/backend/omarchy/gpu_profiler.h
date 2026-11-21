@@ -24,9 +24,10 @@
 //                     unavailable)
 //   {"k":"d",...}     per compute dispatch (per-dispatch mode only):
 //                     kernel enum, groups,
-//                     params.count, host record cost, raw GPU ticks (t0
-//                     written after the pre-dispatch barrier, t1 after the
-//                     dispatch, both at BOTTOM_OF_PIPE), the binding
+//                     params.count, host record cost, raw GPU ticks (t0 at
+//                     TOP_OF_PIPE, parked on pending_start_ts so it stamps
+//                     the dispatch's own stream start; t1 after the dispatch
+//                     at BOTTOM_OF_PIPE on the same stream's tail), the binding
 //                     list (buffer, offset, range) used as the dependency
 //                     proxy between consecutive dispatches, and "bar" (1
 //                     when the dispatch recorded a dependency barrier,
@@ -52,8 +53,12 @@
 // adds one BOTTOM_OF_PIPE timestamp pair per command buffer (t0 after
 // BeginCommandBuffer, t1 before EndCommandBuffer) and no per-dispatch
 // commands. Both add a query-pool reset per command buffer. In
-// per-dispatch mode the barrier isolates t0 from later
-// compute work in Honeykrisp's timestamp-bearing stream. These commands
+// per-dispatch mode t0 uses TOP_OF_PIPE: a BOTTOM_OF_PIPE write after the
+// previous dispatch's t1 cannot ride a stream that already carries an end
+// timestamp, so it would need a command-free timestamp-only stream, which
+// submits empty on compute-only chips (#526). The barrier isolates the
+// dispatch from later compute work in Honeykrisp's timestamp-bearing
+// stream. These commands
 // perturb scheduling; profiled timings are not release performance. Results
 // are read during join_last_completion (which completes every submission
 // of the encoder at once) or when the encoder reuses a completed ring
@@ -192,9 +197,11 @@ class GpuProfiler {
   }
 
   // Called after the pre-dispatch barrier (when one was recorded) and
-  // before the dispatch itself, so t0 lands when prior GPU work
-  // (including the barrier) completes. barrier reports whether this
-  // dispatch recorded a dependency barrier (gated mode may skip it).
+  // before the dispatch itself. t0 is TOP_OF_PIPE so the driver attaches
+  // it to the start of the next command-bearing stream; it lands when
+  // prior GPU work (including the barrier) completes and the dispatch
+  // stream begins. barrier reports whether this dispatch recorded a
+  // dependency barrier (gated mode may skip it).
   void before_dispatch(
       const void* owner,
       int slot,
@@ -220,7 +227,7 @@ class GpuProfiler {
     } else {
       p.tick_index = s.cursor;
       vk::device_table().CmdWriteTimestamp(
-          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, s.cursor);
+          cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s.pool, s.cursor);
       vk::device_table().CmdPipelineBarrier(
           cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
