@@ -7947,3 +7947,216 @@ TEST_CASE("BM32 BF16 NT matmul records a dedicated Vulkan dispatch") {
     }
   }
 }
+
+namespace {
+
+// A deterministic sparse-dyadic matrix row: distinct positions drawn from
+// the row seed, each value +-2^e with e in [-2, 2]. Every entry is exact
+// in bf16 and every product is a power of two in [2^-4, 2^4], so each
+// partial dot product is a multiple of 2^-4 bounded by 2^16 — inside
+// fp32's 24-bit significand. The shader's fma chain then carries no
+// rounding, which lets an integer oracle prove bit equality instead of a
+// tolerance.
+struct DyadicEntry {
+  int pos;
+  int sign;
+  int exp;
+};
+
+std::vector<DyadicEntry> dyadic_row(int k_dim, int count, unsigned seed) {
+  std::vector<DyadicEntry> entries;
+  entries.reserve(static_cast<size_t>(count));
+  std::vector<char> used(static_cast<size_t>(k_dim), 0);
+  for (int j = 0; j < count; ++j) {
+    const unsigned uj = static_cast<unsigned>(j);
+    const int pos = static_cast<int>(
+        (seed * 1021u + uj * 37u + uj * uj) % static_cast<unsigned>(k_dim));
+    if (used[static_cast<size_t>(pos)]) {
+      continue;
+    }
+    used[static_cast<size_t>(pos)] = 1;
+    const int sign = ((pos + j) & 1) == 0 ? 1 : -1;
+    const int exp =
+        static_cast<int>((pos * 7 + seed * 3 + uj) % 5u) - 2;
+    entries.push_back({pos, sign, exp});
+  }
+  return entries;
+}
+
+// IEEE-754 round-to-nearest-even of acc * 2^min_exp into a bf16 bit
+// pattern, computed in integers so the oracle shares no code with the
+// shader. |acc| < 2^21 holds for the fixtures above, so the 24-bit
+// significand is exact and the single rounding is the whole error.
+uint16_t oracle_bf16_bits(int64_t acc, int min_exp) {
+  if (acc == 0) {
+    return 0;
+  }
+  const uint16_t sign = acc < 0 ? uint16_t(0x8000) : uint16_t(0);
+  const uint64_t mag =
+      acc < 0 ? static_cast<uint64_t>(-acc) : static_cast<uint64_t>(acc);
+  const int top = 63 - __builtin_clzll(mag);
+  int exponent = top + min_exp;
+  const uint32_t sig = static_cast<uint32_t>(mag << (23 - top));
+  uint32_t keep = sig >> 16; // implicit bit plus seven stored mantissa bits
+  const uint32_t rem = sig & 0xffffu;
+  if (rem > 0x8000u || (rem == 0x8000u && (keep & 1u) != 0u)) {
+    keep += 1;
+    if (keep == 0x100u) { // mantissa carry into the exponent
+      keep = 0x80u;
+      exponent += 1;
+    }
+  }
+  return static_cast<uint16_t>(
+      sign | uint16_t((exponent + 127) << 7) | uint16_t(keep & 0x7fu));
+}
+
+float bf16_bits_as_float(uint16_t bits) {
+  const uint32_t widened = static_cast<uint32_t>(bits) << 16;
+  float out;
+  std::memcpy(&out, &widened, sizeof(out));
+  return out;
+}
+
+uint32_t float_bits(float value) {
+  uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+} // namespace
+
+// The Nemotron Labs Diffusion projection from pinned mlx-vlm
+// 111ac668078e017c9db1eb3936f4d7a6e0a88f89: 32 bf16 rows times a
+// [4096, 14336] weight, dense or as four 3584-column chunks. This probe
+// replays both layouts through plain matmul calls (no checkpointing, no
+// model file) and requires the exact bf16 output bits of an independent
+// integer round-to-nearest-even oracle — the same contract the small
+// BM32 dispatch test pins for its hand-picked fixture.
+TEST_CASE("BM32 BF16 projection probe matches the integer oracle for dense and chunked") {
+  if (!compute_available()) {
+    return;
+  }
+  const Stream stream = gpu_stream();
+  constexpr int m = 32, k = 4096, n = 14336, chunk = 3584;
+  constexpr int min_product_exp = -4; // 2^[-2,2] times 2^[-2,2]
+
+  // Sparse-dyadic fixtures. ~256 nonzeros per A row and ~192 per B row
+  // give about a dozen nonzero products per output element.
+  std::vector<bfloat16_t> a_host(static_cast<size_t>(m) * k, bfloat16_t(0.0f));
+  std::vector<bfloat16_t> w_host(static_cast<size_t>(n) * k, bfloat16_t(0.0f));
+  std::vector<std::vector<std::pair<int, DyadicEntry>>> a_cols(k);
+  for (int r = 0; r < m; ++r) {
+    for (const DyadicEntry& e : dyadic_row(k, 256, static_cast<unsigned>(r + 1))) {
+      a_host[static_cast<size_t>(r) * k + e.pos] =
+          bfloat16_t(std::ldexp(static_cast<float>(e.sign), e.exp));
+      a_cols[e.pos].push_back({r, e});
+    }
+  }
+  std::vector<std::vector<DyadicEntry>> w_rows(n);
+  for (int c = 0; c < n; ++c) {
+    w_rows[c] = dyadic_row(k, 192, static_cast<unsigned>(c + 977));
+    for (const DyadicEntry& e : w_rows[c]) {
+      w_host[static_cast<size_t>(c) * k + e.pos] =
+          bfloat16_t(std::ldexp(static_cast<float>(e.sign), e.exp));
+    }
+  }
+
+  // Integer oracle: exact signed accumulation at 2^-4 granularity, then
+  // one round-to-nearest-even, matching the shader's single output store.
+  std::vector<float> expected(static_cast<size_t>(m) * n);
+  for (int c = 0; c < n; ++c) {
+    int64_t acc[m] = {};
+    for (const DyadicEntry& eb : w_rows[c]) {
+      for (const auto& [r, ea] : a_cols[eb.pos]) {
+        const int shift = ea.exp + eb.exp - min_product_exp;
+        acc[r] += static_cast<int64_t>(ea.sign * eb.sign) << shift;
+      }
+    }
+    for (int r = 0; r < m; ++r) {
+      expected[static_cast<size_t>(r) * n + c] =
+          bf16_bits_as_float(oracle_bf16_bits(acc[r], min_product_exp));
+    }
+  }
+
+  array a(a_host.begin(), Shape{m, k}, bfloat16);
+  array w(w_host.begin(), Shape{n, k}, bfloat16);
+  array wt = transpose(w, {1, 0}, stream);
+  eval({a, wt});
+  omarchy::get_command_encoder(stream).synchronize();
+
+  constexpr auto flag = "MLX_OMARCHY_MATMUL_BM32";
+  const char* old_flag = std::getenv(flag);
+  const auto saved_flag =
+      old_flag ? std::optional<std::string>(old_flag) : std::nullopt;
+  auto& trace = omarchy::trace::counters();
+  const auto bm32 = static_cast<int64_t>(omarchy::ComputeKernel::MatmulBf16Bm32);
+
+  // Route off: the same projection must not reach the BM32 kernel. A
+  // mutation that dropped the route would make the flag-on assertion
+  // below fail instead.
+  setenv(flag, "0", 1);
+  array off = matmul(a, wt, stream);
+  REQUIRE(evaluation_error(off).empty());
+  CHECK_NE(trace.last_dispatched_kernel.load(), bm32);
+
+  // Route on, dense: exactly one BM32 dispatch, every output bit exact.
+  setenv(flag, "1", 1);
+  const auto before = trace.vk_compute_dispatches.load();
+  array dense = matmul(a, wt, stream);
+  REQUIRE(evaluation_error(dense).empty());
+  CHECK_EQ(trace.vk_compute_dispatches.load() - before, 1u);
+  CHECK_EQ(trace.last_dispatched_kernel.load(), bm32);
+  const auto got_dense = readback_f32(stream, dense);
+  REQUIRE_EQ(got_dense.size(), expected.size());
+  size_t first_bad = expected.size();
+  for (size_t i = 0; i < expected.size(); ++i) {
+    if (float_bits(got_dense[i]) != float_bits(expected[i])) {
+      first_bad = i;
+      break;
+    }
+  }
+  INFO("first mismatch at flat index " << first_bad);
+  CHECK_EQ(first_bad, expected.size());
+
+  // Route on, chunked: four dispatches, each column slice still exact.
+  // readback_f32 astype's to f32 on the device — one more dispatch — so
+  // the count is taken around the matmul eval only.
+  uint64_t chunk_dispatches = 0;
+  for (int c = 0; c < n / chunk; ++c) {
+    array wc = slice(w, {c * chunk, 0}, {(c + 1) * chunk, k}, stream);
+    array wct = transpose(wc, {1, 0}, stream);
+    const auto before_chunk = trace.vk_compute_dispatches.load();
+    array out = matmul(a, wct, stream);
+    REQUIRE(evaluation_error(out).empty());
+    chunk_dispatches += trace.vk_compute_dispatches.load() - before_chunk;
+    CHECK_EQ(trace.last_dispatched_kernel.load(), bm32);
+    const auto got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), static_cast<size_t>(m) * chunk);
+    size_t first_bad_chunk = got.size();
+    for (int r = 0; r < m; ++r) {
+      for (int cc = 0; cc < chunk; ++cc) {
+        if (float_bits(got[static_cast<size_t>(r) * chunk + cc]) !=
+            float_bits(expected[static_cast<size_t>(r) * n + c * chunk + cc])) {
+          first_bad_chunk = static_cast<size_t>(r) * chunk + cc;
+          break;
+        }
+      }
+      if (first_bad_chunk != got.size()) {
+        break;
+      }
+    }
+    INFO("chunk " << c << " first mismatch at index " << first_bad_chunk);
+    CHECK_EQ(first_bad_chunk, got.size());
+  }
+  CHECK_EQ(chunk_dispatches, static_cast<uint64_t>(n / chunk));
+
+  std::cout << "[bm32-projection] m=" << m << " k=" << k << " n=" << n
+            << " dense=1 dispatch, chunks=" << n / chunk
+            << " dispatches, oracle=integer-RNE\n";
+
+  if (saved_flag) {
+    setenv(flag, saved_flag->c_str(), 1);
+  } else {
+    unsetenv(flag);
+  }
+}
