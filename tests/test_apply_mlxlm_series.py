@@ -205,12 +205,21 @@ def test_host_offset_mirror_tracks_device_through_transitions(venv, tmp_path):
         cwd=tmp_path, check=True, capture_output=True, text=True, timeout=30,
     )
     code = """
+import importlib.metadata
 import os
+import sys
 import mlx.core as mx
 from mlx_lm.models import cache
 from mlx_lm.models.cache import BatchKVCache, KVCache
 mx.set_default_device(mx.cpu)
-if os.environ.get("MLX_TEST_UPSTREAM_CPU") == "1":
+check_cpu_prov = os.environ.get("MLX_TEST_UPSTREAM_CPU") == "1"
+if not check_cpu_prov and sys.platform == "linux":
+    try:
+        importlib.metadata.distribution("mlx-cpu")
+        check_cpu_prov = True
+    except importlib.metadata.PackageNotFoundError:
+        pass
+if check_cpu_prov:
     from mlx_provenance import native_provenance, provenance_line
 
     prov = native_provenance(upstream_cpu=True)
@@ -220,7 +229,8 @@ if os.environ.get("MLX_TEST_UPSTREAM_CPU") == "1":
     assert prov["verified"] == "match", prov["mismatch"] or prov["note"]
 print(f"mlx={mx.__version__} binding={mx.__file__} device={mx.default_device()} "
       f"mlx-lm={os.environ['TEST_MLX_LM_VERSION']} cache={cache.__file__}")
-keys = mx.zeros((2, 2, 2, 8))
+keys3 = mx.zeros((3, 2, 2, 8))
+keys2 = mx.zeros((2, 2, 2, 8))
 
 for flag in ("1", None):
     if flag is None:
@@ -230,22 +240,29 @@ for flag in ("1", None):
     def mirror(c, want):
         got = c.offset.tolist()
         assert got == want, f"device {got} != {want}"
+        if c.keys is not None:
+            assert c.keys.shape[0] == len(want), f"batch {c.keys.shape[0]} != {len(want)}"
         # the flag-off arm tracks device-only: the mirror must be None there
         expected_host = want if flag == "1" else None
         assert c._host_offset == expected_host, f"host {c._host_offset} != {expected_host}"
 
-    # mixed left-padding
+    # mixed left-padding (3-row cache receives 3-row keys)
     c = BatchKVCache([0, 1, 3])
     mirror(c, [0, -1, -3])
     # extend through two updates
-    c.update_and_fetch(keys, keys)
+    c.update_and_fetch(keys3, keys3)
     mirror(c, [2, 1, -1])
-    c.update_and_fetch(keys, keys)
+    c.update_and_fetch(keys3, keys3)
     mirror(c, [4, 3, 1])
     # filter with a list rewrites the mirror in the new row order
     c.filter([2, 0])
     mirror(c, [1, 4])
-    c.update_and_fetch(keys, keys)
+    c.update_and_fetch(keys2, keys2)
+    mirror(c, [3, 6])
+    # trim while the mirror is live must update both device and host offsets
+    assert c.trim(2) == 2
+    mirror(c, [1, 4])
+    c.update_and_fetch(keys2, keys2)
     mirror(c, [3, 6])
     # filter with a device index array must drop the mirror, not stale it
     c.filter(mx.array([1, 0]))
@@ -255,7 +272,7 @@ for flag in ("1", None):
     assert c.trim(2) == 2
     assert c.offset.tolist() == [4, 1], c.offset.tolist()
     assert c._host_offset is None, "trim must not resurrect a dropped mirror"
-    c.update_and_fetch(keys, keys)
+    c.update_and_fetch(keys2, keys2)
     assert c.offset.tolist() == [6, 3], c.offset.tolist()
     assert c._host_offset is None
     # retirement clamps at the consumed length, still device-only
@@ -265,12 +282,12 @@ for flag in ("1", None):
 
     # external assignment invalidates; later updates must not resurrect it
     e = BatchKVCache([1, 0])
-    e.update_and_fetch(keys, keys)
+    e.update_and_fetch(keys2, keys2)
     mirror(e, [1, 2])
     e.offset = mx.array([8, 9])
     assert e.offset.tolist() == [8, 9]
     assert e._host_offset is None, "outside assignment must drop the mirror"
-    e.update_and_fetch(keys, keys)
+    e.update_and_fetch(keys2, keys2)
     assert e.offset.tolist() == [10, 11]
     assert e._host_offset is None
     assert e.trim(100) == 4
@@ -279,7 +296,7 @@ for flag in ("1", None):
 
     # Merge takes ordinary KVCache inputs with scalar offsets.
     longer, shorter = KVCache(), KVCache()
-    row = keys[:1]
+    row = keys2[:1]
     longer.update_and_fetch(row, row)
     shorter.update_and_fetch(row[:, :, :1], row[:, :, :1])
     merged = BatchKVCache.merge([longer, shorter])
@@ -287,11 +304,11 @@ for flag in ("1", None):
 
     # State assignment invalidates the destination's old mirror.
     r = BatchKVCache([1, 0])
-    r.update_and_fetch(keys, keys)
+    r.update_and_fetch(keys2, keys2)
     r.state = merged.state
     assert r.offset.tolist() == [2, 1]
     assert r._host_offset is None
-    r.update_and_fetch(keys, keys)
+    r.update_and_fetch(keys2, keys2)
     assert r.offset.tolist() == [4, 3]
     assert r._host_offset is None
 """

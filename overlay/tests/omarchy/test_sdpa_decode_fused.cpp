@@ -670,6 +670,7 @@ TEST_CASE("masked batch-2 BF16 decode keeps the composed score semantics") {
   Stream stream = gpu_stream();
   if (!hd_route_ready(stream) ||
       omarchy::get_command_encoder(stream).device().compute().binding_limit() < 5) {
+    printf("Skipping: masked batch-2 BF16 decode route refuses on this device\n");
     return;
   }
   constexpr int keys = 263;
@@ -686,11 +687,21 @@ TEST_CASE("masked batch-2 BF16 decode keeps the composed score semantics") {
       {2, 1, 1, keys}, stream);
   auto additive = where(
       mask, array(0.0f, bfloat16), array(-0x1.fep127f, bfloat16), stream);
+  // Sliced, head-varying, key-strided mask: distinct non-zero offset, batch,
+  // head, and key strides so swapped push constants or a dropped add fail.
+  constexpr int strided_cols = keys * 2 + 5;
+  auto strided_storage = reshape(
+      astype(hd_pattern_values(2 * kHdHeads * strided_cols, 77), bfloat16, stream),
+      {2, kHdHeads, 1, strided_cols}, stream);
+  auto strided_mask = slice(
+      strided_storage, {0, 0, 0, 3}, {2, kHdHeads, 1, 3 + keys * 2},
+      {1, 1, 1, 2}, stream);
   q.eval();
   k.eval();
   v.eval();
   mask.eval();
   additive.eval();
+  strided_mask.eval();
   omarchy::get_command_encoder(stream).synchronize();
   auto sdpa = [&](const array& m) {
     return fast::scaled_dot_product_attention(
@@ -700,15 +711,22 @@ TEST_CASE("masked batch-2 BF16 decode keeps the composed score semantics") {
   const auto composed_dispatches = dispatches_for([&] { return sdpa(mask); }, stream);
   auto composed = sdpa(mask);
   composed.eval();
+  auto composed_strided = sdpa(strided_mask);
+  composed_strided.eval();
   setenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK", "1", 1);
   const auto dispatches = dispatches_for([&] { return sdpa(additive); }, stream);
+  const auto strided_dispatches = dispatches_for([&] { return sdpa(strided_mask); }, stream);
   const auto bool_dispatches = dispatches_for([&] { return sdpa(mask); }, stream);
   auto fused = sdpa(mask);
   fused.eval();
+  auto fused_strided = sdpa(strided_mask);
+  fused_strided.eval();
   unsetenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK");
   CHECK_EQ(dispatches, 1);
+  CHECK_EQ(strided_dispatches, 1);
   CHECK_LT(bool_dispatches, composed_dispatches);
   require_hd_bit_identical(fused, composed, stream);
+  require_hd_bit_identical(fused_strided, composed_strided, stream);
 }
 
 TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") {
