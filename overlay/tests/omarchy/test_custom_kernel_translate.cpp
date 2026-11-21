@@ -886,11 +886,13 @@ TEST_CASE("a trailing dot keeps multiply binary") {
       "    device float* y [[buffer(1)]],\n"
       "    uint i [[thread_position_in_grid]]) {\n"
       "  uint n = i;\n"
-      "  y[i] = 2. * x[i] + 2. * n;\n"
+      "  y[i] = 2. * x[i] + 2. * n + sizeof(int) * i;\n"
       "}\n";
   auto glsl = translate(source, 1);
   CHECK(glsl.find("2. * _mlx_arg0[i]") != std::string::npos);
   CHECK(glsl.find("2. * n") != std::string::npos);
+  // `sizeof(int) * i` is multiply — the sizeof argument is not a cast.
+  CHECK(glsl.find("sizeof(int) * i") != std::string::npos);
 }
 
 TEST_CASE("dereference after a control header or cast still lowers") {

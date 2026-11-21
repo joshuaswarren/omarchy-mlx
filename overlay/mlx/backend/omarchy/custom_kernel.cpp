@@ -1307,8 +1307,13 @@ void translate_pointer_derefs(
               "char2",   "char3",     "char4",   "uchar2",  "uchar3",
               "uchar4",  "short2",    "short3",  "short4",  "ushort2",
               "ushort3", "ushort4",   "bool2",   "bool3",   "bool4"};
+          // `sizeof(int) * p` — the `)` ends sizeof's complete operand;
+          // its type-shaped argument is not a cast.
+          static const std::unordered_set<std::string> keyword_call = {
+              "sizeof", "alignof", "decltype", "noexcept", "static_assert"};
           if (control.count(caller) ||
-              (std::regex_match(inner, inner_match, cast_inner) &&
+              (!keyword_call.count(caller) &&
+               std::regex_match(inner, inner_match, cast_inner) &&
                (!inner_match[1].str().empty() ||
                 type_words.count(inner_match[2].str())))) {
             operand_before = false;
