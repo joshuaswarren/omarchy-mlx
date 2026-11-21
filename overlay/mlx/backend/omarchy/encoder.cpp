@@ -3,6 +3,7 @@
 
 #include "mlx/backend/omarchy/encoder.h"
 #include <algorithm>
+#include <map>
 #include <cstdio>
 #include <stdexcept>
 #include <string_view>
@@ -38,78 +39,59 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
 } // namespace
 
 std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
-  const size_t n = nodes.size();
-  std::vector<uint32_t> level(n, 0);
-  // Earlier writers and readers of each buffer, so a node only range-checks
-  // against nodes that could possibly hazard it: its reads against earlier
-  // writers (RAW), its writes against earlier writers and readers (WAW,
-  // WAR). Read-read pairs never hazard, so a buffer every node reads (one
-  // shared activation) adds no candidates and the pass stays linear.
-  std::unordered_map<VkBuffer, std::vector<uint32_t>> writers;
-  std::unordered_map<VkBuffer, std::vector<uint32_t>> readers;
-  auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
-    return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
+  // Earlier reads and writes of each buffer, one entry per exact byte range
+  // with the highest level that touched it. A node takes 1 + the highest
+  // level among overlapping earlier writes (RAW, WAW) and, for its writes,
+  // overlapping earlier reads (WAR). Read-read pairs never hazard. Many
+  // nodes that read one range, or write disjoint slices of one buffer, keep
+  // each query short, so the pass stays near linear in the batch length.
+  struct RangeLevels {
+    std::map<std::pair<VkDeviceSize, VkDeviceSize>, uint32_t> ranges;
+    VkDeviceSize max_len = 0;
+    int64_t max_overlap(const TrackedRange& q) const {
+      int64_t best = -1;
+      for (auto it = ranges.lower_bound({q.end, 0}); it != ranges.begin();) {
+        --it;
+        const auto [offset, end] = it->first;
+        if (offset <= q.offset && q.offset - offset >= max_len) {
+          break;
+        }
+        if (q.offset < end) {
+          best = std::max<int64_t>(best, it->second);
+        }
+      }
+      return best;
+    }
+    void add(const TrackedRange& r, uint32_t level) {
+      auto [it, inserted] = ranges.try_emplace({r.offset, r.end}, level);
+      if (!inserted) {
+        it->second = std::max(it->second, level);
+      }
+      max_len = std::max(max_len, r.end - r.offset);
+    }
   };
-  std::vector<uint32_t> candidates;
-  for (size_t i = 0; i < n; ++i) {
-    candidates.clear();
+  std::unordered_map<VkBuffer, RangeLevels> writers;
+  std::unordered_map<VkBuffer, RangeLevels> readers;
+  auto highest = [](const std::unordered_map<VkBuffer, RangeLevels>& index,
+                    const TrackedRange& q) -> int64_t {
+    auto it = index.find(q.buffer);
+    return it == index.end() ? -1 : it->second.max_overlap(q);
+  };
+  std::vector<uint32_t> level(nodes.size(), 0);
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    int64_t source = -1;
     for (const auto& r : nodes[i].reads) {
-      if (auto it = writers.find(r.buffer); it != writers.end()) {
-        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
-      }
+      source = std::max(source, highest(writers, r));
     }
-    for (const auto& r : nodes[i].writes) {
-      if (auto it = writers.find(r.buffer); it != writers.end()) {
-        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
-      }
-      if (auto it = readers.find(r.buffer); it != readers.end()) {
-        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
-      }
+    for (const auto& w : nodes[i].writes) {
+      source = std::max({source, highest(writers, w), highest(readers, w)});
     }
-    std::sort(candidates.begin(), candidates.end());
-    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-    uint32_t wave = 0;
-    for (uint32_t j : candidates) {
-      const WaveNode& earlier = nodes[j];
-      bool hazard = false;
-      for (const auto& r : nodes[i].reads) {
-        for (const auto& w : earlier.writes) {
-          if (overlaps(r, w)) {
-            hazard = true;
-            break;
-          }
-        }
-      }
-      for (const auto& w : nodes[i].writes) {
-        if (hazard) {
-          break;
-        }
-        for (const auto& tw : earlier.writes) {
-          if (overlaps(w, tw)) {
-            hazard = true;
-            break;
-          }
-        }
-        if (hazard) {
-          break;
-        }
-        for (const auto& tr : earlier.reads) {
-          if (overlaps(w, tr)) {
-            hazard = true;
-            break;
-          }
-        }
-      }
-      if (hazard) {
-        wave = std::max(wave, level[j] + 1);
-      }
-    }
-    level[i] = wave;
+    level[i] = static_cast<uint32_t>(source + 1);
     for (const auto& r : nodes[i].reads) {
-      readers[r.buffer].push_back(static_cast<uint32_t>(i));
+      readers[r.buffer].add(r, level[i]);
     }
-    for (const auto& r : nodes[i].writes) {
-      writers[r.buffer].push_back(static_cast<uint32_t>(i));
+    for (const auto& w : nodes[i].writes) {
+      writers[w.buffer].add(w, level[i]);
     }
   }
   return level;
