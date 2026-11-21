@@ -18,8 +18,10 @@ the asset, gate and measured sections at cut time.
 - **Fused masked batch-2 BF16 decode is on by default (#531).** This uses
   the fused route introduced in v0.7.48 (#521).
   `MLX_OMARCHY_SDPA_DECODE_BOOL_MASK=0` restores the composed route.
-  Measured on the 16-inch M1 Max over five AB and BA pairs: two streams
-  53.895 -> 68.934 tokens per second, token digests identical.
+  Measured on a 16-inch M1 Max over five AB and BA pairs: two streams
+  53.895 -> 68.934 tokens per second, token digests identical, zero GPU
+  timeouts and no other GPU in use. The receipt is
+  `receipts/2026-11-20-fused-bool-mask-decode/`.
 - **The backend accepts the Borealis driver name, id, ICD file and env
   prefix (#532)** so installs on the Borealis stack pick our ICD instead
   of failing the system-ICD retry.
@@ -41,8 +43,9 @@ This is the first release that ships the BitNet fix, the nine CBQ kernels
 and the BM32 route. The BM32 route stays off by default and is enabled
 with `MLX_OMARCHY_MATMUL_BM32=1`.
 
-Source: `8215e1cc3c` (the release commit: main `86fcc43cef` with this
-receipt). Mesa qualification pin: unchanged from v0.7.48
+Source: main `86fcc43cef` (PR #548 the mlx-lm BitNet FP32 fallback
+correction and PR #546 the native generated token IDs). The release commit
+adds only this receipt. Mesa qualification pin: unchanged from v0.7.48
 (`439dc032d70ab9ec7e3b40afd4efd920f75c56f1`) unless the release owner
 repins.
 
@@ -56,11 +59,18 @@ receipt conventions.
 ## Draft notes
 
 - Cut point: merged main `86fcc43cef` (PR #548 the BitNet FP32 correction
-  and PR #546 the native token IDs), with this receipt in the release
-  commit `8215e1cc3c`. The qualification-kit r4 pre-release (tag
-  `qualification-r4`, cut from the same tree) already exercises the kit
-  side.
+  and PR #546 the native token IDs). The release commit adds this receipt
+  and nothing else.
+- Qualification kit: this release ships the kit as it stands on main
+  `86fcc43cef`, which includes PR #543 (the r4 wheel pin and the measured
+  reference), PR #545 (results are kept after a GPU correctness failure)
+  and PR #546 (native generated token ids are captured and compared). The
+  `qualification-r4` pre-release tag was cut from `57486b3ccd`, which is
+  the tree of PR #543 alone, so that tag does not carry PR #545 or PR #546.
+  A kit pre-release for this tree has to be cut separately.
 - Version: **v0.7.49** follows v0.7.48 with no skipped number;
   `scripts/check-version-stability.py` stays the release-owner check.
 - PR #538 (the CBQ Apple GPU receipt) is merged, so the release receipt
   can cite its rows as landed evidence.
+- The fused decode numbers in the notes come from
+  `receipts/2026-11-20-fused-bool-mask-decode/`.
