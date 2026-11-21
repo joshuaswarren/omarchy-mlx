@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# no set -e: sourced by build-wheel.sh, which sets strict mode
 # Base CMake args for the mlx-omarchy release wheel build. Sourced by
 # scripts/build-wheel.sh, which appends host-specific additions to
 # $CMAKE_ARGS afterwards.
