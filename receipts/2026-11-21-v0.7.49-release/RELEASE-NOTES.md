@@ -27,9 +27,23 @@ the asset, gate and measured sections at cut time.
   beside the vendored OpenBLAS and pins the library directory to `lib`
   (refusing `lib64`); the qualification kit imports the r3/r4 sources,
   pins the r4 wheel and keeps the suite running past a timeout or abort.
+- **The mlx-lm BitNet CPU fallback keeps FP32 scaling (#548).** This is
+  the first stable release that ships the fix. The installed series that
+  already carry the earlier patch get a separate precision migration
+  patch, and the upgrade path is idempotent: a second install skips the
+  patch instead of applying it twice. Both installer regressions are
+  green in the pinned series.
+- **The qualification kit captures and compares native generated token
+  IDs (#546)**, so a kit run compares the tokens the runtime produced
+  instead of a rendered string.
 
-Source: `57486b3cc` (main at draft time). Mesa qualification pin: unchanged from
-v0.7.48 (`439dc032d70ab9ec7e3b40afd4efd920f75c56f1`) unless the release owner
+This is the first release that ships the BitNet fix, the nine CBQ kernels
+and the BM32 route. The BM32 route stays off by default and is enabled
+with `MLX_OMARCHY_MATMUL_BM32=1`.
+
+Source: `8215e1cc3c` (the release commit: main `86fcc43cef` with this
+receipt). Mesa qualification pin: unchanged from v0.7.48
+(`439dc032d70ab9ec7e3b40afd4efd920f75c56f1`) unless the release owner
 repins.
 
 ## Asset, gates, measured numbers
@@ -41,10 +55,12 @@ receipt conventions.
 
 ## Draft notes
 
-- Cut point: merged main `57486b3cc`; the qualification-kit r4 pre-release
-  (tag `qualification-r4`, cut from the same commit) already exercises the
-  kit side.
+- Cut point: merged main `86fcc43cef` (PR #548 the BitNet FP32 correction
+  and PR #546 the native token IDs), with this receipt in the release
+  commit `8215e1cc3c`. The qualification-kit r4 pre-release (tag
+  `qualification-r4`, cut from the same tree) already exercises the kit
+  side.
 - Version: **v0.7.49** follows v0.7.48 with no skipped number;
   `scripts/check-version-stability.py` stays the release-owner check.
-- PR #538 (the CBQ Apple GPU receipt) should merge before or with the cut
-  so the release receipt can cite its rows as landed evidence.
+- PR #538 (the CBQ Apple GPU receipt) is merged, so the release receipt
+  can cite its rows as landed evidence.
