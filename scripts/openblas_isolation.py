@@ -30,6 +30,10 @@ Subcommands:
   vendor WHEEL [--openblas PATH] [--patchelf BIN]
       Rewrite WHEEL in place. Needs the `patchelf` binary; the wheel is
       left untouched when libmlx.so has no bare libopenblas.so.0 NEEDED.
+      The OpenBLAS passed to --openblas must have its gcc runtime
+      (libgfortran.so.5, libgomp.so.1) in the same directory; those
+      libraries are copied into mlx/lib/ unchanged, so a bare container
+      without the gcc runtime can still import mlx.core.
   check WHEEL [WHEEL ...]
       Exit nonzero if any wheel still carries the bare soname or an
       inconsistent vendored entry. Pure ELF parsing, no patchelf needed.
