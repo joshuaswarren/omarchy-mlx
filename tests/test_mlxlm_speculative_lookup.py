@@ -26,7 +26,7 @@ def site(request, tmp_path_factory):
     return root / "lib" / "python3.11" / "site-packages" / "mlx_lm"
 
 
-def helpers(site, *names):
+def helpers(site, *names, extra_ns=None):
     tree = ast.parse((site / "generate.py").read_text())
     keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     assert {n.name for n in keep} == set(names)
@@ -34,7 +34,7 @@ def helpers(site, *names):
         n.decorator_list = []
     module = ast.Module(body=keep, type_ignores=[])
     ast.fix_missing_locations(module)
-    ns = {"os": os}
+    ns = {"os": os, **(extra_ns or {})}
     exec(compile(module, "generate.py", "exec"), ns)
     return [ns[n] for n in names]
 
@@ -83,6 +83,63 @@ def test_verify_pass_sets_and_restores_the_routes(site, monkeypatch):
     monkeypatch.setenv("MLX_OMARCHY_QMV_SMALL_T", "0")
     with verify(4):
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "0"
+
+
+def test_snapshot_detaches_tuple_state_from_the_live_cache(site):
+    # 0.32 ArraysCache.state is a tuple holding the live cache list, and
+    # CacheList.state nests sub-cache states; a verify pass writes into those
+    # containers, so the snapshot must clone every list/tuple level or a
+    # rejected draft restores corrupted state.
+    trimmed = []
+
+    def trim(caches, n):
+        trimmed.append(n)
+
+    cache_mod = type("cache", (), {"trim_prompt_cache": staticmethod(trim)})
+    snap, restore = helpers(
+        site,
+        "_omarchy_snapshot",
+        "_omarchy_restore",
+        extra_ns={"trim_prompt_cache": trim, "cache": cache_mod},
+    )
+
+    class Arrays:
+        def __init__(self):
+            self.cache = ["a"]
+
+        def is_trimmable(self):
+            return False
+
+        @property
+        def state(self):
+            return (self.cache, None, None)
+
+        @state.setter
+        def state(self, v):
+            self.cache, _, _ = v
+
+    class Wrap:  # CacheList shape: [(state, name), ...]
+        def __init__(self, inner):
+            self.inner = inner
+
+        def is_trimmable(self):
+            return False
+
+        @property
+        def state(self):
+            return [(self.inner.state, "ArraysCache")]
+
+        @state.setter
+        def state(self, v):
+            ((st, _),) = v
+            self.inner.state = st
+
+    for cache in (Arrays(), Wrap(Arrays())):
+        snapshot = snap([cache])
+        inner = getattr(cache, "inner", cache)
+        inner.cache.append("verify-write")
+        restore([cache], snapshot, 1)
+        assert inner.cache == ["a"], inner.cache
 
 
 TOY = r"""

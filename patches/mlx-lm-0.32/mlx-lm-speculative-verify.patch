@@ -8,7 +8,7 @@
  import os
  import sys
  import time
-@@ -696,10 +697,66 @@
+@@ -696,10 +697,72 @@
              n += 1
  
  
@@ -57,8 +57,14 @@
 +
 +def _omarchy_snapshot(prompt_cache):
 +    # Recurrent layers (ArraysCache: GDN, conv state) cannot be trimmed; keep
-+    # their state so a rejected draft can be rolled back.
-+    return [None if c.is_trimmable() else list(c.state) for c in prompt_cache]
++    # their state so a rejected draft can be rolled back. The state tuples hold
++    # live containers (ArraysCache.cache is the list a verify pass writes into,
++    # and CacheList nests sub-cache states), so clone every list/tuple level;
++    # arrays and scalars pass through.
++    def clone(v):
++        return [clone(x) for x in v] if isinstance(v, (list, tuple)) else v
++
++    return [None if c.is_trimmable() else clone(c.state) for c in prompt_cache]
 +
 +
 +def _omarchy_restore(prompt_cache, snapshot, num_tokens):
@@ -76,7 +82,7 @@
      stream: mx.Stream | mx.ThreadLocalStream = generation_stream,
      *,
      num_draft_tokens: int = 2,
-@@ -711,6 +768,9 @@
+@@ -711,6 +774,9 @@
      kv_bits: Optional[int] = None,
      kv_group_size: int = 64,
      quantized_kv_start: int = DEFAULT_QUANTIZED_KV_START,
@@ -86,7 +92,7 @@
  ) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
      """
      A generator producing token ids based on the given prompt from the model.
-@@ -718,7 +778,10 @@
+@@ -718,7 +784,10 @@
      Args:
          prompt (mx.array): The input prompt.
          model (nn.Module): The model to use for generation.
@@ -98,7 +104,7 @@
          num_draft_tokens (int, optional): The number of draft tokens for
            speculative decoding. Default: ``2``.
          max_tokens (int): The maximum number of tokens. Use``-1`` for an infinite
-@@ -729,13 +792,20 @@
+@@ -729,13 +798,20 @@
            A list of functions that take tokens and logits and return the processed
            logits. Default: ``None``.
          prompt_cache (List[Any], optional): A pre-computed prompt cache. Note, if
@@ -120,7 +126,7 @@
  
      Yields:
          Tuple[mx.array, mx.array, bool]: One token, a vector of log probabilities,
-@@ -744,20 +814,26 @@
+@@ -744,20 +820,26 @@
  
      y = prompt.astype(mx.uint32)
      prev_tokens = None
@@ -153,7 +159,7 @@
  
      sampler = sampler or greedy_sampler
  
-@@ -808,13 +884,24 @@
+@@ -808,13 +890,24 @@
              mx.clear_cache()
          return y
  
@@ -180,7 +186,7 @@
          ys = []
          for _ in range(num_draft):
              y, _ = _step(draft_model, draft_cache, y)
-@@ -823,24 +910,61 @@
+@@ -823,24 +916,61 @@
          return mx.concatenate(ys)
  
      with mx.stream(stream):
@@ -246,7 +252,7 @@
                  draft_tokens = draft_tokens.tolist()
                  tokens = tokens.tolist()
                  n = 0
-@@ -850,32 +974,61 @@
+@@ -850,32 +980,61 @@
                          break
                      n += 1
                      ntoks += 1
@@ -311,7 +317,7 @@
  
  
  def stream_generate(
-@@ -928,7 +1081,19 @@
+@@ -928,7 +1087,19 @@
  
      kwargs["max_tokens"] = max_tokens
  
