@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -123,6 +124,7 @@ class ArchiveTest(unittest.TestCase):
             self.assertIn('omarchy-mlx-qualification-kit-test-tag/scripts/apply-mlx-lm-patches.sh', names)
             self.assertIn('omarchy-mlx-qualification-kit-test-tag/qualification-kit/qualify.py', names)
             self.assertTrue(any(name.endswith('patches/mlx-lm-last-logits.patch') for name in names))
+            self.assertFalse(any('__pycache__' in name for name in names))
             extracted = out / 'extracted'
             extracted.mkdir()
             subprocess.run(['tar', '-xf', str(archive), '-C', str(extracted)], check=True)
@@ -133,6 +135,21 @@ class ArchiveTest(unittest.TestCase):
             found = qualify.patch_series_script(kit_root / 'qualification-kit')
             self.assertEqual(found, script)
             self.assertTrue((found.parent.parent / 'patches').is_dir())
+
+    def test_archive_holds_every_helper_the_apply_script_names(self):
+        root = Path(__file__).resolve().parent.parent
+        apply_script = (root / 'scripts' / 'apply-mlx-lm-patches.sh').read_text()
+        named = set(re.findall(r'patch-mlx-lm-[a-z0-9-]+\.py', apply_script))
+        self.assertTrue(named, 'the apply script names no helper')
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            subprocess.run(['bash', str(root / 'scripts' / 'seal-qualification-kit.sh'),
+                            str(out), 'helper-tag'], capture_output=True, text=True, check=True)
+            archive = out / 'omarchy-mlx-qualification-kit-helper-tag.tar'
+            names = subprocess.run(['tar', '-tf', str(archive)], capture_output=True,
+                                   text=True, check=True).stdout.splitlines()
+            for helper in named:
+                self.assertIn(f'omarchy-mlx-qualification-kit-helper-tag/scripts/{helper}', names)
 
     def test_archive_without_the_series_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

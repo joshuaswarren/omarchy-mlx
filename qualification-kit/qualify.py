@@ -203,11 +203,12 @@ def patch_state(site):
     row means: ``patched`` for the Linux release arm, which applies the
     series, and ``stock`` for the macOS baseline arm, which does not.
 
-    A site that cannot be read, or a tree that carries the record
-    without a single marker, is neither: the state is ``unreadable`` and
-    the run is refused. A record alone proves nothing.
+    Three cases are ``unreadable`` and the run is refused: a site the kit
+    cannot read, a file it cannot read, and a tree that carries markers
+    without the completion record. A record alone proves nothing either,
+    so a record without a single marker is ``unreadable`` too.
     """
-    if site is None:
+    if site is None or not (site / 'mlx_lm').is_dir():
         return {'state': 'unreadable', 'series_present': False, 'record_sha256': None,
                 'eager_swiglu_markers': 0}
     record = site / 'mlx_lm' / PATCH_RECORD
@@ -216,9 +217,10 @@ def patch_state(site):
         try:
             markers += path.read_text(errors='replace').count(PATCH_MARKER)
         except OSError:
-            continue
+            return {'state': 'unreadable', 'series_present': record.is_file(),
+                    'record_sha256': None, 'eager_swiglu_markers': markers}
     present = record.is_file()
-    if present and markers == 0:
+    if present and markers == 0 or not present and markers:
         state = 'unreadable'
     else:
         state = 'patched' if present else 'stock'
