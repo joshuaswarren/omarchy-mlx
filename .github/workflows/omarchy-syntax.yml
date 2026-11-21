@@ -131,8 +131,8 @@ jobs:
         run: |
           cmake --build .work/build --target omarchy_custom_kernel_translate_tests \
             omarchy_vocab_tail_tests omarchy_sdpa_decode_mask_layout_tests \
-            omarchy_step_timeline_tests omarchy_sdpa_decode_fused_tests \
-            omarchy_matmul_family_tests
+            omarchy_step_timeline_tests omarchy_step_timeline_eval_tests \
+            omarchy_sdpa_decode_fused_tests omarchy_matmul_family_tests
       - name: Run the translator unit tests
         run: ctest --test-dir .work/build -R omarchy_custom_kernel_translate_tests --output-on-failure
       - name: Run standalone mask-layout unit tests
@@ -203,6 +203,11 @@ jobs:
           icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
           [[ ${#icds[@]} -eq 1 && -f ${icds[0]} ]]
           export VK_DRIVER_FILES="${icds[0]}"
+          .work/build/tests/omarchy/omarchy_step_timeline_eval_tests | tee .work/step-timeline-eval.out
+          if grep -q 'Skipping:' .work/step-timeline-eval.out; then
+            exit 1
+          fi
+          grep -q 'test_step_timeline_eval: PASS' .work/step-timeline-eval.out
           rm -f .work/step-timeline.ndjson
           MLX_OMARCHY_STEP_TIMELINE=.work/step-timeline.ndjson \
             .work/build/tests/omarchy/omarchy_sdpa_decode_fused_tests \
@@ -240,6 +245,9 @@ jobs:
           assert not missing, f"missing timeline kinds: {sorted(missing)}"
           for e in events:
               assert e["k"] == "e" and e["t0"] >= meta["t0_ns"] and e["dur"] >= 0
+          batch_opens = [e["t0"] for e in events if e["kind"] == "step_begin" and e["sub"] == "batch_open"]
+          first_ops = [e["t0"] for e in events if e["kind"] in ("pipeline_lookup", "desc_update", "cmd_begin", "cmd_record")]
+          assert batch_opens and first_ops and min(batch_opens) <= min(first_ops), (min(batch_opens), min(first_ops))
           print(f"step-timeline OK: written={meta['written']} events={len(events)} kinds={len(seen_kinds)}")
           PY
       - name: Run BM32 projection probe (software Vulkan)

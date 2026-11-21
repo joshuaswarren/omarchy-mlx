@@ -77,6 +77,11 @@ void eval(array& arr) {
   // Open-batch state BEFORE this op records: a batch spans every op
   // recorded between commits.
   bool batch_open = encoder.needs_commit();
+  const uint64_t batch_open_t0 =
+      (!batch_open &&
+       MLX_OMARCHY_TIMELINE_UNLIKELY(omarchy::timeline::enabled()))
+      ? omarchy::timeline::monotonic_ns()
+      : 0;
   if (g_first_state == 0 && !batch_open) {
     g_first_state = omarchy::batch_first_budget() > 0 ? 1 : 2;
     static const bool trace_first = std::getenv("MLX_OMARCHY_BATCH_TRACE") != nullptr;
@@ -115,10 +120,14 @@ void eval(array& arr) {
   // submission flushed them.
   if (encoder.needs_commit()) {
     if (!batch_open) {
-      omarchy::timeline::record(
-          omarchy::timeline::Kind::StepBegin,
-          omarchy::timeline::SubKind::BatchOpen,
-          encoder.timeline_id());
+      if (MLX_OMARCHY_TIMELINE_UNLIKELY(batch_open_t0 != 0)) {
+        omarchy::timeline::record_span(
+            omarchy::timeline::Kind::StepBegin,
+            omarchy::timeline::SubKind::BatchOpen,
+            batch_open_t0,
+            batch_open_t0,
+            encoder.timeline_id());
+      }
       // One scheduler task and one completion notification per batch,
       // attached when the batch opens so that every close path
       // (finalize, event flush contract, node budget, host read sync)

@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cinttypes>
 #include <cstdint>
@@ -382,64 +383,77 @@ class StepTimelineRing {
     const uint64_t start = total > capacity_ ? total - capacity_ : 0;
     const uint64_t drop = total > capacity_ ? total - capacity_ : 0;
     const uint64_t busy_drop = busy_dropped_.load(std::memory_order_acquire);
-    std::fprintf(
-        out,
-        "{\"k\":\"meta\",\"clock\":\"%s\",\"t0_ns\":%" PRIu64
-        ",\"capacity\":%" PRIu64 ",\"written\":%" PRIu64
-        ",\"dropped\":%" PRIu64 ",\"busy_dropped\":%" PRIu64 "}\n",
+    bool ok = std::fprintf(
+                  out,
+                  "{\"k\":\"meta\",\"clock\":\"%s\",\"t0_ns\":%" PRIu64
+                  ",\"capacity\":%" PRIu64 ",\"written\":%" PRIu64
+                  ",\"dropped\":%" PRIu64 ",\"busy_dropped\":%" PRIu64 "}\n",
 #if defined(__linux__)
-        "CLOCK_MONOTONIC",
+                  "CLOCK_MONOTONIC",
 #else
-        "steady_clock",
+                  "steady_clock",
 #endif
-        t0_origin_ns_,
-        capacity_,
-        total,
-        drop,
-        busy_drop);
-    for (uint64_t i = start; i < total; ++i) {
+                  t0_origin_ns_,
+                  capacity_,
+                  total,
+                  drop,
+                  busy_drop) >= 0;
+    for (uint64_t i = start; ok && i < total; ++i) {
       const Slot& slot = slots_[static_cast<size_t>(i & mask_)];
       if (slot.state.load(std::memory_order_acquire) != i + 1) {
         continue;
       }
       const Event& ev = slot.ev;
-      std::fprintf(
-          out,
-          "{\"k\":\"e\",\"seq\":%" PRIu64 ",\"kind\":\"%s\",\"sub\":\"%s\""
-          ",\"t0\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"tid\":%" PRIu32
-          ",\"st\":%" PRIu16 ",\"d\":%" PRIu64 "}\n",
-          i,
-          kind_name(static_cast<Kind>(ev.kind)),
-          subkind_name(static_cast<SubKind>(ev.subkind)),
-          ev.t0_ns,
-          ev.dur_ns,
-          ev.tid,
-          ev.stream_id,
-          ev.detail);
+      if (std::fprintf(
+              out,
+              "{\"k\":\"e\",\"seq\":%" PRIu64 ",\"kind\":\"%s\",\"sub\":\"%s\""
+              ",\"t0\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"tid\":%" PRIu32
+              ",\"st\":%" PRIu16 ",\"d\":%" PRIu64 "}\n",
+              i,
+              kind_name(static_cast<Kind>(ev.kind)),
+              subkind_name(static_cast<SubKind>(ev.subkind)),
+              ev.t0_ns,
+              ev.dur_ns,
+              ev.tid,
+              ev.stream_id,
+              ev.detail) < 0) {
+        ok = false;
+      }
     }
-    std::fprintf(out, "{\"k\":\"summary\",\"totals\":[");
+    if (ok && std::fprintf(out, "{\"k\":\"summary\",\"totals\":[") < 0) {
+      ok = false;
+    }
     bool first = true;
-    for (size_t i = 0; i < stats_.size(); ++i) {
+    for (size_t i = 0; ok && i < stats_.size(); ++i) {
       const uint64_t cnt = stats_[i].count.load(std::memory_order_relaxed);
       if (cnt == 0) {
         continue;
       }
       const auto sub = static_cast<SubKind>(i);
-      std::fprintf(
-          out,
-          "%s{\"kind\":\"%s\",\"sub\":\"%s\",\"count\":%" PRIu64
-          ",\"total_ns\":%" PRIu64 ",\"max_ns\":%" PRIu64 "}",
-          first ? "" : ",",
-          kind_name(subkind_kind(sub)),
-          subkind_name(sub),
-          cnt,
-          stats_[i].total_ns.load(std::memory_order_relaxed),
-          stats_[i].max_ns.load(std::memory_order_relaxed));
+      if (std::fprintf(
+              out,
+              "%s{\"kind\":\"%s\",\"sub\":\"%s\",\"count\":%" PRIu64
+              ",\"total_ns\":%" PRIu64 ",\"max_ns\":%" PRIu64 "}",
+              first ? "" : ",",
+              kind_name(subkind_kind(sub)),
+              subkind_name(sub),
+              cnt,
+              stats_[i].total_ns.load(std::memory_order_relaxed),
+              stats_[i].max_ns.load(std::memory_order_relaxed)) < 0) {
+        ok = false;
+      }
       first = false;
     }
-    std::fprintf(out, "]}\n");
-    std::fflush(out);
-    return true;
+    if (ok && std::fprintf(out, "]}\n") < 0) {
+      ok = false;
+    }
+    if (std::fflush(out) != 0) {
+      ok = false;
+    }
+    if (std::ferror(out) != 0) {
+      ok = false;
+    }
+    return ok;
   }
 
   bool dump_to_file(const char* path) const noexcept {
@@ -448,15 +462,30 @@ class StepTimelineRing {
     }
     std::FILE* f = std::fopen(path, "w");
     if (f == nullptr) {
+      const int err = errno;
       std::fprintf(
           stderr,
-          "[omarchy] cannot open MLX_OMARCHY_STEP_TIMELINE path %s\n",
-          path);
+          "[omarchy] cannot open MLX_OMARCHY_STEP_TIMELINE path %s: %s\n",
+          path,
+          err != 0 ? std::strerror(err) : "open failed");
+      std::fflush(stderr);
       return false;
     }
-    const bool ok = dump(f);
-    std::fclose(f);
-    return ok;
+    const bool dump_ok = dump(f);
+    const int dump_err = dump_ok ? 0 : errno;
+    const bool close_ok = (std::fclose(f) == 0);
+    const int close_err = close_ok ? 0 : errno;
+    if (!dump_ok || !close_ok) {
+      const int err = !dump_ok ? dump_err : close_err;
+      std::fprintf(
+          stderr,
+          "[omarchy] failed to write MLX_OMARCHY_STEP_TIMELINE path %s: %s\n",
+          path,
+          err != 0 ? std::strerror(err) : "I/O error");
+      std::fflush(stderr);
+      return false;
+    }
+    return true;
   }
 
  private:

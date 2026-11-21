@@ -661,6 +661,18 @@ target_link_options(omarchy_step_timeline_tests
 add_test(NAME omarchy_step_timeline_tests
          COMMAND omarchy_step_timeline_tests)
 
+# One-op GPU eval ordering test: proves eval.cpp stamps step_begin/batch_open
+# before the first primitive's pipeline_lookup/desc_update/cmd_begin/cmd_record.
+add_executable(omarchy_step_timeline_eval_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_step_timeline_eval.cpp)
+target_link_libraries(omarchy_step_timeline_eval_tests PRIVATE mlx)
+target_compile_options(omarchy_step_timeline_eval_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_step_timeline_eval_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_step_timeline_eval_tests
+         COMMAND omarchy_step_timeline_eval_tests)
+
 # Bf16FusedDecode: the fused single-query decode SDPA stays one dispatch,
 # agrees with the f32-score composition it replaced, and refuses uncovered
 # decode shapes by falling through to that composition.

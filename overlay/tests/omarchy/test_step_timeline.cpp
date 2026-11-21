@@ -423,6 +423,129 @@ int test_concurrent_stop_and_dump() {
   return 0;
 }
 
+int test_pre_op_step_begin_ordering() {
+  StepTimelineRing ring(32);
+  uint64_t fake_now = 10000;
+  auto fake_clock = [&]() -> uint64_t {
+    uint64_t v = fake_now;
+    fake_now += 50;
+    return v;
+  };
+  // Mirrors eval.cpp: capture pre-op start timestamp before the first
+  // primitive runs, record the op, then publish batch_open with the captured t0.
+  const uint64_t pre_op_t0 = fake_clock();
+  {
+    BasicScopedEvent op(
+        ring, Kind::CmdRecord, SubKind::Dispatch, 1, 7, fake_clock);
+  }
+  ring.record(Kind::StepBegin, SubKind::BatchOpen, pre_op_t0, 0, 1, 0);
+
+  char tmpl[] = "/tmp/omarchy-tl-ord-XXXXXX";
+  int fd = ::mkstemp(tmpl);
+  if (fd < 0) {
+    return fail(50, "mkstemp failed");
+  }
+  ::close(fd);
+  const std::string path(tmpl);
+  if (!ring.dump_to_file(path.c_str())) {
+    ::unlink(path.c_str());
+    return fail(50, "dump_to_file failed");
+  }
+  const std::string out = read_all(path);
+  ::unlink(path.c_str());
+
+  uint64_t batch_open_t0 = UINT64_MAX;
+  uint64_t op_t0 = UINT64_MAX;
+  std::istringstream iss(out);
+  std::string line;
+  while (std::getline(iss, line)) {
+    if (line.find("\"kind\":\"step_begin\",\"sub\":\"batch_open\"") !=
+        std::string::npos) {
+      extract_u64_field(line, "\"t0\":", batch_open_t0);
+    } else if (line.find("\"kind\":\"cmd_record\",\"sub\":\"dispatch\"") !=
+               std::string::npos) {
+      extract_u64_field(line, "\"t0\":", op_t0);
+    }
+  }
+  if (batch_open_t0 == UINT64_MAX || op_t0 == UINT64_MAX ||
+      batch_open_t0 > op_t0) {
+    return fail(51, "pre-op batch_open timestamp must precede first op");
+  }
+  return 0;
+}
+
+int test_dump_write_and_close_errors() {
+  // 1. Read-only FILE* must make dump() return false.
+  StepTimelineRing ring1(16);
+  ring1.record(Kind::StepBegin, SubKind::BatchOpen, 100, 0, 1, 0);
+  std::FILE* ro = std::fopen("/dev/null", "r");
+  if (ro == nullptr) {
+    return fail(52, "fopen /dev/null r failed");
+  }
+  const bool ro_ok = ring1.dump(ro);
+  std::fclose(ro);
+  if (ro_ok) {
+    return fail(53, "dump to read-only FILE* must return false");
+  }
+
+  // 2. Non-existent directory must make dump_to_file() return false.
+  StepTimelineRing ring2(16);
+  ring2.record(Kind::StepBegin, SubKind::BatchOpen, 100, 0, 1, 0);
+  if (ring2.dump_to_file("/nonexistent-omarchy-tl-dir/out.ndjson")) {
+    return fail(54, "dump_to_file to nonexistent directory must return false");
+  }
+
+  // 3. On Linux, /dev/full accepts fopen("w") and fails with ENOSPC on
+  // fflush/fclose. Verify dump_to_file() returns false AND atexit_dump()
+  // surfaces the failure to stderr.
+  if (::access("/dev/full", W_OK) == 0) {
+    StepTimelineRing ring3(16);
+    ring3.record(Kind::CmdRecord, SubKind::Dispatch, 100, 20, 1, 3);
+    if (ring3.dump_to_file("/dev/full")) {
+      return fail(55, "dump_to_file(/dev/full) must return false on ENOSPC");
+    }
+
+    int pipefd[2];
+    if (::pipe(pipefd) != 0) {
+      return fail(56, "pipe failed");
+    }
+    pid_t pid = ::fork();
+    if (pid < 0) {
+      ::close(pipefd[0]);
+      ::close(pipefd[1]);
+      return fail(56, "fork failed");
+    }
+    if (pid == 0) {
+      ::close(pipefd[0]);
+      ::dup2(pipefd[1], STDERR_FILENO);
+      ::close(pipefd[1]);
+      ::setenv("MLX_OMARCHY_STEP_TIMELINE", "/dev/full", 1);
+      ::setenv("MLX_OMARCHY_STEP_TIMELINE_CAP", "1024", 1);
+      record(Kind::StepBegin, SubKind::BatchOpen, 1, 0);
+      std::exit(0);
+    }
+    ::close(pipefd[1]);
+    std::string err_out;
+    char buf[256];
+    ssize_t n = 0;
+    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
+      err_out.append(buf, static_cast<size_t>(n));
+    }
+    ::close(pipefd[0]);
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      return fail(57, "dev/full child exited abnormally");
+    }
+    if (err_out.find("failed to write MLX_OMARCHY_STEP_TIMELINE") ==
+        std::string::npos) {
+      std::fprintf(stderr, "unexpected stderr: %s\n", err_out.c_str());
+      return fail(58, "atexit_dump did not surface /dev/full write failure");
+    }
+  }
+  return 0;
+}
+
 int test_capacity_parsing() {
   if (parse_capacity(nullptr) != kDefaultCapacity ||
       parse_capacity("") != kDefaultCapacity ||
@@ -575,12 +698,18 @@ int main() {
   if (int rc = test_concurrent_stop_and_dump()) {
     return rc;
   }
+  if (int rc = test_pre_op_step_begin_ordering()) {
+    return rc;
+  }
+  if (int rc = test_dump_write_and_close_errors()) {
+    return rc;
+  }
   if (int rc = test_capacity_parsing()) {
     return rc;
   }
   if (int rc = test_env_gate_and_atexit_dump()) {
     return rc;
   }
-  std::printf("test_step_timeline: 8/8 tests passed\n");
+  std::printf("test_step_timeline: 10/10 tests passed\n");
   return 0;
 }
