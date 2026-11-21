@@ -5,35 +5,24 @@ the asset, gate and measured sections at cut time.
 
 ## What changed
 
-- **Nine bounded CBQ custom kernels now dispatch on the Vulkan backend
-  (#524).** The shipped CBQ inventory (seven gather kernels and the two
-  upstream atomic gradient kernels) translates from the byte-identical
-  shipped MSL, validates as SPIR-V without int8/8-bit-storage or atomics,
-  and dispatches on the Apple GPU. Runtime receipt on the 16-inch M1 Max
-  (receipt `2026-11-21-cbq-applegpu`, PR #538): the seven gather kernels
-  pass per element against the integer oracles; the two atomic grad
-  kernels pass upstream's own relative-L2 bar (3.6e-08 both, bar 1e-5)
-  with two-boot, four-sample exact reproducibility; float32 and float64
-  CPU references agree exactly. The signed-lookup-bytes oracle fix rides
-  the same patch. The ABI/launch refusals stay fail-closed: near-match
-  bodies and contract mutations still refuse (17-case CI acceptance in
-  the syntax gate).
+- **Nine CBQ custom kernels run on the Vulkan backend (#524).** Seven gather
+  kernels pass the per-element comparison. The two gradient kernels pass the
+  `1e-5` relative-L2 bound on the 16-inch M1 Max. The Vulkan port keeps the
+  source, buffer signature and launch checks for all nine kernels.
 - **Opt-in BM32 BF16 GEMM for the Nemotron Labs Diffusion projections
   (#523).** 32x64x16 tile, FP32 accumulation, round-to-nearest-even BF16
   stores, complete-tile dense NT gate with
   `MLX_OMARCHY_MATMUL_BM32=1`; other shapes keep the general matmul
   route. The projection probe pins bit-exact integer-oracle outputs and
   exactly one (dense) or four (chunked) dedicated dispatches.
-- **The fused masked batch-2 BF16 decode route is the default (#531,
-  already in v0.7.48's notes as shipped code; its default flips here).**
+- **Fused masked batch-2 BF16 decode is on by default (#531).** This uses
+  the fused route introduced in v0.7.48 (#521).
   `MLX_OMARCHY_SDPA_DECODE_BOOL_MASK=0` restores the composed route.
   Measured on the 16-inch M1 Max over five AB and BA pairs: two streams
   53.895 -> 68.934 tokens per second, token digests identical.
 - **The backend accepts the Borealis driver name, id, ICD file and env
   prefix (#532)** so installs on the Borealis stack pick our ICD instead
   of failing the system-ICD retry.
-- **Batching under mlx-lm 0.31.3 preserves host RoPE offsets (#520)** so
-  batched decode keeps the exact single-request rotation behavior.
 - **Packaging fixes (#540-#543):** the wheel ships the GCC runtime libs
   beside the vendored OpenBLAS and pins the library directory to `lib`
   (refusing `lib64`); the qualification kit imports the r3/r4 sources,
