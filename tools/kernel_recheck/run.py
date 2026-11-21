@@ -17,6 +17,8 @@ Status classes:
   wrong     dispatched but outside tolerance (worst class; forces exit 3)
 """
 import argparse
+import hashlib
+import importlib.util
 import os
 import subprocess
 import sys
@@ -192,7 +194,48 @@ def _single(name):
 
 
 # ---------------------------------------------------------------- gpu parent
+def _provenance():
+    """Print which wheel produced this run. The 2026-11-13 receipt fixed
+    kda_glue_pre/post but a later report replayed the exact pre-fix counts:
+    nothing in the KERNEL rows named the library, so a stale wheel read as
+    a current result. The PROVENANCE line makes the wheel identity part of
+    every receipt."""
+    spec = importlib.util.find_spec("mlx")
+    dirs = []
+    if spec:
+        if spec.origin:
+            dirs = [Path(spec.origin).parent]
+        elif spec.submodule_search_locations:
+            # Namespace package: locations arrive in sys.path order and any
+            # of them may hold lib/, so search each in order.
+            dirs = [Path(p) for p in spec.submodule_search_locations]
+    pkgdir = dirs[0] if dirs else None
+    so = None
+    for cand in dirs:
+        libdir = cand / "lib"
+        if not libdir.is_dir():
+            continue
+        for pattern in ("libmlx.so", "libmlx*.so", "libmlx*.dylib"):
+            found = sorted(libdir.glob(pattern))
+            if found:
+                so = found[0]
+                pkgdir = cand
+                break
+        if so:
+            break
+    if so:
+        sha = hashlib.sha256(so.read_bytes()).hexdigest()
+        lib = str(so)
+    else:
+        sha, lib = "missing", "missing"
+    print(f"PROVENANCE mlx_dir={pkgdir if pkgdir else 'missing'} "
+          f"libmlx={lib} libmlx_sha256={sha} "
+          f"translator_source_sha={os.environ.get('MLX_OMARCHY_TRANSLATOR_SOURCE_SHA', 'unset')} "
+          f"spirv_cache={os.environ.get('MLX_OMARCHY_SPIRV_CACHE', 'unset')}")
+
+
 def gpu(only=None, timeout=180):
+    _provenance()
     rows = []
     any_wrong = False
     stderr_dir = Path(os.environ.get("KERNEL_RECHECK_STDERR", "stderr"))
