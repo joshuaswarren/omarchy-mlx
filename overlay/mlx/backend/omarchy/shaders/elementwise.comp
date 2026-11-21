@@ -36,6 +36,17 @@ uint16_t bf16_store(float value) {
 #define ROUND_VALUE(f) (f)
 #endif
 
+#ifdef USE_FP16
+// G18G AGX3 refuses floor/ceil/trunc/round whose source is a 16-bit
+// register (agx3_pack_binary.c 14822/19737): the driver's f16->f32 source
+// fold manufactures that mixed form from our fp16 loads. materialize_f32
+// (defined after Params) feeds rounding ops a true 32-bit register through
+// two multiplies by an opaque 1.0, exact for every fp16-representable number.
+#define MATERIALIZE(f) materialize_f32(f)
+#else
+#define MATERIALIZE(f) (f)
+#endif
+
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer InputA {
@@ -74,6 +85,21 @@ layout(push_constant) uniform Params {
   uint lhs_strides[4];
   uint rhs_strides[4];
 } params;
+
+#ifdef USE_FP16
+float materialize_f32(float v) {
+  // opaque_one is 1.0 for every legal dispatch (dims is a shape rank);
+  // the control-flow opacity keeps the optimizer from folding the pair
+  // of multiplies back into the load.
+  float opaque_one = 1.0;
+  if (params.dims > 1000000u) {
+    opaque_one = 2.0;
+  }
+  return v * (2.0 * opaque_one) * (0.5 * opaque_one);
+}
+#else
+float materialize_f32(float v) { return v; }
+#endif
 layout(set = 0, binding = 3, std430) readonly buffer AxisMetadata {
   uint values[];
 } axis_data;
@@ -555,7 +581,11 @@ float float_power(float base, float exponent) {
       }
     }
   } else {
+#ifdef LOWERED_POWER
+    result = exp2(exponent * log2(magnitude));
+#else
     result = pow(magnitude, exponent);
+#endif
   }
   return negative ? -result : result;
 }
@@ -591,8 +621,11 @@ void main() {
         rhs_index += coord * rhs_stride_at(uint(dim));
       }
     }
-    float lhs = LOAD_VALUE(input_a.values[lhs_index]);
-    float rhs = LOAD_VALUE(input_b.values[rhs_index]);
+    float lhs = MATERIALIZE(LOAD_VALUE(input_a.values[lhs_index]));
+    float rhs = MATERIALIZE(LOAD_VALUE(input_b.values[rhs_index]));
+#ifdef LOWERED_POWER
+    float value = float_power(lhs, rhs);
+#else
     float value;
     switch (params.operation) {
       case 0:
@@ -721,7 +754,8 @@ void main() {
         }
         break;
       case 33:
-        value = ceil(lhs);
+        // Some drivers reject Ceil even when another switch arm is selected.
+        value = -floor(-lhs);
         break;
       case 34:
         value = floor(lhs);
@@ -763,6 +797,7 @@ void main() {
       default:
         return;
     }
+#endif
     output_data.values[params.output_offset + index] = STORE_VALUE(value);
     if (params.count - index <= stride) {
       break;
