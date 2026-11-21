@@ -12,6 +12,7 @@ on:
       - 'scripts/mlx_provenance.py'
       - 'scripts/bench_matrix.py'
       - 'tests/**'
+      - 'qualification-kit/**'
       - 'services/community-data/schema/**'
       - '.github/workflows/collectors.yml'
   push:
@@ -25,6 +26,7 @@ on:
       - 'scripts/mlx_provenance.py'
       - 'scripts/bench_matrix.py'
       - 'tests/**'
+      - 'qualification-kit/**'
       - 'services/community-data/schema/**'
       - '.github/workflows/collectors.yml'
 
@@ -50,6 +52,7 @@ jobs:
       - run: python scripts/test_collect_macos.py
       - run: python -m unittest discover -s tests -p test_mlx_provenance.py
       - run: python scripts/bench_matrix.py --self-test
+      - run: python -m pytest -q qualification-kit/test_receipt.py qualification-kit/test_reference.py
       # tests/ covers the serve, assistant and ANE stack, which runs on Linux
       # only (/proc, /usr/bin/bash, process start times). The macOS legs keep
       # the collector steps above.

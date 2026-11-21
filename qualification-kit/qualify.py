@@ -20,7 +20,8 @@ from qualification_reference import comparison
 
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
-TAG = 'qualification-r4'
+TAG = 'qualification-r5'
+WHEEL_TAG = 'qualification-r4'
 SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
 WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
@@ -114,7 +115,7 @@ def benchmark_result(result):
 def asset(work, cached, name):
     path = cached / name if cached else work / name
     if not cached:
-        release = 'v0.7.47' if name == VENDOR else TAG
+        release = 'v0.7.47' if name == VENDOR else WHEEL_TAG
         url = f'https://github.com/joshuaswarren/omarchy-mlx/releases/download/{release}/{name.replace("+", "%2B")}'
         subprocess.run(['curl', '-fLsS', '--max-time', '300', '-o', path, url],
                        check=True, timeout=310)
@@ -232,6 +233,24 @@ print(snapshot_download(sys.argv[1], revision=sys.argv[2],
     return path
 
 
+def correctness_checks(rc, out, r):
+    probe = read_json(out)
+    ops = probe.get('ops', [])
+    if not isinstance(ops, list) or any(
+            not isinstance(o, dict) or not isinstance(o.get('op'), str)
+            or type(o.get('pass')) is not bool or 'expected' not in o or 'actual' not in o
+            for o in ops):
+        raise RuntimeError('gpu_correctness_failed')
+    failed = [o for o in ops if o['pass'] is False]
+    checks = {'exit': rc, 'passed': len(ops) - len(failed),
+              'total': len(ops), 'failed_ops': [o['op'] for o in failed]}
+    r['mlx_checks'] = checks
+    if rc or probe.get('available') is not True or len(ops) != 6 or len({o['op'] for o in ops}) != 6:
+        raise RuntimeError('gpu_correctness_failed')
+    checks['failures'] = {o['op']: {'expected': o['expected'], 'actual': o['actual']} for o in failed}
+    return checks['failures']
+
+
 def run(args, work, mac, env, r):
     if args.icd:
         env.update(VK_DRIVER_FILES=str(args.icd), VK_ICD_FILENAMES=str(args.icd))
@@ -245,11 +264,7 @@ def run(args, work, mac, env, r):
     r['versions'].update(verify(py, wheel, env))
     code = 'import mlx.core as mx; mx.set_default_device(mx.gpu); exec(open("correctness.py").read())'
     rc, out = command([py, '-c', code], env, 100, BENCH.parent)
-    ops = read_json(out).get('ops', [])
-    r['mlx_checks'] = {'exit': rc, 'passed': sum(o.get('pass') is True for o in ops),
-                       'total': len(ops), 'failed_ops': [o['op'] for o in ops if not o.get('pass')]}
-    if rc or len(ops) != 6 or r['mlx_checks']['passed'] != 6:
-        raise RuntimeError('gpu_correctness_failed')
+    failed = correctness_checks(rc, out, r)
     ane = [py, BENCH.parent / 'coreml_smoke.py'] if mac else ['omarchy-ane-smoke']
     rc, out = command(ane, env, 105, work)
     r['ane'] = ane_result(rc, read_json(out), mac)
@@ -262,7 +277,8 @@ def run(args, work, mac, env, r):
     r['benchmark'] = benchmark_result(read_json(out)) if not rc else None
     if not r['benchmark']:
         raise RuntimeError(f'decode_benchmark_exit_{rc}')
-    return suite_verdict(r, suite(py, work, env), mac)
+    verdict = suite_verdict(r, suite(py, work, env), mac)
+    return 'gpu_correctness_failed' if failed else verdict
 
 
 def suite_verdict(r, results, mac):
@@ -281,7 +297,7 @@ def suite_verdict(r, results, mac):
         return 'reference_missing'
     baseline = json.loads(ref_path.read_text())
     if (baseline.get('schema') != 'omarchy-mlx-m1-max-reference-v1'
-            or baseline.get('release') != TAG or baseline.get('suite_source') != SOURCE
+            or baseline.get('release') != WHEEL_TAG or baseline.get('suite_source') != SOURCE
             or baseline.get('wheel_sha256') != ASSETS[WHEEL]
             or len(baseline.get('failures', {})) != 80
             or len(set(baseline.get('skips', []))) != 81):
@@ -365,7 +381,8 @@ def main():
                 raise RuntimeError('apple_chip_unidentified')
             r['status'] = run(args, Path(tmp), mac, env, r)
         except (OSError, ValueError, RuntimeError, tarfile.TarError, subprocess.SubprocessError) as exc:
-            r['status'] = 'incomplete'
+            r['status'] = ('gpu_correctness_failed' if (r['mlx_checks'] or {}).get('failures')
+                           else 'incomplete')
             r['error'] = str(exc) if type(exc) is RuntimeError else type(exc).__name__
     with args.out.open('x') as f:
         json.dump(r, f, indent=2, sort_keys=True, allow_nan=False)

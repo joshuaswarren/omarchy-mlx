@@ -1,4 +1,4 @@
-# omarchy-mlx qualification kit r4
+# omarchy-mlx qualification kit r5
 
 Run these two commands on **the same physical Mac**, once per OS. Use a different random ID for each Mac (generate it with `openssl rand -hex 8`); use the same ID in both commands. Do not use a serial number or hostname. Share both JSON files even if a command exits nonzero. Nothing is uploaded automatically.
 
@@ -19,6 +19,8 @@ python3.12 qualify.py --machine-id 0123456789abcdef --out macos.json
 Have network access and at least 6 GiB free on the result and Hugging Face cache filesystems. The runner creates a disposable virtual environment. Linux verifies the r4 wheel and reuses the hash-pinned v0.7.47 dependency archive. Use `--asset-dir` if you already have both files. Both systems use MLX-LM 0.31.3 and the pinned Qwen3-4B-Instruct-2507 4-bit snapshot, with the same prompt, seed, four warmup tokens, and 64 scored greedy tokens. Compare prefill and decode rates only when the model revision, prompt count, and token ID digest agree. These rates measure the GPU.
 
 The result lists six MLX correctness checks, all 34 Python test files, and the ANE smoke test. It records the time and exit status for each file. A timeout or abort leaves that file incomplete and the suite runs the remaining files. The C++ build suite and multi-host tests are outside this kit. macOS uses native MLX 0.32.3 and allows CPU or Neural Engine placement for its Core ML smoke test. That smoke test does not prove Neural Engine placement. A skipped or incomplete test never counts as a pass.
+
+A completed GPU check that fails keeps the run unqualified. The result uses `gpu_correctness_failed` and lists expected and actual values by check name under `mlx_checks.failures`. Decode and the test suite still run. An interrupted or unavailable correctness probe still stops the run.
 
 The per-file limit is 300 seconds. The slowest M1 Max r4 reference file took 15.4 seconds. An M4 Pro file took 47 seconds in r3. The limit leaves room for both.
 
