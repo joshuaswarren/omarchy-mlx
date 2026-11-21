@@ -7331,6 +7331,7 @@ void LessEqual::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_comparison(name(), CompareLessEqual, inputs, out);
 }
 void Load::eval_gpu(const std::vector<array>& inputs, array& out) {
+  omarchy::require_card_memory_upload(inference_weight_, swap_endianness_);
   if (inference_weight_ && out.nbytes() != 0) {
     auto& encoder = omarchy::get_command_encoder(stream());
     auto& dev = encoder.device();

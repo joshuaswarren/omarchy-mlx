@@ -12,6 +12,12 @@ target_link_libraries(omarchy_exit_teardown_tests PRIVATE mlx)
 target_compile_options(omarchy_exit_teardown_tests PRIVATE ${SANITIZER_COMPILE_FLAGS})
 target_link_options(omarchy_exit_teardown_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 add_test(NAME omarchy_exit_teardown_tests COMMAND omarchy_exit_teardown_tests)
+# The crash this test covers is the NVIDIA teardown path, so the allow-non-
+# apple switch must be on wherever a discrete GPU exists, and a wedged
+# DeviceWaitIdle must fail the test instead of hanging the suite.
+set_tests_properties(omarchy_exit_teardown_tests PROPERTIES
+    ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+    TIMEOUT 300)
 
 add_executable(omarchy_runtime_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime.cpp)

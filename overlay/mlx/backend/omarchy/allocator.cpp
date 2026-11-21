@@ -192,10 +192,21 @@ void Device::upload_weights(
       range.size = VK_WHOLE_SIZE;
       VKX_CHECK(vk::device_table().FlushMappedMemoryRanges(device_, 1, &range));
     }
-    weight_staging_in_flight_ = true;
-    encoder.copy_buffer(weight_staging_, destination, chunk.copy_bytes, 0, offset);
-    encoder.synchronize("inference weight upload");
-    weight_staging_in_flight_ = false;
+    InFlightFlag in_flight(weight_staging_in_flight_);
+    try {
+      encoder.copy_buffer(weight_staging_, destination, chunk.copy_bytes, 0, offset);
+      encoder.synchronize("inference weight upload");
+    } catch (...) {
+      // The submitted copy may still read the staging buffer. Leave it
+      // unreferenced so the next upload allocates fresh storage instead of
+      // overwriting mapped memory the GPU is reading; DestroyDevice reclaims
+      // the abandoned allocation at teardown.
+      weight_staging_ = VK_NULL_HANDLE;
+      weight_staging_memory_ = VK_NULL_HANDLE;
+      weight_staging_data_ = nullptr;
+      weight_staging_coherent_ = false;
+      throw;
+    }
     offset += chunk.read_bytes;
     ++copies;
   }
