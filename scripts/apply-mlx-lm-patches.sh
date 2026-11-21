@@ -334,12 +334,9 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-eager-swiglu.py" "$VENV"
 # single-token decode kernel, so greedy output equals plain greedy decode.
 # Recurrent layers (Qwen3.5 GDN) roll back by replaying the accepted tokens, and
 # no draft model means prompt lookup (MLX_OMARCHY_PROMPT_LOOKUP=K in
-# stream_generate). 0.31.3 series only; the 0.32 line keeps upstream behavior.
-if [[ "$SERIES" == "patches" ]]; then
-  apply mlx-lm-speculative-verify.patch
-else
-  echo "speculative-verify: 0.31.3 series only; skipped on $SERIES"
-fi
+# stream_generate). Both series; the 0.32 file carries the same change on the
+# newer generate.py API (direct cache imports, the stream parameter).
+apply mlx-lm-speculative-verify.patch
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is

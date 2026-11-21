@@ -131,7 +131,8 @@ A/B gating and qualification, not for normal operation.
   the first chunk makes the cache resident, `generate_step` chooses the chunk again from the headroom that is left, minus a
   1 GiB workspace that matches the serve budget. The new chunk is never larger than the first one. An explicit
   `prefill_step_size` and `kv_bits` skip this step.
-- `mlx-lm-speculative-verify.patch` (0.31.3 series). `speculative_generate_step` runs each verify pass (the last
+- `mlx-lm-speculative-verify.patch` (both series; `patches/` for 0.31.3 and `patches/mlx-lm-0.32/` for the 0.32 line).
+  `speculative_generate_step` runs each verify pass (the last
   accepted token plus the drafted tokens) with full logits, since the last-logits patches trim a cached forward to its
   final row, and with `MLX_OMARCHY_QMV_SMALL_T` set to the pass length when it is unset. The patch never writes
   `MLX_OMARCHY_SDPA_SPLIT_ROWS`: unset keeps the default rows route, and an explicit value stays fixed for the whole process.

@@ -7,7 +7,7 @@
  import os
  import sys
  import time
-@@ -679,10 +680,66 @@
+@@ -679,10 +680,71 @@
          n += 1
  
  
@@ -56,8 +56,13 @@
 +
 +def _omarchy_snapshot(prompt_cache):
 +    # Recurrent layers (ArraysCache: GDN, conv state) cannot be trimmed; keep
-+    # their state so a rejected draft can be rolled back.
-+    return [None if c.is_trimmable() else list(c.state) for c in prompt_cache]
++    # their state so a rejected draft can be rolled back. A state container can
++    # hold live containers (CacheList nests sub-cache states), so clone every
++    # list/tuple level; arrays and scalars pass through.
++    def clone(v):
++        return [clone(x) for x in v] if isinstance(v, (list, tuple)) else v
++
++    return [None if c.is_trimmable() else clone(c.state) for c in prompt_cache]
 +
 +
 +def _omarchy_restore(prompt_cache, snapshot, num_tokens):
