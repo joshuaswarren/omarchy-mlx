@@ -4,6 +4,13 @@ target_include_directories(omarchy_inference_weight_tests PRIVATE
                            ${Vulkan_INCLUDE_DIRS})
 add_test(NAME omarchy_inference_weight_tests COMMAND omarchy_inference_weight_tests)
 
+add_executable(omarchy_vram_activations_tests test_vram_activations.cpp)
+target_include_directories(omarchy_vram_activations_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../..
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy
+                           ${Vulkan_INCLUDE_DIRS})
+add_test(NAME omarchy_vram_activations_tests COMMAND omarchy_vram_activations_tests)
+
 # PR 519: a small Vulkan op and then a clean exit(0). The crash lived in the
 # static Runtime destructor after main returned; a segfault at exit fails
 # the test, so the process itself is the assertion.

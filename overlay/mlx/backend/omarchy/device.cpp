@@ -1639,6 +1639,17 @@ Device::~Device() {
       dt.DestroyBuffer(device_, weight_staging_, nullptr);
       dt.FreeMemory(device_, weight_staging_memory_, nullptr);
     }
+    if (transfer_fence_ != VK_NULL_HANDLE) {
+      dt.DestroyFence(device_, transfer_fence_, nullptr);
+    }
+    if (transfer_pool_ != VK_NULL_HANDLE) {
+      dt.DestroyCommandPool(device_, transfer_pool_, nullptr);
+    }
+    if (transfer_staging_ != VK_NULL_HANDLE) {
+      dt.UnmapMemory(device_, transfer_staging_memory_);
+      dt.DestroyBuffer(device_, transfer_staging_, nullptr);
+      dt.FreeMemory(device_, transfer_staging_memory_, nullptr);
+    }
     compute_.reset();
     if (dt.DestroyDevice) {
       dt.DestroyDevice(device_, nullptr);

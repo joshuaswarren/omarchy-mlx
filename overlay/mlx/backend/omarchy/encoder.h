@@ -522,6 +522,12 @@ class MLX_API CommandEncoder {
       uint32_t group_count_x,
       uint32_t group_count_y,
       uint32_t group_count_z);
+  void prepare_device_local_buffer(
+      VulkanBuffer* vb,
+      bool read,
+      bool write,
+      VkDeviceSize offset,
+      VkDeviceSize range);
 
   // Pick a completed ring slot (joining the oldest only when all are in
   // flight) and begin recording into it.
@@ -641,5 +647,6 @@ class MLX_API CommandEncoder {
 MLX_API CommandEncoder& get_command_encoder(Stream s);
 std::unordered_map<int, CommandEncoder>& get_command_encoders();
 std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
+void synchronize_pending_encoders();
 
 } // namespace mlx::core::omarchy

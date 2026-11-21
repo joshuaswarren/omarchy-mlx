@@ -1863,6 +1863,30 @@ TEST_CASE("buffer round trip through the Vulkan encoder") {
   CHECK(mismatches == 0);
 }
 
+TEST_CASE("device staging upload and download round trip across 4 MiB chunks") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& dev = omarchy::device();
+  // Exercise both a small scalar-sized transfer and a multi-chunk transfer
+  // exceeding kWeightStagingBytes (4 MiB).
+  for (size_t bytes : {size_t{4}, size_t{4096}, size_t{(4u << 20) + 123}}) {
+    auto buf = omarchy::allocator().malloc(bytes);
+    auto* vb = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+    REQUIRE(vb != nullptr);
+    std::vector<uint8_t> src(bytes);
+    for (size_t i = 0; i < bytes; ++i) {
+      src[i] = static_cast<uint8_t>((i * 131u + 17u) & 0xFFu);
+    }
+    std::vector<uint8_t> dst(bytes, 0u);
+    dev.upload_host_to_device(vb->buffer, src.data(), bytes);
+    dev.download_device_to_host(vb->buffer, dst.data(), bytes);
+    CHECK(dst == src);
+    omarchy::allocator().free(buf);
+  }
+}
+
 TEST_CASE("events synchronize between streams") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");

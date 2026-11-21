@@ -33,6 +33,7 @@
 #include "mlx/backend/omarchy/compiled.h"
 #include "mlx/backend/omarchy/qmm_prefill_select.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
 #include "mlx/backend/omarchy/fused_chain.h"
@@ -134,9 +135,18 @@ const QmmGeometry& qmm_geometry() {
     const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
     const std::string v = env == nullptr ? std::string() : std::string(env);
     if (v.empty()) {
-      const std::string& chip = omarchy::device().capabilities().device_name;
-      if (chip.find("G13G") != std::string::npos ||
-          chip.find("G13C") != std::string::npos) {
+      const auto& dev = omarchy::device();
+      const auto& caps = dev.capabilities();
+      const omarchy::QmmWideCaps wide_caps{
+          caps.subgroup_size,
+          caps.subgroup_operations,
+          caps.max_compute_work_group_invocations,
+          caps.max_compute_work_group_size[0]};
+      if (omarchy::select_qmm_wide_2x16(
+              caps.device_name,
+              dev.physical_type(),
+              wide_caps,
+              omarchy::device_local_activations_enabled())) {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};

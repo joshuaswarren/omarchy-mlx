@@ -13,6 +13,7 @@
 #include <vector>
 #include "mlx/allocator.h"
 #include "mlx/backend/common/buffer_cache.h"
+#include "mlx/backend/omarchy/device_local_activations.h"
 
 namespace mlx::core::omarchy {
 
@@ -31,6 +32,13 @@ struct VulkanBuffer {
   void* data{nullptr};
   size_t size{0};
   bool inference_weight{false};
+  // True when backed by non-HOST_VISIBLE DEVICE_LOCAL VRAM under the opt-in
+  // discrete-GPU activation path (MLX_OMARCHY_VRAM_ACTIVATIONS=1).
+  bool device_local{false};
+  // Lazily allocated CPU shadow buffer, created only if host code requests
+  // Buffer::raw_ptr() on a device_local buffer.
+  void* host_shadow{nullptr};
+  DeviceLocalSyncState sync_state{};
   // False when the memory type lacks HOST_COHERENT.
   bool coherent{true};
   // Completion-timeline stamp of the submission that references this
@@ -140,7 +148,7 @@ class VulkanAllocator : public allocator::Allocator {
   }
   size_t get_cache_memory() const {
     std::unique_lock lk(mutex_);
-    return buffer_cache_.cache_size();
+    return buffer_cache_.cache_size() + device_local_cache_.cache_size();
   }
   size_t get_cache_limit() const {
     std::unique_lock lk(mutex_);
@@ -188,6 +196,10 @@ class VulkanAllocator : public allocator::Allocator {
   // handles: resolve + stamp the owning live block so a transfer marks its
   // target in flight; returns nullptr for unknown handles.
   VulkanBuffer* note_buffer_handle(VkBuffer handle);
+  // Non-mutating lookup of a live block by VkBuffer handle.
+  VulkanBuffer* lookup_buffer_handle(VkBuffer handle);
+  // Thread-safe read of a live buffer's completion stamp.
+  uint64_t buffer_completion(const VulkanBuffer* buf) const;
 
   // Record a buffer referenced by an open batch (encoder add_temporary
   // and dispatch bindings). The stamp is unconditional: a buffer whose
@@ -244,6 +256,9 @@ class VulkanAllocator : public allocator::Allocator {
   size_t weight_memory_{0};
   size_t peak_memory_{0};
   mutable BufferCache<VulkanBuffer> buffer_cache_;
+  mutable BufferCache<VulkanBuffer> device_local_cache_;
+  size_t device_local_cache_limit_{0};
+  size_t device_local_gc_limit_{0};
   // Live blocks by VkBuffer handle (encoder-level transfer stamping).
   std::unordered_map<VkBuffer, VulkanBuffer*> live_by_handle_;
   std::vector<VulkanBuffer*> noncoherent_;
@@ -256,6 +271,11 @@ class VulkanAllocator : public allocator::Allocator {
 };
 
 MLX_API VulkanAllocator& allocator();
+
+// True when MLX_OMARCHY_VRAM_ACTIVATIONS=1 is set and the active device is a
+// discrete GPU with both a pure DEVICE_LOCAL memory type and a host-visible
+// staging memory type.
+bool device_local_activations_enabled();
 
 // Round a request to the allocator page so cached buffers can be reused for
 // any smaller request.

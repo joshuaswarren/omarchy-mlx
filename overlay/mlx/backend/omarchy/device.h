@@ -407,6 +407,21 @@ class Device {
       io::Reader& reader,
       size_t file_offset);
 
+  // Chunked staging transfers (<= 4 MiB host-visible staging buffer) for
+  // opt-in device-local activation buffers on discrete GPUs. Runs on a
+  // private transfer command buffer + fence serialized through queue_mutex_,
+  // so callers never disturb any CommandEncoder's open command buffer.
+  void upload_host_to_device(
+      VkBuffer destination,
+      const void* src,
+      size_t bytes);
+  void download_device_to_host(
+      VkBuffer source,
+      void* dst,
+      size_t bytes);
+
+  size_t device_local_heap_bytes() const;
+
   const CapabilityReport& capabilities() const {
     return caps_;
   }
@@ -460,6 +475,8 @@ class Device {
 
   uint64_t signal_timeline(VkSemaphore semaphore, uint64_t value);
 
+  void ensure_transfer_resources_locked();
+
   CapabilityReport caps_;
   CapabilityReport hardware_caps_{};
   VkPhysicalDeviceMemoryProperties mem_props_{};
@@ -470,6 +487,14 @@ class Device {
   void* weight_staging_data_{nullptr};
   bool weight_staging_coherent_{false};
   bool weight_staging_in_flight_{false};
+  std::mutex transfer_mutex_;
+  VkBuffer transfer_staging_{VK_NULL_HANDLE};
+  VkDeviceMemory transfer_staging_memory_{VK_NULL_HANDLE};
+  void* transfer_staging_data_{nullptr};
+  bool transfer_staging_coherent_{false};
+  VkCommandPool transfer_pool_{VK_NULL_HANDLE};
+  VkCommandBuffer transfer_cmd_{VK_NULL_HANDLE};
+  VkFence transfer_fence_{VK_NULL_HANDLE};
   VkDevice device_{VK_NULL_HANDLE};
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;
