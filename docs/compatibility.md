@@ -69,6 +69,18 @@ nothing about Linux execution.
   gives 618 MHz (performance state 2) as the highest GPU clock it tested. We have not
   measured that cap. It would not explain the CPU memory bandwidth in
   [#173](https://github.com/joshuaswarren/omarchy-mlx/issues/173).
+- M3 Pro (MacBook Pro 14-inch, Nov 2023, G15S, 14-core GPU). Other core
+  counts of this chip are not measured.
+  GPU: Tested on Linux with the v0.7.49 release wheel. Omarchy on Arch
+  Linux ARM, `linux-aurora` 7.2.11, Mesa 26.3.0-devel Borealis
+  (git-a196911147, driver ID 26) through the system ICD. Source build
+  `a893cae5c` passes the standing battery, 747/747 cases in 25 suites,
+  and all 8 capability-simulation profiles; the 6 collector probe ops
+  pass. Decode / prefill 512, tokens per second: Qwen3.8-2B 4-bit
+  76.1 / 370.5, Qwen3-4B-Instruct-2507 4-bit 43.9 / 195.3. Decode runs
+  with zero CPU tensor dispatches
+  ([2026-11-21 receipt](../receipts/2026-11-21-m3-pro-g15s-linux/README.md)).
+  ANE: Untested.
 - M4 (Mac mini, J773g / T8132, GPU G16G). GPU: Experimental. Requires the out-of-tree G16G GPU kernel driver (kernel 7.1.13, `asahi_m4`) and Mesa Honeykrisp with the Apple9 compute port (techmore/mesa `m4-honeykrisp-compute`), with `AGX_APPLE9_MAX_SHARED=32768`. With the M4 changes of #316-#321 the standing battery runs every suite and every capability-simulation profile; 34 of 800 cases fail, the same 34 that fail on `main` there, 32 of them compute pipelines the driver rejects (complex ops, eig, wide-row partition). Decode, 64 greedy tokens, mlx-lm 0.31.3: granite-4.0-1b-4bit 51.3 tok/s, Qwen2.5-1.5B-Instruct-4bit 63.2, gemma-3-1b-it-4bit 54.0, Qwen3.5-4B-MLX-4bit 15.7, Mistral-7B-Instruct-v0.3-4bit 18.6 ([receipt](../receipts/2026-11-01-m4-g16g-part1/README.md)). The receipt covers the numerical battery, the dispatch trace and device reopen. ANE: Data-only; h16 bring-up module.
 
 ## Non-Apple GPUs (development drivers)
