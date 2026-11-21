@@ -640,6 +640,12 @@ target_include_directories(omarchy_sdpa_decode_mask_layout_tests PRIVATE
 add_test(NAME omarchy_sdpa_decode_mask_layout_tests
          COMMAND omarchy_sdpa_decode_mask_layout_tests)
 
+add_executable(omarchy_sdpa_decode_mask_flag_tests test_sdpa_decode_mask_flag.cpp)
+target_include_directories(omarchy_sdpa_decode_mask_flag_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+add_test(NAME omarchy_sdpa_decode_mask_flag_tests
+         COMMAND omarchy_sdpa_decode_mask_flag_tests)
+
 # Whole-step host timeline ring: header-only, pure C++, no GPU and no mlx
 # linkage. Covers disabled zero-clock cost, ring wrap-around, concurrency,
 # and env-gated atexit NDJSON dump.

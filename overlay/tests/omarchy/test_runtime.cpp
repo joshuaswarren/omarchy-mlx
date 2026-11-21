@@ -691,6 +691,15 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
     CHECK_FALSE(s.non_apple_dev);
   }
 
+  SUBCASE("both Apple driver ids are accepted, and any other id is not") {
+    // Aurora renames the driver to Borealis and keeps the Khronos enum
+    // entry for id 26; both spellings must stay admitted (Ryan 2026-11-20).
+    CHECK(omarchy::is_apple_driver_id(omarchy::kMesaHoneykrispDriverId));
+    CHECK(omarchy::is_apple_driver_id(omarchy::kAuroraBorealisDriverId));
+    CHECK_FALSE(omarchy::is_apple_driver_id(26 + 1));
+    CHECK_FALSE(omarchy::is_apple_driver_id(9999));
+  }
+
   SUBCASE("M5 Max under Aurora's packaged Mesa is supported by device name") {
     // The packaged Mesa on the M5 Max names the device "Apple M5 Max (G17C B1)"
     // under Mesa's vendor id; the driver id it reports is not one this build

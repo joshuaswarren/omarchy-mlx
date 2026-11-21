@@ -123,9 +123,10 @@ TEST_CASE("device_info reports architecture and device_name") {
   REQUIRE(info.find("architecture") != info.end());
   REQUIRE(info.find("device_name") != info.end());
   // Architecture is the driver family, not the chip family: "honeykrisp"
-  // on Omarchy Apple silicon, "vulkan" otherwise (dev box).
+  // on legacy Mesa builds, "borealis" on Aurora's renamed driver
+  // (Ryan 2026-11-20), "vulkan" otherwise (dev box).
   const auto arch = std::get<std::string>(info.at("architecture"));
-  REQUIRE((arch == "honeykrisp" || arch == "vulkan"));
+  REQUIRE((arch == "honeykrisp" || arch == "borealis" || arch == "vulkan"));
 }
 
 TEST_CASE("device_info chip identification keys") {

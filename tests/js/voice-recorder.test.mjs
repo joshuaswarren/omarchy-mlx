@@ -268,6 +268,66 @@ function micWorld({ gum, contextError, workletError } = {}) {
   } finally { world.restore(); }
 }
 
+// Arming before start() — the production order in app.js onMicStart —
+// ends the capture on speech then silence.
+{
+  const stopsArm = [];
+  const armed = new Recorder({ onStop: (s) => stopsArm.push(s) });
+  armed.setHandsFree({ silenceMs: 160, floorRms: 0.01 });
+  await armed.start();
+  for (let i = 0; i < 5; i++) node.port.onmessage({ data: frame() });
+  for (let i = 0; i < 60; i++) node.port.onmessage({ data: silent() });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stopsArm.length, 1,
+    "an armed-before-start recording must stop on speech-then-silence");
+  assert.equal(stopsArm[0].reason, "silence");
+  assert.equal(armed.state, "idle");
+}
+
+// A hands-free arming that never reaches recording must not leak into the
+// next start: denied permission clears _hf, so a plain push-to-talk retry
+// keeps its own semantics (w7M review: denied wake, then manual retry).
+{
+  const retryStops = [];
+  const denied = new Recorder({ onStop: (s) => retryStops.push(s) });
+  denied.setHandsFree({ silenceMs: 160, floorRms: 0.01 });
+  const deniedWorld = micWorld({
+    gum: async () => { throw new Error("denied"); },
+  });
+  try {
+    await assert.rejects(denied.start(), /denied/);
+  } finally {
+    deniedWorld.restore();
+  }
+  assert.equal(denied._hf, null, "denied startup must disarm hands-free");
+
+  await denied.start();
+  for (let i = 0; i < 5; i++) node.port.onmessage({ data: frame() });
+  for (let i = 0; i < 80; i++) node.port.onmessage({ data: silent() });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(retryStops.length, 0,
+    "denied wake must not leak silence mode into the manual retry");
+  await denied.stop();
+}
+
+// The same leak exists when the pending start is cancelled instead of
+// rejected: _cancelPending's early return must disarm it too.
+{
+  let resolveGum;
+  const gate = new Promise((r) => { resolveGum = r; });
+  const world = micWorld({ gum: async () => gate });
+  const cancelled = new Recorder({});
+  cancelled.setHandsFree({ silenceMs: 160 });
+  try {
+    const starting = cancelled.start();
+    await cancelled.cancel();
+    resolveGum(world.stream);
+    assert.equal(await starting, false, "cancelled start must not record");
+    assert.equal(cancelled._hf, null,
+      "cancelled startup must disarm hands-free");
+  } finally { world.restore(); }
+}
+
 console.log("voice-recorder hands-free checks passed");
 
 console.log("voice recorder js tests passed");

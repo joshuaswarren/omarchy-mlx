@@ -46,6 +46,10 @@ SYSTEM_SHARE_PREFIX = "/usr/share/omarchy-mlx"
 VENV_DIR_NAME = "venv"
 VULKAN_DIR_NAME = "vulkan"
 HONEYKRISP_ICD_NAME = "honeykrisp_icd.aarch64.json"
+# Aurora renames the driver to Borealis (Ryan 2026-11-20). The packaged ICD
+# keeps working under either file name; the package picks the one it ships.
+BOREALIS_ICD_NAME = "borealis_icd.aarch64.json"
+PACKAGED_ICD_NAMES = (BOREALIS_ICD_NAME, HONEYKRISP_ICD_NAME)
 MESA_GIT_SHA_NAME = "mesa-git-sha"
 DATA_HOME_ENV = "MLX_OMARCHY_HOME"
 VENV_ENV = "OMARCHY_MLX_VENV"
@@ -98,8 +102,17 @@ def system_vulkan_dir(prefix: str | Path | None = None) -> Path:
 
 
 def packaged_honeykrisp_icd(prefix: str | Path | None = None) -> Path:
-    """The packaged Honeykrisp ICD JSON with an absolute library_path."""
-    return system_vulkan_dir(prefix) / HONEYKRISP_ICD_NAME
+    """The packaged ICD JSON, under whichever name the package installed.
+
+    Aurora renames the driver to Borealis (Ryan 2026-11-20), so the packaged
+    file may be ``borealis_icd.aarch64.json`` or ``honeykrisp_icd.aarch64.json``.
+    """
+    directory = system_vulkan_dir(prefix)
+    for name in PACKAGED_ICD_NAMES:
+        candidate = directory / name
+        if candidate.exists():
+            return candidate
+    return directory / HONEYKRISP_ICD_NAME
 
 
 def packaged_mesa_git_sha_path(prefix: str | Path | None = None) -> Path:
@@ -164,6 +177,7 @@ SHELL_TABLE = (
     ("VENV_DIR", VENV_DIR_NAME),
     ("VULKAN_DIR", VULKAN_DIR_NAME),
     ("HONEYKRISP_ICD", HONEYKRISP_ICD_NAME),
+    ("BOREALIS_ICD", BOREALIS_ICD_NAME),
     ("MESA_GIT_SHA", MESA_GIT_SHA_NAME),
     ("DATA_HOME_ENV", DATA_HOME_ENV),
     ("VENV_ENV", VENV_ENV),

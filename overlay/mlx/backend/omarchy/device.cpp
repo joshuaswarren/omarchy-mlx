@@ -205,8 +205,12 @@ bool drirc_names_heap_memory_percent() {
 }
 
 void apply_default_hk_sysmem() {
-  if (std::getenv("HK_SYSMEM") != nullptr) {
-    return; // explicit HK_SYSMEM wins
+  // Aurora renames the driver to Borealis and its environment prefix from
+  // HK_ to BRL_, keeping HK_ as a fallback for a time (Ryan 2026-11-20).
+  // Set both, and let an explicit value in either name win.
+  if (std::getenv("HK_SYSMEM") != nullptr ||
+      std::getenv("BRL_SYSMEM") != nullptr) {
+    return; // explicit HK_SYSMEM or BRL_SYSMEM wins
   }
   if (drirc_names_heap_memory_percent()) {
     return; // drirc-configured heap_memory_percent wins
@@ -223,6 +227,7 @@ void apply_default_hk_sysmem() {
   // Never overwrites (checked above). A failed setenv degrades to mesa's
   // 50% default heap for this process; that is not fatal.
   ::setenv("HK_SYSMEM", value, 0);
+  ::setenv("BRL_SYSMEM", value, 0);
 }
 
 // A heap above the kernel client limit can only come from an explicit
@@ -277,7 +282,8 @@ HoneykrispIcdSelection configure_honeykrisp_icd() {
     // No user override: the packaged recipe ICD wins over a stock system
     // asahi ICD, and the loader variables follow the selection.
     selection = resolve_honeykrisp_icd_detail(
-        candidates, nullptr, packaged_honeykrisp_icd_path(omarchy_system_prefix()));
+        candidates, nullptr, packaged_honeykrisp_icd_path_or_renamed(
+                                  omarchy_system_prefix()));
     if (::setenv("VK_DRIVER_FILES", selection.path.c_str(), 1) != 0 ||
         ::setenv("VK_ICD_FILENAMES", selection.path.c_str(), 1) != 0) {
       throw std::runtime_error("cannot set Honeykrisp Vulkan ICD environment");
@@ -915,7 +921,7 @@ bool Runtime::init_impl() {
         : (icd_selection.user_override ? "override" : "search");
     info.caps.expected_sha = expected_sha;
     info.caps.expected_sha_source = expected_sha_source;
-    if (info.support.driver_id == kMesaHoneykrispDriverId) {
+    if (is_apple_driver_id(info.support.driver_id)) {
       require_expected_honeykrisp_sha(expected_sha, info.caps.driver_sha);
     }
     note_heap_above_kernel_limit(info.caps.total_memory);
@@ -1195,9 +1201,11 @@ DeviceSupport classify_physical_device(
   // a non-Apple device ("Apple Metal ...") is still refused.
   bool apple = props.vendorID == kAppleVendorId;
   bool honeykrisp_name =
-      contains_case_insensitive(props.deviceName, "honeykrisp");
-  bool honeykrisp_driver = driver_id == kMesaHoneykrispDriverId ||
-      driver_id == kAuroraBorealisDriverId;
+      contains_case_insensitive(props.deviceName, "honeykrisp") ||
+      // Aurora renamed the driver to Borealis (Ryan 2026-11-20); the
+      // driver-id enum entry keeps its Khronos name.
+      contains_case_insensitive(props.deviceName, "borealis");
+  bool honeykrisp_driver = is_apple_driver_id(driver_id);
   bool apple_chip_name = std::strncmp(props.deviceName, "Apple M", 7) == 0 &&
       std::isdigit(static_cast<unsigned char>(props.deviceName[7]));
 

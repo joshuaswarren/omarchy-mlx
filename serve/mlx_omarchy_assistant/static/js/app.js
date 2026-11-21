@@ -62,6 +62,7 @@ export class App {
     this.voiceStates = { recognition: "unknown", synthesis: "unknown" };
     this.conversationModeEnabled = false;
     this._suppressComposerClear = false;
+    this._wakeSeen = undefined;
 
     window.addEventListener("pagehide", () => {
       this.recorder.cancel().catch(() => {});
@@ -299,10 +300,17 @@ export class App {
   // input is ready and nothing else holds the turn.
   _handleWake(status) {
     const wake = status && status.wake;
-    if (!wake || !wake.last_detection || this._wakeSeen === wake.last_detection) return;
-    const isFresh = this._wakeSeen !== undefined;
-    this._wakeSeen = wake.last_detection;
-    if (!isFresh) return;
+    if (!wake) return;
+    if (this._wakeSeen === undefined) {
+      // First status after load replays the listener's history: whatever
+      // it reports — an old detection or none — is the baseline, never a
+      // reason to open the mic.
+      this._wakeSeen = wake.last_detection ?? null;
+      return;
+    }
+    const detection = wake.last_detection ?? null;
+    if (detection === null || detection === this._wakeSeen) return;
+    this._wakeSeen = detection;
     if (this.activeTurn || this.speakerSpeaking ||
         this.voiceStates.recognition !== "ready" || !this.composer) {
       announce(this.live, "Wake word heard, but the assistant is busy.");

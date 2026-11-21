@@ -137,7 +137,7 @@ export function buildComposer({
     if (onMicCancel) onMicCancel();
   });
 
-  async function startMic() {
+  async function startMic(options) {
     if (micBtn.disabled) return;
     setMicNotice("");
     micBtn.textContent = "Listening…";
@@ -147,7 +147,7 @@ export function buildComposer({
         // Barge-in: stop playback first, then begin the explicit recording.
         if (onStopSpeaking) onStopSpeaking();
       }
-      await onMicStart();
+      await onMicStart(options);
     }
     catch (err) {
       micBtn.textContent = "Microphone";
@@ -178,7 +178,7 @@ export function buildComposer({
   async function startHandsFree() {
     if (micBtn.disabled || latch || (isRecording && isRecording())) return false;
     latch = true;
-    await startMic();
+    await startMic({ handsFree: true });
     return true;
   }
 
