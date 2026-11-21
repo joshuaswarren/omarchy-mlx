@@ -146,13 +146,20 @@ def _single(name):
 
     dtypes = {"float32": mx.float32, "float16": mx.float16, "bfloat16": mx.bfloat16,
               "uint32": mx.uint32, "int32": mx.int32, "uint8": mx.uint8,
-              "uint16": mx.uint16, "int8": mx.int8}
+              "uint16": mx.uint16, "int8": mx.int8, "bool": mx.bool_}
     mx_arrays = []
     for n, dt_name in zip(spec["inputs"], defs.IN_DTYPES[name]):
         a = inputs[n]
+        if a is None:            # upstream passes zeros((1,1)) for an absent arg;
+            PRESENT = False      # the kernel reads it only under HAS_MASK=False,
+            a = np.zeros((1, 1))  # so feed the same placeholder the caller does
+        else:
+            PRESENT = True
         if dt_name == "bfloat16":
             a32 = np.ascontiguousarray(a, dtype=np.float32)
             mx_arrays.append(mx.array(a32).astype(mx.bfloat16))
+        elif dt_name == "bool":
+            mx_arrays.append(mx.array(a.astype(np.bool_)))
         else:
             mx_arrays.append(mx.array(a))
     template = []

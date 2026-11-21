@@ -1,0 +1,26 @@
+// inkling2_virtual_short_convolution: mlx-vlm 0.8.0 (fd6404f)
+// mlx_vlm/models/inkling2/kernels.py::short_convolution, verbatim body.
+// The call contract: inputs state (B,K-1,C) fp32, weight (C,W) x.dtype,
+// x (B,L,C) T, mask (B,L) bool (zeros((1,1)) when absent), divisor fp32;
+// template T=x.dtype, W=width, HAS_MASK. Output (B,L,C) T.
+// ref_inkling2_vconv mirrors this exactly in fp64 (the kernel keeps FP32
+// intermediate arithmetic per the upstream docstring).
+
+        uint i = thread_position_in_grid.x;
+        int B = x_shape[0], L = x_shape[1], C = x_shape[2];
+        if (i >= B * L * C) return;
+        int c = i % C, t = (i / C) % L, b = i / (C * L);
+        float value = 0;
+        for (int j = 0; j < W; ++j) {
+            int p = t + j - W + 1;
+            float xv = p < 0
+                ? float(state[b * state_strides[0] + (p + W - 1) * state_strides[1]
+                              + c * state_strides[2]])
+                : ((HAS_MASK && !mask[b * mask_strides[0] + p * mask_strides[1]])
+                    ? 0.0f
+                    : float(x[b * x_strides[0] + p * x_strides[1] + c * x_strides[2]]));
+            float w = weight[c * weight_strides[0] + j * weight_strides[1]];
+            value = value + xv * w;
+        }
+        out[i] = T((value + float(x[b * x_strides[0] + t * x_strides[1]
+                                   + c * x_strides[2]])) / divisor);

@@ -15,6 +15,8 @@ UPSTREAM = {
     "inkling_banded_mask": "inkling_banded_mask.msl",
     "inkling_banded_mask_v2": "inkling_banded_mask_v2.msl",
     "inkling_sconv_decode": "inkling_sconv_decode.msl",
+    "inkling2_virtual_short_convolution":
+        "inkling2_virtual_short_convolution.msl",
     "inkling_moe_route": "inkling_moe_route.msl",
     "inkling_moe_down_combine": "inkling_moe_down_combine.msl",
     "mlx_vlm_llguidance_mask": "mlx_vlm_llguidance_mask.msl",
@@ -46,6 +48,9 @@ PREDICT = {
     "inkling_banded_mask": "pass",
     "inkling_banded_mask_v2": "pass",
     "inkling_sconv_decode": "pass",
+    # bool buffer input + flat-star pointer arithmetic (2026-11-21 probe:
+    # both refused by the current translator)
+    "inkling2_virtual_short_convolution": "refused",
     "inkling_moe_route": "pass",
     "inkling_moe_down_combine": "pass",
     "mlx_vlm_llguidance_mask": "crash",   # numeric_limits<T>::infinity()
@@ -911,6 +916,7 @@ FP16 = "float16"
 FP32 = "float32"
 U32, I32, U8, U16 = "uint32", "int32", "uint8", "uint16"
 I8 = "int8"
+BOOL = "bool"
 
 # The element type the upstream call site actually passes (it fixes the
 # generated MSL signature). bfloat16 builders hand back float32 arrays whose
@@ -922,6 +928,8 @@ IN_DTYPES = {
     "inkling_banded_mask": [BF16, BF16],
     "inkling_banded_mask_v2": [BF16, BF16, FP32],
     "inkling_sconv_decode": [BF16, FP32, FP32, BF16],
+    # state fp32, weight T, x T, mask bool, divisor fp32 (upstream order)
+    "inkling2_virtual_short_convolution": [FP32, BF16, BF16, BOOL, FP32],
     "inkling_moe_route": [BF16, BF16, FP32],
     "inkling_moe_down_combine": [BF16, U32, BF16, BF16, U32, BF16],
     "mlx_vlm_llguidance_mask": [BF16, I32],
@@ -943,6 +951,39 @@ IN_DTYPES = {
     "situ_fused": [BF16, FP32],
     "situ_pair_fused": [BF16, BF16, FP32],
 }
+
+def build_vconv(seed=7):
+    r = rng(seed)
+    B, L, C, W = 1, 4, 128, 4
+    x = bf16(r.standard_normal((B, L, C)) * 0.5)
+    state = r.standard_normal((B, W - 1, C)).astype(np.float32)
+    weight = bf16(r.standard_normal((C, W)) * 0.5)
+    import math
+    divisor = np.array(math.sqrt(W + 1), dtype=np.float32)
+    return {"x": x, "state": state, "weight": weight, "divisor": divisor,
+            "mask": None}
+
+
+def ref_vconv(inp):
+    x = inp["x"].astype(np.float64)
+    state = inp["state"].astype(np.float64)
+    weight = inp["weight"].astype(np.float64)
+    divisor = float(inp["divisor"])
+    B, L, C = x.shape
+    W = weight.shape[1]
+    xp = np.concatenate([state, x], axis=1)          # (B, W-1+L, C)
+    out = np.zeros((B, L, C))
+    for t in range(L):
+        value = np.zeros((B, C))
+        for j in range(W):
+            p = t + j - W + 1
+            xv = xp[:, p + W - 1, :] if p < 0 else x[:, p, :]
+            value = value + xv * weight[:, j]
+        out[:, t, :] = (value + x[:, t, :]) / divisor
+    # bf16 rounding on the output cast the kernel performs via T(...)
+    out = out.astype(np.float32).astype(np.float64)
+    return [out]
+
 
 SPECS = [
     dict(name="bitlinear_matmul", builder=build_bitlinear, ref=ref_bitlinear,
@@ -987,6 +1028,14 @@ SPECS = [
          template=[("T", BF16), ("B", 2), ("L", 4), ("C", 512), ("K", 4),
                    ("HAS_RES", True)],
          grid=(512, 2, 1), threadgroup=(32, 1, 1)),
+    dict(name="inkling2_virtual_short_convolution",
+         builder=build_vconv, ref=ref_vconv,
+         inputs=("state", "weight", "x", "mask", "divisor"),
+         outputs=("out",),
+         out_shapes=[(1, 4, 128)], out_dtypes=[BF16],
+         tol=[REL],
+         template=[("T", BF16), ("W", 4), ("HAS_MASK", False)],
+         grid=(1 * 4 * 128, 1, 1), threadgroup=(256, 1, 1)),
     dict(name="inkling_moe_route", builder=build_route, ref=ref_route,
          inputs=("logits", "corr", "wscale"), outputs=("idx", "wk", "gamma"),
          out_shapes=[(2, 8), (2, 8), (2, 512)], out_dtypes=[U32, BF16, BF16],
@@ -1098,3 +1147,5 @@ def get_spec(name):
         if spec["name"] == name:
             return spec
     raise KeyError(name)
+
+
