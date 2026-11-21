@@ -2174,6 +2174,33 @@ class PrimaryGpuSelection(unittest.TestCase):
         self.assertEqual(primary["driverName"], "Honeykrisp")
         self.assertEqual(primary["deviceName"], "Apple M1 (G13G B1)")
 
+    BOREALIS_SUMMARY = (
+        "Devices:\n"
+        "========\n"
+        "GPU0:\n"
+        "\tapiVersion         = 1.4.363\n"
+        "\tdriverVersion      = 26.3.0\n"
+        "\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n"
+        "\tdeviceName         = Apple M4 Pro (G16S B1)\n"
+        "\tdriverID           = DRIVER_ID_AURORA_BOREALIS\n"
+        "\tdriverName         = Borealis\n"
+        "\tdriverInfo         = Mesa 26.3.0-devel (git-d4ad4a4dce), Borealis, derived from Honeykrisp\n"
+        "GPU1:\n"
+        "\tapiVersion         = 1.4.363\n"
+        "\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n"
+        "\tdeviceName         = llvmpipe (LLVM 22.1.8, 128 bits)\n"
+        "\tdriverID           = DRIVER_ID_MESA_LLVMPIPE\n"
+        "\tdriverName         = llvmpipe\n"
+    )
+
+    def test_borealis_is_primary_over_llvmpipe(self):
+        """Aurora's driver reports Borealis and id 35 today (Ryan 2026-11-20)."""
+        devices = cq._device_blocks(self.BOREALIS_SUMMARY)
+        self.assertEqual(len(devices), 2)
+        primary = cq._primary_device(devices)
+        self.assertEqual(primary["driverName"], "Borealis")
+        self.assertEqual(primary["deviceName"], "Apple M4 Pro (G16S B1)")
+
     def test_non_cpu_wins_when_driver_is_unknown(self):
         devices = [
             {"driverName": "llvmpipe",

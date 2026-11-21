@@ -36,6 +36,32 @@ inline std::string packaged_honeykrisp_icd_path(const std::string& prefix) {
   return prefix + "/vulkan/honeykrisp_icd.aarch64.json";
 }
 
+// The packaged vulkan dir may hold either ICD name family: the original
+// Honeykrisp name, or the Borealis name after the Aurora fork rename
+// (accepted per Ryan 2026-11-20; the rename date is theirs to announce).
+inline const std::vector<std::string>& packaged_icd_names() {
+  static const std::vector<std::string> names = {
+      "borealis_icd.aarch64.json", "honeykrisp_icd.aarch64.json"};
+  return names;
+}
+
+// The packaged ICD path that exists: the Borealis name when the package
+// renamed it, else the Honeykrisp name. The packaged prefix must hold
+// exactly one, but a directory holding either resolves.
+inline std::string packaged_honeykrisp_icd_path_or_renamed(
+    const std::string& prefix) {
+  for (const auto& name : packaged_icd_names()) {
+    const std::string candidate = prefix + "/vulkan/" + name;
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec)) {
+      return candidate;
+    }
+  }
+  // Neither exists: return the classic path so the "packaged ICD not
+  // found" error message below stays the one everyone knows.
+  return packaged_honeykrisp_icd_path(prefix);
+}
+
 inline std::string packaged_mesa_git_sha_path(const std::string& prefix) {
   return prefix + "/vulkan/mesa-git-sha";
 }
@@ -46,8 +72,10 @@ inline bool is_honeykrisp_icd(const std::string& path) {
     return static_cast<char>(std::tolower(c));
   });
   return lower.find("honeykrisp") != std::string::npos ||
+      lower.find("borealis") != std::string::npos ||
       lower.find("asahi_icd") != std::string::npos ||
-      lower.find("libvulkan_asahi") != std::string::npos;
+      lower.find("libvulkan_asahi") != std::string::npos ||
+      lower.find("libvulkan_borealis") != std::string::npos;
 }
 
 struct HoneykrispIcdSelection {

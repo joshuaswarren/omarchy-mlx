@@ -771,15 +771,17 @@ def _device_blocks(text):
 def _primary_device(devices):
     """The device that actually matters for this project.
 
-    A host with Honeykrisp also enumerates llvmpipe, and llvmpipe is
+    A host with the Apple driver also enumerates llvmpipe, and llvmpipe is
     listed last. Reporting it would make every submission useless for
-    driver work, so prefer the real GPU: Honeykrisp first, then any
-    non-CPU device, and only then whatever came first.
+    driver work, so prefer the real GPU: the Apple driver first (its Khronos
+    driver-id entry keeps the Honeykrisp name, value 26; Aurora's Borealis
+    entry is 35), then any non-CPU device, and only then whatever came first.
     """
     if not devices:
         return {}
     for dev in devices:
-        if "HONEYKRISP" in dev.get("driverID", "").upper():
+        driver_id = dev.get("driverID", "").upper()
+        if "HONEYKRISP" in driver_id or "BOREALIS" in driver_id:
             return dev
     for dev in devices:
         if dev.get("deviceType", "") != "PHYSICAL_DEVICE_TYPE_CPU":

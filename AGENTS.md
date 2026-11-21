@@ -24,7 +24,8 @@ Use `mlx/backend/no_cpu/` and `mlx/backend/no_gpu/` for failure behavior.
 
 - Keep the public MLX Python import as `mlx`.
 - Keep `mx.gpu` as the public accelerator device.
-- Use Honeykrisp Vulkan for complete tensor execution.
+- Use the Borealis Vulkan driver (Aurora's rename of Honeykrisp; both driver
+  ids and both names are accepted) for complete tensor execution.
 - Treat ANE as an internal graph-region accelerator.
 - Let CPU code schedule, copy, tokenize, and serve requests.
 - Never run a tensor primitive on CPU in a release build.
@@ -267,7 +268,7 @@ mode):
 python3 scripts/query_community_data.py list
 python3 scripts/query_community_data.py --json --kind deep --chip M1 list
 python3 scripts/query_community_data.py --kernel 7.1.6 --json list
-python3 scripts/query_community_data.py --mesa honeykrisp list
+python3 scripts/query_community_data.py --mesa borealis list
 python3 scripts/query_community_data.py --mlx-version 0.3.2 list
 python3 scripts/query_community_data.py show <sha256-prefix>
 python3 scripts/query_community_data.py compare --metric tflops
