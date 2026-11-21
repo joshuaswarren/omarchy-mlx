@@ -1197,7 +1197,7 @@ void translate_pointer_derefs(
       R"(^\s*(?:const\s+)?(?:device|constant)\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*$)");
   static const std::regex base_offset(
       R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\s*(.+))?$)");
-  static const std::regex leading_ident(R"(^\s*([A-Za-z_][A-Za-z0-9_]*))");
+  static const std::regex any_ident(R"([A-Za-z_][A-Za-z0-9_]*)");
   const auto refuse = []() {
     throw std::runtime_error(
         "unsupported MSL feature `device pointer arithmetic` is not "
@@ -1233,7 +1233,8 @@ void translate_pointer_derefs(
       if (std::isalnum(static_cast<unsigned char>(body[prev - 1])) ||
           body[prev - 1] == '_') {
         // A word: an operand unless it is a keyword that takes a unary
-        // expression (`return *p`, `case *p`, `sizeof *p`, `throw *p`).
+        // expression (`return *p`, `else *p`, `do *p`, `case *p`,
+        // `sizeof *p`, `throw *p`).
         size_t word = prev;
         while (word > 0 &&
                (std::isalnum(static_cast<unsigned char>(body[word - 1])) ||
@@ -1241,19 +1242,108 @@ void translate_pointer_derefs(
           --word;
         }
         const std::string before = body.substr(word, prev - word);
-        operand_before = before != "return" && before != "case" &&
-            before != "sizeof" && before != "throw";
+        static const std::unordered_set<std::string> unary_context = {
+            "return", "case", "sizeof", "throw", "else", "do"};
+        operand_before = !unary_context.count(before);
       } else if (body[prev - 1] == '+' || body[prev - 1] == '-') {
         // `x++ * y` — the `*` is binary after a postfix inc/dec; `a + *p`
         // keeps the unary read.
         operand_before = prev > 1 && body[prev - 2] == body[prev - 1];
+      } else if (body[prev - 1] == '.' || body[prev - 1] == '\'') {
+        // `2. * x` — the dot closes a float literal; `'a' * x` a char
+        // literal. Both end an operand: the `*` is a multiply.
+        operand_before = true;
+      } else if (body[prev - 1] == ')') {
+        // `)` usually closes an operand (`(a + b) * p`) — but it also
+        // closes a control-flow header (`if (c) *p`) or a C cast
+        // (`(float) *p`), where the `*` is unary. Look back to the
+        // matching `(` to tell them apart.
+        operand_before = true;
+        size_t open = prev - 1;
+        int parens = 0;
+        // Walk back from the `)`: the `(` that returns the depth to 0 is
+        // its match.
+        while (open > 0) {
+          if (body[open] == ')') {
+            ++parens;
+          } else if (body[open] == '(') {
+            --parens;
+            if (parens == 0) {
+              break;
+            }
+          }
+          --open;
+        }
+        if (body[open] == '(' && parens == 0) {
+          size_t w = open;
+          while (w > 0 &&
+                 std::isspace(static_cast<unsigned char>(body[w - 1]))) {
+            --w;
+          }
+          const size_t wend = w;
+          while (w > 0 &&
+                 (std::isalnum(static_cast<unsigned char>(body[w - 1])) ||
+                  body[w - 1] == '_')) {
+            --w;
+          }
+          const std::string caller = body.substr(w, wend - w);
+          static const std::unordered_set<std::string> control = {
+              "if", "while", "for", "switch", "catch"};
+          const std::string inner =
+              trim(body.substr(open + 1, prev - open - 2));
+          std::smatch inner_match;
+          static const std::regex cast_inner(
+              R"(^\s*((?:(?:const|device|constant|threadgroup|atomic)\s+)*)([A-Za-z_][A-Za-z0-9_:<>]*)\s*[\*&]?\s*$)");
+          static const std::unordered_set<std::string> type_words = {
+              "bool",    "char",      "uchar",   "schar",   "short",
+              "ushort",  "int",       "uint",    "long",    "ulong",
+              "float",   "double",    "half",    "void",    "size_t",
+              "ssize_t", "ptrdiff_t", "int8_t",  "uint8_t", "int16_t",
+              "uint16_t", "int32_t",  "uint32_t", "int64_t", "uint64_t",
+              "bfloat16_t", "float16_t", "atomic_float",
+              "float2",  "float3",    "float4",  "int2",    "int3",
+              "int4",    "uint2",     "uint3",   "uint4",   "half2",
+              "half3",   "half4",     "bfloat2", "bfloat3", "bfloat4",
+              "char2",   "char3",     "char4",   "uchar2",  "uchar3",
+              "uchar4",  "short2",    "short3",  "short4",  "ushort2",
+              "ushort3", "ushort4",   "bool2",   "bool3",   "bool4"};
+          if (control.count(caller) ||
+              (std::regex_match(inner, inner_match, cast_inner) &&
+               (!inner_match[1].str().empty() ||
+                type_words.count(inner_match[2].str())))) {
+            operand_before = false;
+          }
+        }
       } else {
-        // `)` and `]` end an operand. `*` does not: `a * *p` is a binary
-        // `*` followed by a unary dereference.
-        operand_before = body[prev - 1] == ')' || body[prev - 1] == ']';
+        // `]` ends an operand. `*` does not: `a * *p` is a binary `*`
+        // followed by a unary dereference.
+        operand_before = body[prev - 1] == ']';
       }
     }
     if (operand_before) {
+      ++index;
+      continue;
+    }
+    if (next + 1 < body.size() &&
+        (body[next] == '+' || body[next] == '-') &&
+        body[next + 1] == body[next]) {
+      // `*++x` / `*--x`: the pointer moves before the dereference —
+      // pointer arithmetic, refuse by name on a known buffer.
+      size_t id = next + 2;
+      while (id < body.size() &&
+             std::isspace(static_cast<unsigned char>(body[id]))) {
+        ++id;
+      }
+      size_t id_end = id;
+      while (id_end < body.size() &&
+             (std::isalnum(static_cast<unsigned char>(body[id_end])) ||
+              body[id_end] == '_')) {
+        ++id_end;
+      }
+      const std::string target = body.substr(id, id_end - id);
+      if (buffer_types.count(target) || scalar_names.count(target)) {
+        refuse();
+      }
       ++index;
       continue;
     }
@@ -1276,13 +1366,25 @@ void translate_pointer_derefs(
         } else if (operand[k] == ')') {
           --depth;
         } else if (operand[k] == '+' && depth == 0) {
-          plus = k;
-          break;
+          // `++` and `+=` are not binary adds — `x++ + tid` splits on the
+          // later `+`, leaving `x ++` in the head to refuse below.
+          const bool glued =
+              (k + 1 < operand.size() &&
+               (operand[k + 1] == '+' || operand[k + 1] == '=')) ||
+              (k > 0 && operand[k - 1] == '+');
+          if (!glued) {
+            plus = k;
+            break;
+          }
         }
       }
       std::string head =
           trim(plus == std::string::npos ? operand : operand.substr(0, plus));
-      if (plus != std::string::npos) {
+      if (!head.empty() && (head.back() == '+' || head.back() == '-')) {
+        // `x ++`, `x - ` — trailing operators are not a base expression.
+        head.clear();
+      }
+      if (plus != std::string::npos && !head.empty()) {
         top_off = trim(operand.substr(plus + 1));
         // `base ++` and other junk offsets do not lower.
         if (top_off.find_first_of(
@@ -1328,13 +1430,18 @@ void translate_pointer_derefs(
       }
       if (!shaped) {
         // A device-pointer cast, or pointer arithmetic on a known buffer
-        // (`*(base - off)`, `*(base ++)`), refuses by name instead of
-        // falling through to a broken `*(_b0.data - off)` emit.
-        std::smatch lead_match;
-        if (cast_seen ||
-            (std::regex_search(operand, lead_match, leading_ident) &&
-             (buffer_types.count(lead_match[1].str()) ||
-              scalar_names.count(lead_match[1].str())))) {
+        // (`*(base - off)`, `*(base ++)`, `*((base) - 1)`, `*(1 + base)`),
+        // refuses by name instead of falling through to a broken
+        // `*(_b0.data - off)` emit.
+        bool known = cast_seen;
+        for (std::sregex_iterator it(operand.begin(), operand.end(),
+                                     any_ident),
+                 end_it;
+             !known && it != end_it; ++it) {
+          known = buffer_types.count(it->str()) ||
+              scalar_names.count(it->str());
+        }
+        if (known) {
           refuse();
         }
         ++index;
@@ -3071,6 +3178,10 @@ Translation translate_msl(
   // Dereferences of buffer parameters lower to indexed reads; anything
   // else keeps the surviving-pointer refusal below.
   translate_pointer_derefs(body, parameters);
+  // A `(T)` cast whose argument was a `*` expression did not match the
+  // cast scan above (`(float)*(x + i)`); after the dereference lowers to
+  // an indexed read, run the cast pass again to functionalize it.
+  translate_c_style_casts(body);
 
   // MSL implicitly narrows/widens in scalar declarations; GLSL 460
   // rejects implicit conversions. Wrap const scalar-declaration
