@@ -23,7 +23,7 @@ AMD: no result yet.
 
 ## Apple silicon GPU (author runs)
 
-The M1 Pro, M2, M4 Pro and A18 Pro rows: source build of #407 head `ec849019` (main `f3ec9599` plus the submission-budget rows), built on each machine with `MLX_BUILD_TESTS=ON`, against the system Borealis driver with no override. The M3 Pro row: source build of main `a893cae5c`, Release, `MLX_BUILD_TESTS=ON`, against the system Borealis driver with no override, running the 25 standing suites of `AGENTS.md` and the 8 capability-simulation profiles.
+The M1 Pro, M2, M4 Pro and A18 Pro rows: source build of #407 head `ec849019` (main `f3ec9599` plus the submission-budget rows), built on each machine with `MLX_BUILD_TESTS=ON`, against the system Borealis driver with no override. The M3 Pro row: source build of main `a893cae5c` (Release, `MLX_BUILD_TESTS=ON`) against the system Borealis driver with no override.
 
 | GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
 |---|---|---|---|---|---|---|

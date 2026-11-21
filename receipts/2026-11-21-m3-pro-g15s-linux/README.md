@@ -59,7 +59,7 @@ Each suite ran alone, in the order below, under a host GPU lock and an 1800 s ti
 | `omarchy_error_contract_tests` | 3/3 | 14/14 |
 | `omarchy_ane_bundle_tests` | 48/48 | 8215/8215 |
 
-747 of 747 cases pass. The four failed assertions in `omarchy_fast_ops_tests` are inside `sdpa vjp dk dv match finite differences at rep=1 (path per gate)`, which is marked `doctest::may_fail` for the open defect in [known-defects.md](../../docs/known-defects.md#sdpa-backward-fused-vjp-value-defects-at-small-rep1-shapes-2026-10-03-open). They are that entry's signatures: `dv[104]` at shape 5x7 (twice) and `dk[28]` and `dv[28]` at shape 4x4, each about half the finite-difference value (`suite/S04-fast_ops.txt`). The `SUBMIT-RECOVER` and `failed to advance` lines in `suite/S01-runtime.txt` come from the child processes that test the stall paths. `omarchy_ane_bundle_tests` parses and validates ANE bundle files and opens no ANE device.
+747 of 747 cases pass. The four failed assertions in `omarchy_fast_ops_tests` are inside `sdpa vjp dk dv match finite differences at rep=1 (path per gate)`, which is marked `doctest::may_fail` for the open defect in [known-defects.md](../../docs/known-defects.md#sdpa-backward-fused-vjp-value-defects-at-small-rep1-shapes-2026-10-03-open). They are that entry's signatures: `dv[104]` at shape 5x7 (twice) and `dk[28]` and `dv[28]` at shape 4x4, 0.48 to 0.59 of the finite-difference value (`suite/S04-fast_ops.txt`). The `SUBMIT-RECOVER` and `failed to advance` lines in `suite/S01-runtime.txt` come from the child processes that test the stall paths. `omarchy_ane_bundle_tests` parses and validates ANE bundle files and opens no ANE device.
 
 Capability-simulation profiles, `omarchy_capability_sim_tests <profile>` on the real device:
 
@@ -82,7 +82,7 @@ Release v0.7.49 (tag commit `bf5631dc34b2`), wheel `mlx_omarchy-0.32.4.dev202611
 
 ## Correctness probes
 
-`scripts/collect_deep.py --skip profile --out ...` from the checkout at `a893cae5c` against the v0.7.49 wheel, with nothing submitted. `collector/` has the correctness, benchmark and environment sections.
+`scripts/collect_deep.py --skip profile` (exact command in `commands.txt`) from the checkout at `a893cae5c` against the v0.7.49 wheel, with nothing submitted. `collector/` has the correctness, benchmark and environment sections.
 
 | Probe ops | Matmul fp32 median ms (TFLOPS), n = 256 / 512 / 1024 |
 |---|---|
@@ -92,14 +92,14 @@ The community dataset holds an earlier capture from the same machine and wheel, 
 
 ## LLM decode and prefill
 
-`receipts/2026-10-09-linux-vs-macos/score_bench.py` with that receipt's `prompts.jsonl` (sha256 `9299a3b2fc13...`), the procedure of [the M1 Pro, M2, M4 Pro and A18 Pro receipt](../2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md#llm-decode-and-prefill): 2 warmup generations, then 10 greedy generations of 64 tokens (decode median, time to first token excluded) and 5 prefills of 512 tokens (median). Each model ran in its own process, the 2B model first, with release defaults (submission budget 5000). Load average 0.38 before the 2B run and 0.43 before the 4B run. `bench/` has the JSON, the run log with its provenance check, and the load and temperatures before and after each run.
+`receipts/2026-10-09-linux-vs-macos/score_bench.py` with that receipt's `prompts.jsonl` (sha256 `9299a3b2fc13...`), the procedure of [the M1 Pro, M2, M4 Pro and A18 Pro receipt](../2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md#llm-decode-and-prefill): 2 warmup generations, then 10 greedy generations of 64 tokens (decode median, time to first token excluded) and 5 prefills of 512 tokens (median). Each model ran in its own process, the 2B model first, with release defaults (submission budget 5000). Load average 0.38 before the 2B run and 0.43 before the 4B run. `bench/` has the JSON, the run log with its provenance check, and the load and temperatures before and after each run. The kernel exposes no SoC or GPU temperature sensor on this machine; the four SMC sensors it does expose are recorded.
 
 | Model | Decode tok/s (min to max) | Prefill 512 tok/s | Time to first token | Peak memory | Digest |
 |---|---:|---:|---:|---:|---|
 | Qwen3.8-2B 4-bit | 76.14 (75.60 to 76.65) | 370.49 | 0.169 s | 1.49 GB | `912ebb46` |
 | Qwen3-4B-Instruct-2507 4-bit | 43.94 (43.38 to 44.13) | 195.29 | 0.374 s | 2.54 GB | `67c191ee` |
 
-Models, from Hugging Face at these revisions:
+Models, from Hugging Face at these revisions (hashes in `env/model-hashes.txt`):
 
 - `SiddhJagani/Qwen3.8-2B-mlx-4Bit` `0867d98bfb174b042d88461c0e7c97b86b34b381`, 4-bit affine, group 64; `model.safetensors` sha256 `b0d5de688567bf4acd5e421027acd410dabcdc255a5bd46fdbf06c75dc2e6863`, `config.json` `6834d47a6e13a1ac135f27be825abfa0fa54b9e33980599a5575e2f298503a34`, `tokenizer.json` `87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4`.
 - `mlx-community/Qwen3-4B-Instruct-2507-4bit` `50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b`, 4-bit, group 64; `model.safetensors` sha256 `2a73c6c248601ab904e035548abd8e6abb65ea27dcb5f342fb0a8910eb44173f`, `config.json` `574349e5a343236546fda55e4744a76e181f534182d7dc60ff1bad7e7a502849`, `tokenizer.json` `aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4`.
@@ -108,13 +108,13 @@ Both output digests equal the M4 Pro and A18 Pro digests in the 2026-11-13 recei
 
 ## Dispatch trace
 
-`trace/trace_decode.py` loads a model from the wheel venv, generates 32 greedy tokens and prints the backend trace counter deltas around the generation. Each arm ran under `receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py`, which counts calls to `mlx::core::cpu::get_command_encoder(Stream)`, the entry every CPU-stream primitive takes, in the same process.
+`trace/trace_decode.py` loads a model from the wheel venv, generates 32 greedy tokens and prints the backend trace counter deltas around the generation. The deltas cover the prefill and the decode steps; mlx-lm queues one decode step ahead, so they include the step after token 32. Each arm ran under `receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py`, which counts calls to `mlx::core::cpu::get_command_encoder(Stream)`, the entry every CPU-stream primitive takes, in the same process.
 
 | Arm | CPU encoder calls | GPU primitive dispatches | Vulkan compute dispatches | Vulkan submissions |
 |---|---:|---:|---:|---:|
 | control, `mx.add(a, a, stream=mx.cpu)` | 3 | | | |
-| Qwen3.8-2B 4-bit, 32 tokens | 0 | 25383 | 10373 | 1027 |
-| Qwen3-4B-Instruct-2507 4-bit, 32 tokens | 0 | 36228 | 11701 | 697 |
+| Qwen3.8-2B 4-bit, prefill and 32 decode steps | 0 | 25383 | 10373 | 1027 |
+| Qwen3-4B-Instruct-2507 4-bit, prefill and 32 decode steps | 0 | 36228 | 11701 | 697 |
 
 The breakpoint resolved in every arm (`resolved_while_running: true`), and the control shows the trace sees a CPU dispatch. Both decodes ran on `Device(gpu, 0)` with zero CPU tensor dispatches. `trace/` has each arm's provenance line, breakpoint and counters.
 
@@ -129,8 +129,9 @@ The kernel logged 36 GPU driver lines at boot and none during or after any leg: 
 
 ## Files
 
-- `env/`: `m3pro.txt`, `info-before.json`, `info-after.json`, `wheel-provenance.txt`, `venv-freeze.txt`.
-- `suite/`: one log per suite and profile, `summary.txt`.
+- `commands.txt`: the exact command and timeout of every GPU leg, in run order.
+- `env/`: `m3pro.txt`, `info-before.json`, `info-after.json`, `wheel-provenance.txt`, `venv-freeze.txt`, `model-hashes.txt`.
+- `suite/`: one log per suite and profile, each headed by its source build, start time, load, exit code and new kernel GPU lines; `summary.txt`.
 - `collector/`: correctness, benchmark and environment sections.
 - `bench/`: per-model JSON, run log and load file.
 - `trace/`: `trace_decode.py` and one file per arm.

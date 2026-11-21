@@ -9,7 +9,7 @@ Mem:           17612        6550        3405        1621       10307       11062
 asahi-g15 292400000.gpu: G15: probing (T6030 G15S)
 asahi-g15 292400000.gpu: GPU firmware build: macOS 14.7-14.8.x stub firmware (iBoot-10151.140.19.700.2)
 asahi-g15 292400000.gpu: M3: firmware identity accepted
-asahi-g15 292400000.gpu: ADT performance states, 1380 MHz top (differs from the reference machine)
+asahi-g15 292400000.gpu: board data: ADT performance states, 1380 MHz top (differs from the reference machine)
 asahi-g15 292400000.gpu: T6030 G15S admitted, ASC=0x0
 asahi-g15 292400000.gpu: T6030 G15S: power acknowledged, version=0x7031100 counts=0x110209 core-mask=0x6f5bd
 asahi-g15 292400000.gpu: G15: firmware at READY, starting the backend

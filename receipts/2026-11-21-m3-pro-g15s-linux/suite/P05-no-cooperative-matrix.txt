@@ -1,3 +1,4 @@
+== P05-no-cooperative-matrix source a893cae5c build [build] start 2026-11-21T22:57:05Z load 1.63 2.97 1.73 exit 0 new GPU kernel lines: (none)
 [omarchy] CAPABILITY SIMULATION ACTIVE: profile 'no-cooperative-matrix' (stands in for driver_variant other)
 [omarchy] simulated runs are not hardware results: no benchmark or generated-id-digest evidence may be recorded from this process.
 [omarchy] simulated device 0: 'Apple M3 Pro (G15S B1)' (Borealis) as subgroup_size=64 subgroup_ops_mask=0x6cf cooperative_matrix_fp32_8x8x8=0 shared_memory_limit_bytes=32768 workgroup_invocations=1024 workgroup_size_x=1024 atomic_float_add=0

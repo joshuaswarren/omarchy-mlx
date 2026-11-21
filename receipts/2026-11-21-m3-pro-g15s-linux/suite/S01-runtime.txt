@@ -1,3 +1,4 @@
+== S01-runtime source a893cae5c build [build] start 2026-11-21T22:55:36Z load 2.12 3.53 1.77 exit 0 new GPU kernel lines: (none)
 [child/reopen] fresh process device reopen ok
 [child/reopen] fresh process device reopen ok
 [rtmod] SUBMIT-RECOVER tid=1856157 resubmitted 1 stalled batch(es) through cv>=1 (round 1, fresh signals)

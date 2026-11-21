@@ -1,3 +1,4 @@
+== P01-m1-honeykrisp-fork source a893cae5c build [build] start 2026-11-21T22:57:04Z load 1.69 3.01 1.73 exit 0 new GPU kernel lines: (none)
 [omarchy] CAPABILITY SIMULATION ACTIVE: profile 'm1-honeykrisp-fork' (stands in for driver_variant honeykrisp_fork)
 [omarchy] simulated runs are not hardware results: no benchmark or generated-id-digest evidence may be recorded from this process.
 [omarchy] simulated device 0: 'Apple M3 Pro (G15S B1)' (Borealis) as subgroup_size=32 subgroup_ops_mask=0x6ff cooperative_matrix_fp32_8x8x8=1 shared_memory_limit_bytes=32768 workgroup_invocations=1024 workgroup_size_x=1024 atomic_float_add=0

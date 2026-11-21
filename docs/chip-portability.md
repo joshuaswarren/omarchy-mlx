@@ -98,7 +98,7 @@ Names agreed with the capability-simulation harness and used verbatim in
 [`chip-capability-axes.json`](chip-capability-axes.json) (which also carries
 the full gate map with line references). M1 reference values are measured or
 gate-proven from the receipts; M2 values are unknown until the chip runs
-Omarchy; M3 has no GPU driver (software rendering only); M4/M5/M6 are unknown
+Omarchy; M3 Pro (T6030) values are measured on the Borealis driver (`t6030_measured`); other M3 parts have community collector rows only; M4/M5/M6 are unknown
 end to end. **Every axis for future silicon must come from runtime discovery
 (`collect_capabilities`), never from a chip-name table.** The current code
 already derives all of these at runtime; the audit's complaint (F-03) is that
