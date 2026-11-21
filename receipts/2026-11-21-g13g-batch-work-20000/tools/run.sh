@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wAZ: decode submissions vs MLX_OMARCHY_BATCH_WORK on the 13-inch M1 (G13G table row 8000), v0.7.49, Qwen3.8-2B 4-bit.
+# decode submissions vs MLX_OMARCHY_BATCH_WORK on the 13-inch M1 (G13G table row 8000), v0.7.49, Qwen3.8-2B 4-bit.
 # Part 1: tok/s, submits/token, ids for default / 0 (cap off) / 40000, balanced ABBA-style order, 128 tokens.
 # Part 2: read-only ftrace of 64 decode tokens per setting: per-submission GPU job time (drm_sched run->done) p50/p99/max. run.sh OUTDIR
 set -euo pipefail
@@ -16,4 +16,4 @@ tr(){ local tag=$1; shift
   grep ^DECODE "$OUT/dj-$tag.txt" | sed "s/^/$tag /" | tee -a "$OUT/run.log"; }
 trap 'sudo -n sh -c "echo 0 > $T/tracing_on; echo 0 > $T/events/enable; echo local > $T/trace_clock" || true' EXIT
 tr def X=1; tr off MLX_OMARCHY_BATCH_WORK=0; tr w40k MLX_OMARCHY_BATCH_WORK=40000
-echo WAZ_SUB_DONE | tee -a "$OUT/run.log"
+echo RUN_DONE | tee -a "$OUT/run.log"

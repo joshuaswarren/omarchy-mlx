@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wAZ: G13G batch-work sweep: decode tok/s, submits/token, ids at default (8000), 20000, 40000, 60000, 80000, balanced order,
+# G13G batch-work sweep: decode tok/s, submits/token, ids at default (8000), 20000, 40000, 60000, 80000, balanced order,
 # then read-only ftrace of per-submission GPU time per setting. Qwen3.8-2B 4-bit, v0.7.49. run2.sh OUTDIR
 set -euo pipefail
 OUT=$1; D=$(dirname "$0"); PY=$VENV/bin/python; M=$MODEL_2B; T=/sys/kernel/tracing
@@ -14,4 +14,4 @@ tr(){ local tag=$1 w=$2
   sudo -n sh -c "echo 0 > $T/tracing_on; cat $T/trace > '$OUT/ft-$tag.txt'; echo 0 > $T/events/enable; echo > $T/trace; echo local > $T/trace_clock"; }
 trap 'sudo -n sh -c "echo 0 > $T/tracing_on; echo 0 > $T/events/enable; echo local > $T/trace_clock" || true' EXIT
 for w in 20000 60000 80000; do tr w$w $w; done
-echo WAZ_SUB2_DONE | tee -a "$OUT/run.log"
+echo RUN_DONE | tee -a "$OUT/run.log"

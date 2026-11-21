@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wAZ: G13G batch-work tail check on Qwen3-4B 4-bit (the calibration model): tok/s, submits/token, ids at default 8000, 20000, 40000,
+# G13G batch-work tail check on Qwen3-4B 4-bit (the calibration model): tok/s, submits/token, ids at default 8000, 20000, 40000,
 # 60000, 80000 (balanced), then read-only ftrace of per-submission GPU time at each. v0.7.49. run3.sh OUTDIR
 set -euo pipefail
 OUT=$1; D=$(dirname "$0"); PY=$VENV/bin/python; M=$MODEL_4B; T=/sys/kernel/tracing
@@ -14,4 +14,4 @@ tr(){ local w=$1
   sudo -n sh -c "echo 0 > $T/tracing_on; cat $T/trace > '$OUT/ft-w$w.txt'; echo 0 > $T/events/enable; echo > $T/trace; echo local > $T/trace_clock"; }
 trap 'sudo -n sh -c "echo 0 > $T/tracing_on; echo 0 > $T/events/enable; echo local > $T/trace_clock" || true' EXIT
 for w in def 20000 40000 60000 80000; do tr $w; done
-echo WAZ_SUB3_DONE | tee -a "$OUT/run.log"
+echo RUN_DONE | tee -a "$OUT/run.log"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wAZ: host-stamped mlx-lm decode for an ftrace window: prints DECODE <t_first_ns> <t_last_ns> <tokens> (CLOCK_MONOTONIC).
+"""host-stamped mlx-lm decode for an ftrace window: prints DECODE <t_first_ns> <t_last_ns> <tokens> (CLOCK_MONOTONIC).
 usage: decode_jobs.py MODEL_DIR [GEN=64]"""
 import sys, time
 import mlx.core as mx

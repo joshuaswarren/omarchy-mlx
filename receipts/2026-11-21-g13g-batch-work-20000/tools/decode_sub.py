@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wAZ: decode tok/s, Vulkan submissions per token and generated ids for one batch-work setting
+"""decode tok/s, Vulkan submissions per token and generated ids for one batch-work setting
 (MLX_OMARCHY_BATCH_WORK is set by the caller). Qwen3.8-2B 4-bit, fixed prompt, greedy, GEN tokens.
 usage: decode_sub.py MODEL_DIR OUT.json LABEL [GEN=128]"""
 import ctypes, hashlib, json, os, sys, time

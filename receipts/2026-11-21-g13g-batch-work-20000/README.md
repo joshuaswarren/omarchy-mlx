@@ -32,3 +32,5 @@ A decode step evaluates once (1 finalize and 867 dispatches per Qwen3.8-2B token
 - runs/submission-gpu-time.json: per-submission GPU time (drm_sched job run to done, read-only ftrace of gpu_scheduler events) over 64 decode tokens per setting. The raw traces are not committed because they list every process on the host.
 
 Decode is mlx-lm stream_generate with a fixed prompt of about 600 tokens and greedy sampling (tools/decode_sub.py). Submissions per token come from the backend trace counters (mlx_omarchy_trace_snapshot).
+
+The scripts in tools/ are the ones that made these runs. After the runs, only the first comment line and the final done marker of each script were edited, to remove internal lab labels.
