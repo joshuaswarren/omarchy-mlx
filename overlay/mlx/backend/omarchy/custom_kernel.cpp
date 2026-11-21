@@ -2516,6 +2516,45 @@ bool half_read_is_plain_value(const std::string& s, size_t begin, size_t end) {
   return false;
 }
 
+// Rewrite every `<name>[<index>]` read in `text`. The index may itself
+// contain brackets (`mask[b * mask_strides[0] + p * mask_strides[1]]` in
+// the inkling2 kernels), so the match walks to the matching ']' instead
+// of a [^\]]+ capture, which stops at the first inner close bracket and
+// mangles the expression. `emit` gets the index text and the read's span
+// in the original string and returns the replacement. An index that
+// itself reads the same buffer (`mask[mask[i] ? 1 : 0]`) is rewritten by
+// the recursive call first. The (non-'.') prefix keeps a member read like
+// `s.x[0]` from matching a buffer named x. `base` is `text`'s offset in
+// the original string, so `emit` sees absolute positions at every depth.
+template <typename Emit>
+std::string rewrite_indexed_reads(
+    const std::string& text,
+    const std::string& name,
+    Emit&& emit,
+    size_t base = 0) {
+  const std::regex head("(^|[^.\\w])" + regex_escape(name) + R"(\s*\[)");
+  std::string out;
+  size_t cursor = 0;
+  std::smatch found;
+  while (cursor < text.size() &&
+         std::regex_search(
+             text.cbegin() + cursor, text.cend(), found, head)) {
+    const size_t match_at =
+        cursor + static_cast<size_t>(found.position(0));
+    const size_t begin = match_at + static_cast<size_t>(found.length(1));
+    const size_t open = match_at + static_cast<size_t>(found.length(0)) - 1;
+    const size_t close = matching_delimiter(text, open, '[', ']');
+    out.append(text, cursor, begin - cursor);
+    const std::string index = rewrite_indexed_reads(
+        text.substr(open + 1, close - open - 1), name, emit,
+        base + open + 1);
+    out += emit(index, base + begin, base + close + 1);
+    cursor = close + 1;
+  }
+  out.append(text, cursor, std::string::npos);
+  return out;
+}
+
 // Statements that assign into a float16_t local or shared array (`acc += x;`,
 // `acc = acc + x;`, `sh[i] = x;`) store through float16_t(): the right-hand
 // side may be float after the half reads were widened, and GLSL does not
@@ -3594,27 +3633,18 @@ Translation translate_msl(
       // arithmetic to fp32); mixed int/f16 expressions then compile as
       // int/float (2026-10-08 KernelRecheck, bitlinear_matmul).
       if (parameter.type == "float16_t" && !output) {
-        const auto escaped16 = regex_escape(parameter.name);
         const std::string storage =
             "_b" + std::to_string(parameter.binding) + ".data[";
-        const std::regex read_pattern(
-            "\\b" + escaped16 + R"(\s*\[([^\]]+)\])");
-        std::string rewritten;
-        size_t last = 0;
-        for (std::sregex_iterator it(body.begin(), body.end(), read_pattern), stop;
-             it != stop;
-             ++it) {
-          const size_t begin = static_cast<size_t>(it->position(0));
-          const size_t end = begin + static_cast<size_t>(it->length(0));
-          const std::string element = storage + (*it)[1].str() + "]";
-          rewritten.append(body, last, begin - last);
-          rewritten += half_read_is_plain_value(body, begin, end)
-              ? element
-              : "float(" + element + ")";
-          last = end;
-        }
-        rewritten.append(body, last, std::string::npos);
-        body = std::move(rewritten);
+        body = rewrite_indexed_reads(
+            body,
+            parameter.name,
+            [&storage, &body](
+                const std::string& index, size_t begin, size_t end) {
+              const std::string element = storage + index + "]";
+              return half_read_is_plain_value(body, begin, end)
+                  ? element
+                  : "float(" + element + ")";
+            });
       }
       // bool buffer reads need an explicit comparison: the element is
       // uint8_t storage, and GLSL has no integer-to-bool promotion
@@ -3622,23 +3652,14 @@ Translation translate_msl(
       // "unsupported buffer type `bool`"). Output-side reads stay the
       // macro path; a `mask[i]` store target is a uint8_t lvalue.
       if (parameter.type == "bool" && !output) {
-        const auto escaped_bool = regex_escape(parameter.name);
         const std::string storage =
             "_b" + std::to_string(parameter.binding) + ".data[";
-        const std::regex read_pattern(
-            "\\b" + escaped_bool + R"(\s*\[([^\]]+)\])");
-        std::string rewritten;
-        size_t last = 0;
-        for (std::sregex_iterator it(body.begin(), body.end(), read_pattern), stop;
-             it != stop;
-             ++it) {
-          const size_t begin = static_cast<size_t>(it->position(0));
-          rewritten.append(body, last, begin - last);
-          rewritten += "(" + storage + (*it)[1].str() + "] != 0)";
-          last = begin + static_cast<size_t>(it->length(0));
-        }
-        rewritten.append(body, last, std::string::npos);
-        body = std::move(rewritten);
+        body = rewrite_indexed_reads(
+            body,
+            parameter.name,
+            [&storage](const std::string& index, size_t, size_t) {
+              return "(" + storage + index + "] != 0)";
+            });
       }
       // A small array bound in the constant space that the body never
       // indexes is used as a value: mlx-audio's phonon unpack divides
@@ -3658,11 +3679,51 @@ Translation translate_msl(
       // inputs (Qwen3.5 GDN state update, [1,1,16,128] bf16, seen in
       // the OmlxLinux M2 repro 2026-10-05).
       if (output || parameter.type == "bfloat16_t") {
-        const auto escaped = regex_escape(parameter.name);
-        body = std::regex_replace(
-            body,
-            std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\]\s*=\s*([^;]+);)"),
-            parameter.name + "[$1] = " + glsl_type(parameter.type) + "($2);");
+        const std::string cast = glsl_type(parameter.type);
+        const std::regex head(
+            "(^|[^.\\w])" + regex_escape(parameter.name) + R"(\s*\[)");
+        std::string rewritten;
+        size_t cursor = 0;
+        std::smatch found;
+        while (cursor < body.size() &&
+               std::regex_search(
+                   body.cbegin() + cursor, body.cend(), found, head)) {
+          const size_t match_at =
+              cursor + static_cast<size_t>(found.position(0));
+          const size_t begin =
+              match_at + static_cast<size_t>(found.length(1));
+          const size_t open =
+              match_at + static_cast<size_t>(found.length(0)) - 1;
+          const size_t close = matching_delimiter(body, open, '[', ']');
+          size_t at = close + 1;
+          while (at < body.size() &&
+                 std::isspace(static_cast<unsigned char>(body[at]))) {
+            ++at;
+          }
+          if (at + 1 >= body.size() || body[at] != '=' ||
+              body[at + 1] == '=') {
+            // A read or a non-store use: keep the text and move on.
+            rewritten.append(body, cursor, close + 1 - cursor);
+            cursor = close + 1;
+            continue;
+          }
+          const size_t semi = body.find(';', at + 1);
+          if (semi == std::string::npos) {
+            break;
+          }
+          size_t rhs = at + 1;
+          while (rhs < semi &&
+                 std::isspace(static_cast<unsigned char>(body[rhs]))) {
+            ++rhs;
+          }
+          rewritten.append(body, cursor, begin - cursor);
+          rewritten += parameter.name + "[" +
+              body.substr(open + 1, close - open - 1) + "] = " + cast +
+              "(" + body.substr(rhs, semi - rhs) + ");";
+          cursor = semi + 1;
+        }
+        rewritten.append(body, cursor, std::string::npos);
+        body = std::move(rewritten);
       }
       macros += "#define _mlx_arg" +
           std::to_string(parameter.binding) + " ";
