@@ -30,10 +30,10 @@ Subcommands:
   vendor WHEEL [--openblas PATH] [--patchelf BIN]
       Rewrite WHEEL in place. Needs the `patchelf` binary; the wheel is
       left untouched when libmlx.so has no bare libopenblas.so.0 NEEDED.
-      The OpenBLAS passed to --openblas must have its gcc runtime
-      (libgfortran.so.5, libgomp.so.1) in the same directory; those
-      libraries are copied into mlx/lib/ unchanged, so a bare container
-      without the gcc runtime can still import mlx.core.
+      Every non-glibc member in its transitive NEEDED chain must be in
+      the same directory. GCC runtime licence texts (COPYING3,
+      COPYING.RUNTIME, and COPYING.LIB where applicable) are copied from
+      the toolchain licence directory into mlx/lib/licences/.
   check WHEEL [WHEEL ...]
       Exit nonzero if any wheel still carries the bare soname or an
       inconsistent vendored entry. Pure ELF parsing, no patchelf needed.
@@ -76,6 +76,8 @@ DT_NEEDED = 1
 DT_STRTAB = 5
 DT_SONAME = 14
 DT_RUNPATH = 29
+GCC_RUNTIME_PREFIXES = ("libgfortran.", "libgomp.", "libquadmath.", "libgcc_s.")
+LICENSE_DIR = "mlx/lib/licences"
 
 
 def _cstr(buf, off):
@@ -149,19 +151,41 @@ def runtime_libraries(needed):
 
 
 def vendor_runtime_additions(openblas_src, blas_needed):
-    """Payloads to ship beside the hashed OpenBLAS: its runtime libraries,
-    copied unchanged from the directory the OpenBLAS came from."""
+    """Copy the complete non-glibc NEEDED closure and GCC licence texts."""
     additions = {}
     src_dir = Path(openblas_src).parent
-    for dep in runtime_libraries(blas_needed):
+    pending = list(runtime_libraries(blas_needed))
+    seen = set()
+    while pending:
+        dep = pending.pop(0)
+        if dep in seen:
+            continue
+        seen.add(dep)
         dep_path = src_dir / dep
         if not dep_path.is_file():
-            raise SystemExit(
-                f"runtime library of the vendored OpenBLAS not found: {dep_path}; "
-                "the gcc runtime (libgfortran, libgomp) must live beside the "
-                "OpenBLAS passed to --openblas"
-            )
-        additions[f"mlx/lib/{dep}"] = dep_path.read_bytes()
+            raise SystemExit(f"runtime library in NEEDED chain not found: {dep_path}")
+        data = dep_path.read_bytes()
+        additions[f"mlx/lib/{dep}"] = data
+        try:
+            child_needed = parse_elf_needed(data)[0]
+        except ValueError as exc:
+            raise SystemExit(f"cannot inspect runtime library {dep_path}: {exc}")
+        if child_needed is None:
+            raise SystemExit(f"runtime library is not ELF: {dep_path}")
+        pending.extend(n for n in runtime_libraries(child_needed) if n not in seen)
+
+    license_dirs = (src_dir / "licences", Path("/usr/share/licenses/gcc-libs"),
+                    Path("/usr/share/doc/gcc"))
+    required = set()
+    if any(n.startswith(("libgfortran.", "libgomp.", "libgcc_s.")) for n in seen):
+        required.update(("COPYING3", "COPYING.RUNTIME"))
+    if any(n.startswith("libquadmath.") for n in seen):
+        required.add("COPYING.LIB")
+    for name in sorted(required):
+        source = next((p / name for p in license_dirs if (p / name).is_file()), None)
+        if source is None:
+            raise SystemExit(f"GCC runtime licence text not found: {name}")
+        additions[f"{LICENSE_DIR}/{name}"] = source.read_bytes()
     return additions
 
 
@@ -262,6 +286,7 @@ def vendor(wheel_path, openblas_src, patchelf):
         patched_blas = work / vendored_name
         patched_blas.write_bytes(src_bytes)
         _run_patchelf(patchelf, ["--set-soname", vendored_name, str(patched_blas)])
+        _run_patchelf(patchelf, ["--add-rpath", "$ORIGIN", str(patched_blas)])
         patched_mlx.write_bytes(libmlx)
         _run_patchelf(
             patchelf,
@@ -280,7 +305,14 @@ def vendor(wheel_path, openblas_src, patchelf):
             raise SystemExit(f"patched RUNPATH wrong: {runpath!r}")
 
         additions = {f"mlx/lib/{vendored_name}": patched_blas.read_bytes()}
-        additions.update(vendor_runtime_additions(src, blas_needed))
+        runtime_additions = vendor_runtime_additions(src, blas_needed)
+        for member in list(runtime_additions):
+            if member.startswith("mlx/lib/") and runtime_additions[member][:4] == b"\x7fELF":
+                path = work / Path(member).name
+                path.write_bytes(runtime_additions[member])
+                _run_patchelf(patchelf, ["--add-rpath", "$ORIGIN", str(path)])
+                runtime_additions[member] = path.read_bytes()
+        additions.update(runtime_additions)
         _rewrite_wheel(
             wheel_path,
             replace={LIBMLX_MEMBER: patched_mlx.read_bytes()},
@@ -335,13 +367,35 @@ def check(wheel_path):
         failures.append(
             f"{wheel_path.name}: carries {sorted(members)} but nothing NEEDS them"
         )
-    for member, member_needed in member_deps.items():
-        for dep in runtime_libraries(member_needed or ()):
-            if f"mlx/lib/{dep}" not in names:
-                failures.append(
-                    f"{wheel_path.name}: {member} NEEDS {dep} but "
-                    f"mlx/lib/{dep} is not in the wheel"
-                )
+    chain = set(members)
+    pending = list(members)
+    while pending:
+        member = pending.pop()
+        with zipfile.ZipFile(wheel_path) as zf:
+            try:
+                parsed_member = parse_elf_needed(zf.read(member))
+            except (ValueError, KeyError):
+                parsed_member = None
+        if parsed_member is None:
+            failures.append(f"{wheel_path.name}: cannot parse vendored library {member}")
+            continue
+        deps = parsed_member[0]
+        if not parsed_member[1] or "$ORIGIN" not in parsed_member[1].split(":"):
+            failures.append(f"{wheel_path.name}: {member} RUNPATH {parsed_member[1]!r} lacks $ORIGIN")
+        for dep in runtime_libraries(deps):
+            dep_member = f"mlx/lib/{dep}"
+            if dep_member not in names:
+                failures.append(f"{wheel_path.name}: {member} NEEDS {dep} but {dep_member} is not in the wheel")
+            elif dep_member not in chain:
+                chain.add(dep_member)
+                pending.append(dep_member)
+    for member in chain:
+        lib = Path(member).name
+        texts = ("COPYING3", "COPYING.RUNTIME") if lib.startswith(("libgfortran.", "libgomp.", "libgcc_s.")) else ("COPYING.LIB",) if lib.startswith("libquadmath.") else ()
+        for text in texts:
+            licence = f"{LICENSE_DIR}/{text}"
+            if licence not in names:
+                failures.append(f"{wheel_path.name}: {lib} lacks licence file {licence}")
     return failures
 
 

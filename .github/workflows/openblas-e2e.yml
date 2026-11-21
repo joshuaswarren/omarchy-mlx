@@ -1,0 +1,13 @@
+name: OpenBLAS wheel isolation
+on:
+  push:
+  pull_request:
+jobs:
+  openblas-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and Python
+        run: sudo apt-get update && sudo apt-get install -y gcc python3-venv
+      - name: Run OpenBLAS vendor end-to-end test
+        run: scripts/test-openblas-e2e.sh

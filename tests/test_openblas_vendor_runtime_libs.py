@@ -42,16 +42,18 @@ class RuntimeLibTest(unittest.TestCase):
             zf.writestr(LIBMLX_MEMBER, libmlx)
             for name, data in members.items():
                 zf.writestr(name, data)
+            for text in ("COPYING3", "COPYING.RUNTIME", "COPYING.LIB"):
+                zf.writestr(f"mlx/lib/licences/{text}", text.encode())
             zf.writestr(RECORD_NAME, f"{RECORD_NAME},,\n")
         return wheel
 
     @staticmethod
     def blas_needing(deps):
-        return elf64(deps, soname=VENDORED)
+        return elf64(deps, runpath="$ORIGIN", soname=VENDORED)
 
     @staticmethod
     def elf_member():
-        return elf64([])
+        return elf64([], runpath="$ORIGIN")
 
     def test_check_fails_when_runtime_libs_missing(self):
         wheel = self.make_wheel(
@@ -86,6 +88,34 @@ class RuntimeLibTest(unittest.TestCase):
         )
         self.assertEqual(check(wheel), [])
 
+    def test_check_walks_transitive_needed_chain_and_requires_each_runpath(self):
+        wheel = self.make_wheel(
+            [GFORTRAN],
+            {
+                f"mlx/lib/{VENDORED}": self.blas_needing([GFORTRAN]),
+                f"mlx/lib/{GFORTRAN}": elf64(["libquadmath.so.0"], runpath="$ORIGIN"),
+            },
+        )
+        failures = check(wheel)
+        self.assertTrue(any("libquadmath.so.0" in failure for failure in failures), failures)
+
+    def test_check_requires_correct_gcc_runtime_licence(self):
+        wheel = self.make_wheel(
+            ["libquadmath.so.0"],
+            {
+                f"mlx/lib/{VENDORED}": self.blas_needing(["libquadmath.so.0"]),
+                "mlx/lib/libquadmath.so.0": self.elf_member(),
+            },
+        )
+        # The quadmath requirement is LGPL (COPYING.LIB), not GPL+runtime exception.
+        rewritten = wheel.with_suffix(".rewritten.whl")
+        with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(rewritten, "w") as target:
+            for info in source.infolist():
+                if info.filename != "mlx/lib/licences/COPYING.LIB":
+                    target.writestr(info, source.read(info.filename))
+        failures = check(rewritten)
+        self.assertTrue(any("COPYING.LIB" in failure for failure in failures), failures)
+
     def test_check_passes_when_blas_needs_only_glibc(self):
         wheel = self.make_wheel(
             ["libm.so.6", "libc.so.6"],
@@ -104,11 +134,18 @@ class RuntimeLibTest(unittest.TestCase):
     def test_vendor_additions_copies_from_openblas_source_dir(self):
         vendor_runtime_additions = MODULE["vendor_runtime_additions"]
         src_dir = Path(self._tmp.name)
-        (src_dir / GFORTRAN).write_bytes(b"\x7fELF-gfortran")
+        (src_dir / GFORTRAN).write_bytes(elf64(["libquadmath.so.0"]))
+        (src_dir / "libquadmath.so.0").write_bytes(elf64([], runpath="$ORIGIN"))
+        license_dir = src_dir / "licences"
+        license_dir.mkdir()
+        for text in ("COPYING3", "COPYING.RUNTIME", "COPYING.LIB"):
+            (license_dir / text).write_text(text)
         additions = vendor_runtime_additions(
             src_dir / "libopenblas.so.0", [GFORTRAN, "libm.so.6"]
         )
-        self.assertEqual(additions, {f"mlx/lib/{GFORTRAN}": b"\x7fELF-gfortran"})
+        self.assertEqual(additions[f"mlx/lib/{GFORTRAN}"], elf64(["libquadmath.so.0"]))
+        self.assertIn("mlx/lib/libquadmath.so.0", additions)
+        self.assertIn("mlx/lib/licences/COPYING.RUNTIME", additions)
 
     def test_vendor_additions_errors_when_runtime_lib_missing(self):
         vendor_runtime_additions = MODULE["vendor_runtime_additions"]
