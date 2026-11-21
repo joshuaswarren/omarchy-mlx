@@ -16,10 +16,11 @@
 +  // counts. With no fill_value the padding is a runtime slice of the
 +  // sorted values, not a constant. Reading the indices first, then the
 +  // counts, is the exact ordering of the original report (40/100 wrong
-+  // counts indices-first in that report; 17/100 in the Python suite
-+  // control arm here; this C++ case fails on the unfixed library).
-+  // Each trial imports the function again, matching the upstream
-+  // reproduction: the fresh import is what widens the window.
++  // counts indices-first in that report; 17/100 in the python control
++  // arm here; this C++ case fails on the unfixed library).
++  // Each trial imports the function again, matching the python
++  // reproduction in the fork's qualification kit: the fresh import is
++  // what widens the window.
 +  if (!gpu::is_available()) {
 +    MESSAGE("Skipping: requires a qualifying Vulkan device.");
 +    return;
