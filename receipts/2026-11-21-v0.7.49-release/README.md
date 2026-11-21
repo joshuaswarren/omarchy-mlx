@@ -21,11 +21,11 @@ d41df12441b34b4e90b27283ea52034e2d53a94db2a54119acfbbf38c4caac75  omarchy-mlx-wh
 The release-assets gate (`scripts/verify-release-assets.py v0.7.49`, the
 script from the tag) ran against the uploaded draft bytes on the aarch64
 build host and printed: `VERIFIED: every uploaded asset matches what the
-release claims`. It checked every asset's sha256 against `SHA256SUMS`, the
-version in the filename and in `dist-info/METADATA`, the stamped build
-commit against the tag, the feature strings, the platform tags, coverage of
-both required platforms, and that the fixed-name copy is byte-identical to
-the aarch64 wheel.
+release claims`. The published body's Gates section carries that verdict
+with the same checks: every asset hash matches `SHA256SUMS`, both wheels
+carry the tag commit in their version and in the library, the fixed-name
+aarch64 copy is byte-identical to the aarch64 wheel, both required
+platforms are covered, and the Mesa pin is in the tag.
 
 The v0.7.49 gates battery (g1–g15) covers the runtime gates that need a
 machine; for this release the battery did not run, because the release
