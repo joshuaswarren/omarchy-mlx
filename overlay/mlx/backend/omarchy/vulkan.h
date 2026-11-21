@@ -130,6 +130,7 @@ struct DeviceTable {
   PFN_vkResetCommandBuffer ResetCommandBuffer{nullptr};
   PFN_vkCmdCopyBuffer CmdCopyBuffer{nullptr};
   PFN_vkCmdFillBuffer CmdFillBuffer{nullptr};
+  PFN_vkCmdUpdateBuffer CmdUpdateBuffer{nullptr};
   PFN_vkCreateShaderModule CreateShaderModule{nullptr};
   PFN_vkDestroyShaderModule DestroyShaderModule{nullptr};
   PFN_vkCreateDescriptorSetLayout CreateDescriptorSetLayout{nullptr};

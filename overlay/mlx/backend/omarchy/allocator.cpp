@@ -636,8 +636,10 @@ Buffer VulkanAllocator::malloc(size_t size) {
   if (size == 0) {
     return Buffer{new VulkanBuffer{}};
   }
+  const size_t requested_size = size;
   size = round_size(size);
-  const bool want_device_local = device_local_activations_enabled();
+  const bool want_device_local = should_use_device_local_activation(
+      device_local_activations_enabled(), requested_size);
 
   std::unique_lock lk(mutex_);
   auto& cache = want_device_local ? device_local_cache_ : buffer_cache_;

@@ -64,6 +64,36 @@ int main() {
       "tail chunk rounds copy_bytes to 4 bytes");
   fails += check(c2.byte_count == 0 && c2.copy_bytes == 0, "end of buffer returns empty chunk");
 
+  // 2b. Inline vkCmdUpdateBuffer eligibility (<= 65536 B, non-zero, 4-byte aligned)
+  // and tiny scalar HOST_VISIBLE fast path (checked against unrounded request size).
+  fails += check(!should_use_device_local_activation(true, 4),
+                 "4-byte scalar stays HOST_VISIBLE for zero-stall pipelined readback");
+  fails += check(!should_use_device_local_activation(true, 16),
+                 "16-byte scalar stays HOST_VISIBLE for zero-stall pipelined readback");
+  fails += check(should_use_device_local_activation(true, 80),
+                 "80-byte activation uses DEVICE_LOCAL VRAM");
+  fails += check(!should_use_device_local_activation(false, 4096),
+                 "disabled opt-in never uses DEVICE_LOCAL VRAM");
+  fails += check(!can_inline_update_device_local(0), "0 bytes cannot inline update");
+  fails += check(can_inline_update_device_local(4), "4-byte scalar can inline update");
+  fails += check(can_inline_update_device_local(256), "256-byte buffer can inline update");
+  fails += check(can_inline_update_device_local(kInlineUpdateMaxBytes), "65536 B exact cap can inline update");
+  fails += check(!can_inline_update_device_local(kInlineUpdateMaxBytes + 4), "above 65536 B falls back to staging");
+  fails += check(!can_inline_update_device_local(6), "non-4-byte-aligned size falls back to staging");
+
+  // 2c. Inline update timeline semaphore wait predicate.
+  constexpr uint64_t kPending = ~uint64_t{0};
+  fails += check(!needs_inline_update_semaphore_wait(0, kPending, 5, 3),
+                 "zero completion needs no semaphore wait");
+  fails += check(!needs_inline_update_semaphore_wait(kPending, kPending, 5, 3),
+                 "pending sentinel is handled via same-encoder order or cross-encoder flush");
+  fails += check(!needs_inline_update_semaphore_wait(5, kPending, 5, 3),
+                 "completion <= last_completion on this stream needs no extra wait");
+  fails += check(!needs_inline_update_semaphore_wait(7, kPending, 5, 7),
+                 "already-drained completion needs no semaphore wait");
+  fails += check(needs_inline_update_semaphore_wait(9, kPending, 5, 7),
+                 "unretired cross-stream completion requires timeline semaphore wait");
+
   // 3. Wider 2x16 Qmm workgroup selection.
   QmmWideCaps rtx_caps{32u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 1024u, 1024u};
   QmmWideCaps narrow_wg{32u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 256u, 1024u};

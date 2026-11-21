@@ -14,6 +14,19 @@
 
 namespace mlx::core::omarchy {
 
+// Minimum *unrounded* allocation size placed in pure DEVICE_LOCAL VRAM when
+// MLX_OMARCHY_VRAM_ACTIVATIONS=1. Tiny scalar buffers (<= 16 B, e.g. 4-byte
+// sampled token IDs, RoPE offsets, scalar reductions) stay
+// HOST_VISIBLE|HOST_COHERENT so pipelined host readback (y.item()) never
+// stalls behind the next token's queued compute work on a shared VkQueue.
+inline constexpr size_t kMinDeviceLocalActivationBytes = 16;
+
+inline bool should_use_device_local_activation(
+    bool opt_in_enabled,
+    size_t requested_size) {
+  return opt_in_enabled && requested_size > kMinDeviceLocalActivationBytes;
+}
+
 // Memory type for opt-in device-local activation/general buffers on discrete
 // GPUs. Returns UINT32_MAX when disabled, on integrated/UMA/software GPUs, or
 // when no pure DEVICE_LOCAL + non-DEVICE_LOCAL HOST_VISIBLE staging pair
@@ -59,6 +72,31 @@ inline StagingTransferChunk vram_staging_chunk(
   const size_t n = std::min(total_bytes - offset, staging_cap);
   const size_t aligned = (n + 3) & ~size_t{3};
   return {offset, n, aligned};
+}
+
+// Vulkan 1.0 core limit for inline vkCmdUpdateBuffer: dataSize <= 65536 and
+// multiple of 4 (dstOffset multiple of 4). Recording small host->device
+// uploads inline inside the active compute command buffer avoids per-buffer
+// vkQueueSubmit + vkWaitForFences round-trips over PCIe/Thunderbolt.
+inline constexpr size_t kInlineUpdateMaxBytes = 65536;
+
+inline bool can_inline_update_device_local(size_t buffer_size) {
+  return buffer_size > 0 && buffer_size <= kInlineUpdateMaxBytes &&
+      (buffer_size % 4u) == 0;
+}
+
+// Whether an inline vkCmdUpdateBuffer recorded on this encoder must add a
+// timeline semaphore wait for a buffer's prior completion stamp. Same-stream
+// submitted work (<= last_completion) and already-retired work (<= drained)
+// require no extra wait; pending-sentinel work is handled by the caller
+// (program order on the same encoder, or flushing other pending encoders).
+inline bool needs_inline_update_semaphore_wait(
+    uint64_t comp,
+    uint64_t pending_sentinel,
+    uint64_t last_completion,
+    uint64_t drained_value) {
+  return comp != 0 && comp != pending_sentinel && comp > last_completion &&
+      comp > drained_value;
 }
 
 // Pure capability check for the 2x16 Qmm decode workgroup geometry
