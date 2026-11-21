@@ -31,11 +31,11 @@
 +    };
 +    export_function(file_path, fun, {x});
 +  }
-+  auto imported = import_function(file_path);
 +  const int32_t expected[10] = {1, 4, 3, 2, 0, 0, 0, 0, 0, 0};
 +
 +  for (int trial = 0; trial < 100; ++trial) {
 +    StreamContext on_gpu(gpu_stream);
++    auto imported = import_function(file_path);
 +    auto out = imported({x});
 +    eval(out[1]);
 +    synchronize(gpu_stream);
