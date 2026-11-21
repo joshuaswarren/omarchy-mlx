@@ -1,0 +1,11 @@
+port proof: float64 run of the port matches the shipped reference exactly
+== grad_d n=65536
+float32 CPU ref vs float64 ref: maxabs 0.000e+00 maxrel 0.000e+00 rel-L2 0.000e+00
+near-zero band (|ref|<1, n=32829): maxabs 0.000e+00 maxrel 0.000e+00
+shipped ('rel',1e-4,atol=0) failures on f32-ref-vs-f64-ref: 0
+GPU maxabs 3.6e-03 vs float32-reference maxabs 0.0e+00 -> GPU sits inside the float32 arithmetic band: False
+== grad_x n=4096
+float32 CPU ref vs float64 ref: maxabs 0.000e+00 maxrel 0.000e+00 rel-L2 0.000e+00
+near-zero band (|ref|<1, n=1): maxabs 0.000e+00 maxrel 0.000e+00
+shipped ('rel',1e-4,atol=0) failures on f32-ref-vs-f64-ref: 0
+GPU maxabs 3.6e-04 vs float32-reference maxabs 0.0e+00 -> GPU sits inside the float32 arithmetic band: True
