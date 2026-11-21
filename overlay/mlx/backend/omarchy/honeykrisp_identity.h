@@ -66,8 +66,11 @@ inline std::string packaged_mesa_git_sha_path(const std::string& prefix) {
   return prefix + "/vulkan/mesa-git-sha";
 }
 
+// Matches the manifest or library file name only, never parent directories,
+// so a foreign ICD placed under a directory containing a driver token is
+// still refused.
 inline bool is_honeykrisp_icd(const std::string& path) {
-  std::string lower = path;
+  std::string lower = std::filesystem::path(path).filename().string();
   std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
   });
@@ -76,6 +79,24 @@ inline bool is_honeykrisp_icd(const std::string& path) {
       lower.find("asahi_icd") != std::string::npos ||
       lower.find("libvulkan_asahi") != std::string::npos ||
       lower.find("libvulkan_borealis") != std::string::npos;
+}
+
+// First colon-separated entry in a VK_DRIVER_FILES / VK_ICD_FILENAMES value
+// matching is_honeykrisp_icd, or empty when none matches.
+inline std::string find_honeykrisp_icd_in_list(const std::string& value) {
+  size_t start = 0;
+  while (start <= value.size()) {
+    const size_t end = value.find(':', start);
+    const std::string item = value.substr(start, end - start);
+    if (is_honeykrisp_icd(item)) {
+      return item;
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  return {};
 }
 
 struct HoneykrispIcdSelection {
@@ -130,25 +151,17 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
     const char* user_files,
     const std::string& packaged_path) {
   if (user_files != nullptr && user_files[0] != '\0') {
-    std::string value(user_files);
-    size_t start = 0;
-    while (start <= value.size()) {
-      const size_t end = value.find(':', start);
-      const std::string item = value.substr(start, end - start);
-      if (is_honeykrisp_icd(item)) {
-        std::error_code existence;
-        if (!std::filesystem::exists(item, existence) || existence) {
-          throw std::runtime_error(
-              "Honeykrisp ICD selection refused: user Vulkan ICD JSON does"
-              " not exist: " +
-              item);
-        }
-        return {item, false, true};
+    const std::string value(user_files);
+    const std::string item = find_honeykrisp_icd_in_list(value);
+    if (!item.empty()) {
+      std::error_code existence;
+      if (!std::filesystem::exists(item, existence) || existence) {
+        throw std::runtime_error(
+            "Honeykrisp ICD selection refused: user Vulkan ICD JSON does"
+            " not exist: " +
+            item);
       }
-      if (end == std::string::npos) {
-        break;
-      }
-      start = end + 1;
+      return {item, false, true};
     }
     throw std::runtime_error(
         "Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: " +

@@ -973,7 +973,7 @@ TEST_CASE("the development override runs without the Honeykrisp ICD") {
   const char* allow = std::getenv("MLX_OMARCHY_ALLOW_NON_APPLE");
   const char* files = std::getenv("VK_DRIVER_FILES");
   if (allow == nullptr || std::string(allow) != "1" || files == nullptr ||
-      omarchy::is_honeykrisp_icd(files)) {
+      !omarchy::find_honeykrisp_icd_in_list(files).empty()) {
     skip("needs the development override and a non-Honeykrisp driver.");
     return;
   }
