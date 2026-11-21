@@ -18,14 +18,14 @@ void new_stream(Stream s) {
   assert(s.device == Device::gpu);
   auto& encoders = omarchy::get_command_encoders();
   auto& d = omarchy::device(s.device.index);
-  encoders.try_emplace(s.index, d);
+  d.probe_float_power(encoders.try_emplace(s.index, d).first->second);
 }
 
 void new_thread_unsafe_stream(Stream s) {
   assert(s.device == Device::gpu);
   auto& encoders = omarchy::get_global_command_encoders();
   auto& d = omarchy::device(s.device.index);
-  encoders.try_emplace(s.index, d);
+  d.probe_float_power(encoders.try_emplace(s.index, d).first->second);
 }
 
 void clear_streams() {

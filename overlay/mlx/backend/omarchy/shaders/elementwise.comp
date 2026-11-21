@@ -555,7 +555,11 @@ float float_power(float base, float exponent) {
       }
     }
   } else {
+#ifdef LOWERED_POWER
+    result = exp2(exponent * log2(magnitude));
+#else
     result = pow(magnitude, exponent);
+#endif
   }
   return negative ? -result : result;
 }
@@ -593,6 +597,9 @@ void main() {
     }
     float lhs = LOAD_VALUE(input_a.values[lhs_index]);
     float rhs = LOAD_VALUE(input_b.values[rhs_index]);
+#ifdef LOWERED_POWER
+    float value = float_power(lhs, rhs);
+#else
     float value;
     switch (params.operation) {
       case 0:
@@ -721,7 +728,8 @@ void main() {
         }
         break;
       case 33:
-        value = ceil(lhs);
+        // Some drivers reject Ceil even when another switch arm is selected.
+        value = -floor(-lhs);
         break;
       case 34:
         value = floor(lhs);
@@ -763,6 +771,7 @@ void main() {
       default:
         return;
     }
+#endif
     output_data.values[params.output_offset + index] = STORE_VALUE(value);
     if (params.count - index <= stride) {
       break;

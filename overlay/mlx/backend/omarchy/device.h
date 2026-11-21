@@ -458,6 +458,11 @@ class Device {
     return *compute_;
   }
 
+  void probe_float_power(CommandEncoder& encoder);
+  bool float_power_needs_lowering() const {
+    return float_power_needs_lowering_;
+  }
+
   uint64_t signal_timeline(VkSemaphore semaphore, uint64_t value);
 
   CapabilityReport caps_;
@@ -475,6 +480,10 @@ class Device {
   std::mutex queue_mutex_;
   std::unique_ptr<ComputeRuntime> compute_;
   std::unique_ptr<CompletionDispatcher> completions_;
+
+ private:
+  std::once_flag float_power_probe_;
+  bool float_power_needs_lowering_{false};
 };
 
 // --- Process-wide runtime -------------------------------------------------

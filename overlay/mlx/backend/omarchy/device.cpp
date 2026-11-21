@@ -15,6 +15,7 @@
 #include <filesystem>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cstdio>
@@ -23,6 +24,7 @@
 #include <atomic>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <unistd.h>
@@ -36,6 +38,7 @@
 
 #include "mlx/backend/omarchy/capability_sim.h"
 #include "mlx/backend/omarchy/allocator.h"
+#include "mlx/backend/omarchy/encoder.h"
 
 // bf16 cooperative matrices need the Vulkan header to know
 // VK_KHR_shader_bfloat16 and this build to carry the bf16 direct shaders
@@ -1624,6 +1627,43 @@ Device::Device(uint32_t physical_device_index) {
   compute_ = std::make_unique<ComputeRuntime>(
       device_, binding_limit, hardware_caps_.required_subgroup_size);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
+}
+
+void Device::probe_float_power(CommandEncoder& encoder) {
+  std::call_once(float_power_probe_, [&] {
+    constexpr std::array bases{4.0f, -2.0f, -0.0f, 0.0f};
+    constexpr std::array exponents{0.5f, 3.0f, -3.0f, 0.0f};
+    constexpr std::array expected{
+        2.0f, -8.0f, -std::numeric_limits<float>::infinity(), 1.0f};
+    auto scratch = [&] {
+      array a(Shape{static_cast<int>(expected.size())}, float32, nullptr, {});
+      a.set_data(allocator().malloc(a.nbytes()));
+      return a;
+    };
+    auto binding = [](const array& a) {
+      auto* buffer = static_cast<const VulkanBuffer*>(a.buffer().ptr());
+      return ComputeBinding{buffer->buffer, 0, a.nbytes(), buffer};
+    };
+    auto lhs = scratch(), rhs = scratch(), out = scratch();
+    std::copy(bases.begin(), bases.end(), lhs.data<float>());
+    std::copy(exponents.begin(), exponents.end(), rhs.data<float>());
+    std::fill_n(
+        out.data<float>(), expected.size(),
+        std::numeric_limits<float>::quiet_NaN());
+    ComputeParams params{};
+    params.count = params.lhs_size = params.rhs_size = params.output_size =
+        expected.size();
+    params.operation = kFloatPowerOperation;
+    const std::array bindings{
+        binding(lhs), binding(rhs), binding(out), binding(out)};
+    encoder.dispatch_compute(ComputeKernel::ElementwiseF32, bindings, params, 1);
+    encoder.synchronize("float power startup probe");
+    float_power_needs_lowering_ =
+        !std::equal(expected.begin(), expected.end(), out.data<float>());
+    if (float_power_needs_lowering_) {
+      std::fputs("[omarchy] float Power startup probe selected lowering\n", stderr);
+    }
+  });
 }
 
 Device::~Device() {
