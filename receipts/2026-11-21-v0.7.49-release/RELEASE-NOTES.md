@@ -68,7 +68,7 @@ byte-identical to the aarch64 wheel; the vendor tar and its checksum ride the
 same release. The release-assets gate printed `VERIFIED: every uploaded asset
 matches what the release claims` against the uploaded bytes.
 
-The g1–g15 runtime gates battery did not run for this release. The
+The g1-g15 runtime gates battery did not run for this release. The
 release-assets gate is the only gate status carried for v0.7.49, and the
 last full battery on record is v0.7.46
 (`receipts/2026-11-15-v0.7.46-release/`). This is a scope statement, not

@@ -16,7 +16,7 @@ d41df12441b34b4e90b27283ea52034e2d53a94db2a54119acfbbf38c4caac75  mlx_omarchy-0.
 d41df12441b34b4e90b27283ea52034e2d53a94db2a54119acfbbf38c4caac75  omarchy-mlx-wheel-cp314-aarch64.whl
 ```
 
-## Gate record (release-gates g1–g15)
+## Gate record (release-gates g1-g15)
 
 The release-assets gate (`scripts/verify-release-assets.py v0.7.49`, the
 script from the tag) ran against the uploaded draft bytes on the aarch64
@@ -27,7 +27,7 @@ carry the tag commit in their version and in the library, the fixed-name
 aarch64 copy is byte-identical to the aarch64 wheel, both required
 platforms are covered, and the Mesa pin is in the tag.
 
-The v0.7.49 gates battery (g1–g15) covers the runtime gates that need a
+The v0.7.49 gates battery (g1-g15) covers the runtime gates that need a
 machine; for this release the battery did not run, because the release
 window was moved up before the battery could be scheduled. The published
 `RELEASE-NOTES.md` carries the same scope statement. Recorded outcomes:
