@@ -95,6 +95,14 @@ apply_to_existing_venv() {
   fetch_patch_assets
   say "Patching mlx-lm in $target (vendored serve patches)"
   MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$target"
+  # Stamp the `mlx` metadata alias into pre-alias installs
+  # (omarchy-mlx#566); a foreign venv without mlx-omarchy just notes.
+  local mlx_site
+  mlx_site="$(printf '%s\n' "$target"/lib/python3.*/site-packages)"
+  if [[ -d $mlx_site ]]; then
+    python3 "$ROOT/scripts/mlx_dist_alias.py" --site-packages "$mlx_site" \
+      || echo "note: no mlx-omarchy dist-info in $target; skipped the mlx metadata alias"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -200,6 +208,10 @@ install_system() {
   else
     echo "note: mlx-lm is not in this venv; skipped the mlx-lm serve patches (every real vendor lock carries mlx-lm==0.31.3)"
   fi
+  # Stamp the `mlx` metadata alias for wheels that predate it
+  # (omarchy-mlx#566); a missing mlx-omarchy dist-info means a broken
+  # wheel and should fail the staging here.
+  python3 "$ROOT/scripts/mlx_dist_alias.py" --site-packages "$site_dir"
 
   say "Installing launchers into $bindir"
   mkdir -p "$bindir" "$system_root"
@@ -483,6 +495,12 @@ mkdir -p "$PREFIX" "$BIN" "$APPS"
 python3 -m venv --clear "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet "$tmp/$wheel"
+# Wheels built before the mlx_dist_alias step carry only the
+# mlx-omarchy dist-info; stamp the plain-name metadata alias so version
+# lookups by the module name resolve (omarchy-mlx#566). A wheel that
+# already carries it is reported as already aliased.
+python3 "$ROOT/scripts/mlx_dist_alias.py" \
+  --site-packages "$(printf '%s\n' "$VENV"/lib/python3.*/site-packages)"
 # mlx-lm declares a dependency on upstream mlx, which provides the same module
 # and would conflict, so it is installed without dependencies and its real
 # runtime dependencies are pinned explicitly.

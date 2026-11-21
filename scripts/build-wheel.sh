@@ -284,6 +284,14 @@ python3 "$ROOT/scripts/openblas_isolation.py" vendor "$wheel"
 python3 "$ROOT/scripts/openblas_isolation.py" check-layout "$wheel"
 python3 "$ROOT/scripts/openblas_isolation.py" check "$wheel"
 
+echo "== mlx distribution alias =="
+# The wheel installs the `mlx` module but registers only the
+# `mlx-omarchy` dist-info, so importlib.metadata.version("mlx") raised
+# PackageNotFoundError for version-probing consumers (songe's
+# trainability probe; omarchy-mlx#566). Inject a sibling
+# mlx-<ver>.dist-info so both names resolve on every install.
+python3 "$ROOT/scripts/mlx_dist_alias.py" "$wheel"
+
 echo "== receipt =="
 echo "[receipt] wheel: $wheel"
 echo "[receipt] size: $(stat -c '%s' "$wheel") bytes"
