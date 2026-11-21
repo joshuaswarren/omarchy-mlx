@@ -39,7 +39,7 @@ REV = '50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b'
 PROMPT = 'Explain how a transistor can function as a switch in a simple circuit.'
 TOKENS = 64
 BENCH = ROOT / 'scripts/bench_decode.py'
-SCHEMA = 'omarchy-mlx-qualification-v3'
+SCHEMA = 'omarchy-mlx-qualification-v4'
 WORKLOAD = {'model': MODEL, 'revision': REV, 'prompt': PROMPT,
             'tokens': TOKENS, 'warmup': 4, 'temp': 0, 'seed': 0}
 
@@ -202,9 +202,13 @@ def patch_state(site):
     count says the patched code is really there. ``state`` says what the
     row means: ``patched`` for the Linux release arm, which applies the
     series, and ``stock`` for the macOS baseline arm, which does not.
+
+    A site that cannot be read, or a tree that carries the record
+    without a single marker, is neither: the state is ``unreadable`` and
+    the run is refused. A record alone proves nothing.
     """
     if site is None:
-        return {'state': 'stock', 'series_present': False, 'record_sha256': None,
+        return {'state': 'unreadable', 'series_present': False, 'record_sha256': None,
                 'eager_swiglu_markers': 0}
     record = site / 'mlx_lm' / PATCH_RECORD
     markers = 0
@@ -214,7 +218,11 @@ def patch_state(site):
         except OSError:
             continue
     present = record.is_file()
-    return {'state': 'patched' if present else 'stock', 'series_present': present,
+    if present and markers == 0:
+        state = 'unreadable'
+    else:
+        state = 'patched' if present else 'stock'
+    return {'state': state, 'series_present': present,
             'record_sha256': sha(record) if present else None,
             'eager_swiglu_markers': markers}
 
@@ -223,13 +231,35 @@ def stock_state(site):
     """The state of an arm that measures stock mlx-lm by design.
 
     The macOS baseline arm does not apply the series, so its row says
-    ``stock`` whatever the environment carries. The measured markers and
-    the completion record stay in the receipt so the row cannot be read
-    as a patched one.
+    ``stock``. A caller that hands the kit a patched interpreter is
+    refused: the row would claim a stock baseline for a patched
+    environment, and the two can never be compared.
     """
     state = patch_state(site)
+    if state['state'] == 'patched':
+        raise RuntimeError('reuse_runtime_carries_the_patch_series')
+    if state['state'] == 'unreadable':
+        raise RuntimeError('mlx_lm_patch_state_unreadable')
     state['state'] = 'stock'
     return state
+
+
+def patch_series_script(kit_root=None):
+    """The script that applies the vendored mlx-lm series.
+
+    It sits beside the kit in a repo checkout and in the sealed archive:
+    the archive holds the script and the patch files, so a Linux run
+    works from the archive alone. An explicit path wins over both.
+    """
+    override = os.environ.get('MLX_OMARCHY_PATCH_SERIES')
+    if override:
+        return Path(override)
+    root = Path(kit_root) if kit_root else ROOT
+    for base in (root.parent, root):
+        candidate = base / 'scripts' / 'apply-mlx-lm-patches.sh'
+        if candidate.is_file():
+            return candidate
+    return root.parent / 'scripts' / 'apply-mlx-lm-patches.sh'
 
 
 def apply_patch_series(venv, env):
@@ -239,9 +269,10 @@ def apply_patch_series(venv, env):
     holds the stock wheel from the vendor set, so every decode number
     understates what the packaged install gives.
     """
-    if not PATCH_SERIES.is_file():
+    script = patch_series_script()
+    if not script.is_file():
         raise RuntimeError('mlx_lm_patch_series_missing')
-    rc, _ = command(['bash', str(PATCH_SERIES), str(venv)], env, 180)
+    rc, _ = command(['bash', str(script), str(venv)], env, 180)
     if rc:
         raise RuntimeError(f'mlx_lm_patch_series_exit_{rc}')
 
