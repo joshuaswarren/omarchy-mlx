@@ -122,8 +122,9 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
 // identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
 // tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
-// every other chip until its paired A/B lands. The accepted overrides are
-// 2x4 and 2x16.
+// every other chip until its paired A/B lands (G14C: 2x16 is 1.16 percent
+// slower on the 2B decode, five of five pairs, tokens identical, so 2x4
+// stays). The accepted overrides are 2x4 and 2x16.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
