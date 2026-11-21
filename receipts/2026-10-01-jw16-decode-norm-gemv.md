@@ -56,6 +56,7 @@ Lane assignment: "A further landed+deployed decode gain with all pins, OR measur
 ## What is not this lane
 1. The barrier-elision lever (Jw16BarrierElide) is CLOSED at both driver (rw10) and MLX tracker (this census: RAW-only, 0 avoidable on this stack); ORDER-level lever (level-batched emission ~42 levels/token vs 220 emitted barriers/token, ceiling ~2.25 ms/token) is driver/queue territory.
 2. Norm-prologue fusion into a GEMV dispatch — REFUTED in Jw16DecodeGap2 W6 (−28.7%, bit-exact).
+   - Rechecked 2026-11-21 on the 14-inch M2 Max (G14C), raw Vulkan microbench of the real multi GEMV SPIR-V (2 weights, N = K = 2048, 4-bit g64 bf16, 2x4 geometry), 400 dependent dispatches per command buffer, 7 reps, 3 runs. Per iteration: plain GEMV 26.60-27.17 us, the same GEMV with an RMSNorm prologue in the FastRmsNormApple order 45.66-46.27 us, a FastRmsNormApple dispatch plus the plain GEMV 38.59-38.71 us. The prologue costs about 19 us and the norm dispatch it removes about 12 us, so the fold is about 19% slower per norm. Still refuted; not built.
 3. Q4 GEMV rows-per-workgroup widening — REFUTED in Jw16DecodeGap2 W7/W7b (slower; + a `QMM_VEC_Q4_WORD` `ROWS_PER_SLOT>1` landmine).
 
 ## Cleanup
