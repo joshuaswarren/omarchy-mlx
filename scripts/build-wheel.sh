@@ -288,9 +288,12 @@ echo "== mlx distribution alias =="
 # The wheel installs the `mlx` module but registers only the
 # `mlx-omarchy` dist-info, so importlib.metadata.version("mlx") raised
 # PackageNotFoundError for version-probing consumers (songe's
-# trainability probe; omarchy-mlx#566). Inject a sibling
-# mlx-<ver>.dist-info so both names resolve on every install.
-python3 "$ROOT/scripts/mlx_dist_alias.py" "$wheel"
+# trainability probe; omarchy-mlx#566). PEP 427 allows only one
+# dist-info per wheel, so emit a companion metadata-only
+# `mlx-<ver>-py3-none-any.whl` next to it; standalone pip/uv users
+# install both.
+python3 "$ROOT/scripts/mlx_dist_alias.py" \
+  --emit-wheel "$wheel" --out "$DIST_DIR"
 
 echo "== receipt =="
 echo "[receipt] wheel: $wheel"

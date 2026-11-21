@@ -81,6 +81,20 @@ fetch_patch_assets() {
   done
 }
 
+# scripts/mlx_dist_alias.py lives in the checkout, but the default install
+# runs under `curl | bash` where $ROOT is empty. Fetch it from the release
+# tag the same way fetch_patch_assets resolves its helpers.
+mlx_alias_script() {
+  if [[ -n $ROOT && -f $ROOT/scripts/mlx_dist_alias.py ]]; then
+    printf '%s\n' "$ROOT/scripts/mlx_dist_alias.py"
+    return
+  fi
+  mkdir -p "$PREFIX/scripts"
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/scripts/mlx_dist_alias.py" \
+    -o "$PREFIX/scripts/mlx_dist_alias.py"
+  printf '%s\n' "$PREFIX/scripts/mlx_dist_alias.py"
+}
+
 # --patch-venv: apply the vendored mlx-lm serve patches to an EXISTING venv.
 # It serves the release-wheel path of docs/INSTALL.md and the Muse quick start, which
 # upgrades the installer venv to mlx-lm 0.32.0 after the install patched it as
@@ -97,10 +111,8 @@ apply_to_existing_venv() {
   MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$target"
   # Stamp the `mlx` metadata alias into pre-alias installs
   # (omarchy-mlx#566); a foreign venv without mlx-omarchy just notes.
-  local mlx_site
-  mlx_site="$(printf '%s\n' "$target"/lib/python3.*/site-packages)"
-  if [[ -d $mlx_site ]]; then
-    python3 "$ROOT/scripts/mlx_dist_alias.py" --site-packages "$mlx_site" \
+  if [[ -x $target/bin/python ]]; then
+    "$target/bin/python" "$(mlx_alias_script)" --self \
       || echo "note: no mlx-omarchy dist-info in $target; skipped the mlx metadata alias"
   fi
 }
@@ -211,7 +223,7 @@ install_system() {
   # Stamp the `mlx` metadata alias for wheels that predate it
   # (omarchy-mlx#566); a missing mlx-omarchy dist-info means a broken
   # wheel and should fail the staging here.
-  python3 "$ROOT/scripts/mlx_dist_alias.py" --site-packages "$site_dir"
+  "$venv/bin/python" "$(mlx_alias_script)" --self
 
   say "Installing launchers into $bindir"
   mkdir -p "$bindir" "$system_root"
@@ -495,12 +507,11 @@ mkdir -p "$PREFIX" "$BIN" "$APPS"
 python3 -m venv --clear "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet "$tmp/$wheel"
-# Wheels built before the mlx_dist_alias step carry only the
-# mlx-omarchy dist-info; stamp the plain-name metadata alias so version
-# lookups by the module name resolve (omarchy-mlx#566). A wheel that
-# already carries it is reported as already aliased.
-python3 "$ROOT/scripts/mlx_dist_alias.py" \
-  --site-packages "$(printf '%s\n' "$VENV"/lib/python3.*/site-packages)"
+# Wheels built before the alias existed carry only the mlx-omarchy
+# dist-info; stamp the plain-name metadata alias so version lookups by
+# the module name resolve (omarchy-mlx#566). --self resolves the venv's
+# own site-packages via sysconfig.
+"$VENV/bin/python" "$(mlx_alias_script)" --self
 # mlx-lm declares a dependency on upstream mlx, which provides the same module
 # and would conflict, so it is installed without dependencies and its real
 # runtime dependencies are pinned explicitly.

@@ -1,27 +1,33 @@
 """Tests for the `mlx` distribution alias (scripts/mlx_dist_alias.py).
 
 Stdlib unittest only, no network. Issue omarchy-mlx#566: the wheel
-installs the ``mlx`` module but its dist-info is named
-``mlx-omarchy``, so ``importlib.metadata.version("mlx")`` raises
-PackageNotFoundError and version-probing consumers (songe's
-trainability probe was the report) fail on a healthy install.
+installs the ``mlx`` module but its dist-info is ``mlx-omarchy``, so
+``importlib.metadata.version("mlx")`` raises PackageNotFoundError on a
+healthy install. The first fix injected a second dist-info into the
+wheel itself; w8E showed pip and uv both refuse it (PEP 427: one
+dist-info per wheel). The alias now lives outside the wheel: a
+companion ``mlx-<ver>`` wheel for standalone pip users, and
+site-packages stamping for install.sh paths. The real-pip install test
+below is the regression guard for that failure class.
 """
 
 
-import importlib.metadata
-import importlib.util
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import venv
 import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "mlx_dist_alias.py"
+VERSION = "0.32.4.dev202611210237"
 
 
-def make_wheel(path: Path, version: str = "0.32.4.dev202611210237") -> Path:
+def make_wheel(path: Path, version: str = VERSION) -> Path:
     dist = f"mlx_omarchy-{version}.dist-info"
     record = "\n".join([
         "mlx/__init__.py,sha256=abc,10",
@@ -32,66 +38,122 @@ def make_wheel(path: Path, version: str = "0.32.4.dev202611210237") -> Path:
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("mlx/__init__.py", "__version__ = 'x'\n")
         zf.writestr(f"{dist}/METADATA",
-                    f"Metadata-Version: 2.1\nName: mlx-omarchy\nVersion: {version}\n")
+                    f"Metadata-Version: 2.1\nName: mlx-omarchy\n"
+                    f"Version: {version}\n")
         zf.writestr(f"{dist}/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
         zf.writestr(f"{dist}/RECORD", record + "\n")
     return path
 
 
-class WheelAliasTests(unittest.TestCase):
-    def test_inject_adds_mlx_dist_info(self):
+class EmitWheelTests(unittest.TestCase):
+    def test_emit_builds_companion_wheel(self):
         with tempfile.TemporaryDirectory() as td:
-            wheel = make_wheel(Path(td) / "mlx_omarchy-0.32.4.dev202611210237-cp314-cp314-linux_aarch64.whl")
-            subprocess.run([sys.executable, str(SCRIPT), str(wheel)], check=True)
-            names = zipfile.ZipFile(wheel).namelist()
-            self.assertIn("mlx-0.32.4.dev202611210237.dist-info/METADATA", names)
-            self.assertIn("mlx-0.32.4.dev202611210237.dist-info/RECORD", names)
-            meta = zipfile.ZipFile(wheel).read(
-                "mlx-0.32.4.dev202611210237.dist-info/METADATA").decode()
+            wheel = make_wheel(Path(td) / f"mlx_omarchy-{VERSION}-py3-none-any.whl")
+            out = subprocess.run(
+                [sys.executable, str(SCRIPT),
+                 "--emit-wheel", str(wheel), "--out", td],
+                check=True, capture_output=True, text=True).stdout.strip()
+            self.assertTrue(out.endswith(f"mlx-{VERSION}-py3-none-any.whl"))
+            names = zipfile.ZipFile(out).namelist()
+            self.assertEqual(len(names), 4)
+            meta = zipfile.ZipFile(out).read(
+                f"mlx-{VERSION}.dist-info/METADATA").decode()
             self.assertIn("Name: mlx\n", meta)
-            self.assertIn("Version: 0.32.4.dev202611210237\n", meta)
-            # The main RECORD must cover the new files or the installer
-            # flags an incomplete wheel.
-            record = zipfile.ZipFile(wheel).read(
-                "mlx_omarchy-0.32.4.dev202611210237.dist-info/RECORD").decode()
-            self.assertIn("mlx-0.32.4.dev202611210237.dist-info/METADATA", record)
+            self.assertIn(f"Version: {VERSION}\n", meta)
+            record = zipfile.ZipFile(out).read(
+                f"mlx-{VERSION}.dist-info/RECORD").decode()
+            self.assertIn(f"mlx-{VERSION}.dist-info/RECORD,,", record)
 
-    def test_inject_is_idempotent(self):
+    def test_emit_from_site_packages_dir(self):
         with tempfile.TemporaryDirectory() as td:
-            wheel = make_wheel(Path(td) / "mlx_omarchy-0.32.4.dev202611210237-cp314-cp314-linux_aarch64.whl")
-            for _ in range(2):
-                subprocess.run([sys.executable, str(SCRIPT), str(wheel)], check=True)
-            names = zipfile.ZipFile(wheel).namelist()
-            self.assertEqual(
-                names.count("mlx-0.32.4.dev202611210237.dist-info/METADATA"), 1)
-
-    def test_installed_tree_resolves_version(self):
-        with tempfile.TemporaryDirectory() as td:
-            wheel = make_wheel(Path(td) / "w.whl")
-            subprocess.run([sys.executable, str(SCRIPT), str(wheel)], check=True)
+            wheel = make_wheel(Path(td) / f"mlx_omarchy-{VERSION}-py3-none-any.whl")
             site = Path(td) / "site"
             zipfile.ZipFile(wheel).extractall(site)
-            sys.path.insert(0, str(site))
-            try:
-                importlib.invalidate_caches()
-                self.assertEqual(
-                    importlib.metadata.version("mlx"),
-                    "0.32.4.dev202611210237")
-            finally:
-                sys.path.remove(str(site))
+            out = subprocess.run(
+                [sys.executable, str(SCRIPT),
+                 "--emit-wheel", str(site), "--out", td],
+                check=True, capture_output=True, text=True).stdout.strip()
+            self.assertTrue(Path(out).exists())
 
-    def test_site_packages_mode(self):
+
+class StampTests(unittest.TestCase):
+    def _install(self, site: Path, version: str = VERSION):
+        dist = site / f"mlx_omarchy-{version}.dist-info"
+        dist.mkdir(parents=True)
+        (dist / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: mlx-omarchy\nVersion: {version}\n")
+
+    def test_stamps_alias(self):
         with tempfile.TemporaryDirectory() as td:
-            site = Path(td) / "site-packages"
-            site.mkdir()
-            make_install = site / "mlx_omarchy-0.32.4.dist-info"
-            make_install.mkdir()
-            (make_install / "METADATA").write_text(
-                "Metadata-Version: 2.1\nName: mlx-omarchy\nVersion: 0.32.4\n")
+            site = Path(td)
+            self._install(site)
             subprocess.run([sys.executable, str(SCRIPT),
                             "--site-packages", str(site)], check=True)
-            self.assertTrue(
-                (site / "mlx-0.32.4.dist-info" / "METADATA").exists())
+            meta = (site / f"mlx-{VERSION}.dist-info" / "METADATA").read_text()
+            self.assertIn("Name: mlx\n", meta)
+
+    def test_removes_stale_alias_keeps_foreign_mlx(self):
+        with tempfile.TemporaryDirectory() as td:
+            site = Path(td)
+            self._install(site)
+            stale = site / "mlx-0.32.3.dist-info"
+            stale.mkdir()
+            (stale / "INSTALLER").write_text("omarchy-mlx\n")
+            foreign = site / "mlx-9.9.9.dist-info"
+            foreign.mkdir()
+            (foreign / "INSTALLER").write_text("pip\n")
+            subprocess.run([sys.executable, str(SCRIPT),
+                            "--site-packages", str(site)], check=True)
+            self.assertFalse(stale.exists())
+            self.assertTrue(foreign.exists())
+            self.assertTrue((site / f"mlx-{VERSION}.dist-info").exists())
+
+    def test_idempotent_and_partial_recovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            site = Path(td)
+            self._install(site)
+            partial = site / f"mlx-{VERSION}.dist-info"
+            partial.mkdir()  # no METADATA: a torn earlier stamp
+            for _ in range(2):
+                subprocess.run([sys.executable, str(SCRIPT),
+                                "--site-packages", str(site)], check=True)
+            self.assertTrue((partial / "METADATA").exists())
+
+
+class RealInstallTests(unittest.TestCase):
+    """pip and uv both install the wheel pair on a fresh venv (PEP 427)."""
+
+    def _venv_install(self, installer):
+        with tempfile.TemporaryDirectory() as td:
+            wheel = make_wheel(Path(td) / f"mlx_omarchy-{VERSION}-py3-none-any.whl")
+            alias = Path(subprocess.run(
+                [sys.executable, str(SCRIPT),
+                 "--emit-wheel", str(wheel), "--out", td],
+                check=True, capture_output=True, text=True).stdout.strip())
+            env = Path(td) / "venv"
+            venv.create(env, with_pip=True)
+            vpy = env / "bin" / "python"
+            if installer == "uv":
+                cmd = ["uv", "pip", "install", "--python", str(vpy),
+                       "--no-deps", str(wheel), str(alias)]
+            else:
+                cmd = [str(env / "bin" / "pip"), "install",
+                       "--no-deps", "--no-index", str(wheel), str(alias)]
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            out = subprocess.run(
+                [str(vpy), "-c",
+                 "import importlib.metadata as m;"
+                 "print(m.version('mlx'));print(m.version('mlx-omarchy'))"],
+                check=True, capture_output=True, text=True).stdout.split()
+            self.assertEqual(out, [VERSION, VERSION])
+
+    def test_pip_installs_both_wheels(self):
+        self._venv_install("pip")
+
+    def test_uv_installs_both_wheels(self):
+        if shutil.which("uv") is None:
+            self.skipTest("uv not on PATH")
+        self._venv_install("uv")
 
 
 if __name__ == "__main__":
