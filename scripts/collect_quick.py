@@ -780,8 +780,14 @@ def _primary_device(devices):
     if not devices:
         return {}
     for dev in devices:
+        # The driver id prints as the Khronos enum name when the local
+        # Vulkan headers know it, and as "UNKNOWN_VkDriverId_value35" when
+        # they do not, so match the name and both id spellings.
         driver_id = dev.get("driverID", "").upper()
-        if "HONEYKRISP" in driver_id or "BOREALIS" in driver_id:
+        driver_name = dev.get("driverName", "").upper()
+        if ("HONEYKRISP" in driver_id or "BOREALIS" in driver_id or
+                "VALUE35" in driver_id or "VALUE26" in driver_id or
+                "HONEYKRISP" in driver_name or "BOREALIS" in driver_name):
             return dev
     for dev in devices:
         if dev.get("deviceType", "") != "PHYSICAL_DEVICE_TYPE_CPU":

@@ -2201,6 +2201,16 @@ class PrimaryGpuSelection(unittest.TestCase):
         self.assertEqual(primary["driverName"], "Borealis")
         self.assertEqual(primary["deviceName"], "Apple M4 Pro (G16S B1)")
 
+    UNKNOWN_ID_SUMMARY = BOREALIS_SUMMARY.replace(
+        "DRIVER_ID_AURORA_BOREALIS", "UNKNOWN_VkDriverId_value35")
+
+    def test_borealis_with_an_unknown_driver_id_string_is_primary(self):
+        """vulkaninfo prints UNKNOWN_VkDriverId_value35 without the new enum."""
+        primary = cq._primary_device(
+            cq._device_blocks(self.UNKNOWN_ID_SUMMARY))
+        self.assertEqual(primary["driverName"], "Borealis")
+        self.assertEqual(primary["deviceName"], "Apple M4 Pro (G16S B1)")
+
     def test_non_cpu_wins_when_driver_is_unknown(self):
         devices = [
             {"driverName": "llvmpipe",
