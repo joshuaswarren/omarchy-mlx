@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from reference import comparison
+from qualification_reference import comparison
 
 
 class ReferenceTest(unittest.TestCase):

@@ -11,26 +11,38 @@ from pathlib import Path
 
 import pytest
 
-KIT = Path(__file__).resolve().parent.parent / 'qualification-kit'
+KIT = Path(__file__).resolve().parents[1] / 'qualification-kit'
 
 CLEAN_EVENTS = {'invalid': 0, 'failures': {}, 'skips': []}
 CLEAN_XML = '<testsuite tests="1" failures="0" errors="0" skipped="0"/>'
 
 
-def load_kit():
-    sys.path.insert(0, str(KIT))
-    try:
-        spec = importlib.util.spec_from_file_location('kit_qualify', KIT / 'qualify.py')
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    finally:
-        sys.path.remove(str(KIT))
+def load_kit(monkeypatch):
+    monkeypatch.syspath_prepend(str(KIT))
+    spec = importlib.util.spec_from_file_location('kit_qualify', KIT / 'qualify.py')
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
     return mod
+
+
+def test_kit_import_survives_another_reference_module(monkeypatch):
+    path = KIT.parent / 'overlay/tools/coreml/reference.py'
+    spec = importlib.util.spec_from_file_location('reference', path)
+    assert spec is not None and spec.loader is not None
+    overlay = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, 'reference', overlay)
+    spec.loader.exec_module(overlay)
+    mod = load_kit(monkeypatch)
+    assert mod.comparison({'failures': {}, 'skips': []}, {'test_x': 'assertion'}, [])[
+        'new_failures'
+    ] == {'test_x': 'assertion'}
+    assert sys.modules['reference'] is overlay
 
 
 @pytest.fixture()
 def kit(tmp_path, monkeypatch):
-    mod = load_kit()
+    mod = load_kit(monkeypatch)
     suite_dir = tmp_path / 'suite'
     suite_dir.mkdir()
     for name in ('test_a.py', 'test_b.py'):

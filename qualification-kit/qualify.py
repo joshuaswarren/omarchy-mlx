@@ -16,7 +16,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from reference import comparison
+from qualification_reference import comparison
 
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '900'))
