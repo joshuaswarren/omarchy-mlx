@@ -157,7 +157,7 @@ class CheckTests(IsolationTest):
     def test_vendored_wheel_passes(self):
         buf = elf64([VENDORED], runpath="$ORIGIN")
         failures = check(
-            self.make_wheel(buf, extra={f"mlx/lib/{VENDORED}": b"\x7fELF-vendored"})
+            self.make_wheel(buf, extra={f"mlx/lib/{VENDORED}": elf64([], runpath="$ORIGIN")})
         )
         self.assertEqual(failures, [])
 
@@ -170,7 +170,7 @@ class CheckTests(IsolationTest):
     def test_missing_runpath_fails(self):
         buf = elf64([VENDORED])
         failures = check(
-            self.make_wheel(buf, extra={f"mlx/lib/{VENDORED}": b"\x7fELF-vendored"})
+            self.make_wheel(buf, extra={f"mlx/lib/{VENDORED}": elf64([], runpath="$ORIGIN")})
         )
         self.assertEqual(len(failures), 1)
         self.assertIn("$ORIGIN", failures[0])
@@ -179,7 +179,7 @@ class CheckTests(IsolationTest):
         failures = check(
             self.make_wheel(
                 elf64([BARE_SONAME]),
-                extra={f"mlx/lib/{VENDORED}": b"\x7fELF-vendored"},
+                extra={f"mlx/lib/{VENDORED}": elf64([], runpath="$ORIGIN")},
             )
         )
         self.assertEqual(len(failures), 2)
