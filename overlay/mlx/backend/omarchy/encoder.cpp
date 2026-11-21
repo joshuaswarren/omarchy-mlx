@@ -343,7 +343,7 @@ void CommandEncoder::ensure_recording() {
   recording_ = true;
 }
 
-void CommandEncoder::prepare_device_local_buffer(
+void CommandEncoder::upload_device_local_if_needed(
     VulkanBuffer* vb,
     bool read,
     bool write,
@@ -357,9 +357,11 @@ void CommandEncoder::prepare_device_local_buffer(
              ? vb->size - static_cast<size_t>(offset)
              : 0)
       : static_cast<size_t>(range);
-  const bool need_upload = vb->sync_state.on_gpu_access(
-      read, write, static_cast<size_t>(offset), eff_range, vb->size);
-  if (need_upload && vb->host_shadow != nullptr) {
+  if (!vb->sync_state.needs_upload(
+          read, write, static_cast<size_t>(offset), eff_range, vb->size)) {
+    return;
+  }
+  if (vb->host_shadow != nullptr) {
     uint64_t comp = omarchy::allocator().buffer_completion(vb);
     if (comp == kPendingCompletion) {
       synchronize("vram host upload");
@@ -369,6 +371,13 @@ void CommandEncoder::prepare_device_local_buffer(
       device_.completions().wait(comp);
     }
     device_.upload_host_to_device(vb->buffer, vb->host_shadow, vb->size);
+  }
+  vb->sync_state.commit_gpu_upload();
+}
+
+void CommandEncoder::commit_device_local_write(VulkanBuffer* vb) {
+  if (vb && vb->device_local) {
+    vb->sync_state.commit_gpu_write();
   }
 }
 
@@ -381,10 +390,12 @@ void CommandEncoder::copy_buffer(
   auto* src_vb = omarchy::allocator().lookup_buffer_handle(src);
   auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
   if (src_vb && src_vb == dst_vb) {
-    prepare_device_local_buffer(src_vb, true, true, dst_offset, size);
+    upload_device_local_if_needed(src_vb, true, true, dst_offset, size);
+    commit_device_local_write(src_vb);
   } else {
-    prepare_device_local_buffer(src_vb, true, false, src_offset, size);
-    prepare_device_local_buffer(dst_vb, false, true, dst_offset, size);
+    upload_device_local_if_needed(src_vb, true, false, src_offset, size);
+    upload_device_local_if_needed(dst_vb, false, true, dst_offset, size);
+    commit_device_local_write(dst_vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
     batch_buffers_.push_back(vb);
@@ -441,12 +452,9 @@ void CommandEncoder::fill_buffer(
     uint32_t value,
     VkDeviceSize size,
     VkDeviceSize offset) {
-  prepare_device_local_buffer(
-      omarchy::allocator().lookup_buffer_handle(dst),
-      false,
-      true,
-      offset,
-      size);
+  auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
+  upload_device_local_if_needed(dst_vb, false, true, offset, size);
+  commit_device_local_write(dst_vb);
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
     batch_buffers_.push_back(vb);
   }
@@ -743,12 +751,21 @@ void CommandEncoder::dispatch_compute_pipeline(
       slot->min_off = std::min(slot->min_off, off);
       slot->max_end = std::max(slot->max_end, end);
     }
+    // Phase 1: complete every required host->device upload before marking any
+    // binding device_dirty, so an exception mid-upload leaves both the failing
+    // buffer's host_dirty and any sibling write target's device_dirty intact.
     for (size_t j = 0; j < agg_count; ++j) {
       const VkDeviceSize rng = aggs[j].max_end > aggs[j].min_off
           ? aggs[j].max_end - aggs[j].min_off
           : 0;
-      prepare_device_local_buffer(
+      upload_device_local_if_needed(
           aggs[j].vb, aggs[j].read, aggs[j].write, aggs[j].min_off, rng);
+    }
+    // Phase 2: all uploads succeeded; mark write targets device_dirty.
+    for (size_t j = 0; j < agg_count; ++j) {
+      if (aggs[j].write) {
+        commit_device_local_write(aggs[j].vb);
+      }
     }
   }
   for (const auto& item : bindings) {

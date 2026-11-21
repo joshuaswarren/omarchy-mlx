@@ -135,6 +135,41 @@ int main() {
     st.on_recycle();
     fails += check(!st.device_dirty && !st.host_dirty, "recycle resets dirty flags");
   }
+  {
+    // Exception mid-upload must preserve host_dirty and never set device_dirty
+    // (on read-only, partial-write, or sibling-write multi-binding dispatches).
+    DeviceLocalSyncState read_st{};
+    DeviceLocalSyncState partial_write_st{};
+    DeviceLocalSyncState sibling_out_st{};
+    read_st.on_host_raw_ptr();
+    partial_write_st.on_host_raw_ptr();
+
+    // Simulate upload throwing before commit_gpu_upload / commit_gpu_write.
+    fails += check(read_st.needs_upload(true, false, 0, 4096, 4096),
+                   "read-only query requests upload without mutating state");
+    fails += check(read_st.host_dirty && !read_st.device_dirty,
+                   "failed read-only upload preserves host_dirty=true device_dirty=false");
+    fails += check(partial_write_st.needs_upload(false, true, 128, 64, 4096),
+                   "partial-write query requests upload without mutating state");
+    fails += check(partial_write_st.host_dirty && !partial_write_st.device_dirty,
+                   "failed partial-write upload preserves host_dirty=true device_dirty=false");
+    fails += check(!partial_write_st.needs_download(),
+                   "next raw_ptr after failed partial-write upload will not download stale VRAM over host_shadow");
+    fails += check(!sibling_out_st.device_dirty,
+                   "sibling write target stays device_dirty=false when another binding upload throws");
+
+    // Subsequent retry succeeds and commits cleanly.
+    read_st.commit_gpu_upload();
+    partial_write_st.commit_gpu_upload();
+    partial_write_st.commit_gpu_write();
+    sibling_out_st.commit_gpu_write();
+    fails += check(!read_st.host_dirty && !read_st.device_dirty,
+                   "committed read-only upload clears host_dirty");
+    fails += check(!partial_write_st.host_dirty && partial_write_st.device_dirty,
+                   "committed partial write sets device_dirty and clears host_dirty");
+    fails += check(sibling_out_st.device_dirty,
+                   "committed sibling write sets device_dirty");
+  }
 
   if (fails != 0) {
     return 1;

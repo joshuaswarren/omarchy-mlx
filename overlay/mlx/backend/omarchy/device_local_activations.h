@@ -105,7 +105,12 @@ struct DeviceLocalSyncState {
   bool device_dirty{false};
 
   // Host requests a raw pointer via Buffer::raw_ptr().
-  // Returns true if the caller must download device -> host_shadow first.
+  // Pure query: whether the caller must download device -> host_shadow first.
+  bool needs_download() const {
+    return device_dirty;
+  }
+
+  // Commit state after any required download completes.
   bool on_host_raw_ptr() {
     const bool need_download = device_dirty;
     device_dirty = false;
@@ -113,23 +118,47 @@ struct DeviceLocalSyncState {
     return need_download;
   }
 
-  // GPU command references this buffer for read and/or write over [offset, offset+range).
-  // Returns true if the caller must upload host_shadow -> device first.
+  // Pure query: whether GPU access over [offset, offset+range) must upload
+  // host_shadow -> device first. Does NOT mutate state, so a thrown upload
+  // leaves host_dirty / device_dirty intact and never lets a later raw_ptr()
+  // overwrite the authoritative host shadow with stale or partial device data.
+  bool needs_upload(
+      bool read,
+      bool write,
+      size_t offset,
+      size_t range,
+      size_t buffer_size) const {
+    const bool full_overwrite =
+        write && !read && offset == 0 && range >= buffer_size;
+    return host_dirty && !full_overwrite;
+  }
+
+  // Commit after host_shadow -> device upload has succeeded.
+  void commit_gpu_upload() {
+    host_dirty = false;
+  }
+
+  // Commit after all uploads for a GPU command have succeeded and the command
+  // will write this buffer.
+  void commit_gpu_write() {
+    device_dirty = true;
+    host_dirty = false;
+  }
+
+  // Single-step transition when transfer and record cannot fail independently.
   bool on_gpu_access(
       bool read,
       bool write,
       size_t offset,
       size_t range,
       size_t buffer_size) {
-    const bool full_overwrite =
-        write && !read && offset == 0 && range >= buffer_size;
-    const bool need_upload = host_dirty && !full_overwrite;
+    const bool need_upload =
+        needs_upload(read, write, offset, range, buffer_size);
     if (need_upload) {
-      host_dirty = false;
+      commit_gpu_upload();
     }
     if (write) {
-      device_dirty = true;
-      host_dirty = false;
+      commit_gpu_write();
     }
     return need_upload;
   }

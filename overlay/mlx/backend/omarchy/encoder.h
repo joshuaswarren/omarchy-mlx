@@ -522,12 +522,13 @@ class MLX_API CommandEncoder {
       uint32_t group_count_x,
       uint32_t group_count_y,
       uint32_t group_count_z);
-  void prepare_device_local_buffer(
+  void upload_device_local_if_needed(
       VulkanBuffer* vb,
       bool read,
       bool write,
       VkDeviceSize offset,
       VkDeviceSize range);
+  static void commit_device_local_write(VulkanBuffer* vb);
 
   // Pick a completed ring slot (joining the oldest only when all are in
   // flight) and begin recording into it.
