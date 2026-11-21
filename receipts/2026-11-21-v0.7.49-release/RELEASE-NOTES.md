@@ -68,6 +68,12 @@ byte-identical to the aarch64 wheel; the vendor tar and its checksum ride the
 same release. The release-assets gate printed `VERIFIED: every uploaded asset
 matches what the release claims` against the uploaded bytes.
 
+The g1–g15 runtime gates battery did not run for this release. The
+release-assets gate is the only gate status carried for v0.7.49, and the
+last full battery on record is v0.7.46
+(`receipts/2026-11-15-v0.7.46-release/`). This is a scope statement, not
+a pass.
+
 Measured decode on the uploaded aarch64 asset: one pinned 4-bit decode
 installed from the uploaded vendored set on a 13-inch M1 MacBook Pro, model
 Qwen3.8-2B-mlx-4Bit at revision `0867d98bfb174b042d88461c0e7c97b86b34b381`,
