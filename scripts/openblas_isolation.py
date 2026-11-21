@@ -55,6 +55,7 @@ import zipfile
 from pathlib import Path
 
 LIBMLX_MEMBER = "mlx/lib/libmlx.so"
+LIBMLX_LIB64_MEMBER = "mlx/lib64/libmlx.so"
 BARE_SONAME = "libopenblas.so.0"
 # Sonames glibc always provides; never ship these in the wheel.
 GIBC_SONAMES = {"libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2",
@@ -329,6 +330,26 @@ def vendor(wheel_path, openblas_src, patchelf):
     print(f"[vendor] {wheel_path}: sha256={digest} size={wheel_path.stat().st_size}")
 
 
+def check_layout(wheel_path):
+    """Refuse a wheel whose libmlx.so is not in mlx/lib/.
+
+    A build on a libdir-lib64 host (Fedora convention) otherwise puts
+    libmlx.so in mlx/lib64/ while core.so carries RUNPATH $ORIGIN/lib,
+    and import mlx.core fails on the installed wheel.
+    """
+    failures = []
+    with zipfile.ZipFile(wheel_path) as zf:
+        names = set(zf.namelist())
+    if LIBMLX_MEMBER not in names:
+        failures.append(f"missing {LIBMLX_MEMBER}: the wheel cannot load")
+    if LIBMLX_LIB64_MEMBER in names:
+        failures.append(
+            f"{LIBMLX_LIB64_MEMBER} present: built with the host lib64 "
+            "convention; rebuild with -DCMAKE_INSTALL_LIBDIR=lib"
+        )
+    return failures
+
+
 def check(wheel_path):
     """Return a list of failure strings; empty means the wheel is isolated."""
     wheel_path = Path(wheel_path)
@@ -404,6 +425,11 @@ def main(argv=None):
     p_vendor.add_argument("--patchelf", default=shutil.which("patchelf"))
     p_check = sub.add_parser("check", help="verify wheel isolation; nonzero on failure")
     p_check.add_argument("wheels", nargs="+")
+    p_layout = sub.add_parser(
+        "check-layout",
+        help="verify libmlx.so lives in mlx/lib, not mlx/lib64; nonzero on failure",
+    )
+    p_layout.add_argument("wheels", nargs="+")
     args = parser.parse_args(argv)
     if args.command == "vendor":
         if not args.patchelf:
@@ -412,6 +438,14 @@ def main(argv=None):
                 "inside the build venv) or pass --patchelf"
             )
         vendor(args.wheel, args.openblas, args.patchelf)
+    elif args.command == "check-layout":
+        failures = []
+        for wheel in args.wheels:
+            failures.extend(check_layout(wheel))
+        if failures:
+            print("\n".join(failures), file=sys.stderr)
+            sys.exit(1)
+        print(f"OK: {len(args.wheels)} wheel(s) in mlx/lib layout")
     else:
         failures = []
         for wheel in args.wheels:
