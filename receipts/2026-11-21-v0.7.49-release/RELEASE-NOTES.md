@@ -1,14 +1,23 @@
 # omarchy-mlx v0.7.49
 
-Draft. Entries accumulate as changes land on main; the release owner fills
-the asset, gate and measured sections at cut time.
+Release receipt for v0.7.49. Cut point `86fcc43cef`; assets, gates and the
+measured decode are recorded below.
 
 ## What changed
 
-- **Nine CBQ custom kernels run on the Vulkan backend (#524).** Seven gather
-  kernels pass the per-element comparison. The two gradient kernels pass the
-  `1e-5` relative-L2 bound on the 16-inch M1 Max. The Vulkan port keeps the
-  source, buffer signature and launch checks for all nine kernels.
+- **Nine bounded CBQ custom kernels now dispatch on the Vulkan backend
+  (#524).** The shipped CBQ inventory (seven gather kernels and the two
+  upstream atomic gradient kernels) translates from the byte-identical
+  shipped MSL, validates as SPIR-V without int8/8-bit-storage or atomics,
+  and dispatches on the Apple GPU. Runtime receipt on the 16-inch M1 Max
+  (receipt `2026-11-21-cbq-applegpu`, PR #538): the seven gather kernels
+  pass per element against the integer oracles; the two atomic grad
+  kernels pass upstream's own relative-L2 bar (3.6e-08 both, bar 1e-5)
+  with two-boot, four-sample exact reproducibility; float32 and float64
+  CPU references agree exactly. The signed-lookup-bytes oracle fix rides
+  the same patch. The ABI/launch refusals stay fail-closed: near-match
+  bodies and contract mutations still refuse (17-case CI acceptance in
+  the syntax gate).
 - **Opt-in BM32 BF16 GEMM for the Nemotron Labs Diffusion projections
   (#523).** 32x64x16 tile, FP32 accumulation, round-to-nearest-even BF16
   stores, complete-tile dense NT gate with
@@ -25,6 +34,8 @@ the asset, gate and measured sections at cut time.
 - **The backend accepts the Borealis driver name, id, ICD file and env
   prefix (#532)** so installs on the Borealis stack pick our ICD instead
   of failing the system-ICD retry.
+- **Batching under mlx-lm 0.31.3 preserves host RoPE offsets (#520)** so
+  batched decode keeps the exact single-request rotation behavior.
 - **Packaging fixes (#540-#543):** the wheel ships the GCC runtime libs
   beside the vendored OpenBLAS and pins the library directory to `lib`
   (refusing `lib64`); the qualification kit imports the r3/r4 sources,
@@ -51,12 +62,29 @@ repins.
 
 ## Asset, gates, measured numbers
 
-To be filled at cut time by the release owner: wheel asset and SHA-256,
-gate statuses (release-gates g1-g15 on the release wheel), and the
-per-machine decode/prefill medians, following the v0.7.45/v0.7.46/v0.7.48
-receipt conventions.
+Assets (published 2026-11-21 06:23 UTC, tag `v0.7.49`): both wheels carry the
+cut point in their version and in the library; the fixed-name copy is
+byte-identical to the aarch64 wheel; the vendor tar and its checksum ride the
+same release. The release-assets gate printed `VERIFIED: every uploaded asset
+matches what the release claims` against the uploaded bytes.
 
-## Draft notes
+The g1-g15 runtime gates battery did not run for this release. The
+release-assets gate is the only gate status carried for v0.7.49, and the
+last full battery on record is v0.7.46
+(`receipts/2026-11-15-v0.7.46-release/`). This is a scope statement, not
+a pass.
+
+Measured decode on the uploaded aarch64 asset: one pinned 4-bit decode
+installed from the uploaded vendored set on a 13-inch M1 MacBook Pro, model
+Qwen3.8-2B-mlx-4Bit at revision `0867d98bfb174b042d88461c0e7c97b86b34b381`,
+greedy, seed 0, Mesa `439dc032d7`. Five 128-token runs: 28.91, 29.12, 29.22,
+29.08 and 29.04 tokens per second, a median of 29.08; every run returned the
+same token id digest `775bf034e185c8f9`; prefill 0.45 s, reported separately.
+The loaded wheel reports `verified=match` and `harness=bf5631d`. The same
+recipe with the vendored mlx-lm serve patch series applied is not a stable
+number on this machine and is recorded as an open item, not a release number.
+
+## Release notes
 
 - Cut point: merged main `86fcc43cef` (PR #548 the BitNet FP32 correction
   and PR #546 the native token IDs). The release commit adds this receipt
