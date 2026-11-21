@@ -30,9 +30,10 @@ platforms are covered, and the Mesa pin is in the tag.
 The v0.7.49 gates battery (g1-g15) covers the runtime gates that need a
 machine; for this release the battery did not run, because the release
 window was moved up before the battery could be scheduled. The published
-`RELEASE-NOTES.md` carries the same scope statement. Recorded outcomes:
+`RELEASE-NOTES.md` and the published release body now carry that same
+sentence in their Gates sections. Recorded outcomes:
 
-- g1–g8, g9, g13, g15: **not run** for this release. The last full
+- g1-g8, g9, g13, g15: **not run** for this release. The last full
   battery on record is v0.7.46
   (`receipts/2026-11-15-v0.7.46-release/README.md`), and the asset gate
   above is the only gate status carried for v0.7.49. This is a scope
