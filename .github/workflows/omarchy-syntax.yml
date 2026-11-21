@@ -159,8 +159,13 @@ jobs:
         run: |
           set -o pipefail
           python3 -m pytest tests/test_cbq_vulkan_translation.py -v | tee .work/cbq-translation.out
+          # Count floor, not exact: the suite grows as contracts get exercised
+          # (15 was the nine shipped bodies plus the original refusal set).
+          # pipefail fails the step on any pytest failure or error.
           ! grep -qE '[0-9]+ skipped' .work/cbq-translation.out
-          grep -q '15 passed' .work/cbq-translation.out
+          ! grep -qE '[0-9]+ failed' .work/cbq-translation.out
+          n=$(grep -oE '[0-9]+ passed' .work/cbq-translation.out | tail -n1 | cut -d ' ' -f1)
+          test "${n:-0}" -ge 15
       - name: Run vocabulary-tail parity tests (software Vulkan)
         env:
           MLX_OMARCHY_ALLOW_NON_APPLE: "1"
