@@ -5,6 +5,10 @@
 # Prepares the pinned upstream tree with the Omarchy-only backend, builds the
 # python bindings, and writes exactly one wheel into dist/ at the repo root.
 #
+# A release build from an unpacked tarball tree (no git metadata) must export
+# DEV_RELEASE=1 and set MLX_OMARCHY_SOURCE_COMMIT=<short sha>; the stamp guard
+# below refuses the build when the commit cannot be resolved.
+#
 # Options:
 #   --diagnostics  Build the dev diagnostics wheel instead of a release
 #                  wheel. Compiles in the GPU profiling harness
@@ -122,8 +126,11 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
 # setup.py appends CMAKE_ARGS to its cmake invocation; it splits the value on
-# spaces, so keep each -D flag space separated.
-export CMAKE_ARGS="-DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF"
+# spaces, so keep each -D flag space separated. The base args live in
+# scripts/wheel-cmake-args.sh so tests can assert the release flags.
+# shellcheck disable=SC1091
+source "$ROOT/scripts/wheel-cmake-args.sh"
+export CMAKE_ARGS
 # MLX's CPU backend needs lapacke.h and finds it only in /usr/include,
 # /usr/local/include, and CMAKE_INCLUDE_PATH. Arch Linux ARM's openblas ships
 # it in /usr/include/openblas (libopenblas also carries the LAPACKE symbols),
@@ -274,6 +281,7 @@ if ! command -v patchelf >/dev/null 2>&1; then
   "$venv_python" -m pip install patchelf
 fi
 python3 "$ROOT/scripts/openblas_isolation.py" vendor "$wheel"
+python3 "$ROOT/scripts/openblas_isolation.py" check-layout "$wheel"
 python3 "$ROOT/scripts/openblas_isolation.py" check "$wheel"
 
 echo "== receipt =="
