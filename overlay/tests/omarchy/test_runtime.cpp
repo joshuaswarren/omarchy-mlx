@@ -3650,3 +3650,70 @@ TEST_CASE("stuck-submit warning fires before the wall typed error") {
   CHECK_FALSE(run.signaled);
   CHECK(run.code == 0);
 }
+
+// Wave leveling cost stays linear when every node reads one shared buffer
+// (the activation that a batch of independent decode GEMVs all read). A
+// read never conflicts with an earlier read, so those pairs must not be
+// range-checked: before the fix each node checked every earlier reader of
+// the shared buffer, and a 2,000-call batch of small 4-bit GEMVs on the
+// 14-inch M2 Max (wave scheduling on by default) cost 58.9 us per call
+// against 2.8 with MLX_OMARCHY_WAVE_SCHED=0. Also checks that the levels
+// stay correct when a later node writes the shared buffer (WAR).
+TEST_CASE("wave levels stay linear for nodes sharing a read-only buffer") {
+  using omarchy::TrackedRange;
+  using omarchy::WaveNode;
+  auto build = [](int n, std::vector<std::vector<TrackedRange>>& rd,
+                  std::vector<std::vector<TrackedRange>>& wr) {
+    rd.assign(n, {});
+    wr.assign(n, {});
+    std::vector<WaveNode> nodes;
+    auto shared = reinterpret_cast<VkBuffer>(uintptr_t{1});
+    for (int i = 0; i < n; ++i) {
+      rd[i].push_back({reinterpret_cast<VkBuffer>(uintptr_t{100} + i % 72), 0, 4096});
+      rd[i].push_back({shared, 0, 4096});
+      wr[i].push_back({reinterpret_cast<VkBuffer>(uintptr_t{100000} + i), 0, 4096});
+    }
+    for (int i = 0; i < n; ++i) {
+      nodes.push_back({rd[i], wr[i]});
+    }
+    return nodes;
+  };
+  auto best_ms = [&](int n) {
+    std::vector<std::vector<TrackedRange>> rd, wr;
+    auto nodes = build(n, rd, wr);
+    double best = 1e30;
+    for (int rep = 0; rep < 5; ++rep) {
+      auto t0 = std::chrono::steady_clock::now();
+      auto level = omarchy::wave_levels(nodes);
+      double ms = std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - t0)
+                      .count();
+      best = std::min(best, ms);
+      for (auto l : level) {
+        REQUIRE(l == 0u);
+      }
+    }
+    return best;
+  };
+  // Cost per node, best of five, at 1,024 and 4,096 nodes: flat when the
+  // leveling is linear, about 4x higher at 4,096 with the quadratic scan.
+  const double small = std::max(best_ms(1024), 0.01) / 1024.0;
+  const double large = best_ms(4096) / 4096.0;
+  INFO("ms per node: 1024 nodes " << small << ", 4096 nodes " << large);
+  CHECK(large < 2.0 * small);
+
+  // A writer of the shared buffer still waits for every earlier reader.
+  std::vector<std::vector<TrackedRange>> rd, wr;
+  auto nodes = build(8, rd, wr);
+  std::vector<TrackedRange> war_write{
+      {reinterpret_cast<VkBuffer>(uintptr_t{1}), 0, 4096}};
+  std::vector<TrackedRange> none;
+  nodes.push_back({none, war_write});
+  std::vector<TrackedRange> raw_read{
+      {reinterpret_cast<VkBuffer>(uintptr_t{1}), 0, 16}};
+  nodes.push_back({raw_read, none});
+  auto level = omarchy::wave_levels(nodes);
+  CHECK(level[7] == 0u);
+  CHECK(level[8] == 1u);
+  CHECK(level[9] == 2u);
+}
