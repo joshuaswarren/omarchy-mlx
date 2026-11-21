@@ -2154,6 +2154,81 @@ TEST_CASE("bool buffer input stores as uint8 and reads compare to zero") {
   CHECK(glsl.find("!(_b0.data[i] != 0)") != std::string::npos);
 }
 
+TEST_CASE("bool buffer reads rewrite nested stride indices correctly") {
+  // Inkling 2 short_convolution and conv_history read the mask at
+  // mask[b * mask_strides[0] + p * mask_strides[1]]: the index itself
+  // contains brackets, so the rewrite must walk to the matching ']'
+  // rather than stop at the first one (PR 571 follow-up; reported on
+  // the inkling2 kernels).
+  const char* source =
+      "[[kernel]] void bool_mask_strided(\n"
+      "    const device bool* mask [[buffer(0)]],\n"
+      "    const constant int64_t* mask_strides [[buffer(1)]],\n"
+      "    const device float* x [[buffer(2)]],\n"
+      "    device float* out [[buffer(3)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  int b = 0, p = int(i);\n"
+      "  out[i] = !mask[b * mask_strides[0] + p * mask_strides[1]] ? 0.0f : x[i];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("!(_b0.data[b * int(_mlx_arg1[0]) + p * int(_mlx_arg1[1])] != 0)") !=
+        std::string::npos);
+}
+
+TEST_CASE("bool buffer reads rewrite a self-nested index") {
+  // mask[mask[i] ? 1 : 0]: the index itself contains another read of the
+  // same buffer. A non-recursive single pass either duplicates the tail
+  // or leaves the inner read unrewritten.
+  const char* source =
+      "[[kernel]] void bool_mask_nested(\n"
+      "    const device bool* mask [[buffer(0)]],\n"
+      "    const device float* x [[buffer(1)]],\n"
+      "    device float* out [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  out[i] = mask[mask[i] ? 1 : 0] ? x[i] : 0.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(_b0.data[(_b0.data[i] != 0) ? 1 : 0] != 0)") !=
+        std::string::npos);
+}
+
+TEST_CASE("a struct member read is not rewritten as a buffer read") {
+  // `s.x[0]` names a member, not the x buffer parameter; \bx\[ matches
+  // after '.', so the pattern needs the (non-'.') prefix the stride
+  // narrowing pass already uses.
+  const char* source =
+      "[[kernel]] void member_read(\n"
+      "    const device float16_t* x [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  struct P { int x[2]; };\n"
+      "  P s;\n"
+      "  s.x[0] = 1;\n"
+      "  out[i] = s.x[0] + x[i];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("s.x[0]") != std::string::npos);
+  CHECK(glsl.find("s.float(_b0.data[0])") == std::string::npos);
+}
+
+TEST_CASE("float16 buffer reads rewrite nested stride indices correctly") {
+  // The float16 read path had the same [^\]]+ capture: a strided read
+  // like x[b * x_strides[0] + p * x_strides[1]] stopped at the stride
+  // read's own ']' and mangled the expression.
+  const char* source =
+      "[[kernel]] void half_strided(\n"
+      "    const device float16_t* x [[buffer(0)]],\n"
+      "    const constant int64_t* x_strides [[buffer(1)]],\n"
+      "    device float* out [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  int b = 0, p = int(i);\n"
+      "  out[i] = x[b * x_strides[0] + p * x_strides[1]] + 1.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("float(_b0.data[b * int(_mlx_arg1[0]) + p * int(_mlx_arg1[1])])") !=
+        std::string::npos);
+}
+
 TEST_CASE("bool buffer output stores through a uint8 cast") {
   const char* source =
       "[[kernel]] void bool_out(\n"
@@ -2166,4 +2241,21 @@ TEST_CASE("bool buffer output stores through a uint8 cast") {
   auto glsl = translate(source, 1);
   CHECK(glsl.find("uint8_t data[]") != std::string::npos);
   CHECK(glsl.find("= uint8_t(") != std::string::npos);
+}
+
+TEST_CASE("output stores rewrite nested stride indices correctly") {
+  // A strided store target mask[b * mask_strides[0]] = ... had the same
+  // [^\]]+ capture bug on the store side of the rewrite.
+  const char* source =
+      "[[kernel]] void bool_out_strided(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    const constant int64_t* mask_strides [[buffer(1)]],\n"
+      "    device bool* mask [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  int b = 0;\n"
+      "  mask[b * mask_strides[0]] = x[i] > 0.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("_mlx_arg2[b * int(_mlx_arg1[0])] = uint8_t(_mlx_arg0[i] > 0.0f);") !=
+        std::string::npos);
 }
