@@ -251,6 +251,11 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # host-read the constant before the I/O worker wrote it).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-load-scalar-publish.patch"
+# Focused regression test for the scalar-load publication contract (issue
+# 537): a scalar constant import graph consumed on a GPU stream must read
+# the loaded bytes, not a stale word, across repeated runs.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-scalar-load-publish-test.patch"
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
 trap - EXIT
