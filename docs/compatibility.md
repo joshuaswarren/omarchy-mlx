@@ -74,7 +74,7 @@ nothing about Linux execution.
   GPU: Tested on Linux with the v0.7.49 release wheel. Omarchy on Arch
   Linux ARM, `linux-aurora` 7.2.11, Mesa 26.3.0-devel Borealis
   (git-a196911147, driver ID 26) through the system ICD. Source build
-  `a893cae5c` passes the standing battery, 747/747 cases in 25 suites,
+  `a893cae5c` runs 747/747 cases in 25 suites,
   and all 8 capability-simulation profiles; the 6 collector probe ops
   pass. Decode / prefill 512, tokens per second: Qwen3.8-2B 4-bit
   76.1 / 370.5, Qwen3-4B-Instruct-2507 4-bit 43.9 / 195.3. Decode runs

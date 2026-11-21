@@ -1,5 +1,6 @@
 # Every command below ran under an exclusive flock on /tmp/m1-gpu.lock and timeout --kill-after=30s <timeout_s>,
-# with VK_DRIVER_FILES, VK_ICD_FILENAMES, MLX_OMARCHY_ALLOW_NON_APPLE and MLX_OMARCHY_CAPS_SIM unset.
+# with VK_DRIVER_FILES, VK_ICD_FILENAMES and MLX_OMARCHY_CAPS_SIM unset, and MLX_OMARCHY_ALLOW_NON_APPLE unset except where a line sets it.
+# The wrapper logged arguments unquoted: quote the bash -c, python -c and --test-case= arguments when re-running in a shell.
 # [build] = .work/mlx/build-m3pro-a893cae5c, [checkout] = the repository checkout, [venv] = the release-wheel venv.
 # [lane-scripts]/count_cpu.gdb.py is byte-identical to receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py;
 # [lane-scripts]/trace_decode.py is trace/trace_decode.py in this receipt. [models] holds the two model snapshots, [out] the collector output.

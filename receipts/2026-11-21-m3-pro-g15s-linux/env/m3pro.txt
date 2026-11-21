@@ -1,10 +1,11 @@
 label=j514s date=2026-11-21T22:55:02Z kernel=7.2.11-14-1-ARCH
-os=Omarchy 4.5.0 on Arch Linux ARM (rolling) arch=aarch64 cpus=11 model=Apple MacBook Pro (14-inch, M3 Pro, Nov 2023)
+os=Omarchy 4.5.0-3 on Arch Linux ARM (rolling) arch=aarch64 cpus=11 model=Apple MacBook Pro (14-inch, M3 Pro, Nov 2023)
 packages: linux-aurora 7.2.11.aurora14-1;mesa-aurora 1:26.3.0_devel.20261031.231483.a1969111475-1;vulkan-aurora 1:26.3.0_devel.20261031.231483.a1969111475-1
-governor=schedutil power=AC
+governor=schedutil power: macsmc-ac Mains online=1
 devicetree compatible: apple,j514s apple,t6030 apple,arm-platform 
-                     total        used        free      shared  buff/cache   available
-Mem:           17612        6550        3405        1621       10307       11062
+-- free -m at 2026-11-21T23:30:12Z
+               total        used        free      shared  buff/cache   available
+Mem:           17612        6349        3003        1716       11005       11263
 -- kernel GPU driver, boot
 asahi-g15 292400000.gpu: G15: probing (T6030 G15S)
 asahi-g15 292400000.gpu: GPU firmware build: macOS 14.7-14.8.x stub firmware (iBoot-10151.140.19.700.2)

@@ -6,13 +6,13 @@ Date: 2026-11-21. These runs back the M3 Pro rows in `README.md`, `docs/compatib
 
 | Chip | Machine | GPU cores | Memory | OS | Kernel | Vulkan device |
 |---|---|---|---|---|---|---|
-| M3 Pro | MacBook Pro 14-inch, Nov 2023 (`apple,j514s` / `apple,t6030`), 11 CPU cores | 14 | 18 GB | Omarchy 4.5.0 on Arch Linux ARM | 7.2.11-14-1-ARCH, `linux-aurora 7.2.11.aurora14-1` | `Apple M3 Pro (G15S B1)` |
+| M3 Pro | MacBook Pro 14-inch, Nov 2023 (`apple,j514s` / `apple,t6030`), 11 CPU cores | 14 | 18 GB | Omarchy 4.5.0-3 on Arch Linux ARM | 7.2.11-14-1-ARCH, `linux-aurora 7.2.11.aurora14-1` | `Apple M3 Pro (G15S B1)` |
 
 Driver: Mesa 26.3.0-devel Borealis (git-a196911147), packages `mesa-aurora` and `vulkan-aurora` `1:26.3.0_devel.20261031.231483.a1969111475-1`. It reports Vulkan 1.4.363, driver version 26.2.99, vendor 0x10005, device 0x6030 and driver ID 26 (`DRIVER_ID_MESA_HONEYKRISP`), driver name `Borealis`. The ICD is the system `asahi_icd.aarch64.json`. `omarchy-mlx-vulkan` is not installed, and `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` and `MLX_OMARCHY_ALLOW_NON_APPLE` are unset for every leg except the capability-simulation profiles, which run with `MLX_OMARCHY_ALLOW_NON_APPLE=1` as their CTest registration sets it.
 
 GPU firmware: the kernel GPU driver logs `GPU firmware build: macOS 14.7-14.8.x stub firmware (iBoot-10151.140.19.700.2)`, `version=0x7031100` and `core-mask=0x6f5bd` at boot. That mask has 14 bits set: 14 active GPU cores. The M3 Pro also ships with 18 GPU cores; only the 14-core part was measured. Governor `schedutil`, on AC power. `env/m3pro.txt` has the boot lines, the `vulkaninfo` identity and capability fields, the devicetree compatible, memory and toolchain.
 
-Capabilities the backend reads (`env/m3pro.txt`, `env/info-before.json`): subgroup size 32 (min and max 32) with BASIC, VOTE, ARITHMETIC, BALLOT, SHUFFLE, SHUFFLE_RELATIVE, CLUSTERED, QUAD, ROTATE and ROTATE_CLUSTERED; compute shared memory 32768 bytes; workgroup 1024 invocations, size 1024 x 1024 x 64; f16, i16 and 16-bit storage; one memory type that is device-local, host-visible, coherent and cached. `VK_KHR_cooperative_matrix`, `VK_EXT_shader_atomic_float` and `VK_KHR_shader_bfloat16` are not listed, so the cooperative-matrix and bf16 direct routes stay off and the tile and scalar kernels serve those shapes.
+Capabilities the backend reads (`env/m3pro.txt`, `env/info-before.json`): subgroup size 32 (min and max 32) with BASIC, VOTE, ARITHMETIC, BALLOT, SHUFFLE, SHUFFLE_RELATIVE, CLUSTERED, QUAD, ROTATE and ROTATE_CLUSTERED; compute shared memory 32768 bytes; workgroup 1024 invocations, size 1024 x 1024 x 64; f16, i16 and 16-bit storage; two memory types on heap 0, type 0 device-local, host-visible, coherent and cached. `VK_KHR_cooperative_matrix`, `VK_EXT_shader_atomic_float` and `VK_KHR_shader_bfloat16` are not listed, so the cooperative-matrix and bf16 direct routes stay off and the tile and scalar kernels serve those shapes.
 
 ## Standing battery
 
@@ -88,7 +88,7 @@ Release v0.7.49 (tag commit `bf5631dc34b2`), wheel `mlx_omarchy-0.32.4.dev202611
 |---|---|
 | 6/6 pass (add, matmul, softmax, argmax, cumsum, value_and_grad) | 0.157 (0.2143) / 0.332 (0.8074) / 1.836 (1.1694) |
 
-The community dataset holds an earlier capture from the same machine and wheel, record [`b5095c3b8e1a`](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/b5095c3b8e1a9ca0131a89262694d92be3faa1016ff1bbed591d53b8c01f1008): 6/6 probe ops, matmul medians 0.157 / 0.339 / 1.828 ms.
+The community dataset holds an earlier capture from the same machine and wheel, record (archive sha256) [`b5095c3b8e1a`](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/b5095c3b8e1a9ca0131a89262694d92be3faa1016ff1bbed591d53b8c01f1008): 6/6 probe ops, matmul medians 0.157 / 0.339 / 1.828 ms.
 
 ## LLM decode and prefill
 
