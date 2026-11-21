@@ -151,6 +151,22 @@ class ArchiveTest(unittest.TestCase):
             for helper in named:
                 self.assertIn(f'omarchy-mlx-qualification-kit-helper-tag/scripts/{helper}', names)
 
+    def test_sealed_archive_manifest_verifies(self):
+        root = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            subprocess.run(['bash', str(root / 'scripts' / 'seal-qualification-kit.sh'),
+                            str(out), 'manifest-tag'], capture_output=True, text=True, check=True)
+            archive = out / 'omarchy-mlx-qualification-kit-manifest-tag.tar'
+            extracted = out / 'extracted'
+            extracted.mkdir()
+            subprocess.run(['tar', '-xf', str(archive), '-C', str(extracted)], check=True)
+            kit_root = extracted / 'omarchy-mlx-qualification-kit-manifest-tag'
+            result = subprocess.run(['sha256sum', '-c', '--quiet', 'SHA256SUMS'],
+                                    cwd=kit_root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn('SHA256SUMS', result.stdout)
+
     def test_archive_without_the_series_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             kit_root = Path(tmp) / 'kit'

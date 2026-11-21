@@ -40,7 +40,7 @@ cp "$root/LICENSE" "$stage/LICENSE" 2>/dev/null || true
 cd "$stage"
 find . -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find . -name '*.pyc' -type f -delete 2>/dev/null || true
-find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 cd "$out"
 tar -cf "$name.tar" "$name"
 sha256sum "$name.tar" > "$name.tar.sha256"
