@@ -136,6 +136,23 @@ inline bool select_qmm_wide_2x16(
   return false;
 }
 
+// Row norms (fast_norm.comp, fast_rope_norm.comp) reduce 256 partials with a
+// shared-memory tree: eight strides, a barrier each. The SUBGROUP_TAIL build
+// folds strides 128/64/32 in one read and runs 16..1 as relative shuffles in
+// the tree's own pairing, so the sum is bit-identical with three barriers
+// fewer than five. Discrete GPUs only: on the RTX 5060 Ti a 2560-wide decode
+// rms_norm took 8.6 us against llama.cpp's 4.1 us, while Apple chips keep
+// their measured kernels. MLX_OMARCHY_NORM_SGTAIL=0/1 overrides (primitives.cpp).
+inline bool select_norm_subgroup_tail(
+    VkPhysicalDeviceType physical_type,
+    uint32_t subgroup_size,
+    VkSubgroupFeatureFlags subgroup_operations) {
+  constexpr VkSubgroupFeatureFlags kNeeded =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  return physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
+      subgroup_size == 32u && (subgroup_operations & kNeeded) == kNeeded;
+}
+
 // Pure host/device coherence state machine for one device-local buffer.
 // Models the exact transitions enforced by Buffer::raw_ptr() and
 // CommandEncoder::{dispatch_compute_pipeline, copy_buffer, fill_buffer}.

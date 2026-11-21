@@ -64,6 +64,10 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
 
+#ifdef SUBGROUP_TAIL
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#endif
 #extension GL_GOOGLE_include_directive : require
 #include "omarchy_trig.h"
 
@@ -111,6 +115,32 @@ shared float block_values[256];
 shared float subgroup_values[8];
 #endif
 shared float rounded[256];
+
+#ifdef SUBGROUP_TAIL
+// SUBGROUP_TAIL (discrete GPUs, select_norm_subgroup_tail): the same tree in
+// fewer barriers. Lane t of subgroup 0 folds strides 128, 64 and 32 straight
+// from block_values in the tree's own pairing, then strides 16..1 run as
+// relative shuffles (lane t adds lane t + s's pre-step value, as the tree's
+// block[t] += block[t + s] does). Lane 0 stores the bit-identical row sum
+// in block_values[0]; the caller's barrier publishes it. Needs a 32-lane
+// subgroup, which the host guarantees before it selects this build.
+void subgroup_tail_reduce() {
+  if (gl_SubgroupID == 0u) {
+    uint t = gl_SubgroupInvocationID;
+    precise float v =
+        ((block_values[t] + block_values[t + 128u]) +
+         (block_values[t + 64u] + block_values[t + 192u])) +
+        ((block_values[t + 32u] + block_values[t + 160u]) +
+         (block_values[t + 96u] + block_values[t + 224u]));
+    for (uint s = 16u; s > 0u; s >>= 1u) {
+      v = v + subgroupShuffleDown(v, s);
+    }
+    if (t == 0u) {
+      block_values[0] = v;
+    }
+  }
+}
+#endif
 
 float rope_load(uint abs_index) {
   uint word = input_data.values[abs_index >> 1u];
@@ -212,12 +242,17 @@ void main() {
   }
   block_values[thread] = squared;
   barrier();
+#ifdef SUBGROUP_TAIL
+  subgroup_tail_reduce();
+  barrier();
+#else
   for (uint stride = 128u; stride > 0u; stride >>= 1u) {
     if (thread < stride) {
       block_values[thread] += block_values[thread + stride];
     }
     barrier();
   }
+#endif
   // fast_norm.comp re-loads `value` after the reduction barrier. We do the
   // same: the production kernel carries the squared value in a register
   // across the reduction barrier and re-loads the input inside its output

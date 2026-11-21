@@ -824,6 +824,12 @@ enum class ComputeKernel : uint16_t {
   FastNormGatedAppleBF16,
   FastNormGatedOnlyAppleBF16,
   FastRopeNormAppleBF16,
+  // The deployed FastRmsNormBF16 / FastRopeNormBF16 reduction tree with the
+  // barrier tail replaced by 32-lane relative shuffles in the same pairing:
+  // bit-identical output, three barriers instead of ten (discrete GPUs,
+  // select_norm_subgroup_tail in device_local_activations.h).
+  FastRmsNormSgTailBF16,
+  FastRopeNormSgTailBF16,
   GdnConvDecodeAppleBF16,
   // Prefill-axes rasterization / issue-quality twins of the x32 FullN
   // prefill route (receipts/2026-10-03-prefill-axes): a different

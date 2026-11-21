@@ -3,11 +3,50 @@
 
 #include "device_local_activations.h"
 
+#include <array>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 using namespace mlx::core::omarchy;
 
 namespace {
+
+// The deployed fast_norm.comp / fast_rope_norm.comp tree over 256 partials:
+// stride 128..1, block[t] += block[t + stride] for t < stride.
+float tree_sum_reference(std::array<float, 256> b) {
+  for (uint32_t stride = 128; stride > 0; stride >>= 1) {
+    for (uint32_t t = 0; t < stride; ++t) {
+      b[t] += b[t + stride];
+    }
+  }
+  return b[0];
+}
+
+// The SUBGROUP_TAIL build: lane t < 32 folds strides 128, 64 and 32 from
+// shared memory in the tree's own pairing, then strides 16..1 run as
+// subgroupShuffleDown adds (every lane reads its neighbour's pre-step value).
+float tree_sum_subgroup_tail(const std::array<float, 256>& b) {
+  std::array<float, 32> v{};
+  for (uint32_t t = 0; t < 32; ++t) {
+    v[t] = ((b[t] + b[t + 128]) + (b[t + 64] + b[t + 192])) +
+        ((b[t + 32] + b[t + 160]) + (b[t + 96] + b[t + 224]));
+  }
+  for (uint32_t s = 16; s > 0; s >>= 1) {
+    std::array<float, 32> next = v;
+    for (uint32_t t = 0; t + s < 32; ++t) {
+      next[t] = v[t] + v[t + s];
+    }
+    v = next;
+  }
+  return v[0];
+}
+
+uint32_t float_bits(float f) {
+  uint32_t u;
+  std::memcpy(&u, &f, sizeof(u));
+  return u;
+}
 
 int check(bool cond, const char* msg) {
   if (!cond) {
@@ -326,6 +365,42 @@ int main() {
     fails += check(
         all_false(plan_device_teardown(true, VK_NOT_READY, true)),
         "both staging transfers pending preserves all handles together");
+  }
+
+  // 7. Subgroup-tail row reduction: bit-identical to the deployed tree, and
+  // selected only on discrete GPUs with 32-lane relative shuffles.
+  {
+    uint32_t state = 0x9e3779b9u;
+    int mismatches = 0;
+    for (int row = 0; row < 20000; ++row) {
+      std::array<float, 256> partials{};
+      for (auto& p : partials) {
+        state = state * 1664525u + 1013904223u;
+        // Sums of squares like the norm's per-thread partials: non-negative,
+        // spread over many binades so rounding differs between orders.
+        float x = static_cast<float>(state >> 8) * (1.0f / 16777216.0f);
+        p = x * x * static_cast<float>(1u << ((state >> 3) & 15u));
+      }
+      if (float_bits(tree_sum_reference(partials)) !=
+          float_bits(tree_sum_subgroup_tail(partials))) {
+        ++mismatches;
+      }
+    }
+    fails += check(mismatches == 0, "subgroup-tail reduction is bit-identical to the 256-wide tree");
+    const VkSubgroupFeatureFlags shuffle_ops =
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+    fails += check(
+        select_norm_subgroup_tail(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 32, shuffle_ops),
+        "discrete GPU with 32-lane relative shuffles selects the subgroup tail");
+    fails += check(
+        !select_norm_subgroup_tail(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, 32, shuffle_ops),
+        "integrated (Apple) GPUs keep the deployed tree");
+    fails += check(
+        !select_norm_subgroup_tail(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 64, shuffle_ops),
+        "64-lane subgroups keep the deployed tree");
+    fails += check(
+        !select_norm_subgroup_tail(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 32, VK_SUBGROUP_FEATURE_BASIC_BIT),
+        "no relative shuffle keeps the deployed tree");
   }
 
   if (fails != 0) {

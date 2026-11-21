@@ -222,6 +222,28 @@ bool apple_norm_enabled(
   return subgroup_ready && apple_norm_shape_selected(row_length, rows);
 }
 
+// The deployed bf16 rms_norm / rope+norm tree with its barrier tail on
+// relative shuffles (FastRmsNormSgTailBF16, FastRopeNormSgTailBF16): same
+// bits, fewer barriers. Default on discrete GPUs that the shader can run on
+// (select_norm_subgroup_tail); MLX_OMARCHY_NORM_SGTAIL=0 forces it off and =1
+// forces it on wherever the hardware has 32-lane relative shuffles.
+bool norm_subgroup_tail_enabled(const omarchy::Device& device) {
+  static const int setting = [] {
+    const char* env = std::getenv("MLX_OMARCHY_NORM_SGTAIL");
+    return env == nullptr ? -1 : (omarchy::env_flag("MLX_OMARCHY_NORM_SGTAIL") ? 1 : 0);
+  }();
+  if (setting == 0) {
+    return false;
+  }
+  const auto& hw = device.hardware_capabilities();
+  const auto& caps = device.capabilities();
+  const VkPhysicalDeviceType type = setting == 1
+      ? VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+      : device.physical_type();
+  return omarchy::select_norm_subgroup_tail(type, hw.subgroup_size, hw.subgroup_operations) &&
+      omarchy::select_norm_subgroup_tail(type, caps.subgroup_size, caps.subgroup_operations);
+}
+
 // Keep in lockstep with the switch in shaders/elementwise.comp.
 enum ElementwiseOperation : uint32_t {
   AddOperation,
@@ -14819,6 +14841,10 @@ void RMSNorm::eval_gpu(
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
       kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+    } else if (
+        out.dtype() == bfloat16 &&
+        norm_subgroup_tail_enabled(encoder.device())) {
+      kernel = omarchy::ComputeKernel::FastRmsNormSgTailBF16;
     }
   }
   encoder.dispatch_compute(
@@ -15934,6 +15960,8 @@ void RoPE::eval_gpu(
                  static_cast<size_t>(params.reduce_size),
                  static_cast<size_t>(params.count))
         ? omarchy::ComputeKernel::FastRopeNormAppleBF16
+        : norm_subgroup_tail_enabled(encoder.device())
+        ? omarchy::ComputeKernel::FastRopeNormSgTailBF16
         : omarchy::ComputeKernel::FastRopeNormBF16;
   } else if (direct_bf16) {
     kernel = half_split
