@@ -40,9 +40,13 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
 std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
   const size_t n = nodes.size();
   std::vector<uint32_t> level(n, 0);
-  // Earlier nodes touching each buffer, so a node only range-checks
-  // against nodes that could possibly hazard it.
-  std::unordered_map<VkBuffer, std::vector<uint32_t>> touchers;
+  // Earlier writers and readers of each buffer, so a node only range-checks
+  // against nodes that could possibly hazard it: its reads against earlier
+  // writers (RAW), its writes against earlier writers and readers (WAW,
+  // WAR). Read-read pairs never hazard, so a buffer every node reads (one
+  // shared activation) adds no candidates and the pass stays linear.
+  std::unordered_map<VkBuffer, std::vector<uint32_t>> writers;
+  std::unordered_map<VkBuffer, std::vector<uint32_t>> readers;
   auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
     return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
   };
@@ -50,12 +54,15 @@ std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
   for (size_t i = 0; i < n; ++i) {
     candidates.clear();
     for (const auto& r : nodes[i].reads) {
-      if (auto it = touchers.find(r.buffer); it != touchers.end()) {
+      if (auto it = writers.find(r.buffer); it != writers.end()) {
         candidates.insert(candidates.end(), it->second.begin(), it->second.end());
       }
     }
     for (const auto& r : nodes[i].writes) {
-      if (auto it = touchers.find(r.buffer); it != touchers.end()) {
+      if (auto it = writers.find(r.buffer); it != writers.end()) {
+        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
+      }
+      if (auto it = readers.find(r.buffer); it != readers.end()) {
         candidates.insert(candidates.end(), it->second.begin(), it->second.end());
       }
     }
@@ -99,10 +106,10 @@ std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
     }
     level[i] = wave;
     for (const auto& r : nodes[i].reads) {
-      touchers[r.buffer].push_back(static_cast<uint32_t>(i));
+      readers[r.buffer].push_back(static_cast<uint32_t>(i));
     }
     for (const auto& r : nodes[i].writes) {
-      touchers[r.buffer].push_back(static_cast<uint32_t>(i));
+      writers[r.buffer].push_back(static_cast<uint32_t>(i));
     }
   }
   return level;
