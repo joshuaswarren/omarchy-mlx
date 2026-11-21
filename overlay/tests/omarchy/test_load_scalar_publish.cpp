@@ -24,6 +24,7 @@
 
 #include "mlx/array.h"
 #include "mlx/io/load.h"
+#include "mlx/ops.h"
 #include "mlx/primitives.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
@@ -124,4 +125,37 @@ TEST_CASE("a multi-element load keeps the pipelined I/O read") {
   CHECK_FALSE(result.done_on_return);
   CHECK(result.reader_thread != std::this_thread::get_id());
   CHECK(result.values_after_sync == std::vector<int32_t>{1, 4, 3, 2});
+}
+
+TEST_CASE("a deferred size-1 load leaves a cross-stream consumer stale") {
+  // Same defect end-to-end: the evaluator signals the load's event when
+  // eval_cpu returns, so a scalar copy on a GPU stream can host-read the
+  // word before the deferred I/O task writes it. The SlowReader makes the
+  // window deterministic. Unfixed libraries fill the consumer from the
+  // zero-init word; the size-1 synchronous publish gives it the real value.
+  auto s = default_stream(Device::cpu);
+  auto reader = std::make_shared<SlowReader>(std::vector<int32_t>{7});
+  array scalar(
+      {1},
+      int32,
+      std::make_shared<Load>(s, reader, 0),
+      {});
+  auto consumer_stream = new_stream(Device::gpu);
+  array counts = [&] {
+    StreamContext on_consumer(consumer_stream);
+    auto c = full(Shape{10}, scalar);
+    eval(c);
+    return c;
+  }();
+  synchronize(consumer_stream);
+  while (!reader->done()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  auto* data = counts.data<int32_t>();
+  std::vector<int32_t> got(data, data + 10);
+  std::string g;
+  for (auto v : got) g += std::to_string(v) + ",";
+  MESSAGE("scalar=", scalar.data<int32_t>()[0], " counts=", g);
+  CHECK(got == std::vector<int32_t>(10, 7));
 }
