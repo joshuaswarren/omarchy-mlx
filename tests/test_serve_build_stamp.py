@@ -118,5 +118,105 @@ class ReadStampTests(unittest.TestCase):
             self.assertIsNone(shim.read_build_stamp(directory=Path(d)))
 
 
+class RecordVerifiedMissingStampTests(unittest.TestCase):
+    def test_record_verified_missing_stamp_warns_but_runs(self):
+        refusal, warning = shim.resolve_stamp_mismatch(
+            None, "0.32.4.dev+ef7923c374", record_verified=True)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
+        self.assertIn("RECORD", warning)
+
+    def test_record_verified_does_not_rescue_a_stale_stamp(self):
+        # A present-but-different stamp still refuses: the wheel may have
+        # moved on from what the copies were stamped with.
+        refusal, warning = shim.resolve_stamp_mismatch(
+            "7ec5347", "0.32.4.dev+ef7923c374", record_verified=True)
+        self.assertIsNotNone(refusal)
+        self.assertIsNone(warning)
+
+    def test_override_beats_record_verification_in_wording(self):
+        refusal, warning = shim.resolve_stamp_mismatch(
+            None, "0.32.4.dev+ef7923c374", drift_allowed=True,
+            record_verified=True)
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(warning)
+        self.assertIn(shim.STAMP_ENV, warning)
+
+
+class _FakeHash:
+    def __init__(self, digest):
+        self._digest = digest
+
+    @property
+    def name(self):
+        return "sha256"
+
+    def hexdigest(self):
+        return self._digest.hex()
+
+    def digest(self):
+        return self._digest
+
+
+class _FakeEntry:
+    def __init__(self, path, digest):
+        self._path = path
+        self.hash = _FakeHash(digest)
+
+    def __str__(self):
+        return self._path
+
+
+class VerifyAgainstRecordTests(unittest.TestCase):
+    """verify_serve_copies_against_record against a faked installed wheel."""
+
+    def setUp(self):
+        import hashlib
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name) / "mlx_omarchy_serve"
+        self.root.mkdir()
+        self.content = {
+            "__init__.py": "x = 1\n",
+            "_mlxlm_server.py": "print('serve')\n",
+        }
+        for name, text in self.content.items():
+            (self.root / name).write_text(text)
+        self.entries = [
+            _FakeEntry(f"mlx_omarchy_serve/{name}",
+                       hashlib.sha256(text.encode()).digest())
+            for name, text in self.content.items()
+        ]
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _with_files(self, entries):
+        import unittest.mock
+        return unittest.mock.patch(
+            "importlib.metadata.files", return_value=entries)
+
+    def test_all_copies_match_the_record(self):
+        with self._with_files(self.entries):
+            self.assertTrue(
+                shim.verify_serve_copies_against_record(self.root))
+
+    def test_one_divergent_copy_fails_verification(self):
+        (self.root / "_mlxlm_server.py").write_text("print('tampered')\n")
+        with self._with_files(self.entries):
+            self.assertFalse(
+                shim.verify_serve_copies_against_record(self.root))
+
+    def test_copy_absent_from_the_record_fails_verification(self):
+        (self.root / "extra.py").write_text("print('extra')\n")
+        with self._with_files(self.entries):
+            self.assertFalse(
+                shim.verify_serve_copies_against_record(self.root))
+
+    def test_no_installed_wheel_fails_verification(self):
+        with self._with_files(None):
+            self.assertFalse(
+                shim.verify_serve_copies_against_record(self.root))
+
+
 if __name__ == "__main__":
     unittest.main()
