@@ -21,10 +21,21 @@ bde3e374320ff428e77fe89cdd2f8641db9189fe94e5614560aa05ae2ef42345  omarchy-mlx-ve
 
 Run on a 13-inch M1 MacBook Pro under the pinned Mesa build `439dc032d7`, from the installed release asset, with the wheel's own provenance verified as a match for the tag.
 
-- median 29.23 tokens per second over four runs of 128 tokens (29.10, 29.22, 29.23, 29.28)
-- all four runs returned the same 128 token IDs (`sha256:775bf034e185c8f9`)
-- prefill 0.44 s per run, reported separately from decode
-- GPU timeouts: 0 before and after; foreign GPU users: 0
+The published `RELEASE-NOTES.md` is preserved as released. Its decode summary counts four runs; the original 13-inch guard log (`decode-guard.out`, SHA-256 `f36b4e405a2ef6d2a3c77756974839124a314f5affb1170401b5d7a02946a02d`) records five successful 128-token runs, excluding the 2-token pilot.
+
+| Run | Decode (tok/s) |
+|---:|---:|
+| 1 | 29.1046 |
+| 2 | 29.2328 |
+| 3 | 29.2795 |
+| 4 | 29.2168 |
+| 5 | 29.4019 |
+
+- Median: 29.2328 tok/s (range 29.1046–29.4019). All five runs returned 128 token IDs with the same digest (`sha256:775bf034e185c8f9`).
+- Prefill was about 0.44 s per run, measured separately from decode.
+- GPU timeouts: 0 before and after; foreign GPU users: 0.
+
+This is the historical release smoke test, not a performance qualification: the guard log does not capture kernel dispatch, thermal measurements, or a post-run Vulkan device reopen.
 
 ## Known limit: speech on M6
 
