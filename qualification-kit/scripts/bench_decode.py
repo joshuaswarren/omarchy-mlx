@@ -40,6 +40,7 @@ unusable environment; 3 provenance refusal.
 import argparse
 import hashlib
 import json
+import platform
 import sys
 import time
 from pathlib import Path
@@ -90,6 +91,7 @@ def result_line(decode_tps, ids, prefill_ns, prompt_tokens=None,
         "decode_tps": round(decode_tps, 4),
         "generated": len(ids),
         "ids_sha256_16": ids_digest(ids),
+        "generated_ids": [int(i) for i in ids],
         "ids_first": [int(i) for i in ids[:3]],
         "ids_last": [int(i) for i in ids[-3:]],
         "prefill_s": round(prefill_ns / 1e9, 6),
@@ -267,14 +269,28 @@ def main():
     # of the binary that produced it. Runs BEFORE any mlx import so a
     # lying environment refuses instead of measuring.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from mlx_provenance import (ProvenanceRefusal, installed_provenance,
-                                provenance_line)
+    from mlx_provenance import (
+        ProvenanceRefusal,
+        installed_provenance,
+        native_provenance,
+        provenance_line,
+    )
     try:
-        prov = installed_provenance(
-            expect_wheel=Path(args.wheel) if args.wheel else None)
+        if platform.system() == "Darwin":
+            import mlx.core as mx
+
+            if not mx.metal.is_available():
+                raise ProvenanceRefusal("Metal GPU unavailable")
+            mx.set_default_device(mx.gpu)
+            prov = native_provenance()
+            if prov["verified"] != "match":
+                raise ProvenanceRefusal(prov.get("mismatch") or "native MLX RECORD unverified")
+        else:
+            prov = installed_provenance(
+                expect_wheel=Path(args.wheel) if args.wheel else None)
         if prov["verified"] == "mismatch":
             raise ProvenanceRefusal(prov["mismatch"])
-    except ProvenanceRefusal as exc:
+    except (ImportError, OSError, ProvenanceRefusal) as exc:
         print(f"REFUSING TO EMIT NUMBERS: {exc}", file=sys.stderr)
         sys.exit(3)
     print(provenance_line(prov))
@@ -282,8 +298,8 @@ def main():
         print("mlx is not importable in this interpreter; cannot benchmark.",
               file=sys.stderr)
         sys.exit(2)
-    from mlx_lm.utils import load
     from mlx_lm.generate import stream_generate
+    from mlx_lm.utils import load
 
     model, tokenizer = load(args.model)
     import mlx.core as mx

@@ -1,3 +1,7 @@
+Backport of the BitLinear non-Metal gate from
+https://github.com/joshuaswarren/mlx-lm/commit/4ff89aa5fbbf9d8d009c9b052d7e36405ca433f7
+(ml-explore/mlx-lm#2088), adapted to the pinned BitLinear class.
+
 --- a/mlx_lm/models/bitlinear_layers.py	2026-11-20 17:47:54.905534948 -0600
 +++ b/mlx_lm/models/bitlinear_layers.py	2026-11-20 17:47:54.935534678 -0600
 @@ -88,6 +88,22 @@

@@ -58,7 +58,7 @@ jobs:
       # the collector steps above.
       - run: pytest tests -q
         if: runner.os == 'Linux'
-      - name: Run legacy host-offset transitions on CPU
+      - name: Run installer-backed CPU regressions
         if: runner.os == 'Linux' && matrix.python == '3.11'
         env:
           MLX_TEST_UPSTREAM_CPU: "1"
@@ -66,13 +66,14 @@ jobs:
           python -m pip install 'mlx[cpu]==0.32.4'
           python -m pytest -q -rP \
             tests/test_apply_mlxlm_series.py::test_host_offset_mirror_tracks_device_through_transitions \
-            --junitxml="$RUNNER_TEMP/host-offset.xml"
+            tests/test_apply_mlxlm_series.py::test_bitlinear_fallback_on_upstream_cpu \
+            --junitxml="$RUNNER_TEMP/installer-cpu.xml"
           # pytest returns success for an all-skipped run.
-          python - "$RUNNER_TEMP/host-offset.xml" <<'PY'
+          python - "$RUNNER_TEMP/installer-cpu.xml" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
 
           cases = ET.parse(sys.argv[1]).findall(".//testcase")
-          if len(cases) != 1 or cases[0].find("skipped") is not None:
-              sys.exit("Expected one executed host-offset regression")
+          if len(cases) != 3 or any(case.find("skipped") is not None for case in cases):
+              sys.exit("Expected one host-offset and two BitLinear CPU regressions")
           PY
