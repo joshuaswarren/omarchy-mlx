@@ -1041,7 +1041,7 @@ def section_ane(redactor, repo, ws, smoke):
     out["dmesg_source"] = kernel_log["source"]
     out["iomem"] = _ane_iomem_ranges(redactor)
     out["reserved_memory"] = collect_quick._ane_reserved_memory(
-        redactor, max_nodes=32)
+        redactor, base=collect_quick.DT_BASE, max_nodes=32)
     out["interrupts"] = _ane_interrupts(redactor,
                                           smoke_result.get("attempted") is True)
     out["packages"] = _ane_packages(redactor)

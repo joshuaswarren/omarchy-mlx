@@ -2958,9 +2958,11 @@ class AneSectionUnavailableMarks(unittest.TestCase):
 
     def test_linux_section_runs_read_only_and_reports(self):
         # The Linux branch is under test; a macOS runner would take the
-        # Darwin branch of section_ane without this pin.
+        # Darwin branch of section_ane without this pin. An absent devicetree
+        # root keeps an Apple Silicon Linux host's own tree out of the result.
         with tempfile.TemporaryDirectory() as ws, \
                 patch.object(cd.platform, "system", return_value="Linux"), \
+                patch.object(cq, "DT_BASE", "/no/such/tree"), \
                 patch.object(cd, "_omarchy_ane_check", return_value={
                     "available": False, "installed": False,
                     "reason": "omarchy-ane-check not installed",

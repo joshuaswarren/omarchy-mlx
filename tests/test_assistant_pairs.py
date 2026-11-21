@@ -537,7 +537,10 @@ class SelectionEvidenceTests(unittest.TestCase):
         self.assertIn("release gate", message)
 
     def test_unknown_chip_arch_refused(self):
-        with self.assertRaises(pairs.PairError) as ctx:
+        # chip_arch=None falls back to detection; pin detection to None
+        # (undetected) so an Apple Silicon host's own chip id does not answer it.
+        with mock.patch.object(pairs, "local_chip_arch", return_value=None), \
+                self.assertRaises(pairs.PairError) as ctx:
             self._pick(selection_catalog(), chip_arch=None)
         self.assertIn("chip architecture", str(ctx.exception))
 
