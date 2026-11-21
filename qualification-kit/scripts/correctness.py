@@ -34,18 +34,26 @@ if res["provenance"].get("verified") == "mismatch":
 def close(a, b, tol=1e-5):
     if isinstance(a, list) and isinstance(b, list):
         return len(a) == len(b) and all(close(x, y, tol) for x, y in zip(a, b))
-    if isinstance(a, list):
+    if isinstance(a, list) or isinstance(b, list) or not math.isfinite(a):
         return False
     return abs(a - b) <= tol * max(1.0, abs(a), abs(b))
 
+
+def json_value(value):
+    if isinstance(value, list):
+        return [json_value(item) for item in value]
+    return str(value) if isinstance(value, float) and not math.isfinite(value) else value
+
 def record(name, fn, expect):
-    entry = {"op": name, "pass": False, "detail": None, "ms": None}
+    entry = {"op": name, "pass": False, "expected": expect, "actual": None,
+             "detail": None, "ms": None}
     start = time.perf_counter()
     try:
         got = fn()
         got = got.tolist() if hasattr(got, "tolist") else got
         entry["pass"] = bool(close(got, expect))
         if not entry["pass"]:
+            entry["actual"] = json_value(got)
             entry["detail"] = f"expected {expect}, got {got}"
     except Exception as exc:
         entry["detail"] = f"{type(exc).__name__}: {exc}"
@@ -73,4 +81,4 @@ def _grad():
     return mx.value_and_grad(f)(mx.array(wv))[1]
 
 record("value_and_grad", _grad, grad_expect)
-print(json.dumps(res))
+print(json.dumps(res, allow_nan=False))
