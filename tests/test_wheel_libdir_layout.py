@@ -67,11 +67,26 @@ def test_cli_check_layout_refuses(tmp_path):
     assert exc.value.code != 0
 
 
+def pin_is_lib(cmake_args: str) -> bool:
+    """True only when the exact argument -DCMAKE_INSTALL_LIBDIR=lib is present
+    and no other CMAKE_INSTALL_LIBDIR argument is set. A substring match would
+    also accept -DCMAKE_INSTALL_LIBDIR=lib64, which is the exact bug from
+    issue 537."""
+    libdir = [a for a in cmake_args.split() if a.startswith("-DCMAKE_INSTALL_LIBDIR=")]
+    return libdir == ["-DCMAKE_INSTALL_LIBDIR=lib"]
+
+
 def test_cmake_args_pin_libdir():
     script = ROOT / "scripts/wheel-cmake-args.sh"
     proc = subprocess.run(
         ["bash", "-c", f'source "{script}" && printf "%s\\n" "$CMAKE_ARGS"'],
         capture_output=True, text=True, check=True)
-    assert "-DCMAKE_INSTALL_LIBDIR=lib" in proc.stdout, (
-        "the wheel build must pin the CMake install dir to lib so libmlx.so "
-        "lands beside core.so on every host libdir convention")
+    assert pin_is_lib(proc.stdout), (
+        "the wheel build must pin the CMake install dir to exactly lib so "
+        f"libmlx.so lands beside core.so, got: {proc.stdout!r}")
+
+
+def test_lib64_pin_fails_the_check():
+    assert not pin_is_lib("-DMLX_BUILD_OMARCHY=ON -DCMAKE_INSTALL_LIBDIR=lib64"), (
+        "a lib64 pin must not pass: the substring form of this assertion "
+        "accepted -DCMAKE_INSTALL_LIBDIR=lib64 and hid the issue 537 defect")
