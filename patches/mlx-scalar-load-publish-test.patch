@@ -10,7 +10,7 @@
  
  #include "doctest/doctest.h"
 
-@@ -189,3 +192,63 @@
+@@ -189,3 +192,70 @@
    }
    CHECK(import_function(file_path).metadata() == metadata);
  }
