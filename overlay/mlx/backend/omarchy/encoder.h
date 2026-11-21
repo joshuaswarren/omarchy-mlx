@@ -138,7 +138,8 @@ inline int batch_node_budget() {
 // desktop and not only the median does; the other rows were picked before
 // that tail rule and carry their own tail data where the receipt has it:
 // receipts/2026-10-02-submission-cap-19 (G14C),
-// receipts/2026-10-12-submission-cap-calibration (G13C, G13G),
+// receipts/2026-10-12-submission-cap-calibration (G13C),
+// receipts/2026-11-21-g13g-batch-work-20000 (G13G, tail rule),
 // receipts/2026-11-13-g18g-batch-work (G18G),
 // receipts/2026-11-15-m4-pro-g16s-batch-work (G16S) and
 // receipts/2026-11-13-g14c-batch-work (G14C 100000: GPU time per
@@ -168,7 +169,7 @@ struct BatchWorkCalibration {
 inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13S", 10000},  // M1 Pro (16-inch, 16 GB, 16 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 2.50 ms, p99 36.2 ms, max 43.2 ms; 20000 raised the p99 to 72.3 ms (max 86.0, at the #19 stutter); decode +17.4% 2B and +20.6% 4B against 5000, tokens identical (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p, /tail)
     {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
-    {"G13G", 8000},  // 13-inch M1, Mesa e7631595df: p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B), +2.4% decode against 5000 (receipts/2026-10-20-g13g-batch-work-8000)
+    {"G13G", 20000},  // 13-inch M1, Mesa 69bde15340, v0.7.49: decode +4.0% (Qwen3.8-2B, 16 -> 7 submissions per token) and +1.3% (Qwen3-4B) against 8000, greedy ids identical; Qwen3-4B submission p50 20.2 ms, p99 24.1 ms, max 24.5 ms (40000 reached p99 45.5 ms) (receipts/2026-11-21-g13g-batch-work-20000)
     {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
     {"G14G", 8000},  // M2 (13-inch, 8 GB, 8 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 3.64 ms, p99 37.9 ms, max 47.8 ms; 10000 raised the p99 to 48.3 ms (max 56.3); decode +2.7% 2B and +2.7% 4B against 5000, tokens identical (same receipt, /tail)
     {"G16S", 15000},  // M4 Pro, Borealis Mesa 05ddb00f5c, 2x4 decode Qmm geometry: decode +13.1% (Qwen3-4B), +7.7% (Qwen3-8B), +17.7% (granite-4.0-1b) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B p50 2.5 ms decode, p99 27.8 ms and max 28.5 ms over all submissions (5000: 27.2 / 28.0), Qwen3-8B max 54.7 ms (5000: 54.2); 30000 reached 94.6 ms (receipts/2026-11-15-m4-pro-g16s-batch-work)

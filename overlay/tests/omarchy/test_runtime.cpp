@@ -851,14 +851,14 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // The G14C row ships calibrated (receipts/2026-11-13-g14c-batch-work).
   CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 100000);
 
-  // The G13C/G13G rows carry the measured values from
-  // receipts/2026-10-12-submission-cap-calibration and
-  // receipts/2026-10-20-g13g-batch-work-8000: the 16-inch M1 Max keeps
-  // 40000 (both models land at or under 1.6 ms p50 there), the 13-inch M1
-  // takes 8000 (40000 left it at 23.6 ms p50; 8000 lands the 2B at 3.0 ms
-  // and the 4B at 4.6 ms, inside the 2-6 ms band).
+  // The G13C row carries receipts/2026-10-12-submission-cap-calibration:
+  // the 16-inch M1 Max keeps 40000 (both models at or under 1.6 ms p50).
+  // The 13-inch M1 takes 20000 under the tail rule of the G13S/G14G/G17P
+  // rows (receipts/2026-11-21-g13g-batch-work-20000): Qwen3-4B submission
+  // p99 24.1 ms (40000 reached 45.5 ms), decode +4.0% (2B) and +1.3% (4B)
+  // against 8000, tokens identical.
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
-  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 8000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 20000);
 
   // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (tail/ rework): the
   // largest swept budget that keeps the Qwen3-4B submission p50 at or under
@@ -925,18 +925,18 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // budgets however many devices ran before them: the first caller must
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
-  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
   CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
-  // 40000 or 8000 here.
+  // 40000 or 20000 here.
   CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 100000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
-  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
 
   // An unknown board keeps the conservative fallback, again per call.
   CHECK(omarchy::batch_work_budget("llvmpipe (LLVM 19.1.0, 256 bits)") == 5000);
