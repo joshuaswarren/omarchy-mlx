@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -665,6 +666,214 @@ class ReadApiSummaryShape(unittest.TestCase):
         self.assertEqual(query.record_mlx_version(nested), "0.3.2")
 
 
+def run_cli(*argv):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(err):
+        rc = query.main(list(argv))
+    return rc, out.getvalue(), err.getvalue()
+
+
+class RemoteShowTests(unittest.TestCase):
+    """--source remote show resolves hash prefixes via latest.jsonl."""
+
+    BASE_URL = "https://example.invalid"
+    DATASET_URL = f"{BASE_URL}/v1/dataset/latest.jsonl"
+    RESULTS_URL = f"{BASE_URL}/v1/results/"
+
+    def make_fetcher(self, dataset_records, results_by_sha):
+        calls = []
+        dataset_bytes = (
+            "\n".join(json.dumps(r) for r in dataset_records) + "\n"
+        ).encode("utf-8")
+
+        def fake_fetch(url, timeout=60):
+            calls.append(url)
+            if url == self.DATASET_URL:
+                return dataset_bytes
+            if url.startswith(self.RESULTS_URL):
+                sha = url[len(self.RESULTS_URL):]
+                if sha in results_by_sha:
+                    payload = results_by_sha[sha]
+                    if isinstance(payload, bytes):
+                        return payload
+                    return json.dumps(payload).encode("utf-8")
+            raise query.DatasetError(f"HTTP 404 from {url}")
+
+        return calls, fake_fetch
+
+    def run_remote(self, fake_fetch, *argv):
+        with mock.patch.object(query, "fetch_url", side_effect=fake_fetch):
+            return run_cli(
+                "--source", "remote", "--base-url", self.BASE_URL, *argv)
+
+    def test_remote_show_unique_prefix_resolves_and_fetches_full_sha(self):
+        summary = {"content_sha256": SHA_DEEP_M1, "kind": "deep",
+                   "chip": "Apple M1"}
+        full = dict(deep_m1_record(), archive=None)
+        calls, fake_fetch = self.make_fetcher(
+            [summary, quick_m2_record()], {SHA_DEEP_M1: full})
+        rc, out, err = self.run_remote(fake_fetch, "show", SHA_DEEP_M1[:12])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(err, "")
+        self.assertEqual(calls, [
+            self.DATASET_URL,
+            self.RESULTS_URL + SHA_DEEP_M1,
+        ])
+        self.assertEqual(json.loads(out), full)
+
+    def test_remote_show_full_sha_fetches_directly_and_propagates_404(self):
+        fresh_sha = "c" * 64
+        missing_sha = "d" * 64
+        full = {"content_sha256": fresh_sha, "kind": "quick", "chip": "M3"}
+        calls, fake_fetch = self.make_fetcher(
+            [deep_m1_record()], {fresh_sha: full})
+        rc, out, err = self.run_remote(fake_fetch, "show", fresh_sha)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(calls, [self.RESULTS_URL + fresh_sha])
+        self.assertEqual(json.loads(out), full)
+
+        calls.clear()
+        rc, out, err = self.run_remote(fake_fetch, "show", missing_sha)
+        self.assertEqual(rc, 1)
+        self.assertEqual(calls, [self.RESULTS_URL + missing_sha])
+        self.assertIn("HTTP 404", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_remote_show_missing_prefix_errors_without_result_fetch(self):
+        calls, fake_fetch = self.make_fetcher(
+            [deep_m1_record(), quick_m2_record()], {})
+        rc, out, err = self.run_remote(fake_fetch, "show", "ffffffff")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("no record with hash prefix", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [self.DATASET_URL])
+
+    def test_remote_show_ambiguous_prefix_errors_without_result_fetch(self):
+        sha_a = "abcd1234" + "0" * 56
+        sha_b = "abcd1234" + "1" * 56
+        records = [
+            {"content_sha256": sha_a, "kind": "quick", "chip": "Apple M1"},
+            {"content_sha256": sha_b, "kind": "quick", "chip": "Apple M2"},
+        ]
+        calls, fake_fetch = self.make_fetcher(records, {})
+        rc, out, err = self.run_remote(fake_fetch, "show", "abcd1234")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("is ambiguous (2 records)", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [self.DATASET_URL])
+
+    def test_remote_show_prefix_applies_cli_filters(self):
+        sha_m1 = "abcd1234" + "0" * 56
+        sha_m2 = "abcd1234" + "1" * 56
+        rec_m1 = {"content_sha256": sha_m1, "kind": "quick",
+                  "chip": "Apple M1"}
+        rec_m2 = {"content_sha256": sha_m2, "kind": "quick",
+                  "chip": "Apple M2"}
+        calls, fake_fetch = self.make_fetcher(
+            [rec_m1, rec_m2], {sha_m1: rec_m1, sha_m2: rec_m2})
+        rc, out, err = self.run_remote(
+            fake_fetch, "--chip", "M2", "show", "abcd1234")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(calls, [
+            self.DATASET_URL,
+            self.RESULTS_URL + sha_m2,
+        ])
+        self.assertEqual(json.loads(out), rec_m2)
+
+        calls.clear()
+        rc, out, err = self.run_remote(
+            fake_fetch, "--chip", "M3", "show", "abcd1234")
+        self.assertEqual(rc, 1)
+        self.assertIn("no record with hash prefix", err)
+        self.assertEqual(calls, [self.DATASET_URL])
+
+    def test_remote_show_malformed_matched_sha_errors_cleanly(self):
+        bad_record = {"content_sha256": "bad12345/../evil", "kind": "quick"}
+        calls, fake_fetch = self.make_fetcher([bad_record], {})
+        rc, out, err = self.run_remote(fake_fetch, "show", "bad12345")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("invalid sha256", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [self.DATASET_URL])
+
+    def test_remote_show_prefix_applies_phandle_correction(self):
+        swapped_sha = sorted(query._PHANDLE_BYTESWAP_ROWS)[0]
+        summary = {"content_sha256": swapped_sha, "kind": "quick"}
+        full = {
+            "content_sha256": swapped_sha,
+            "kind": "quick",
+            "summary": {
+                "ane_port_detail": {
+                    "macos": {
+                        "ane_nodes": [{"phandle": 0x69010000}],
+                        "dart_nodes": [{"phandle": 0x2a000000}],
+                    },
+                },
+            },
+        }
+        calls, fake_fetch = self.make_fetcher([summary], {swapped_sha: full})
+        rc, out, err = self.run_remote(fake_fetch, "show", swapped_sha[:12])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [
+            self.DATASET_URL,
+            self.RESULTS_URL + swapped_sha,
+        ])
+        parsed = json.loads(out)
+        macos = parsed["summary"]["ane_port_detail"]["macos"]
+        self.assertEqual(macos["ane_nodes"][0]["phandle"], 0x169)
+        self.assertEqual(macos["dart_nodes"][0]["phandle"], 0x2A)
+        self.assertIn("read-side correction", parsed["_read_side_correction"])
+        self.assertIn("read-side correction", err)
+
+    def test_remote_show_malformed_result_payload_errors_cleanly(self):
+        summary = {"content_sha256": SHA_DEEP_M1, "kind": "deep"}
+
+        calls, fake_fetch = self.make_fetcher(
+            [summary], {SHA_DEEP_M1: b"not-json"})
+        rc, out, err = self.run_remote(fake_fetch, "show", SHA_DEEP_M1[:12])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("invalid JSON", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [
+            self.DATASET_URL,
+            self.RESULTS_URL + SHA_DEEP_M1,
+        ])
+
+        calls, fake_fetch = self.make_fetcher(
+            [summary], {SHA_DEEP_M1: b"[]"})
+        rc, out, err = self.run_remote(fake_fetch, "show", SHA_DEEP_M1)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("expected JSON object", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [self.RESULTS_URL + SHA_DEEP_M1])
+
+        calls, fake_fetch = self.make_fetcher(
+            [summary], {SHA_DEEP_M1: b"\xff\xfe"})
+        rc, out, err = self.run_remote(fake_fetch, "show", SHA_DEEP_M1)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("invalid JSON", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [self.RESULTS_URL + SHA_DEEP_M1])
+
+        embedded_bad_utf8 = (
+            b'{"content_sha256":"' + SHA_DEEP_M1.encode("ascii")
+            + b'","kind":"quick","note":"\xff"}'
+        )
+        calls, fake_fetch = self.make_fetcher(
+            [summary], {SHA_DEEP_M1: embedded_bad_utf8})
+        rc, out, err = self.run_remote(fake_fetch, "show", SHA_DEEP_M1)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("invalid JSON", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(calls, [self.RESULTS_URL + SHA_DEEP_M1])
 
 
 if __name__ == "__main__":
