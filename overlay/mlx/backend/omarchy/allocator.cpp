@@ -329,8 +329,12 @@ void Device::check_prior_transfer_locked(const char* direction) {
     return;
   }
   auto& dt = vk::device_table();
-  const VkResult st = transfer_state_.check_prior_in_flight(
-      [&]() { return dt.GetFenceStatus(device_, transfer_fence_); });
+  const VkResult st = transfer_state_.check_prior_in_flight([&]() {
+    if (env_flag("MLX_OMARCHY_TEST_STAGING_FENCE_BUSY")) {
+      return VK_NOT_READY;
+    }
+    return dt.GetFenceStatus(device_, transfer_fence_);
+  });
   if (st == VK_SUCCESS) {
     if (transfer_in_flight_buffer_ != VK_NULL_HANDLE) {
       omarchy::allocator().mark_transfer_in_flight(

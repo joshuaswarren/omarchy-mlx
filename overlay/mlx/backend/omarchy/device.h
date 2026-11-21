@@ -286,7 +286,7 @@ class CompletionDispatcher {
   uint64_t drained_value();
   void reset_progress_event(VkEvent event);
   bool has_active_submission(uint64_t through_value);
-  void shutdown();
+  void shutdown(bool destroy_vulkan_handles = true);
 
   // Everything a submission put on the queue, retained so the watchdog's
   // recovery ladder can resubmit it when Honeykrisp drops the batch (the
@@ -486,6 +486,16 @@ class Device {
       VkBuffer target_buffer,
       const char* direction);
 
+  struct TeardownOutcome {
+    bool device_destroyed{true};
+    bool completion_handles_destroyed{true};
+    bool compute_handles_destroyed{true};
+  };
+  // Retire or preserve this device's Vulkan handles coherently. Idempotent;
+  // called by Runtime::teardown() before deciding whether VkInstance may be
+  // destroyed, and again as a no-op from ~Device().
+  TeardownOutcome teardown_vulkan();
+
   CapabilityReport caps_;
   CapabilityReport hardware_caps_{};
   VkPhysicalDeviceMemoryProperties mem_props_{};
@@ -511,6 +521,8 @@ class Device {
   std::mutex queue_mutex_;
   std::unique_ptr<ComputeRuntime> compute_;
   std::unique_ptr<CompletionDispatcher> completions_;
+  bool teardown_done_{false};
+  TeardownOutcome teardown_outcome_{};
 };
 
 // --- Process-wide runtime -------------------------------------------------

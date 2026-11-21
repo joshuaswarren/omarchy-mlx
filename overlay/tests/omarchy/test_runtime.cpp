@@ -602,6 +602,73 @@ int run_child_scenario(const std::string& mode) {
                  " typed error\n";
     return 0;
   }
+  if (mode == "staging_pending_shutdown") {
+    // Exercise full Runtime::teardown() (via atexit on clean return 0) while a
+    // staging transfer fence is still pending, without hanging real hardware.
+    // Run a real compute op first so ComputeRuntime has live pipelines and
+    // CompletionDispatcher has live timeline semaphore activity.
+    set_default_device(Device::gpu);
+    Stream s = new_stream(Device::gpu);
+    auto x = add(ones({4}, float32, s), ones({4}, float32, s), s);
+    x.eval();
+    synchronize(s);
+
+    auto& dev = omarchy::device(0);
+    auto& alloc = omarchy::allocator();
+    constexpr size_t kBytes = 4096;
+    std::vector<uint8_t> src(kBytes, 0x5au);
+
+    auto buf = alloc.malloc(kBytes);
+    auto* vb = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+    if (vb == nullptr) {
+      return 51;
+    }
+
+    ::setenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT", "1", 1);
+    ::setenv("MLX_OMARCHY_TEST_STAGING_FENCE_BUSY", "1", 1);
+    std::string msg;
+    try {
+      dev.upload_host_to_device(vb->buffer, src.data(), kBytes);
+      return 52;
+    } catch (const std::exception& ex) {
+      msg = ex.what();
+    }
+    if (msg.find("Timeout") == std::string::npos) {
+      return 53;
+    }
+
+    // Freeing while pinned must quarantine and keep the buffer alive.
+    alloc.free(buf);
+    alloc.release_quarantine(UINT64_MAX);
+    if (!alloc.has_quarantined()) {
+      return 54;
+    }
+
+    // A follow-up transfer while the fence is still pending must refuse reuse.
+    auto buf2 = alloc.malloc(kBytes);
+    auto* vb2 = static_cast<omarchy::VulkanBuffer*>(buf2.ptr());
+    if (vb2 == nullptr) {
+      return 55;
+    }
+    std::string busy_msg;
+    try {
+      dev.upload_host_to_device(vb2->buffer, src.data(), kBytes);
+      alloc.free(buf2);
+      return 56;
+    } catch (const std::exception& ex) {
+      busy_msg = ex.what();
+    }
+    alloc.free(buf2);
+    if (busy_msg.find("still in flight") == std::string::npos) {
+      return 57;
+    }
+
+    // Return cleanly (not _Exit) with MLX_OMARCHY_TEST_STAGING_FENCE_BUSY=1
+    // still armed so Runtime::teardown() runs via atexit with a still-pending
+    // transfer fence and must preserve VkDevice, dependent handles, and
+    // VkInstance together without hanging or crashing.
+    return 0;
+  }
   return 126;
 }
 
@@ -1990,6 +2057,67 @@ TEST_CASE("device staging transfers bound timeout, pin in-flight buffer, and rec
     }
     CHECK(dst == src);
     alloc.free(buf);
+  }
+}
+
+TEST_CASE("runtime teardown preserves parent instance and child handles when staging transfer is still pending") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto read_teardown_file = [](const std::string& path) {
+    std::ifstream f(path);
+    std::map<std::string, int> kv;
+    std::string line;
+    while (std::getline(f, line)) {
+      auto eq = line.find('=');
+      if (eq != std::string::npos) {
+        kv[line.substr(0, eq)] = std::stoi(line.substr(eq + 1));
+      }
+    }
+    return kv;
+  };
+  const std::string pid_tag = std::to_string(static_cast<long>(::getpid()));
+
+  // Baseline idle shutdown: retires dependent handles, VkDevice, and VkInstance together.
+  {
+    const std::string out_path =
+        "/tmp/omarchy-teardown-idle-" + pid_tag + ".txt";
+    ::unlink(out_path.c_str());
+    ::setenv("MLX_OMARCHY_TEST_TEARDOWN_OUT", out_path.c_str(), 1);
+    ChildRun run = run_child("reopen", 30);
+    ::unsetenv("MLX_OMARCHY_TEST_TEARDOWN_OUT");
+    CHECK_FALSE(run.timed_out);
+    CHECK_FALSE(run.signaled);
+    CHECK(run.code == 0);
+    auto kv = read_teardown_file(out_path);
+    ::unlink(out_path.c_str());
+    CHECK(kv["devices_destroyed"] == 1);
+    CHECK(kv["devices_preserved"] == 0);
+    CHECK(kv["instance_destroyed"] == 1);
+    CHECK(kv["completions_handles_destroyed"] == 1);
+    CHECK(kv["compute_handles_destroyed"] == 1);
+  }
+
+  // Still-pending staging transfer at shutdown: preserves dependent handles,
+  // VkDevice, and parent VkInstance together without hanging or crashing.
+  {
+    const std::string out_path =
+        "/tmp/omarchy-teardown-pending-" + pid_tag + ".txt";
+    ::unlink(out_path.c_str());
+    ::setenv("MLX_OMARCHY_TEST_TEARDOWN_OUT", out_path.c_str(), 1);
+    ChildRun run = run_child("staging_pending_shutdown", 30);
+    ::unsetenv("MLX_OMARCHY_TEST_TEARDOWN_OUT");
+    CHECK_FALSE(run.timed_out);
+    CHECK_FALSE(run.signaled);
+    CHECK(run.code == 0);
+    auto kv = read_teardown_file(out_path);
+    ::unlink(out_path.c_str());
+    CHECK(kv["devices_destroyed"] == 0);
+    CHECK(kv["devices_preserved"] == 1);
+    CHECK(kv["instance_destroyed"] == 0);
+    CHECK(kv["completions_handles_destroyed"] == 0);
+    CHECK(kv["compute_handles_destroyed"] == 0);
   }
 }
 

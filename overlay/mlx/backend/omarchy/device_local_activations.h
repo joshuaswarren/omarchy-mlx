@@ -270,4 +270,39 @@ struct StagingTransferState {
   }
 };
 
+// Coordinated Vulkan teardown plan for one Device and its parent VkInstance.
+// Vulkan requires child handles (VkDevice, pipelines, semaphores, buffers,
+// fences, command pools) to be idle before destruction and every VkDevice to
+// be destroyed before its parent VkInstance. Either the device is idle and
+// every dependent handle plus VkDevice/VkInstance retires together, or an
+// unretired transfer keeps VkDevice, its dependent handles, and the parent
+// VkInstance alive together until process exit.
+struct DeviceTeardownPlan {
+  bool wait_device_idle{true};
+  bool destroy_completion_semaphore{true};
+  bool destroy_weight_staging{true};
+  bool destroy_transfer_staging{true};
+  bool destroy_compute_pipelines{true};
+  bool destroy_device{true};
+  bool allow_destroy_instance{true};
+};
+
+inline DeviceTeardownPlan plan_device_teardown(
+    bool transfer_in_flight,
+    VkResult transfer_fence_status,
+    bool weight_staging_in_flight) {
+  const bool transfer_idle =
+      !transfer_in_flight || transfer_fence_status == VK_SUCCESS;
+  const bool device_idle = transfer_idle && !weight_staging_in_flight;
+  return DeviceTeardownPlan{
+      device_idle,
+      device_idle,
+      device_idle,
+      device_idle,
+      device_idle,
+      device_idle,
+      device_idle,
+  };
+}
+
 } // namespace mlx::core::omarchy

@@ -244,6 +244,9 @@ CommandEncoder::~CommandEncoder() {
   // teardown SIGSEGV, pure-virtual aborts, and Khronos-validation-layer
   // crashes after a watchdog throw. The pools are children of the
   // VkDevice; vkDestroyDevice releases them with it.
+  if (!runtime_alive()) {
+    return;
+  }
   try {
     synchronize();
   } catch (const std::exception&) {

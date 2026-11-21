@@ -246,6 +246,41 @@ int main() {
                    "VK_ERROR_DEVICE_LOST preserves in_flight=true and returns exact error");
   }
 
+  // 6. Coordinated device/instance teardown plan.
+  {
+    auto all_true = [](const DeviceTeardownPlan& p) {
+      return p.wait_device_idle && p.destroy_completion_semaphore &&
+          p.destroy_weight_staging && p.destroy_transfer_staging &&
+          p.destroy_compute_pipelines && p.destroy_device &&
+          p.allow_destroy_instance;
+    };
+    auto all_false = [](const DeviceTeardownPlan& p) {
+      return !p.wait_device_idle && !p.destroy_completion_semaphore &&
+          !p.destroy_weight_staging && !p.destroy_transfer_staging &&
+          !p.destroy_compute_pipelines && !p.destroy_device &&
+          !p.allow_destroy_instance;
+    };
+
+    fails += check(
+        all_true(plan_device_teardown(false, VK_SUCCESS, false)),
+        "idle device retires all dependent handles, VkDevice, and VkInstance together");
+    fails += check(
+        all_true(plan_device_teardown(true, VK_SUCCESS, false)),
+        "late-signaled transfer fence retires all handles together");
+    fails += check(
+        all_false(plan_device_teardown(true, VK_NOT_READY, false)),
+        "still-pending transfer fence preserves all dependent handles, VkDevice, and VkInstance");
+    fails += check(
+        all_false(plan_device_teardown(true, VK_ERROR_DEVICE_LOST, false)),
+        "device-lost transfer preserves all handles together");
+    fails += check(
+        all_false(plan_device_teardown(false, VK_SUCCESS, true)),
+        "pending weight staging preserves all handles together");
+    fails += check(
+        all_false(plan_device_teardown(true, VK_NOT_READY, true)),
+        "both staging transfers pending preserves all handles together");
+  }
+
   if (fails != 0) {
     return 1;
   }
