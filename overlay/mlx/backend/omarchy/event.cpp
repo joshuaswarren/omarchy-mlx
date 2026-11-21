@@ -17,6 +17,7 @@
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/vulkan.h"
 #include "mlx/scheduler.h"
 
@@ -184,6 +185,11 @@ void Event::wait() {
   if (event.host) {
     event.host->wait(value());
   } else {
+    omarchy::timeline::ScopedEvent tl_ev(
+        omarchy::timeline::Kind::Wait,
+        omarchy::timeline::SubKind::EventWait,
+        0,
+        value_);
     if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
       uint64_t cnt = 0;
       omarchy::vk::device_table().GetSemaphoreCounterValue(
@@ -214,7 +220,14 @@ void Event::wait() {
       std::this_thread::yield();
     }
     event.gpu->device.join_completed_handlers();
-    omarchy::allocator().invalidate_noncoherent(event.gpu->device.handle());
+    {
+      omarchy::timeline::ScopedEvent tl_inv(
+          omarchy::timeline::Kind::Readback,
+          omarchy::timeline::SubKind::InvalidateNoncoherent,
+          0,
+          value_);
+      omarchy::allocator().invalidate_noncoherent(event.gpu->device.handle());
+    }
   }
   check_error();
 }

@@ -478,6 +478,10 @@ class MLX_API CommandEncoder {
     return device_;
   }
 
+  uint16_t timeline_id() const noexcept {
+    return encoder_id_;
+  }
+
   uint64_t last_submitted_completion() const {
     return last_completion_;
   }
@@ -610,6 +614,7 @@ class MLX_API CommandEncoder {
   bool head_synced_{false};
 
   Device& device_;
+  uint16_t encoder_id_{0};
   VkCommandPool pool_{VK_NULL_HANDLE};
   std::array<Slot, kInFlightCommandBuffers> slots_{};
   int current_slot_{0};

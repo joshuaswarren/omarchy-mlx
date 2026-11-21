@@ -17,6 +17,7 @@
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/primitives.h"
 #include "mlx/device.h"
@@ -76,6 +77,11 @@ void eval(array& arr) {
   // Open-batch state BEFORE this op records: a batch spans every op
   // recorded between commits.
   bool batch_open = encoder.needs_commit();
+  const uint64_t batch_open_t0 =
+      (!batch_open &&
+       MLX_OMARCHY_TIMELINE_UNLIKELY(omarchy::timeline::enabled()))
+      ? omarchy::timeline::monotonic_ns()
+      : 0;
   if (g_first_state == 0 && !batch_open) {
     g_first_state = omarchy::batch_first_budget() > 0 ? 1 : 2;
     static const bool trace_first = std::getenv("MLX_OMARCHY_BATCH_TRACE") != nullptr;
@@ -114,6 +120,14 @@ void eval(array& arr) {
   // submission flushed them.
   if (encoder.needs_commit()) {
     if (!batch_open) {
+      if (MLX_OMARCHY_TIMELINE_UNLIKELY(batch_open_t0 != 0)) {
+        omarchy::timeline::record_span(
+            omarchy::timeline::Kind::StepBegin,
+            omarchy::timeline::SubKind::BatchOpen,
+            batch_open_t0,
+            batch_open_t0,
+            encoder.timeline_id());
+      }
       // One scheduler task and one completion notification per batch,
       // attached when the batch opens so that every close path
       // (finalize, event flush contract, node budget, host read sync)
@@ -190,7 +204,13 @@ void finalize(Stream s) {
     }
   }
   g_first_state = 0;
-  omarchy::get_command_encoder(s).commit();
+  auto& encoder = omarchy::get_command_encoder(s);
+  omarchy::timeline::ScopedEvent tl_fin(
+      omarchy::timeline::Kind::StepEnd,
+      omarchy::timeline::SubKind::Finalize,
+      encoder.timeline_id(),
+      static_cast<uint64_t>(encoder.nodes()));
+  encoder.commit();
 }
 
 
@@ -217,6 +237,17 @@ mlx_omarchy_trace_snapshot(
 extern "C" __attribute__((visibility("default"))) std::uint64_t
 mlx_omarchy_trace_snapshot_abi_size(void) {
   return sizeof(mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot);
+}
+
+extern "C" __attribute__((visibility("default"))) void
+mlx_omarchy_step_timeline_mark(int is_end, std::uint64_t step_id) {
+  mlx::core::omarchy::timeline::record(
+      is_end ? mlx::core::omarchy::timeline::Kind::StepEnd
+             : mlx::core::omarchy::timeline::Kind::StepBegin,
+      is_end ? mlx::core::omarchy::timeline::SubKind::StepEndMarker
+             : mlx::core::omarchy::timeline::SubKind::StepBeginMarker,
+      0,
+      step_id);
 }
 
 // The mode the fused GatedDelta conv + delta op runs in: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated norm
