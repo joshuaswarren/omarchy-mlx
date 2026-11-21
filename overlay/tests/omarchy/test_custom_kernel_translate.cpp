@@ -698,6 +698,84 @@ TEST_CASE("auto pointer declarations alias like explicit device pointers") {
         std::string::npos);
 }
 
+TEST_CASE("casted pointer dereference lowers to a buffer index") {
+  // cbq_gather_mm reads its grid LUT through a casted deref:
+  //   `*((const device int64_t*)(grid + (size_t)gi * 8))`.
+  // The cast's `const T*` token reached the surviving-pointer guard and
+  // refused as `device pointer arithmetic`; the uncasted `*(base + off)`
+  // form passed the guard and emitted `*(_b0.data + off)` — invalid GLSL,
+  // a fail-open escape past the named refusal. Both are `base[off]`.
+  const char* source =
+      "[[kernel]] void lut(\n"
+      "    const device int64_t* grid [[buffer(0)]],\n"
+      "    const device uint8_t* qs [[buffer(1)]],\n"
+      "    device float* y [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  uint gi = (uint)qs[i];\n"
+      "  int64_t gv = *((const device int64_t*)(grid + (size_t)gi * 8));\n"
+      "  uint code = *(qs + i * 2u);\n"
+      "  y[i] = (float)gv + (float)code;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // No dereference, cast, or pointer arithmetic survives; both reads are
+  // plain buffer indexes off the parameter macros.
+  CHECK(glsl.find("const int64_t*") == std::string::npos);
+  CHECK(glsl.find("*(_b") == std::string::npos);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg0[(uint(gi) * 8)]") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(i * 2u)]") != std::string::npos);
+}
+
+TEST_CASE("char casts lower to int8_t") {
+  // cbq_gather_mm unpacks its grid int64 through `(char)((gv >> j) & 0xFF)`.
+  // `char` is MSL's spelling of int8_t; without a map entry the translator
+  // emitted `float((char))` — silently broken GLSL.
+  const char* source =
+      "[[kernel]] void unpack(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  int64_t gv = *((const device int64_t*)(grid + i * 8u));\n"
+      "  y[i] = (float)(char)((gv >> 8) & 0xFF);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(char)") == std::string::npos);
+  CHECK(glsl.find("int8_t(") != std::string::npos);
+}
+
+TEST_CASE("casted dereference reassembles a wider integer little-endian") {
+  // The real cbq_gather_mm signature: `grid` is an int8 buffer and the
+  // kernel reads each 8-byte LUT row through an int64_t* cast.
+  const char* source =
+      "[[kernel]] void lut8(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  uint gi = i * 2u;\n"
+      "  int64_t gv = *((const device int64_t*)(grid + (size_t)gi * 8));\n"
+      "  y[i] = (float)gv;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("const int64_t*") == std::string::npos);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("uint8_t(_mlx_arg0[(uint(gi) * 8)])") != std::string::npos);
+  CHECK(glsl.find("<< 56)") != std::string::npos);
+  CHECK(glsl.find("int64_t(") != std::string::npos);
+}
+
+TEST_CASE("dereference of a mismatched cast stays refused") {
+  // A narrower or non-integer cast cannot be reassembled from the buffer's
+  // element type, so the named refusal still fires.
+  const char* source =
+      "[[kernel]] void bad_cast(\n"
+      "    const device int64_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = (float)(*((const device float*)(grid + i)));\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source, 1), std::runtime_error);
+}
+
 TEST_CASE("header helper numeric_limits constants map like the body") {
   // The omlx_log1p header helper of the Qwen3.5/Qwen4 GDN kernels tests
   // against metal::numeric_limits<float>::max(); the body-only limits pass
