@@ -1,0 +1,9 @@
+iter 0 3.983 ms last_kernel 413
+iter 1 2.371 ms last_kernel 413
+iter 2 1.863 ms last_kernel 413
+iter 3 1.804 ms last_kernel 413
+iter 4 1.501 ms last_kernel 413
+iter 5 1.429 ms last_kernel 413
+iter 6 1.415 ms last_kernel 413
+iter 7 1.429 ms last_kernel 413
+iter 8 1.427 ms last_kernel 413
