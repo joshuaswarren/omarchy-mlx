@@ -38,6 +38,7 @@
 #include "mlx/backend/omarchy/inference_weights.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
+#include "mlx/backend/omarchy/qmm_out_rows.h"
 #include "mlx/backend/omarchy/sdpa_decode_mask_layout.h"
 #include "mlx/distributed/primitives.h"
 #include "mlx/fast_primitives.h"
@@ -7974,44 +7975,124 @@ uint32_t qmm_tile_columns_per_piece(
 // column) and rhs_size (tile-column count) and keeps every stride on the full matrix_n, so each output is computed exactly as
 // in the unsplit dispatch (bit-identical). Not split while a tape records (commit() is not valid there); a budget of 0 or a
 // dispatch within budget issues the single dispatch it always did, with lhs_size and rhs_size left at 0.
+// Issue #560: when the out binding's byte range would exceed
+// maxStorageBufferRange (a vocab-wide lm_head over a long context), emit
+// one dispatch per out-row chunk. Each chunk binds the same buffer at an
+// offset-aligned disjoint byte range via the last binding, advances
+// lhs_offset by the chunk's x rows, and zeroes output_offset because
+// the bound range starts at the chunk's first out byte. |fire|
+// re-derives the
+// grid from the chunk params, so m-dependent grids keep their shape.
+// Anything the split cannot serve (a single out row over the limit, or
+// a batched-params dispatch whose weight offsets differ per row) keeps
+// the unchunked call and its exact refusal.
+template <typename Fire>
+void dispatch_qmm_out_rows(
+    omarchy::CommandEncoder& encoder,
+    const array& out,
+    std::span<const omarchy::ComputeBinding> bindings,
+    const omarchy::ComputeParams& params,
+    Fire&& fire) {
+  const auto& caps = encoder.device().capabilities();
+  const uint64_t align = std::max<uint64_t>(
+      16ull, caps.min_storage_buffer_offset_alignment);
+  const uint64_t row_bytes = uint64_t(params.matrix_n) * out.itemsize();
+  const uint64_t out_byte_start =
+      bindings.empty()
+          ? 0u
+          : bindings.back().offset + uint64_t(params.output_offset) * out.itemsize();
+  const uint32_t rows_per = omarchy::qmm_out_row_split(
+      params.matrix_m,
+      row_bytes,
+      out_byte_start,
+      caps.max_storage_buffer_range,
+      align);
+  // Batched calls (shape[0] > 1) address output by batch strides, not rows, so row
+  // chunking cannot apply; they fall through to the unsplit dispatch below.
+  if (rows_per == 0u || params.shape[0] > 1u || bindings.empty()) {
+    fire(bindings, params);
+    return;
+  }
+  std::vector<omarchy::ComputeBinding> chunk_bindings(
+      bindings.begin(), bindings.end());
+  for (uint32_t r0 = 0u; r0 < params.matrix_m; r0 += rows_per) {
+    const uint32_t rows = std::min(rows_per, params.matrix_m - r0);
+    const omarchy::QmmOutChunk c = omarchy::qmm_out_chunk(
+        r0,
+        rows,
+        row_bytes,
+        out_byte_start,
+        params.matrix_n,
+        params.matrix_k,
+        caps.max_storage_buffer_range);
+    omarchy::ComputeParams pc = params;
+    pc.matrix_m = c.rows;
+    pc.count = c.count;
+    pc.output_size = c.count;
+    pc.lhs_offset = params.lhs_offset + c.lhs_offset_add;
+    // The bound range begins at the chunk's first out byte, so the
+    // shader's element index starts at 0 there.
+    pc.output_offset = 0u;
+    chunk_bindings.back() = {
+        bindings.back().buffer,
+        c.binding_offset,
+        c.binding_range,
+        bindings.back().owner};
+    fire(std::span<const omarchy::ComputeBinding>(chunk_bindings), pc);
+  }
+}
+
 void dispatch_qmm_tile(
     omarchy::CommandEncoder& encoder,
+    const array& out,
     omarchy::ComputeKernel kernel,
     std::span<const omarchy::ComputeBinding> bindings,
     const omarchy::ComputeParams& params,
     uint32_t n_groups,
-    uint32_t m_groups) {
+    uint32_t m_tile_rows) {
   const uint64_t budget = encoder.in_tape_recording
       ? 0u
       : omarchy::batch_work_budget(
             encoder.device().hardware_capabilities().device_name);
+  const uint32_t m_groups =
+      (params.matrix_m + m_tile_rows - 1u) / m_tile_rows;
   const uint32_t piece = qmm_tile_columns_per_piece(n_groups, m_groups, budget);
-  if (piece >= n_groups) {
-    encoder.dispatch_compute(
-        kernel,
-        bindings,
-        params,
-        std::min(n_groups, omarchy::kMaxComputeGroupCountX),
-        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
-        1u);
-    return;
-  }
-  for (uint32_t begin = 0u; begin < n_groups; begin += piece) {
-    const uint32_t count = std::min(piece, n_groups - begin);
-    omarchy::ComputeParams piece_params = params;
-    piece_params.lhs_size = begin;
-    piece_params.rhs_size = count;
-    encoder.dispatch_compute(
-        kernel,
-        bindings,
-        piece_params,
-        std::min(count, omarchy::kMaxComputeGroupCountX),
-        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
-        1u);
-    if (begin + count < n_groups) {
-      encoder.commit();
-    }
-  }
+  dispatch_qmm_out_rows(
+      encoder,
+      out,
+      bindings,
+      params,
+      [&](std::span<const omarchy::ComputeBinding> cb,
+          const omarchy::ComputeParams& cp) {
+        const uint32_t chunk_m_groups =
+            (cp.matrix_m + m_tile_rows - 1u) / m_tile_rows;
+        if (piece >= n_groups) {
+          encoder.dispatch_compute(
+              kernel,
+              cb,
+              cp,
+              std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+              std::min(chunk_m_groups, omarchy::kMaxComputeGroupCountX),
+              1u);
+          return;
+        }
+        for (uint32_t begin = 0u; begin < n_groups; begin += piece) {
+          const uint32_t count = std::min(piece, n_groups - begin);
+          omarchy::ComputeParams piece_params = cp;
+          piece_params.lhs_size = begin;
+          piece_params.rhs_size = count;
+          encoder.dispatch_compute(
+              kernel,
+              cb,
+              piece_params,
+              std::min(count, omarchy::kMaxComputeGroupCountX),
+              std::min(chunk_m_groups, omarchy::kMaxComputeGroupCountX),
+              1u);
+          if (begin + count < n_groups) {
+            encoder.commit();
+          }
+        }
+      });
 }
 
 } // namespace
@@ -8191,13 +8272,22 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         params.rhs_offset += slice == 0 ? 0u : rhs_step;
         params.aux_offset += slice == 0 ? 0u : aux_step;
         params.output_offset += slice == 0 ? 0u : out_step;
-        fp_encoder.dispatch_compute(
-            tile_kernel,
+        dispatch_qmm_out_rows(
+            fp_encoder,
+            out,
             bindings,
             params,
-            std::min(n_groups, omarchy::kMaxComputeGroupCountX),
-            std::min(m_groups, omarchy::kMaxComputeGroupCountX),
-            1u);
+            [&](std::span<const omarchy::ComputeBinding> cb,
+                const omarchy::ComputeParams& cp) {
+              const uint32_t cm = (cp.matrix_m + 15u) / 16u;
+              fp_encoder.dispatch_compute(
+                  tile_kernel,
+                  cb,
+                  cp,
+                  std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+                  std::min(cm, omarchy::kMaxComputeGroupCountX),
+                  1u);
+            });
       }
       return;
     }
@@ -8211,11 +8301,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       params.rhs_offset += slice == 0 ? 0u : rhs_step;
       params.aux_offset += slice == 0 ? 0u : aux_step;
       params.output_offset += slice == 0 ? 0u : out_step;
-      fp_encoder.dispatch_compute(
-          fp_kernel,
+      dispatch_qmm_out_rows(
+          fp_encoder,
+          out,
           bindings,
           params,
-          omarchy::compute_dispatch_group_count(params.count));
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+            fp_encoder.dispatch_compute(
+                fp_kernel,
+                cb,
+                cp,
+                omarchy::compute_dispatch_group_count(cp.count));
+          });
     }
     return;
   }
@@ -8582,13 +8680,21 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       uint32_t column_groups =
           (params.matrix_n + cols_per_group - 1u) / cols_per_group;
       if (column_groups <= omarchy::kMaxComputeGroupCountX) {
-        encoder.dispatch_compute(
-            stream_kernel,
+        dispatch_qmm_out_rows(
+            encoder,
+            out,
             bindings,
             params,
-            column_groups,
-            (params.matrix_m + rows_per_group - 1u) / rows_per_group,
-            1u);
+            [&](std::span<const omarchy::ComputeBinding> cb,
+                const omarchy::ComputeParams& cp) {
+              encoder.dispatch_compute(
+                  stream_kernel,
+                  cb,
+                  cp,
+                  column_groups,
+                  (cp.matrix_m + rows_per_group - 1u) / rows_per_group,
+                  1u);
+            });
         return;
       }
     }
@@ -8804,15 +8910,23 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           params.matrix_m >= 1024u
               ? omarchy::ComputeKernel::QmmPrefillFmaPreciseBF16
               : omarchy::ComputeKernel::QmmPrefillFmaBF16;
-      encoder.dispatch_compute(
-          fma_kernel,
+      dispatch_qmm_out_rows(
+          encoder,
+          out,
           bindings,
           params,
-          std::min((params.matrix_n + 63u) / 64u,
-                   omarchy::kMaxComputeGroupCountX),
-          std::min((params.matrix_m + 63u) / 64u,
-                   omarchy::kMaxComputeGroupCountX),
-          1u);
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+            encoder.dispatch_compute(
+                fma_kernel,
+                cb,
+                cp,
+                std::min((cp.matrix_n + 63u) / 64u,
+                         omarchy::kMaxComputeGroupCountX),
+                std::min((cp.matrix_m + 63u) / 64u,
+                         omarchy::kMaxComputeGroupCountX),
+                1u);
+          });
       return;
     }
     // bf16-activation coopmat prefill: the pinned mlx-community Qwen3.8
@@ -8900,6 +9014,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // bit-exact digests; G13G confirmation in the same receipt. The
       // single-row-tile case keeps the shipped mapping (nothing to
       // regroup).
+      dispatch_qmm_out_rows(
+          encoder,
+          out,
+          qmm_bindings,
+          params,
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+        const uint32_t m_groups =
+            (cp.matrix_m + coopmat_rows - 1u) / coopmat_rows;
       if (!q4_g64_transpose) {
         // Other formats: the default route of each shape only (32-row
         // g4 raster with the padded B tile, else the shipped mappings);
@@ -8922,8 +9045,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         }
         encoder.dispatch_compute(
             qmm_coopmat_format_kernel(route, bits_, group_size_),
-            qmm_bindings,
-            params,
+            cb,
+            cp,
             std::min(fmt_grid_x, omarchy::kMaxComputeGroupCountX),
             std::min(fmt_grid_y, omarchy::kMaxComputeGroupCountX),
             1u);
@@ -8942,7 +9065,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           std::getenv("MLX_OMARCHY_QMM_NO_RASTER") == nullptr;
       if ((coopmat_rows == 32u || coopmat_rows == 64u) && full_n) {
         if (coopmat_rows == 32u && twon_env != nullptr &&
-            twon_env[0] == '1' && (params.matrix_n % 64u) == 0u) {
+            twon_env[0] == '1' && (cp.matrix_n % 64u) == 0u) {
           qmm_kernel =
               omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNTwoN;
           grid_x = n_groups / 2u;
@@ -9092,11 +9215,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       }
       encoder.dispatch_compute(
           qmm_kernel,
-          qmm_bindings,
-          params,
+          cb,
+          cp,
           std::min(grid_x, omarchy::kMaxComputeGroupCountX),
           std::min(grid_y, omarchy::kMaxComputeGroupCountX),
           1u);
+      return;
+          });
       return;
     }
     if (rb_enabled && out.dtype() == float16 &&
@@ -9121,15 +9246,23 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
             params.matrix_m >= 1024u
                 ? omarchy::ComputeKernel::QmmPrefillFmaPreciseF16
                 : omarchy::ComputeKernel::QmmPrefillFmaF16;
-        encoder.dispatch_compute(
-            fma_kernel,
+        dispatch_qmm_out_rows(
+            encoder,
+            out,
             bindings,
             params,
-            std::min((params.matrix_n + 63u) / 64u,
-                     omarchy::kMaxComputeGroupCountX),
-            std::min((params.matrix_m + 63u) / 64u,
-                     omarchy::kMaxComputeGroupCountX),
-            1u);
+            [&](std::span<const omarchy::ComputeBinding> cb,
+                const omarchy::ComputeParams& cp) {
+              encoder.dispatch_compute(
+                  fma_kernel,
+                  cb,
+                  cp,
+                  std::min((cp.matrix_n + 63u) / 64u,
+                           omarchy::kMaxComputeGroupCountX),
+                  std::min((cp.matrix_m + 63u) / 64u,
+                           omarchy::kMaxComputeGroupCountX),
+                  1u);
+            });
         return;
       }
       // The 8x8x8 fp32 cooperative matrix (shaders/qmm_coopmat.comp)
@@ -9189,16 +9322,32 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         // Register-blocked scalar tile: the same shader as the fallback below, so it takes the same budget split (issue 202).
         // The coopmat kernels are other shaders and are dispatched whole.
         dispatch_qmm_tile(
-            encoder, qmm_kernel, bindings, params, n_groups, m_groups);
+            encoder,
+            out,
+            qmm_kernel,
+            bindings,
+            params,
+            n_groups,
+            coopmat_rows);
         return;
       }
-      encoder.dispatch_compute(
-          qmm_kernel,
+      dispatch_qmm_out_rows(
+          encoder,
+          out,
           bindings,
           params,
-          std::min(n_groups, omarchy::kMaxComputeGroupCountX),
-          std::min(m_groups, omarchy::kMaxComputeGroupCountX),
-          1u);
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+            const uint32_t chunk_m_groups =
+                (cp.matrix_m + coopmat_rows - 1u) / coopmat_rows;
+            encoder.dispatch_compute(
+                qmm_kernel,
+                cb,
+                cp,
+                std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+                std::min(chunk_m_groups, omarchy::kMaxComputeGroupCountX),
+                1u);
+          });
       return;
     }
     auto tile_kernel = select_float_kernel(
@@ -9210,7 +9359,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     uint32_t n_groups = (params.matrix_n + 15u) / 16u;
     // Scalar tile fallback (a device without cooperative matrix): split by output columns when the dispatch exceeds the work
     // budget, so one full-logit QMM cannot outlast the GPU job watchdog (issue 202).
-    dispatch_qmm_tile(encoder, tile_kernel, bindings, params, n_groups, m_groups);
+    dispatch_qmm_tile(
+        encoder, out, tile_kernel, bindings, params, n_groups, 16u);
     return;
   }
   auto kernel = select_float_kernel(
@@ -9218,11 +9368,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       omarchy::ComputeKernel::QmmF32,
       omarchy::ComputeKernel::QmmF16,
       omarchy::ComputeKernel::QmmBF16);
-  encoder.dispatch_compute(
-      kernel,
+  dispatch_qmm_out_rows(
+      encoder,
+      out,
       bindings,
       params,
-      omarchy::compute_dispatch_group_count(params.count));
+      [&](std::span<const omarchy::ComputeBinding> cb,
+          const omarchy::ComputeParams& cp) {
+        encoder.dispatch_compute(
+            kernel,
+            cb,
+            cp,
+            omarchy::compute_dispatch_group_count(cp.count));
+      });
 }
 
 namespace omarchy {
