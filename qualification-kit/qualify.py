@@ -3,6 +3,7 @@
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -29,6 +30,9 @@ WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
 ASSETS = {WHEEL: '05a4802bc4c547aa77a6478612e103a7bfcedc3878f9049e502b37aba8eefb14',
           VENDOR: '31a9ed2075865d41e84729b850c1bdf9f66530f9b12df7bfb50cd80c472555f4'}
+PATCH_SERIES = ROOT.parent / 'scripts' / 'apply-mlx-lm-patches.sh'
+PATCH_RECORD = '.omarchy-serve-patches'
+PATCH_MARKER = '_EAGER_SWIGLU'
 MODEL = 'mlx-community/Qwen3-4B-Instruct-2507-4bit'
 REV = '50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b'
 PROMPT = 'Explain how a transistor can function as a switch in a simple circuit.'
@@ -174,6 +178,66 @@ def asset(work, cached, name):
     return path
 
 
+def site_packages(venv):
+    """The site-packages tree of a venv that holds mlx_lm, or None."""
+    for path in sorted((Path(venv) / 'lib').glob('python3.*/site-packages')):
+        if (path / 'mlx_lm').is_dir():
+            return path
+    return None
+
+
+def interpreter_site():
+    """The site-packages tree of the running interpreter, or None."""
+    spec = importlib.util.find_spec('mlx_lm')
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    return Path(list(spec.submodule_search_locations)[0]).parent
+
+
+def patch_state(site):
+    """The mlx-lm patch state of one site-packages tree.
+
+    ``applied`` says the series wrote its completion record, and the
+    marker count says the patched code is really there. A tree without the
+    record is an unpatched mlx-lm, whatever its version claims.
+    """
+    if site is None:
+        return {'applied': False, 'record_sha256': None, 'eager_swiglu_markers': 0}
+    record = site / 'mlx_lm' / PATCH_RECORD
+    markers = 0
+    for path in sorted((site / 'mlx_lm').rglob('*.py')):
+        try:
+            markers += path.read_text(errors='replace').count(PATCH_MARKER)
+        except OSError:
+            continue
+    return {'applied': record.is_file(),
+            'record_sha256': sha(record) if record.is_file() else None,
+            'eager_swiglu_markers': markers}
+
+
+def apply_patch_series(venv, env):
+    """Apply the vendored mlx-lm serve patch series to a venv.
+
+    The kit benchmarks the installed mlx-lm. Without the series the venv
+    holds the stock wheel from the vendor set, so every decode number
+    understates what the packaged install gives.
+    """
+    if not PATCH_SERIES.is_file():
+        raise RuntimeError('mlx_lm_patch_series_missing')
+    rc, _ = command(['bash', str(PATCH_SERIES), str(venv)], env, 180)
+    if rc:
+        raise RuntimeError(f'mlx_lm_patch_series_exit_{rc}')
+
+
+def patched_state(venv, env):
+    """Apply the series to a venv and return the state it left behind."""
+    apply_patch_series(venv, env)
+    state = patch_state(site_packages(venv))
+    if not state['applied']:
+        raise RuntimeError('mlx_lm_patch_state_unreadable')
+    return state
+
+
 def setup(work, args, mac, env, receipt):
     needed = (3, 12) if mac else (3, 14)
     arch = 'arm64' if mac else 'aarch64'
@@ -186,6 +250,10 @@ def setup(work, args, mac, env, receipt):
         rc, _ = command([sys.executable, '-c', code], env, 15)
         if rc:
             raise RuntimeError('existing_macos_runtime_versions_do_not_match')
+        state = patch_state(interpreter_site())
+        if not state['applied']:
+            raise RuntimeError('mlx_lm_not_patched')
+        receipt['mlx_lm_patches'] = state
         return Path(sys.executable), None
     print('Setting up isolated Python environment.', flush=True)
     rc, _ = command([sys.executable, '-m', 'venv', work / 'venv'], env, 45)
@@ -210,6 +278,8 @@ def setup(work, args, mac, env, receipt):
         receipt['wheel'] = {'name': WHEEL, 'sha256': ASSETS[WHEEL], 'vendor_sha256': ASSETS[VENDOR]}
     if rc:
         raise RuntimeError(f'pip_install_exit_{rc}')
+    state = patched_state(work / 'venv', env)
+    receipt['mlx_lm_patches'] = state
     return py, wheel
 
 

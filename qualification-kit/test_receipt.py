@@ -35,6 +35,38 @@ class ReceiptTest(unittest.TestCase):
         self.assertIsNone(benchmark_result(dict(r, device='llvmpipe')))
 
 
+class PatchStateTest(unittest.TestCase):
+    """The kit must know whether the mlx-lm it benchmarks carries the series."""
+
+    def test_unpatched_tree_is_not_applied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm').mkdir()
+            (site / 'mlx_lm' / 'generate.py').write_text('x = 1\n')
+            state = qualify.patch_state(site)
+            self.assertFalse(state['applied'])
+            self.assertIsNone(state['record_sha256'])
+            self.assertEqual(state['eager_swiglu_markers'], 0)
+
+    def test_patched_tree_reports_record_and_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm' / 'models').mkdir(parents=True)
+            (site / 'mlx_lm' / 'models' / 'qwen3.py').write_text(
+                'flag = "_EAGER_SWIGLU"\nother = "_EAGER_SWIGLU"\n')
+            record = site / 'mlx_lm' / qualify.PATCH_RECORD
+            record.write_text('series patches\n')
+            state = qualify.patch_state(site)
+            self.assertTrue(state['applied'])
+            self.assertEqual(state['record_sha256'], qualify.sha(record))
+            self.assertEqual(state['eager_swiglu_markers'], 2)
+
+    def test_missing_site_is_not_applied(self):
+        state = qualify.patch_state(None)
+        self.assertFalse(state['applied'])
+        self.assertEqual(state['eager_swiglu_markers'], 0)
+
+
 class PairTest(unittest.TestCase):
     def test_pair_requires_matching_generated_token_digests(self):
         base = {'schema': qualify.SCHEMA, 'machine_id': '0123456789abcdef',
