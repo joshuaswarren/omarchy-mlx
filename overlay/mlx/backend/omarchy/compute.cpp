@@ -2297,6 +2297,15 @@ ComputeRuntime::~ComputeRuntime() {
   }
 }
 
+void ComputeRuntime::abandon_vulkan_handles() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  pipelines_.fill(VK_NULL_HANDLE);
+  dynamic_pipelines_.clear();
+  access_.clear();
+  pipeline_layout_ = VK_NULL_HANDLE;
+  descriptor_layout_ = VK_NULL_HANDLE;
+}
+
 VkPipeline ComputeRuntime::pipeline(ComputeKernel kernel) {
   size_t index = static_cast<size_t>(kernel);
   if (index >= pipelines_.size()) {

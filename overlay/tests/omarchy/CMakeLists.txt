@@ -4,6 +4,13 @@ target_include_directories(omarchy_inference_weight_tests PRIVATE
                            ${Vulkan_INCLUDE_DIRS})
 add_test(NAME omarchy_inference_weight_tests COMMAND omarchy_inference_weight_tests)
 
+add_executable(omarchy_vram_activations_tests test_vram_activations.cpp)
+target_include_directories(omarchy_vram_activations_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../..
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy
+                           ${Vulkan_INCLUDE_DIRS})
+add_test(NAME omarchy_vram_activations_tests COMMAND omarchy_vram_activations_tests)
+
 # PR 519: a small Vulkan op and then a clean exit(0). The crash lived in the
 # static Runtime destructor after main returned; a segfault at exit fails
 # the test, so the process itself is the assertion.
@@ -654,6 +661,16 @@ target_compile_options(omarchy_qmm_geometry_tests
 target_link_options(omarchy_qmm_geometry_tests
                     PRIVATE ${SANITIZER_LINK_FLAGS})
 add_test(NAME omarchy_qmm_geometry_tests COMMAND omarchy_qmm_geometry_tests)
+
+# QmmOutRows: the lm_head logits output passes maxStorageBufferRange
+# at context 8192 (issue 560), so the QMM eval splits whole output rows
+# into aligned, range-legal binding chunks. Pure math; the dispatch
+# wrapper uses the same helpers.
+add_executable(omarchy_qmm_out_rows_tests test_qmm_out_rows.cpp)
+target_include_directories(omarchy_qmm_out_rows_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+add_test(NAME omarchy_qmm_out_rows_tests
+         COMMAND omarchy_qmm_out_rows_tests)
 
 add_executable(omarchy_sdpa_decode_mask_layout_tests test_sdpa_decode_mask_layout.cpp)
 target_include_directories(omarchy_sdpa_decode_mask_layout_tests PRIVATE

@@ -244,6 +244,9 @@ CommandEncoder::~CommandEncoder() {
   // teardown SIGSEGV, pure-virtual aborts, and Khronos-validation-layer
   // crashes after a watchdog throw. The pools are children of the
   // VkDevice; vkDestroyDevice releases them with it.
+  if (!runtime_alive()) {
+    return;
+  }
   try {
     synchronize();
   } catch (const std::exception&) {
@@ -343,12 +346,127 @@ void CommandEncoder::ensure_recording() {
   recording_ = true;
 }
 
+void CommandEncoder::upload_device_local_if_needed(
+    VulkanBuffer* vb,
+    bool read,
+    bool write,
+    VkDeviceSize offset,
+    VkDeviceSize range,
+    bool exact_write_coverage) {
+  if (!vb || !vb->device_local) {
+    return;
+  }
+  const size_t eff_range = range == VK_WHOLE_SIZE
+      ? (vb->size > static_cast<size_t>(offset)
+             ? vb->size - static_cast<size_t>(offset)
+             : 0)
+      : static_cast<size_t>(range);
+  if (!vb->sync_state.needs_upload(
+          read,
+          write,
+          static_cast<size_t>(offset),
+          eff_range,
+          vb->size,
+          exact_write_coverage)) {
+    return;
+  }
+  if (vb->host_shadow != nullptr) {
+    auto& dt = vk::device_table();
+    if (can_inline_update_device_local(vb->size) &&
+        dt.CmdUpdateBuffer != nullptr) {
+      uint64_t comp = omarchy::allocator().buffer_completion(vb);
+      if (comp == kPendingCompletion) {
+        // Same-stream pending work is already recorded in this encoder, so
+        // program order plus the barrier tracker/wave scheduler orders the
+        // inline vkCmdUpdateBuffer after it without flushing. Only flush if
+        // another encoder holds the uncommitted use of vb.
+        const bool on_this_encoder =
+            std::find(batch_buffers_.begin(), batch_buffers_.end(), vb) !=
+            batch_buffers_.end();
+        if (!on_this_encoder) {
+          synchronize_pending_encoders();
+          comp = omarchy::allocator().buffer_completion(vb);
+        }
+      }
+      if (needs_inline_update_semaphore_wait(
+              comp,
+              kPendingCompletion,
+              last_completion_,
+              device_.completions().drained_value())) {
+        add_semaphore_wait(device_.completions().semaphore(), comp, nullptr);
+      }
+      if (auto* noted = omarchy::allocator().note_buffer_handle(vb->buffer)) {
+        batch_buffers_.push_back(noted);
+      }
+      if (wave_sched()) {
+        PendingNode& node = pending_.emplace_back();
+        node.kind = PendingNode::Kind::Update;
+        node.prim = trace::current_prim();
+        node.dst = vb->buffer;
+        node.size = vb->size;
+        node.write_offset = 0;
+        const auto* src = static_cast<const uint8_t*>(vb->host_shadow);
+        node.update_data.assign(src, src + vb->size);
+        node.wr[node.nw++] = {vb->buffer, 0, vb->size};
+      } else {
+        ensure_recording();
+        if (tape_full_barriers()) {
+          record_dependency_barrier();
+        }
+        if (gated_barriers()) {
+          TrackedRange wr{vb->buffer, 0, vb->size};
+          if (!head_synced_ || tracker_.needs_barrier({}, {&wr, 1})) {
+            record_dependency_barrier();
+            trace::counters().barriers_emitted++;
+            prof::get().on_barrier(true);
+          } else {
+            trace::counters().barriers_skipped++;
+            prof::get().on_barrier(false);
+          }
+          tracker_.add_write(wr);
+        }
+        dt.CmdUpdateBuffer(cmd_, vb->buffer, 0, vb->size, vb->host_shadow);
+        if (!gated_barriers()) {
+          record_dependency_barrier();
+        }
+      }
+    } else {
+      uint64_t comp = omarchy::allocator().buffer_completion(vb);
+      if (comp == kPendingCompletion) {
+        synchronize("vram host upload");
+        comp = omarchy::allocator().buffer_completion(vb);
+      }
+      if (comp != 0 && comp != kPendingCompletion) {
+        device_.completions().wait(comp);
+      }
+      device_.upload_host_to_device(vb->buffer, vb->host_shadow, vb->size);
+    }
+  }
+  vb->sync_state.commit_gpu_upload();
+}
+
+void CommandEncoder::commit_device_local_write(VulkanBuffer* vb) {
+  if (vb && vb->device_local) {
+    vb->sync_state.commit_gpu_write();
+  }
+}
+
 void CommandEncoder::copy_buffer(
     VkBuffer src,
     VkBuffer dst,
     VkDeviceSize size,
     VkDeviceSize src_offset,
     VkDeviceSize dst_offset) {
+  auto* src_vb = omarchy::allocator().lookup_buffer_handle(src);
+  auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
+  if (src_vb && src_vb == dst_vb) {
+    upload_device_local_if_needed(src_vb, true, true, dst_offset, size, true);
+    commit_device_local_write(src_vb);
+  } else {
+    upload_device_local_if_needed(src_vb, true, false, src_offset, size, false);
+    upload_device_local_if_needed(dst_vb, false, true, dst_offset, size, true);
+    commit_device_local_write(dst_vb);
+  }
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
     batch_buffers_.push_back(vb);
   }
@@ -404,6 +522,9 @@ void CommandEncoder::fill_buffer(
     uint32_t value,
     VkDeviceSize size,
     VkDeviceSize offset) {
+  auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
+  upload_device_local_if_needed(dst_vb, false, true, offset, size, true);
+  commit_device_local_write(dst_vb);
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
     batch_buffers_.push_back(vb);
   }
@@ -644,6 +765,85 @@ void CommandEncoder::dispatch_compute_pipeline(
           "; this device's maxStorageBufferRange is " +
           std::to_string(range_limit) +
           " bytes. One binding cannot address that much memory.");
+    }
+  }
+  bool any_device_local = false;
+  for (const auto& item : bindings) {
+    auto* vb = const_cast<VulkanBuffer*>(
+        static_cast<const VulkanBuffer*>(item.owner));
+    if (!vb) {
+      vb = omarchy::allocator().lookup_buffer_handle(item.buffer);
+    }
+    if (vb && vb->device_local) {
+      any_device_local = true;
+      break;
+    }
+  }
+  if (any_device_local) {
+    const auto access = compute.binding_access(pipeline);
+    struct AccessAgg {
+      VulkanBuffer* vb{nullptr};
+      bool read{false};
+      bool write{false};
+      VkDeviceSize min_off{UINT64_MAX};
+      VkDeviceSize max_end{0};
+    };
+    std::array<AccessAgg, kComputeBindingBudget> aggs{};
+    size_t agg_count = 0;
+    for (size_t i = 0; i < bindings.size(); ++i) {
+      auto* vb = const_cast<VulkanBuffer*>(
+          static_cast<const VulkanBuffer*>(bindings[i].owner));
+      if (!vb) {
+        vb = omarchy::allocator().lookup_buffer_handle(bindings[i].buffer);
+      }
+      if (!vb || !vb->device_local) {
+        continue;
+      }
+      const bool r = ((access.read_mask >> i) & 1u) != 0u;
+      const bool w = ((access.write_mask >> i) & 1u) != 0u;
+      const VkDeviceSize off = bindings[i].offset;
+      const VkDeviceSize end = bindings[i].range == VK_WHOLE_SIZE
+          ? static_cast<VkDeviceSize>(vb->size)
+          : off + bindings[i].range;
+      AccessAgg* slot = nullptr;
+      for (size_t j = 0; j < agg_count; ++j) {
+        if (aggs[j].vb == vb) {
+          slot = &aggs[j];
+          break;
+        }
+      }
+      if (!slot) {
+        slot = &aggs[agg_count++];
+        slot->vb = vb;
+      }
+      slot->read = slot->read || r;
+      slot->write = slot->write || w;
+      slot->min_off = std::min(slot->min_off, off);
+      slot->max_end = std::max(slot->max_end, end);
+    }
+    // Phase 1: complete every required host->device upload before marking any
+    // binding device_dirty, so an exception mid-upload leaves both the failing
+    // buffer's host_dirty and any sibling write target's device_dirty intact.
+    for (size_t j = 0; j < agg_count; ++j) {
+      const VkDeviceSize rng = aggs[j].max_end > aggs[j].min_off
+          ? aggs[j].max_end - aggs[j].min_off
+          : 0;
+      // Compute shader descriptor bounds do not guarantee full-allocation
+      // overwrite (e.g. Fill/slice kernels writing from output_offset), so
+      // conservatively upload any host-dirty compute binding.
+      upload_device_local_if_needed(
+          aggs[j].vb,
+          aggs[j].read,
+          aggs[j].write,
+          aggs[j].min_off,
+          rng,
+          /*exact_write_coverage=*/false);
+    }
+    // Phase 2: all uploads succeeded; mark write targets device_dirty.
+    for (size_t j = 0; j < agg_count; ++j) {
+      if (aggs[j].write) {
+        commit_device_local_write(aggs[j].vb);
+      }
     }
   }
   for (const auto& item : bindings) {
@@ -1094,9 +1294,16 @@ void CommandEncoder::emit_pending() {
         region.dstOffset = node.dst_offset;
         region.size = node.size;
         dt.CmdCopyBuffer(cmd_, node.src, node.dst, 1, &region);
-      } else {
+      } else if (node.kind == PendingNode::Kind::Fill) {
         dt.CmdFillBuffer(
             cmd_, node.dst, node.write_offset, node.size, node.value);
+      } else {
+        dt.CmdUpdateBuffer(
+            cmd_,
+            node.dst,
+            node.write_offset,
+            node.update_data.size(),
+            node.update_data.data());
       }
       for (uint32_t r = 0; r < node.nr; ++r) {
         tracker_.add_read(node.rd[r]);
@@ -1494,6 +1701,19 @@ std::unordered_map<int, CommandEncoder>& get_command_encoders() {
 std::unordered_map<int, CommandEncoder>& get_global_command_encoders() {
   static std::unordered_map<int, CommandEncoder> global_encoders;
   return global_encoders;
+}
+
+void synchronize_pending_encoders() {
+  for (auto& [idx, enc] : get_command_encoders()) {
+    if (enc.needs_commit()) {
+      enc.synchronize("vram readback");
+    }
+  }
+  for (auto& [idx, enc] : get_global_command_encoders()) {
+    if (enc.needs_commit()) {
+      enc.synchronize("vram readback");
+    }
+  }
 }
 
 } // namespace mlx::core::omarchy

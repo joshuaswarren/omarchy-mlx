@@ -10,11 +10,13 @@
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -93,6 +95,28 @@ bool consume_test_oom() {
   } else {
     std::string next = std::to_string(remaining - 1);
     setenv("MLX_OMARCHY_TEST_OOM_REMAINING", next.c_str(), 1);
+  }
+  return true;
+}
+
+// Test-only hook: simulate one or more bounded staging-transfer fence timeouts
+// so runtime tests can verify timeout handling, in-flight lifetime
+// preservation, and late-completion recovery on real Vulkan drivers.
+bool consume_test_staging_timeout() {
+  const char* env = std::getenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT");
+  if (env == nullptr || *env == '\0') {
+    return false;
+  }
+  char* end = nullptr;
+  long remaining = std::strtol(env, &end, 10);
+  if (end == env || remaining <= 0) {
+    return false;
+  }
+  if (remaining == 1) {
+    unsetenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT");
+  } else {
+    std::string next = std::to_string(remaining - 1);
+    setenv("MLX_OMARCHY_TEST_STAGING_TIMEOUT", next.c_str(), 1);
   }
   return true;
 }
@@ -215,6 +239,343 @@ void Device::upload_weights(
   }
 }
 
+size_t Device::device_local_heap_bytes() const {
+  return max_device_local_heap_bytes(mem_props_);
+}
+
+void Device::ensure_transfer_resources_locked() {
+  if (transfer_staging_ != VK_NULL_HANDLE) {
+    return;
+  }
+  auto& dt = vk::device_table();
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = kWeightStagingBytes;
+  bci.usage =
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VKX_CHECK(dt.CreateBuffer(device_, &bci, nullptr, &transfer_staging_));
+  try {
+    VkMemoryRequirements reqs{};
+    dt.GetBufferMemoryRequirements(device_, transfer_staging_, &reqs);
+    uint32_t type = staging_memory_type(mem_props_, reqs.memoryTypeBits);
+    if (type == UINT32_MAX) {
+      // Fallback for UMA/software-Vulkan tests that exercise staging transfers.
+      for (uint32_t i = 0; i < mem_props_.memoryTypeCount; ++i) {
+        if ((reqs.memoryTypeBits & (1u << i)) &&
+            (mem_props_.memoryTypes[i].propertyFlags &
+             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+          type = i;
+          if (mem_props_.memoryTypes[i].propertyFlags &
+              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
+            break;
+          }
+        }
+      }
+    }
+    if (type == UINT32_MAX) {
+      throw std::runtime_error(
+          "[omarchy] no compatible host-visible memory for activation staging");
+    }
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = reqs.size;
+    mai.memoryTypeIndex = type;
+    VKX_CHECK(
+        dt.AllocateMemory(device_, &mai, nullptr, &transfer_staging_memory_));
+    VKX_CHECK(dt.BindBufferMemory(
+        device_, transfer_staging_, transfer_staging_memory_, 0));
+    transfer_staging_coherent_ =
+        (mem_props_.memoryTypes[type].propertyFlags &
+         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+    VKX_CHECK(dt.MapMemory(
+        device_,
+        transfer_staging_memory_,
+        0,
+        VK_WHOLE_SIZE,
+        0,
+        &transfer_staging_data_));
+
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+        VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pci.queueFamilyIndex = caps_.queue_family_index;
+    VKX_CHECK(dt.CreateCommandPool(device_, &pci, nullptr, &transfer_pool_));
+
+    VkCommandBufferAllocateInfo cbai{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbai.commandPool = transfer_pool_;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VKX_CHECK(dt.AllocateCommandBuffers(device_, &cbai, &transfer_cmd_));
+
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VKX_CHECK(dt.CreateFence(device_, &fci, nullptr, &transfer_fence_));
+  } catch (...) {
+    if (transfer_fence_ != VK_NULL_HANDLE) {
+      dt.DestroyFence(device_, transfer_fence_, nullptr);
+      transfer_fence_ = VK_NULL_HANDLE;
+    }
+    if (transfer_pool_ != VK_NULL_HANDLE) {
+      dt.DestroyCommandPool(device_, transfer_pool_, nullptr);
+      transfer_pool_ = VK_NULL_HANDLE;
+      transfer_cmd_ = VK_NULL_HANDLE;
+    }
+    if (transfer_staging_data_ != nullptr) {
+      dt.UnmapMemory(device_, transfer_staging_memory_);
+      transfer_staging_data_ = nullptr;
+    }
+    if (transfer_staging_ != VK_NULL_HANDLE) {
+      dt.DestroyBuffer(device_, transfer_staging_, nullptr);
+      transfer_staging_ = VK_NULL_HANDLE;
+    }
+    if (transfer_staging_memory_ != VK_NULL_HANDLE) {
+      dt.FreeMemory(device_, transfer_staging_memory_, nullptr);
+      transfer_staging_memory_ = VK_NULL_HANDLE;
+    }
+    throw;
+  }
+}
+
+void Device::check_prior_transfer_locked(const char* direction) {
+  if (!transfer_state_.in_flight) {
+    return;
+  }
+  auto& dt = vk::device_table();
+  const VkResult st = transfer_state_.check_prior_in_flight([&]() {
+    if (env_flag("MLX_OMARCHY_TEST_STAGING_FENCE_BUSY")) {
+      return VK_NOT_READY;
+    }
+    return dt.GetFenceStatus(device_, transfer_fence_);
+  });
+  if (st == VK_SUCCESS) {
+    if (transfer_in_flight_buffer_ != VK_NULL_HANDLE) {
+      omarchy::allocator().mark_transfer_in_flight(
+          transfer_in_flight_buffer_, false);
+      transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+    }
+    return;
+  }
+  if (st == VK_NOT_READY) {
+    throw std::runtime_error(
+        std::string("[omarchy] previous activation staging transfer is still "
+                    "in flight; cannot start ") +
+        direction + " (Timeout). In-flight staging resources preserved.");
+  }
+  throw std::runtime_error(
+      std::string("[omarchy] activation staging fence status failed before ") +
+      direction + " (" + vk::result_string(st) + ").");
+}
+
+void Device::wait_transfer_fence_locked(
+    VkBuffer target_buffer,
+    const char* direction) {
+  auto& dt = vk::device_table();
+  const uint64_t timeout_ns =
+      std::min(submit_hang_no_progress_ns(), submit_max_wall_ns());
+  VkResult err = VK_SUCCESS;
+  StagingTransferWaitResult wait_res = StagingTransferWaitResult::Completed;
+  if (consume_test_staging_timeout()) {
+    err = VK_TIMEOUT;
+    wait_res = StagingTransferWaitResult::TimedOut;
+  } else {
+    wait_res = transfer_state_.wait_bounded(
+        timeout_ns,
+        kHangWatchPollNs,
+        [&](uint64_t slice_ns) {
+          return dt.WaitForFences(
+              device_, 1, &transfer_fence_, VK_TRUE, slice_ns);
+        },
+        &err);
+  }
+  if (wait_res == StagingTransferWaitResult::Completed) {
+    omarchy::allocator().mark_transfer_in_flight(target_buffer, false);
+    transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+    return;
+  }
+  if (wait_res == StagingTransferWaitResult::TimedOut) {
+    throw std::runtime_error(
+        std::string("[omarchy] Vulkan activation staging ") + direction +
+        " timed out after " + std::to_string(timeout_ns / 1000000ull) +
+        " ms (Timeout). The device may be hung; in-flight staging resources"
+        " preserved.");
+  }
+  throw std::runtime_error(
+      std::string("[omarchy] Vulkan activation staging ") + direction +
+      " fence wait failed (" + vk::result_string(err) +
+      "). In-flight staging resources preserved.");
+}
+
+void Device::upload_host_to_device(
+    VkBuffer destination,
+    const void* src,
+    size_t bytes) {
+  if (bytes == 0) {
+    return;
+  }
+  std::lock_guard lk(transfer_mutex_);
+  ensure_transfer_resources_locked();
+  check_prior_transfer_locked("upload");
+  auto& dt = vk::device_table();
+  const auto* src_bytes = static_cast<const uint8_t*>(src);
+  auto* stage = static_cast<uint8_t*>(transfer_staging_data_);
+
+  for (size_t offset = 0; offset < bytes;) {
+    const auto chunk = vram_staging_chunk(bytes, offset);
+    std::memcpy(stage, src_bytes + chunk.byte_offset, chunk.byte_count);
+    if (chunk.copy_bytes > chunk.byte_count) {
+      std::memset(
+          stage + chunk.byte_count, 0, chunk.copy_bytes - chunk.byte_count);
+    }
+    if (!transfer_staging_coherent_) {
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+      range.memory = transfer_staging_memory_;
+      range.size = VK_WHOLE_SIZE;
+      VKX_CHECK(dt.FlushMappedMemoryRanges(device_, 1, &range));
+    }
+    VKX_CHECK(dt.ResetCommandBuffer(transfer_cmd_, 0));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKX_CHECK(dt.BeginCommandBuffer(transfer_cmd_, &bi));
+    VkBufferCopy region{};
+    region.srcOffset = 0;
+    region.dstOffset = chunk.byte_offset;
+    region.size = chunk.copy_bytes;
+    dt.CmdCopyBuffer(transfer_cmd_, transfer_staging_, destination, 1, &region);
+    // Make transfer writes visible to subsequent compute and transfer
+    // consumers on the device before signaling transfer_fence_.
+    VkMemoryBarrier post_mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    post_mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    post_mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+        VK_ACCESS_TRANSFER_WRITE_BIT;
+    dt.CmdPipelineBarrier(
+        transfer_cmd_,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &post_mb,
+        0,
+        nullptr,
+        0,
+        nullptr);
+    VKX_CHECK(dt.EndCommandBuffer(transfer_cmd_));
+
+    VKX_CHECK(dt.ResetFences(device_, 1, &transfer_fence_));
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &transfer_cmd_;
+    omarchy::allocator().mark_transfer_in_flight(destination, true);
+    transfer_in_flight_buffer_ = destination;
+    try {
+      std::lock_guard qlk(queue_mutex_);
+      VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, transfer_fence_));
+    } catch (...) {
+      omarchy::allocator().mark_transfer_in_flight(destination, false);
+      transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+      throw;
+    }
+    transfer_state_.mark_submitted();
+    wait_transfer_fence_locked(destination, "upload");
+    offset += chunk.byte_count;
+  }
+}
+
+void Device::download_device_to_host(
+    VkBuffer source,
+    void* dst,
+    size_t bytes) {
+  if (bytes == 0) {
+    return;
+  }
+  std::lock_guard lk(transfer_mutex_);
+  ensure_transfer_resources_locked();
+  check_prior_transfer_locked("download");
+  auto& dt = vk::device_table();
+  auto* dst_bytes = static_cast<uint8_t*>(dst);
+  const auto* stage = static_cast<const uint8_t*>(transfer_staging_data_);
+
+  for (size_t offset = 0; offset < bytes;) {
+    const auto chunk = vram_staging_chunk(bytes, offset);
+    VKX_CHECK(dt.ResetCommandBuffer(transfer_cmd_, 0));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKX_CHECK(dt.BeginCommandBuffer(transfer_cmd_, &bi));
+    // Establish device-memory visibility from prior GPU compute/transfer
+    // writes to transfer reads before copying into staging (with gated
+    // barriers, producer submit only emits a write->HOST_READ barrier).
+    VkMemoryBarrier pre_mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    pre_mb.srcAccessMask =
+        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre_mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    dt.CmdPipelineBarrier(
+        transfer_cmd_,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &pre_mb,
+        0,
+        nullptr,
+        0,
+        nullptr);
+    VkBufferCopy region{};
+    region.srcOffset = chunk.byte_offset;
+    region.dstOffset = 0;
+    region.size = chunk.copy_bytes;
+    dt.CmdCopyBuffer(transfer_cmd_, source, transfer_staging_, 1, &region);
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    dt.CmdPipelineBarrier(
+        transfer_cmd_,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_HOST_BIT,
+        0,
+        1,
+        &mb,
+        0,
+        nullptr,
+        0,
+        nullptr);
+    VKX_CHECK(dt.EndCommandBuffer(transfer_cmd_));
+
+    VKX_CHECK(dt.ResetFences(device_, 1, &transfer_fence_));
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &transfer_cmd_;
+    omarchy::allocator().mark_transfer_in_flight(source, true);
+    transfer_in_flight_buffer_ = source;
+    try {
+      std::lock_guard qlk(queue_mutex_);
+      VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, transfer_fence_));
+    } catch (...) {
+      omarchy::allocator().mark_transfer_in_flight(source, false);
+      transfer_in_flight_buffer_ = VK_NULL_HANDLE;
+      throw;
+    }
+    transfer_state_.mark_submitted();
+    wait_transfer_fence_locked(source, "download");
+    if (!transfer_staging_coherent_) {
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+      range.memory = transfer_staging_memory_;
+      range.size = VK_WHOLE_SIZE;
+      VKX_CHECK(dt.InvalidateMappedMemoryRanges(device_, 1, &range));
+    }
+    std::memcpy(dst_bytes + chunk.byte_offset, stage, chunk.byte_count);
+    offset += chunk.byte_count;
+  }
+}
+
+bool device_local_activations_enabled() {
+  if (!env_flag("MLX_OMARCHY_VRAM_ACTIVATIONS") || !is_available()) {
+    return false;
+  }
+  auto& dev = device();
+  return vram_activation_memory_type(
+             true, dev.physical_type(), dev.memory_properties(), UINT32_MAX) !=
+      UINT32_MAX;
+}
+
 uint32_t VulkanAllocator::find_memory_type(
     uint32_t type_bits,
     VkMemoryPropertyFlags required) const {
@@ -244,6 +605,10 @@ VulkanAllocator::VulkanAllocator()
     : buffer_cache_(
           kPageSize,
           [](VulkanBuffer* buf) { return buf->size; },
+          [this](VulkanBuffer* buf) { destroy_buffer(buf); }),
+      device_local_cache_(
+          kPageSize,
+          [](VulkanBuffer* buf) { return buf->size; },
           [this](VulkanBuffer* buf) { destroy_buffer(buf); }) {
   size_t total = is_available() ? capability_report(0).total_memory : 0;
   heap_bytes_ = total;
@@ -256,20 +621,30 @@ VulkanAllocator::VulkanAllocator()
   // release cached buffers.
   gc_limit_ = default_gc_limit(total);
   cache_limit_ = default_cache_limit(total);
+  size_t vram_total = is_available() ? device().device_local_heap_bytes() : 0;
+  device_local_gc_limit_ = default_gc_limit(vram_total > 0 ? vram_total : total);
+  device_local_cache_limit_ =
+      default_cache_limit(vram_total > 0 ? vram_total : total);
 }
 
 Buffer VulkanAllocator::malloc(size_t size) {
   // The table is empty until the first device exists. A core flow can reach
   // malloc before anything else touches the device, so initialize here; the
   // table field would otherwise be read before the lazy init fills it.
-  device();
+  auto& dev = device();
   auto& dt = vk::device_table();
   if (size == 0) {
     return Buffer{new VulkanBuffer{}};
   }
+  const size_t requested_size = size;
   size = round_size(size);
+  const bool want_device_local = should_use_device_local_activation(
+      device_local_activations_enabled(), requested_size);
 
   std::unique_lock lk(mutex_);
+  auto& cache = want_device_local ? device_local_cache_ : buffer_cache_;
+  const size_t effective_gc_limit =
+      want_device_local ? device_local_gc_limit_ : gc_limit_;
   // MLX_OMARCHY_TAPE_NO_REUSE (diagnostic, docs/install-omarchy.md):
   // skip the cache entirely so every allocation lands in fresh device
   // memory and nothing recycled can alias a tape dispatch.
@@ -277,9 +652,10 @@ Buffer VulkanAllocator::malloc(size_t size) {
   // wide - it also covers frees and re-hands outside the tape window,
   // which TAPE_NO_REUSE deliberately does not.
   if (!tape_no_reuse() && !buffer_cache_disabled()) {
-    if (void* cached = buffer_cache_.reuse_from_cache(size)) {
+    if (void* cached = cache.reuse_from_cache(size)) {
       auto* buf = static_cast<VulkanBuffer*>(cached);
       buf->recycled = true;
+      buf->sync_state.on_recycle();
       live_by_handle_[buf->buffer] = buf;
       active_memory_ += buf->size;
       peak_memory_ = std::max(active_memory_ + weight_memory_, peak_memory_);
@@ -295,7 +671,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
   // did not report.
   size_t effective_limit = std::max(memory_limit_, wired_limit_);
   if (active_memory_ + size > effective_limit) {
-    buffer_cache_.clear();
+    cache.clear();
   }
   // Working-set ceiling (Metal: `gc_limit_`): keep active + cache + this
   // request under the ceiling by releasing the reuse cache before we ask
@@ -307,9 +683,9 @@ Buffer VulkanAllocator::malloc(size_t size) {
   // Quarantined buffers still hold their device memory, so they count
   // against the ceiling like active and cached bytes do.
   if (const size_t held = active_memory_ + quarantine_bytes_ +
-          buffer_cache_.cache_size() + size;
-      held > gc_limit_) {
-    buffer_cache_.release_cached_buffers(held - gc_limit_);
+          cache.cache_size() + size;
+      held > effective_gc_limit) {
+    cache.release_cached_buffers(held - effective_gc_limit);
   }
   lk.unlock();
 
@@ -321,31 +697,42 @@ Buffer VulkanAllocator::malloc(size_t size) {
   bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  VKX_CHECK(dt.CreateBuffer(device().handle(), &bci, nullptr, &buf->buffer));
+  VKX_CHECK(dt.CreateBuffer(dev.handle(), &bci, nullptr, &buf->buffer));
 
   VkMemoryRequirements reqs{};
-  dt.GetBufferMemoryRequirements(device().handle(), buf->buffer, &reqs);
+  dt.GetBufferMemoryRequirements(dev.handle(), buf->buffer, &reqs);
 
-  // Prefer host-visible coherent memory (unified memory on Apple GPUs). Fall
-  // back to plain host-visible memory with explicit cache maintenance; fail
-  // closed when even that is unavailable.
-  uint32_t type_index = find_memory_type(
-      reqs.memoryTypeBits,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-  if (type_index != UINT32_MAX) {
-    buf->coherent = true;
-  } else {
-    type_index = find_memory_type(
-        reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-    buf->coherent = false;
+  uint32_t type_index = UINT32_MAX;
+  if (want_device_local) {
+    type_index = vram_activation_memory_type(
+        true, dev.physical_type(), dev.memory_properties(), reqs.memoryTypeBits);
+    if (type_index != UINT32_MAX) {
+      buf->device_local = true;
+      buf->coherent = true;
+    }
   }
-  if (type_index == UINT32_MAX) {
-    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
-    delete buf;
-    throw std::runtime_error(
-        "[omarchy] no host-visible memory type available;"
-        " the backend cannot stage CPU data without one.");
+  if (!buf->device_local) {
+    // Prefer host-visible coherent memory (unified memory on Apple GPUs). Fall
+    // back to plain host-visible memory with explicit cache maintenance; fail
+    // closed when even that is unavailable.
+    type_index = find_memory_type(
+        reqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (type_index != UINT32_MAX) {
+      buf->coherent = true;
+    } else {
+      type_index = find_memory_type(
+          reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+      buf->coherent = false;
+    }
+    if (type_index == UINT32_MAX) {
+      dt.DestroyBuffer(dev.handle(), buf->buffer, nullptr);
+      delete buf;
+      throw std::runtime_error(
+          "[omarchy] no host-visible memory type available;"
+          " the backend cannot stage CPU data without one.");
+    }
   }
 
   VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
@@ -356,25 +743,14 @@ Buffer VulkanAllocator::malloc(size_t size) {
     alloc_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
   } else {
     alloc_result =
-        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+        dt.AllocateMemory(dev.handle(), &mai, nullptr, &buf->memory);
   }
   if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
       alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
-    // Freed buffers of submitted batches wait in the quarantine; they hold
-    // heap bytes that neither active_memory_ nor the cache count. The
-    // drain's release pass stops one generation short of the newest
-    // (observing N proves cleanup for N-1: Mesa signals the completion
-    // timeline before its submit-final cleanup), so the newest
-    // generation's buffers are still parked here and the plain wait would
-    // retry while they are about to come back. Settle the drain like the
-    // dispatcher's idle tick and release through the newest generation;
-    // each buffer still has to pass its own execution fence. A queue that
-    // never goes quiet leaves the tick in charge and the retry behaves as
-    // before. No allocator lock is held here.
-    if (const uint64_t submitted = device().completions().last_reserved();
+    if (const uint64_t submitted = dev.completions().last_reserved();
         submitted != 0) {
-      device().completions().wait(submitted);
-      if (device().completions().wait_settled(
+      dev.completions().wait(submitted);
+      if (dev.completions().wait_settled(
               submitted,
               std::chrono::nanoseconds(submit_hang_no_progress_ns()))) {
         release_quarantine(submitted);
@@ -383,16 +759,13 @@ Buffer VulkanAllocator::malloc(size_t size) {
     {
       std::unique_lock rl(mutex_);
       buffer_cache_.clear();
+      device_local_cache_.clear();
     }
-    // The driver can free the kernel GEM objects after vkFreeMemory
-    // returns, so an immediate retry can run ahead of the memory coming
-    // back (#435). Settle briefly between retries; a genuine OOM still
-    // fails after the bounded attempts below.
     for (int attempt = 0; attempt < kOomRetryAttempts; ++attempt) {
       alloc_result = consume_test_oom()
           ? VK_ERROR_OUT_OF_DEVICE_MEMORY
           : dt.AllocateMemory(
-                device().handle(), &mai, nullptr, &buf->memory);
+                dev.handle(), &mai, nullptr, &buf->memory);
       if (alloc_result != VK_ERROR_OUT_OF_DEVICE_MEMORY &&
           alloc_result != VK_ERROR_OUT_OF_HOST_MEMORY) {
         break;
@@ -401,7 +774,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
     }
   }
   if (alloc_result != VK_SUCCESS) {
-    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    dt.DestroyBuffer(dev.handle(), buf->buffer, nullptr);
     delete buf;
     lk.lock();
     const std::string held = "active=" + std::to_string(active_memory_) +
@@ -414,15 +787,17 @@ Buffer VulkanAllocator::malloc(size_t size) {
         " bytes; cache released)");
   }
   VKX_CHECK(
-      dt.BindBufferMemory(device().handle(), buf->buffer, buf->memory, 0));
-  VKX_CHECK(dt.MapMemory(
-      device().handle(), buf->memory, 0, VK_WHOLE_SIZE, 0, &buf->data));
+      dt.BindBufferMemory(dev.handle(), buf->buffer, buf->memory, 0));
+  if (!buf->device_local) {
+    VKX_CHECK(dt.MapMemory(
+        dev.handle(), buf->memory, 0, VK_WHOLE_SIZE, 0, &buf->data));
+  }
 
   lk.lock();
   live_by_handle_[buf->buffer] = buf;
   active_memory_ += buf->size;
   peak_memory_ = std::max(active_memory_ + weight_memory_, peak_memory_);
-  if (!buf->coherent) {
+  if (!buf->device_local && !buf->coherent) {
     noncoherent_.push_back(buf);
   }
   lk.unlock();
@@ -451,6 +826,10 @@ void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
   std::erase(noncoherent_, buf);
   auto& dt = vk::device_table();
   live_by_handle_.erase(buf->buffer);
+  if (buf->host_shadow) {
+    std::free(buf->host_shadow);
+    buf->host_shadow = nullptr;
+  }
   if (buf->data) {
     dt.UnmapMemory(device().handle(), buf->memory);
   }
@@ -479,8 +858,9 @@ void VulkanAllocator::free(Buffer buffer) {
   // buffer whose generation drained at least one generation ago (a later
   // generation is observable) needs no wait; without this an idle
   // process parks every freed buffer until the next submission.
-  if (buf->completion != 0) {
-    if (buf->completion == kPendingCompletion || !runtime_alive() ||
+  if (buf->transfer_in_flight || buf->completion != 0) {
+    if (buf->transfer_in_flight ||
+        buf->completion == kPendingCompletion || !runtime_alive() ||
         buf->completion >= device().completions().drained_value() ||
         !device().completions().execution_complete(buf->completion)) {
       if (buf->completion == kPendingCompletion) {
@@ -494,16 +874,24 @@ void VulkanAllocator::free(Buffer buffer) {
     }
     buf->completion = 0;
   }
+  auto& cache = buf->device_local ? device_local_cache_ : buffer_cache_;
+  const size_t limit =
+      buf->device_local ? device_local_cache_limit_ : cache_limit_;
   if (!buf->inference_weight && sz > 0 && !tape_no_reuse() &&
-      !buffer_cache_disabled() && buffer_cache_.cache_size() + sz <= cache_limit_) {
+      !buffer_cache_disabled() && cache.cache_size() + sz <= limit) {
+    if (buf->host_shadow) {
+      std::free(buf->host_shadow);
+      buf->host_shadow = nullptr;
+    }
+    buf->sync_state.on_recycle();
     // Buffers stay mapped for their whole lifetime (malloc maps at
     // creation and only destroy_buffer unmaps), so the poison is a
     // plain host memset. Non-coherent buffers are flushed at the next
     // submit like any other host write.
-    if (poison_freed()) {
+    if (poison_freed() && buf->data != nullptr) {
       poison_freed_buffer(buf->data, sz);
     }
-    buffer_cache_.recycle_to_cache(buf);
+    cache.recycle_to_cache(buf);
     return;
   }
   // The cache is full, so release this block instead of retaining it.
@@ -531,9 +919,11 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   }
   std::vector<VulkanBuffer*> still_quarantined;
   for (auto* buf : quarantine_) {
-    if (buf->completion > cleanup_done_through ||
+    if (buf->transfer_in_flight ||
+        buf->completion > cleanup_done_through ||
         buf->completion == kPendingCompletion ||
-        !device().completions().execution_complete(buf->completion)) {
+        (buf->completion != 0 &&
+         !device().completions().execution_complete(buf->completion))) {
       still_quarantined.push_back(buf);
       continue;
     }
@@ -542,12 +932,20 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
     if (!buf->inference_weight) {
       quarantine_bytes_ -= sz;
     }
+    auto& cache = buf->device_local ? device_local_cache_ : buffer_cache_;
+    const size_t limit =
+        buf->device_local ? device_local_cache_limit_ : cache_limit_;
     if (!buf->inference_weight && sz > 0 && !tape_no_reuse() &&
-        !buffer_cache_disabled() && buffer_cache_.cache_size() + sz <= cache_limit_) {
-      if (poison_freed()) {
+        !buffer_cache_disabled() && cache.cache_size() + sz <= limit) {
+      if (buf->host_shadow) {
+        std::free(buf->host_shadow);
+        buf->host_shadow = nullptr;
+      }
+      buf->sync_state.on_recycle();
+      if (poison_freed() && buf->data != nullptr) {
         poison_freed_buffer(buf->data, sz);
       }
-      buffer_cache_.recycle_to_cache(buf);
+      cache.recycle_to_cache(buf);
     } else {
       // The cache is full, so release this block instead of retaining it.
       destroy_buffer(buf);
@@ -594,6 +992,37 @@ VulkanBuffer* VulkanAllocator::note_buffer_handle(VkBuffer handle) {
   return buf;
 }
 
+VulkanBuffer* VulkanAllocator::lookup_buffer_handle(VkBuffer handle) {
+  std::unique_lock lk(mutex_);
+  auto it = live_by_handle_.find(handle);
+  return it == live_by_handle_.end() ? nullptr : it->second;
+}
+
+uint64_t VulkanAllocator::buffer_completion(const VulkanBuffer* buf) const {
+  std::unique_lock lk(mutex_);
+  return buf ? buf->completion : 0;
+}
+
+void VulkanAllocator::mark_transfer_in_flight(
+    VkBuffer handle,
+    bool in_flight) {
+  if (handle == VK_NULL_HANDLE) {
+    return;
+  }
+  std::unique_lock lk(mutex_);
+  auto it = live_by_handle_.find(handle);
+  if (it != live_by_handle_.end() && it->second != nullptr) {
+    it->second->transfer_in_flight = in_flight;
+    return;
+  }
+  for (auto* buf : quarantine_) {
+    if (buf && buf->buffer == handle) {
+      buf->transfer_in_flight = in_flight;
+      return;
+    }
+  }
+}
+
 size_t VulkanAllocator::size(Buffer buffer) const {
   auto* buf = static_cast<VulkanBuffer*>(buffer.ptr());
   return buf ? buf->size : 0;
@@ -602,9 +1031,14 @@ size_t VulkanAllocator::size(Buffer buffer) const {
 size_t VulkanAllocator::set_cache_limit(size_t limit) {
   std::unique_lock lk(mutex_);
   std::swap(cache_limit_, limit);
+  device_local_cache_limit_ = cache_limit_;
   if (buffer_cache_.cache_size() > cache_limit_) {
     buffer_cache_.release_cached_buffers(
         buffer_cache_.cache_size() - cache_limit_);
+  }
+  if (device_local_cache_.cache_size() > device_local_cache_limit_) {
+    device_local_cache_.release_cached_buffers(
+        device_local_cache_.cache_size() - device_local_cache_limit_);
   }
   return limit;
 }
@@ -612,6 +1046,7 @@ size_t VulkanAllocator::set_cache_limit(size_t limit) {
 void VulkanAllocator::clear_cache() {
   std::unique_lock lk(mutex_);
   buffer_cache_.clear();
+  device_local_cache_.clear();
 }
 
 void VulkanAllocator::flush_noncoherent(VkDevice device) {
@@ -690,6 +1125,34 @@ void* Buffer::raw_ptr() {
   auto* buffer = static_cast<omarchy::VulkanBuffer*>(ptr_);
   if (buffer->inference_weight) {
     throw std::runtime_error("[omarchy] device-local inference weights are not host-accessible");
+  }
+  if (buffer->device_local) {
+    if (buffer->sync_state.device_dirty) {
+      uint64_t comp = omarchy::allocator().buffer_completion(buffer);
+      if (comp == omarchy::kPendingCompletion) {
+        omarchy::synchronize_pending_encoders();
+        comp = omarchy::allocator().buffer_completion(buffer);
+      }
+      if (comp != 0 && comp != omarchy::kPendingCompletion &&
+          omarchy::runtime_alive()) {
+        omarchy::device().completions().wait(comp);
+      }
+      if (buffer->host_shadow == nullptr) {
+        buffer->host_shadow = std::calloc(1, buffer->size);
+        if (buffer->host_shadow == nullptr) {
+          throw std::bad_alloc();
+        }
+      }
+      omarchy::device().download_device_to_host(
+          buffer->buffer, buffer->host_shadow, buffer->size);
+    } else if (buffer->host_shadow == nullptr) {
+      buffer->host_shadow = std::calloc(1, buffer->size);
+      if (buffer->host_shadow == nullptr) {
+        throw std::bad_alloc();
+      }
+    }
+    (void)buffer->sync_state.on_host_raw_ptr();
+    return buffer->host_shadow;
   }
   return buffer->data;
 }

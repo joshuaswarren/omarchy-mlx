@@ -57,7 +57,15 @@ struct Parameter {
   bool constant_space;
 };
 
-enum CbqPort { CbqNone, CbqGather, CbqSitu, CbqGlu, CbqGradD, CbqGradX };
+enum CbqPort {
+  CbqNone,
+  CbqGather,
+  CbqSitu,
+  CbqGlu,
+  CbqGradD,
+  CbqGradX,
+  SteelBm32
+};
 
 struct CbqDispatch {
   CbqPort port = CbqNone;
@@ -221,6 +229,9 @@ std::string glsl_type(const std::string& msl_type) {
       {"uint16_t", "uint16_t"},
       {"uint32_t", "uint"},
       {"uint64_t", "uint64_t"},
+      // MLX bool is one byte per element; GLSL has no bool buffer type, so
+      // it stores as uint8_t and every read compares against zero.
+      {"bool", "uint8_t"},
   };
   const auto found = types.find(msl_type);
   if (found == types.end()) {
@@ -2557,6 +2568,7 @@ constexpr std::string_view bf16_glsl_helpers =
     "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
 
 #include "custom_kernel_cbq.h"
+#include "custom_kernel_bm32.h"
 
 Translation translate_msl(
     const std::string& source,
@@ -2585,6 +2597,11 @@ Translation translate_msl(
           source, marker, arguments_open, arguments_close, body_open, body_close,
           parameters, grid, threadgroup, output_count)) {
     return std::move(*cbq);
+  }
+  if (auto bm32 = translate_bm32(
+          source, marker, arguments_open, arguments_close, body_open, body_close,
+          parameters, grid, threadgroup, output_count)) {
+    return std::move(*bm32);
   }
 
   std::string header;
@@ -3108,6 +3125,30 @@ Translation translate_msl(
         rewritten.append(body, last, std::string::npos);
         body = std::move(rewritten);
       }
+      // bool buffer reads need an explicit comparison: the element is
+      // uint8_t storage, and GLSL has no integer-to-bool promotion
+      // (Inkling 2 short_convolution's mask, 2026-11-21 recheck refusal
+      // "unsupported buffer type `bool`"). Output-side reads stay the
+      // macro path; a `mask[i]` store target is a uint8_t lvalue.
+      if (parameter.type == "bool" && !output) {
+        const auto escaped_bool = regex_escape(parameter.name);
+        const std::string storage =
+            "_b" + std::to_string(parameter.binding) + ".data[";
+        const std::regex read_pattern(
+            "\\b" + escaped_bool + R"(\s*\[([^\]]+)\])");
+        std::string rewritten;
+        size_t last = 0;
+        for (std::sregex_iterator it(body.begin(), body.end(), read_pattern), stop;
+             it != stop;
+             ++it) {
+          const size_t begin = static_cast<size_t>(it->position(0));
+          rewritten.append(body, last, begin - last);
+          rewritten += "(" + storage + (*it)[1].str() + "] != 0)";
+          last = begin + static_cast<size_t>(it->length(0));
+        }
+        rewritten.append(body, last, std::string::npos);
+        body = std::move(rewritten);
+      }
       // A small array bound in the constant space that the body never
       // indexes is used as a value: mlx-audio's phonon unpack divides
       // `in_features / 16` directly (2026-10-08 KernelRecheck). Mark it
@@ -3138,6 +3179,8 @@ Translation translate_msl(
         // half storage widened at the macro: int/f16 arithmetic compiles as
         // int/float (Metal promotes half math to fp32)
         macros += "float(_b" + std::to_string(parameter.binding) + ".data[0])";
+      } else if (parameter.type == "bool" && parameter.scalar) {
+        macros += "bool(_b" + std::to_string(parameter.binding) + ".data[0])";
       } else {
         macros += "_b" + std::to_string(parameter.binding) + ".data";
         if (parameter.scalar) {
@@ -3147,7 +3190,7 @@ Translation translate_msl(
       macros += "\n";
     }
     needs_int8 = needs_int8 || parameter.type == "int8_t" ||
-        parameter.type == "uint8_t";
+        parameter.type == "uint8_t" || parameter.type == "bool";
     needs_int16 = needs_int16 || parameter.type == "int16_t" ||
         parameter.type == "uint16_t" || parameter.type == "bfloat16_t";
     needs_int64 = needs_int64 || parameter.type == "int64_t" ||
@@ -3763,16 +3806,21 @@ bool parse_translation(const std::string& blob, Translation& translation) {
     remaining -= 2;
   }
   uint64_t port = 0;
-  if (!get_u64(blob, cursor, remaining, port) || port > CbqGradX) {
+  if (!get_u64(blob, cursor, remaining, port) || port > SteelBm32) {
     return false;
   }
   translation.cbq = {};
   if (port != CbqNone) {
     uint64_t k = 0, o = 0, r = 0;
     if (!get_u64(blob, cursor, remaining, k) || k == 0 || k > INT32_MAX ||
-        k % 256 != 0 ||
         !get_u64(blob, cursor, remaining, o) || o == 0 || o > INT32_MAX ||
         !get_u64(blob, cursor, remaining, r) || r == 0 || r > INT32_MAX) {
+      return false;
+    }
+    const bool dims_ok = static_cast<CbqPort>(port) == SteelBm32
+        ? (k % 16 == 0 && o % 64 == 0 && r % 32 == 0)
+        : (k % 256 == 0);
+    if (!dims_ok) {
       return false;
     }
     translation.cbq = {static_cast<CbqPort>(port), static_cast<int>(k),
@@ -3880,8 +3928,7 @@ array metadata_array(
       Strides{1},
       flags,
       0);
-  auto* buffer = static_cast<omarchy::VulkanBuffer*>(metadata.buffer().ptr());
-  std::memcpy(buffer->data, values.data(), metadata.nbytes());
+  std::memcpy(metadata.buffer().raw_ptr(), values.data(), metadata.nbytes());
   encoder.add_temporary(metadata);
   return metadata;
 }
@@ -4102,18 +4149,25 @@ void CustomKernel::eval_gpu(
         m2v_prefix + "generated binding count mismatch",
         out_for_error);
   }
-  const bool cbq = translation->cbq.port != CbqNone;
+  const auto port = translation->cbq.port;
+  const bool cbq = port != CbqNone && port != SteelBm32;
   if (cbq && !cbq_dispatch_matches(
           translation->cbq, checked_inputs, outputs, init_value_.has_value())) {
     omarchy::unsupported(
         m2v_prefix + "unsupported CBQ kernel buffer shape, layout or initialization",
         out_for_error);
   }
-  if (cbq) {
+  if (port == SteelBm32 &&
+      !bm32_dispatch_matches(translation->cbq, checked_inputs, outputs)) {
+    omarchy::unsupported(
+        m2v_prefix + "unsupported BM32 kernel buffer shape or layout",
+        out_for_error);
+  }
+  if (port != CbqNone) {
     const auto& caps = encoder.device().hardware_capabilities();
     if (!caps.shader_int16 || !caps.storage_buffer_16bit_access) {
       omarchy::unsupported(
-          m2v_prefix + "CBQ requires shaderInt16 and storageBuffer16BitAccess",
+          m2v_prefix + "hand-ported kernels require shaderInt16 and storageBuffer16BitAccess",
           out_for_error);
     }
   }

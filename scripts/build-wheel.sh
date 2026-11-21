@@ -3,7 +3,8 @@
 # This is the U5 packaging gate: scripts/build-wheel.sh
 #
 # Prepares the pinned upstream tree with the Omarchy-only backend, builds the
-# python bindings, and writes exactly one wheel into dist/ at the repo root.
+# python bindings, and writes the main wheel plus the companion
+# mlx-<ver> metadata-alias wheel into dist/ at the repo root.
 #
 # A release build from an unpacked tarball tree (no git metadata) must export
 # DEV_RELEASE=1 and set MLX_OMARCHY_SOURCE_COMMIT=<short sha>; the stamp guard
@@ -283,6 +284,17 @@ fi
 python3 "$ROOT/scripts/openblas_isolation.py" vendor "$wheel"
 python3 "$ROOT/scripts/openblas_isolation.py" check-layout "$wheel"
 python3 "$ROOT/scripts/openblas_isolation.py" check "$wheel"
+
+echo "== mlx distribution alias =="
+# The wheel installs the `mlx` module but registers only the
+# `mlx-omarchy` dist-info, so importlib.metadata.version("mlx") raised
+# PackageNotFoundError for version-probing consumers (songe's
+# trainability probe; omarchy-mlx#566). PEP 427 allows only one
+# dist-info per wheel, so emit a companion metadata-only
+# `mlx-<ver>-py3-none-any.whl` next to it; standalone pip/uv users
+# install both.
+python3 "$ROOT/scripts/mlx_dist_alias.py" \
+  --emit-wheel "$wheel" --out "$DIST_DIR"
 
 echo "== receipt =="
 echo "[receipt] wheel: $wheel"

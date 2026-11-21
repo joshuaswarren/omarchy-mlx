@@ -1,0 +1,3 @@
+/tmp/ok.comp
+WARNING: /tmp/ok.comp:9: '#define' : names containing consecutive underscores are reserved: __FAST_MATH__
+

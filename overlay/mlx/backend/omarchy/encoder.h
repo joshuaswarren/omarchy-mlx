@@ -522,6 +522,14 @@ class MLX_API CommandEncoder {
       uint32_t group_count_x,
       uint32_t group_count_y,
       uint32_t group_count_z);
+  void upload_device_local_if_needed(
+      VulkanBuffer* vb,
+      bool read,
+      bool write,
+      VkDeviceSize offset,
+      VkDeviceSize range,
+      bool exact_write_coverage);
+  static void commit_device_local_write(VulkanBuffer* vb);
 
   // Pick a completed ring slot (joining the oldest only when all are in
   // flight) and begin recording into it.
@@ -553,7 +561,7 @@ class MLX_API CommandEncoder {
   // waves. A hazard-free node therefore runs concurrently with its wave
   // instead of serializing behind a barrier its tape neighbors induced.
   struct PendingNode {
-    enum class Kind : uint8_t { Dispatch, Copy, Fill };
+    enum class Kind : uint8_t { Dispatch, Copy, Fill, Update };
     Kind kind{Kind::Dispatch};
     // Profiler attribution, captured at arrival (emit happens later, at
     // submit): the evaluating primitive's name and the tape flag.
@@ -570,7 +578,7 @@ class MLX_API CommandEncoder {
     uint32_t group_count_y{1};
     uint32_t group_count_z{1};
     VkDescriptorSet descriptor_set{VK_NULL_HANDLE};
-    // Copy/fill payload:
+    // Copy/fill/update payload:
     VkBuffer src{VK_NULL_HANDLE};
     VkBuffer dst{VK_NULL_HANDLE};
     VkDeviceSize size{0};
@@ -578,6 +586,7 @@ class MLX_API CommandEncoder {
     VkDeviceSize dst_offset{0};
     VkDeviceSize write_offset{0};
     uint32_t value{0};
+    std::vector<uint8_t> update_data{};
     // Hazard access sets (exact tracked ranges):
     std::array<TrackedRange, kComputeBindingBudget> rd{};
     std::array<TrackedRange, kComputeBindingBudget> wr{};
@@ -641,5 +650,6 @@ class MLX_API CommandEncoder {
 MLX_API CommandEncoder& get_command_encoder(Stream s);
 std::unordered_map<int, CommandEncoder>& get_command_encoders();
 std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
+void synchronize_pending_encoders();
 
 } // namespace mlx::core::omarchy
