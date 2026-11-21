@@ -3652,14 +3652,15 @@ TEST_CASE("stuck-submit warning fires before the wall typed error") {
 }
 
 // Wave leveling cost stays linear when every node reads one shared buffer
-// (the activation that a batch of independent decode GEMVs all read). A
+// (the activation that a batch of independent decode GEMVs all read) and
+// writes a disjoint slice of another shared buffer. A
 // read never conflicts with an earlier read, so those pairs must not be
 // range-checked: before the fix each node checked every earlier reader of
 // the shared buffer, and a 2,000-call batch of small 4-bit GEMVs on the
 // 14-inch M2 Max (wave scheduling on by default) cost 58.9 us per call
 // against 2.8 with MLX_OMARCHY_WAVE_SCHED=0. Also checks that the levels
 // stay correct when a later node writes the shared buffer (WAR).
-TEST_CASE("wave levels stay linear for nodes sharing a read-only buffer") {
+TEST_CASE("wave levels stay linear for nodes sharing buffers without hazards") {
   using omarchy::TrackedRange;
   using omarchy::WaveNode;
   auto build = [](int n, std::vector<std::vector<TrackedRange>>& rd,
@@ -3672,6 +3673,9 @@ TEST_CASE("wave levels stay linear for nodes sharing a read-only buffer") {
       rd[i].push_back({reinterpret_cast<VkBuffer>(uintptr_t{100} + i % 72), 0, 4096});
       rd[i].push_back({shared, 0, 4096});
       wr[i].push_back({reinterpret_cast<VkBuffer>(uintptr_t{100000} + i), 0, 4096});
+      // Disjoint slices of one shared output buffer: no hazard between nodes.
+      const auto slice = static_cast<VkDeviceSize>(i) * 64;
+      wr[i].push_back({reinterpret_cast<VkBuffer>(uintptr_t{2}), slice, slice + 64});
     }
     for (int i = 0; i < n; ++i) {
       nodes.push_back({rd[i], wr[i]});
