@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vulkan/vulkan.h>
 
 namespace mlx::core::omarchy {
@@ -48,6 +49,36 @@ inline uint32_t weight_memory_type(
 }
 
 inline constexpr size_t kWeightStagingBytes = 4 * 1024 * 1024;
+
+// The card-memory upload path moves bytes with DMA copies and cannot run the
+// host-side endianness swap that the mapped path applies after reading. A
+// big-endian source combined with VRAM weights must fail loudly, not produce
+// byte-swapped weights in card memory.
+inline void require_card_memory_upload(bool inference_weight, bool swap_endianness) {
+  if (inference_weight && swap_endianness) {
+    throw std::runtime_error(
+        "[omarchy] card-memory inference weights cannot apply the endianness"
+        " swap; load big-endian sources without MLX_OMARCHY_VRAM_WEIGHTS");
+  }
+}
+
+// Sets the flag for its whole scope and clears it on every exit path,
+// including an exception mid-upload, so a failed upload cannot poison every
+// later one with "previous weight upload did not complete".
+class InFlightFlag {
+ public:
+  explicit InFlightFlag(bool& flag) : flag_(flag) {
+    flag_ = true;
+  }
+  ~InFlightFlag() {
+    flag_ = false;
+  }
+  InFlightFlag(const InFlightFlag&) = delete;
+  InFlightFlag& operator=(const InFlightFlag&) = delete;
+
+ private:
+  bool& flag_;
+};
 
 struct WeightUploadChunk {
   size_t read_bytes;
