@@ -210,10 +210,19 @@ device_info(int device_index) {
     info["driver_version"] = static_cast<size_t>(caps.driver_version);
     info["vendor_id"] = static_cast<size_t>(caps.vendor_id);
     info["device_id"] = static_cast<size_t>(caps.device_id);
+    // Driver family, from driverName. Borealis is the Aurora rename of
+    // Honeykrisp (Khronos driver-id enum keeps its name), so both strings
+    // map to their family value; legacy stored receipts keep "honeykrisp".
+    const bool is_honeykrisp_family =
+        caps.driver_name.find("Honeykrisp") != std::string::npos ||
+        caps.driver_name.find("honeykrisp") != std::string::npos;
+    const bool is_borealis_family =
+        caps.driver_name.find("Borealis") != std::string::npos;
     info["architecture"] =
-        caps.driver_name.find("Honeykrisp") != std::string::npos
+        is_honeykrisp_family
             ? std::string("honeykrisp")
-            : std::string("vulkan");
+            : (is_borealis_family ? std::string("borealis")
+                                  : std::string("vulkan"));
     info["total_memory"] = caps.total_memory;
     // Alias for oMLX/TensorFold readers that key on memory_size. Same
     // bytes as total_memory, the actual Vulkan-reported unified heap.

@@ -13,7 +13,8 @@ machine learning on Apple silicon. Upstream runs on macOS through Metal
 and on Linux through CUDA or CPU. omarchy-mlx runs the same
 `import mlx.core as mx` code on an Apple silicon Mac running
 [Omarchy](https://github.com/omacom/omarchy) Linux, on the Apple GPU. The
-GPU driver is Mesa's Honeykrisp Vulkan stack. Tensors stay on the GPU.
+GPU driver is Mesa's Borealis Vulkan stack (Aurora's rename of the
+Honeykrisp driver; both names are accepted). Tensors stay on the GPU.
 There is no Metal and no CPU fallback.
 
 It is for people who run Linux on an M1 or M2 Mac. You get local chat,
@@ -26,7 +27,7 @@ Part of the Omarchy on Apple Silicon ecosystem:
 - [omarchy-ane](https://github.com/joshuaswarren/omarchy-ane) — Linux driver for the Apple Neural Engine: DRM kernel modules and libane.
 - [mil-hwx-compiler](https://github.com/joshuaswarren/mil-hwx-compiler) — compiles Core ML MIL into ANE programs on Linux (M1/M2 targets).
 - [metal2vk](https://github.com/joshuaswarren/metal2vk) — translates Metal compute kernels to Vulkan SPIR-V with open tools.
-- [mesa-1](https://github.com/joshuaswarren/mesa-1) — Mesa fork carrying the Honeykrisp Vulkan driver work for Apple silicon.
+- [mesa-1](https://github.com/joshuaswarren/mesa-1) — Mesa fork carrying the Borealis Vulkan driver work for Apple silicon (the `honeykrisp-omarchy` branch).
 - [omarchy-cluster](https://github.com/joshuaswarren/omarchy-cluster) — one local model split across Macs on macOS and Omarchy Linux.
 - [omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) — build and ship iOS apps from Omarchy Linux, no Xcode or Mac.
 - [omarchy-egpu](https://github.com/joshuaswarren/omarchy-egpu) — eGPU setup, diagnostics and measured local-inference results on Omarchy Linux.

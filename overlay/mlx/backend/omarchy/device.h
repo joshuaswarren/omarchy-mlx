@@ -41,6 +41,16 @@ constexpr int32_t kMesaHoneykrispDriverId = 26;
 // names no driver and its vendorID is Mesa's, so the driver id is the signal.
 constexpr int32_t kAuroraBorealisDriverId = 35;
 
+// True for either accepted Apple-driver id: the Khronos enum entry that keeps
+// its Honeykrisp name (26), or Aurora's own Borealis entry (35). Aurora
+// renames the driver to Borealis (driverName, ICD and library file names) and
+// keeps HK_ environment names as fallbacks for a time, so both spellings must
+// keep working (Ryan 2026-11-20).
+inline bool is_apple_driver_id(int32_t driver_id) {
+  return driver_id == kMesaHoneykrispDriverId ||
+      driver_id == kAuroraBorealisDriverId;
+}
+
 // Result of the discovery policy applied to one physical device. The logic is
 // pure so tests can exercise it without a Vulkan loader or GPU.
 struct DeviceSupport {

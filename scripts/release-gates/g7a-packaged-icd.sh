@@ -11,9 +11,15 @@ gate_log_wheel_identity "$LOG"
 
 VDST="$DEST/usr/lib/omarchy-mlx/vulkan"
 mkdir -p "$VDST"
-# the packaged honeykrisp ICD is the only ICD an Omarchy M+ image has;
-# the stock-Mesa asahi default guaranteed a driver-sha mismatch here
-cp "${SYSTEM_ICD:-/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json}" "$VDST/honeykrisp_icd.aarch64.json"
+# The packaged ICD is the only ICD an Omarchy M+ image has; the stock-Mesa
+# asahi default guaranteed a driver-sha mismatch here. Aurora renames the
+# driver to Borealis (Ryan 2026-11-20), so the packaged file may carry
+# either name: publish it under whatever name the package installed.
+SRC_ICD="${SYSTEM_ICD:-/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json}"
+if [ ! -f "$SRC_ICD" ] && [ -f /usr/lib/omarchy-mlx/vulkan/borealis_icd.aarch64.json ]; then
+  SRC_ICD=/usr/lib/omarchy-mlx/vulkan/borealis_icd.aarch64.json
+fi
+cp "$SRC_ICD" "$VDST/$(basename "$SRC_ICD")"
 DRIVER_SHA=$(env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   "$GATE_HOME/.local/bin/mlx-omarchy-info" --json 2>/dev/null \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["driver_sha"])')

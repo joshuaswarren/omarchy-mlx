@@ -314,6 +314,58 @@ TEST_CASE("Honeykrisp ICD resolution honors user choices and identifies Mesa SHA
   std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("a Borealis-named user ICD is accepted like the Honeykrisp one") {
+  using namespace mlx::core::omarchy;
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("runtimegate-icd-borealis-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(directory);
+  REQUIRE(std::filesystem::create_directory(directory));
+  const auto lavapipe = directory / "lvp_icd.json";
+  const auto borealis = directory / "asahi_icd.json";
+  const auto renamed = directory / "borealis_icd.aarch64.json";
+  for (const auto& path : {lavapipe, borealis, renamed}) {
+    const int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    REQUIRE(fd >= 0);
+    REQUIRE(::close(fd) == 0);
+  }
+  // The Aurora fork renames its ICD and driver to Borealis; both file-name
+  // families must resolve (Ryan 2026-11-20, rename date to come).
+  const std::vector<std::string> legacy{lavapipe.string(), borealis.string()};
+  CHECK(resolve_honeykrisp_icd(legacy, nullptr) == borealis.string());
+  const std::vector<std::string> renamed_only{
+      lavapipe.string(), renamed.string()};
+  CHECK(resolve_honeykrisp_icd(renamed_only, nullptr) == renamed.string());
+  CHECK(resolve_honeykrisp_icd(
+            renamed_only, renamed.string().c_str()) == renamed.string());
+  CHECK_THROWS_AS(
+      resolve_honeykrisp_icd(renamed_only, lavapipe.string().c_str()),
+      std::runtime_error);
+  std::filesystem::remove_all(directory);
+}
+
+TEST_CASE("the packaged ICD resolves under either file name") {
+  using namespace mlx::core::omarchy;
+  const auto prefix = std::filesystem::temp_directory_path() /
+      ("runtimegate-packaged-borealis-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(prefix);
+  const auto legacy = packaged_honeykrisp_icd_path(prefix.string());
+  std::filesystem::create_directories(legacy);
+  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) ==
+        legacy.string());
+  std::filesystem::remove_all(prefix);
+  const auto renamed =
+      prefix / "vulkan" / "borealis_icd.aarch64.json";
+  std::filesystem::create_directories(renamed);
+  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) ==
+        renamed.string());
+  std::filesystem::remove_all(prefix);
+  // Neither name present: the classic path is returned so the packaged-ICD
+  // error message stays the known one.
+  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) ==
+        packaged_honeykrisp_icd_path(prefix.string()));
+  std::filesystem::remove_all(prefix);
+}
+
 TEST_CASE("an explicit ICD override naming a missing file is refused") {
   using namespace mlx::core::omarchy;
   const auto directory = std::filesystem::temp_directory_path() /

@@ -40,8 +40,8 @@ if ! command -v vulkaninfo >/dev/null 2>&1; then
   echo "ERROR: vulkaninfo not found. Install it: sudo pacman -S --needed vulkan-tools"
   exit 2
 fi
-if ! env VK_DRIVER_FILES="$ICD" vulkaninfo --summary 2>/dev/null | grep -q Honeykrisp; then
-  echo "ERROR: the Honeykrisp driver did not load (vulkaninfo found no Honeykrisp device)."
+if ! env VK_DRIVER_FILES="$ICD" vulkaninfo --summary 2>/dev/null | grep -Eqi 'Honeykrisp|Borealis'; then
+  echo "ERROR: the Apple GPU driver did not load (vulkaninfo found no Honeykrisp or Borealis device)."
   echo "llama.cpp would silently fall back to the CPU and produce meaningless numbers, so refusing to run."
   echo "Debug:  VK_LOADER_DEBUG=error,driver VK_DRIVER_FILES=$ICD vulkaninfo --summary"
   echo "Common cause: the ICD was built against older system libraries than the ones now installed."

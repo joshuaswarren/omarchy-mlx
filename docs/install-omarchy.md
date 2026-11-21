@@ -373,13 +373,14 @@ Names are fixed in `serve/mlx_omarchy_paths.py` and
 
 | Path | Contents |
 |---|---|
-| `/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json` | ICD JSON. `library_path` is an absolute path to the driver library installed in the same directory. |
+| `/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json` (or `borealis_icd.aarch64.json` after Aurora's rename) | ICD JSON. `library_path` is an absolute path to the driver library installed in the same directory. |
 | `/usr/lib/omarchy-mlx/vulkan/mesa-git-sha` | One line: the hex string the driver reports after `git-` in `driverInfo`. |
 
 `OMARCHY_MLX_SYSTEM_PREFIX`, when set and non-empty, replaces the
 `/usr/lib/omarchy-mlx` prefix. Tests and staged trees use that seam. The
 ICD and SHA paths are then
-`<prefix>/vulkan/honeykrisp_icd.aarch64.json` and
+`<prefix>/vulkan/honeykrisp_icd.aarch64.json` (or the Borealis name)
+and
 `<prefix>/vulkan/mesa-git-sha`.
 
 ### Selection
@@ -387,7 +388,8 @@ ICD and SHA paths are then
 Before Vulkan loads, the backend selects the ICD for this process
 (`configure_honeykrisp_icd` in `overlay/mlx/backend/omarchy/device.cpp`).
 `is_honeykrisp_icd` in `honeykrisp_identity.h` accepts a path whose name
-contains `honeykrisp`, in any case. It also accepts the stock system ICD
+contains `honeykrisp` or `borealis` (Aurora's rename; both spellings work),
+in any case. It also accepts the stock system ICD
 JSON and the driver library name. An explicit override of the system driver
 therefore still resolves. The packaged file
 `honeykrisp_icd.aarch64.json` matches.
