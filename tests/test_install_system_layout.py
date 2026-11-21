@@ -9,6 +9,7 @@ install.sh --system.
 import os
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import unittest
 import zipfile
@@ -19,6 +20,9 @@ PACKAGING = REPO / "packaging"
 INSTALL = REPO / "install.sh"
 
 PYTAG = "cp%d%d" % sys.version_info[:2]
+# The running interpreter's platform tag ("linux_x86_64", "linux_aarch64"),
+# so pip in the test venv accepts the fake cp-tagged wheel on any host.
+PLATTAG = sysconfig.get_platform().replace("-", "_").replace(".", "_")
 
 
 def _wheel_bytes() -> None:
@@ -63,8 +67,8 @@ def _wheel_bytes() -> None:
     def build(vendor: Path) -> None:
         vendor.mkdir(parents=True)
         make_wheel(
-            vendor / f"mlx_omarchy-0.0.0.dev0+fake-{PYTAG}-{PYTAG}-linux_x86_64.whl",
-            "mlx-omarchy", "0.0.0.dev0+fake", f"{PYTAG}-{PYTAG}-linux_x86_64",
+            vendor / f"mlx_omarchy-0.0.0.dev0+fake-{PYTAG}-{PYTAG}-{PLATTAG}.whl",
+            "mlx-omarchy", "0.0.0.dev0+fake", f"{PYTAG}-{PYTAG}-{PLATTAG}",
             {"mlx/__init__.py": "", "mlx/bin/mlx-omarchy-info": "#!/bin/sh\necho fake-info\n",
              "mlx/bin/mlx-omarchy-parakeet": "#!/usr/bin/env python3\nprint('fake-parakeet')\n"},
             exec_files=("mlx/bin/mlx-omarchy-info", "mlx/bin/mlx-omarchy-parakeet"),
