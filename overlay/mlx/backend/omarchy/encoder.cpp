@@ -351,7 +351,8 @@ void CommandEncoder::upload_device_local_if_needed(
     bool read,
     bool write,
     VkDeviceSize offset,
-    VkDeviceSize range) {
+    VkDeviceSize range,
+    bool exact_write_coverage) {
   if (!vb || !vb->device_local) {
     return;
   }
@@ -361,7 +362,12 @@ void CommandEncoder::upload_device_local_if_needed(
              : 0)
       : static_cast<size_t>(range);
   if (!vb->sync_state.needs_upload(
-          read, write, static_cast<size_t>(offset), eff_range, vb->size)) {
+          read,
+          write,
+          static_cast<size_t>(offset),
+          eff_range,
+          vb->size,
+          exact_write_coverage)) {
     return;
   }
   if (vb->host_shadow != nullptr) {
@@ -393,11 +399,11 @@ void CommandEncoder::copy_buffer(
   auto* src_vb = omarchy::allocator().lookup_buffer_handle(src);
   auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
   if (src_vb && src_vb == dst_vb) {
-    upload_device_local_if_needed(src_vb, true, true, dst_offset, size);
+    upload_device_local_if_needed(src_vb, true, true, dst_offset, size, true);
     commit_device_local_write(src_vb);
   } else {
-    upload_device_local_if_needed(src_vb, true, false, src_offset, size);
-    upload_device_local_if_needed(dst_vb, false, true, dst_offset, size);
+    upload_device_local_if_needed(src_vb, true, false, src_offset, size, false);
+    upload_device_local_if_needed(dst_vb, false, true, dst_offset, size, true);
     commit_device_local_write(dst_vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
@@ -456,7 +462,7 @@ void CommandEncoder::fill_buffer(
     VkDeviceSize size,
     VkDeviceSize offset) {
   auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
-  upload_device_local_if_needed(dst_vb, false, true, offset, size);
+  upload_device_local_if_needed(dst_vb, false, true, offset, size, true);
   commit_device_local_write(dst_vb);
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
     batch_buffers_.push_back(vb);
@@ -761,8 +767,16 @@ void CommandEncoder::dispatch_compute_pipeline(
       const VkDeviceSize rng = aggs[j].max_end > aggs[j].min_off
           ? aggs[j].max_end - aggs[j].min_off
           : 0;
+      // Compute shader descriptor bounds do not guarantee full-allocation
+      // overwrite (e.g. Fill/slice kernels writing from output_offset), so
+      // conservatively upload any host-dirty compute binding.
       upload_device_local_if_needed(
-          aggs[j].vb, aggs[j].read, aggs[j].write, aggs[j].min_off, rng);
+          aggs[j].vb,
+          aggs[j].read,
+          aggs[j].write,
+          aggs[j].min_off,
+          rng,
+          /*exact_write_coverage=*/false);
     }
     // Phase 2: all uploads succeeded; mark write targets device_dirty.
     for (size_t j = 0; j < agg_count; ++j) {

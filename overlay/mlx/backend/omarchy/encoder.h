@@ -527,7 +527,8 @@ class MLX_API CommandEncoder {
       bool read,
       bool write,
       VkDeviceSize offset,
-      VkDeviceSize range);
+      VkDeviceSize range,
+      bool exact_write_coverage);
   static void commit_device_local_write(VulkanBuffer* vb);
 
   // Pick a completed ring slot (joining the oldest only when all are in

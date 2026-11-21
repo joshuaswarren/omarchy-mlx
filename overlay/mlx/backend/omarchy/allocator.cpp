@@ -440,6 +440,24 @@ void Device::upload_host_to_device(
     region.dstOffset = chunk.byte_offset;
     region.size = chunk.copy_bytes;
     dt.CmdCopyBuffer(transfer_cmd_, transfer_staging_, destination, 1, &region);
+    // Make transfer writes visible to subsequent compute and transfer
+    // consumers on the device before signaling transfer_fence_.
+    VkMemoryBarrier post_mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    post_mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    post_mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+        VK_ACCESS_TRANSFER_WRITE_BIT;
+    dt.CmdPipelineBarrier(
+        transfer_cmd_,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &post_mb,
+        0,
+        nullptr,
+        0,
+        nullptr);
     VKX_CHECK(dt.EndCommandBuffer(transfer_cmd_));
 
     VKX_CHECK(dt.ResetFences(device_, 1, &transfer_fence_));
@@ -482,6 +500,24 @@ void Device::download_device_to_host(
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VKX_CHECK(dt.BeginCommandBuffer(transfer_cmd_, &bi));
+    // Establish device-memory visibility from prior GPU compute/transfer
+    // writes to transfer reads before copying into staging (with gated
+    // barriers, producer submit only emits a write->HOST_READ barrier).
+    VkMemoryBarrier pre_mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    pre_mb.srcAccessMask =
+        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre_mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    dt.CmdPipelineBarrier(
+        transfer_cmd_,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &pre_mb,
+        0,
+        nullptr,
+        0,
+        nullptr);
     VkBufferCopy region{};
     region.srcOffset = chunk.byte_offset;
     region.dstOffset = 0;

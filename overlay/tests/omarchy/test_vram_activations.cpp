@@ -127,10 +127,27 @@ int main() {
     fails += check(st.device_dirty && !st.host_dirty, "after partial GPU write, device_dirty=true host_dirty=false");
   }
   {
-    // Full GPU overwrite of a host-dirty buffer skips redundant upload.
+    // Compute write-only descriptor spanning the whole allocation does NOT prove
+    // full-buffer overwrite (e.g. offset Fill/slice shaders), so it must still
+    // upload host_dirty bytes before clearing host_dirty.
     DeviceLocalSyncState st{};
     st.on_host_raw_ptr();
-    fails += check(!st.on_gpu_access(false, true, 0, 4096, 4096), "full GPU overwrite skips redundant upload");
+    fails += check(st.on_gpu_access(false, true, 0, 4096, 4096, false),
+                   "compute write-only descriptor over full allocation still uploads host_dirty buffer");
+    fails += check(st.device_dirty && !st.host_dirty,
+                   "after compute write upload, device_dirty=true host_dirty=false");
+  }
+  {
+    // Exact full-buffer transfer overwrite (copy_buffer/fill_buffer) skips
+    // redundant upload; partial transfer still uploads.
+    DeviceLocalSyncState partial{};
+    partial.on_host_raw_ptr();
+    fails += check(partial.on_gpu_access(false, true, 128, 64, 4096, true),
+                   "partial exact transfer still uploads host_dirty buffer");
+    DeviceLocalSyncState st{};
+    st.on_host_raw_ptr();
+    fails += check(!st.on_gpu_access(false, true, 0, 4096, 4096, true),
+                   "full exact transfer overwrite skips redundant upload");
     fails += check(st.device_dirty && !st.host_dirty, "full overwrite marks device_dirty");
     st.on_recycle();
     fails += check(!st.device_dirty && !st.host_dirty, "recycle resets dirty flags");

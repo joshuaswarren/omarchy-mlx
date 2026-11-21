@@ -123,14 +123,23 @@ struct DeviceLocalSyncState {
   // host_shadow -> device first. Does NOT mutate state, so a thrown upload
   // leaves host_dirty / device_dirty intact and never lets a later raw_ptr()
   // overwrite the authoritative host shadow with stale or partial device data.
+  //
+  // |exact_write_coverage| may only be true when the GPU command is proven to
+  // overwrite every byte in [offset, offset+range) (e.g. vkCmdCopyBuffer /
+  // vkCmdFillBuffer). Compute shader descriptors often span the full
+  // allocation even when the shader only writes a slice (output_offset +
+  // count), so compute dispatches pass exact_write_coverage=false and
+  // conservatively upload any host-dirty buffer.
   bool needs_upload(
       bool read,
       bool write,
       size_t offset,
       size_t range,
-      size_t buffer_size) const {
+      size_t buffer_size,
+      bool exact_write_coverage = false) const {
     const bool full_overwrite =
-        write && !read && offset == 0 && range >= buffer_size;
+        exact_write_coverage && write && !read && offset == 0 &&
+        range >= buffer_size;
     return host_dirty && !full_overwrite;
   }
 
@@ -152,9 +161,10 @@ struct DeviceLocalSyncState {
       bool write,
       size_t offset,
       size_t range,
-      size_t buffer_size) {
-    const bool need_upload =
-        needs_upload(read, write, offset, range, buffer_size);
+      size_t buffer_size,
+      bool exact_write_coverage = false) {
+    const bool need_upload = needs_upload(
+        read, write, offset, range, buffer_size, exact_write_coverage);
     if (need_upload) {
       commit_gpu_upload();
     }
