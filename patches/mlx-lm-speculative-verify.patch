@@ -320,7 +320,7 @@
 +    lookup_k = int(lookup_k) if lookup_k.strip().isdigit() else 0
 +    if draft_model is None and lookup_k > 0 and kwargs.get("input_embeddings") is None and kwargs.get("max_kv_size") is None:
 +        kwargs["num_draft_tokens"] = min(lookup_k, 7)
-+        for k in ("prompt_progress_callback", "input_embeddings"):
++        for k in ("prompt_progress_callback", "input_embeddings", "max_kv_size"):
 +            kwargs.pop(k, None)
 +        if kwargs.get("prefill_step_size") is None:
 +            kwargs.pop("prefill_step_size", None)
