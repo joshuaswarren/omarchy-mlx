@@ -1017,16 +1017,16 @@ GPU streams only. A backtrace shim on `__cxa_throw` showed one throw, on the mai
 The earlier note here blamed the per-thread encoder table; that was wrong. No shipped path calls it on a CPU stream. Fix: `synchronize(stream)`,
 which works for any device. Verification of the fixed test is pending in PR #72.
 
-## omarchy_ane_runtime_tests does not link in the static test configure (2026-10-06, open)
+## omarchy_ane_runtime_tests does not link in the static test configure (2026-10-06, fixed)
 
-`omarchy_ane_runtime_tests` fails at link: undefined
-`AneRuntime::load/~AneRuntime` — `ane/runtime.cpp` compiles into libmlx
-only when `MLX_OMARCHY_ANE_SOURCE_DIR` is set, which requires
-`BUILD_SHARED_LIBS=ON` (docs/ane-runtime.md); the default static test
-configure therefore cannot link the runtime test. Pre-existing
-(recorded in receipts/2026-10-06-gdn-recur32-default). Fix: build the
-test target only when the ANE runtime sources are in the lib, or link
-runtime.cpp into the test binary directly.
+`omarchy_ane_runtime_tests` failed at link with undefined references to
+`AneRuntime::load` and `AneRuntime::~AneRuntime` in the default static
+test configure because `ane/runtime.cpp` compiles into `libmlx` only when
+`MLX_OMARCHY_ANE_SOURCE_DIR` is set (which requires
+`BUILD_SHARED_LIBS=ON`, see `docs/ane-runtime.md`). Fixed in
+`overlay/tests/omarchy/CMakeLists.txt`: `omarchy_ane_runtime_tests` is now
+guarded with `if(TARGET mlx-omarchy-ane-worker)`, matching
+`mlx-omarchy-ane-smoke`.
 
 ## 2026-10-03: OpCost's in-shader Cody-Waite constants were wrong; the honest contract is accurate-to-5e5, NaN above (fixed this change)
 

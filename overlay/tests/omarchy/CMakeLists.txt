@@ -154,14 +154,21 @@ target_link_options(omarchy_ane_bundle_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
 doctest_discover_tests(omarchy_ane_bundle_tests)
 add_test(NAME omarchy_ane_bundle_tests COMMAND omarchy_ane_bundle_tests)
-add_executable(omarchy_ane_runtime_tests
-               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_runtime.cpp)
-target_link_libraries(omarchy_ane_runtime_tests PRIVATE mlx doctest)
-target_compile_options(omarchy_ane_runtime_tests
-                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
-target_link_options(omarchy_ane_runtime_tests PRIVATE ${SANITIZER_LINK_FLAGS})
-doctest_discover_tests(omarchy_ane_runtime_tests)
-add_test(NAME omarchy_ane_runtime_tests COMMAND omarchy_ane_runtime_tests)
+# ane/runtime.cpp is compiled into libmlx only when MLX_OMARCHY_ANE_SOURCE_DIR
+# is set, which defines mlx-omarchy-ane-worker alongside it. Because
+# tools/mlx-omarchy-ane-worker is added after tests/ in the top-level
+# CMakeLists.txt, TARGET mlx-omarchy-ane-worker exists here only when
+# MLX_OMARCHY_ANE_SOURCE_DIR built the private ANE runtime into libmlx.
+if(TARGET mlx-omarchy-ane-worker)
+  add_executable(omarchy_ane_runtime_tests
+                 ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_runtime.cpp)
+  target_link_libraries(omarchy_ane_runtime_tests PRIVATE mlx doctest)
+  target_compile_options(omarchy_ane_runtime_tests
+                         PRIVATE ${SANITIZER_COMPILE_FLAGS})
+  target_link_options(omarchy_ane_runtime_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+  doctest_discover_tests(omarchy_ane_runtime_tests)
+  add_test(NAME omarchy_ane_runtime_tests COMMAND omarchy_ane_runtime_tests)
+endif()
 add_executable(omarchy_ane_worker_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_worker.cpp)
 target_link_libraries(omarchy_ane_worker_tests PRIVATE mlx doctest)
