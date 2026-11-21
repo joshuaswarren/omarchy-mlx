@@ -698,6 +698,284 @@ TEST_CASE("auto pointer declarations alias like explicit device pointers") {
         std::string::npos);
 }
 
+TEST_CASE("casted pointer dereference lowers to a buffer index") {
+  // cbq_gather_mm reads its grid LUT through a casted deref:
+  //   `*((const device int64_t*)(grid + (size_t)gi * 8))`.
+  // The cast's `const T*` token reached the surviving-pointer guard and
+  // refused as `device pointer arithmetic`; the uncasted `*(base + off)`
+  // form passed the guard and emitted `*(_b0.data + off)` — invalid GLSL,
+  // a fail-open escape past the named refusal. Both are `base[off]`.
+  const char* source =
+      "[[kernel]] void lut(\n"
+      "    const device int64_t* grid [[buffer(0)]],\n"
+      "    const device uint8_t* qs [[buffer(1)]],\n"
+      "    device float* y [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  uint gi = (uint)qs[i];\n"
+      "  int64_t gv = *((const device int64_t*)(grid + (size_t)gi * 8));\n"
+      "  uint code = *(qs + i * 2u);\n"
+      "  y[i] = (float)gv + (float)code;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // No dereference, cast, or pointer arithmetic survives; both reads are
+  // plain buffer indexes off the parameter macros.
+  CHECK(glsl.find("const int64_t*") == std::string::npos);
+  CHECK(glsl.find("*(_b") == std::string::npos);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg0[(uint(gi) * 8)]") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(i * 2u)]") != std::string::npos);
+}
+
+TEST_CASE("char casts lower to int8_t") {
+  // cbq_gather_mm unpacks its grid int64 through `(char)((gv >> j) & 0xFF)`.
+  // `char` is MSL's spelling of int8_t; without a map entry the translator
+  // emitted `float((char))` — silently broken GLSL.
+  const char* source =
+      "[[kernel]] void unpack(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  int64_t gv = *((const device int64_t*)(grid + i * 8u));\n"
+      "  y[i] = (float)(char)((gv >> 8) & 0xFF);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(char)") == std::string::npos);
+  CHECK(glsl.find("int8_t(") != std::string::npos);
+}
+
+TEST_CASE("casted dereference reassembles a wider integer little-endian") {
+  // The real cbq_gather_mm signature: `grid` is an int8 buffer and the
+  // kernel reads each 8-byte LUT row through an int64_t* cast.
+  const char* source =
+      "[[kernel]] void lut8(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  uint gi = i * 2u;\n"
+      "  int64_t gv = *((const device int64_t*)(grid + (size_t)gi * 8));\n"
+      "  y[i] = (float)gv;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("const int64_t*") == std::string::npos);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("uint8_t(_mlx_arg0[(uint(gi) * 8)])") != std::string::npos);
+  CHECK(glsl.find("<< 56)") != std::string::npos);
+  CHECK(glsl.find("int64_t(") != std::string::npos);
+}
+
+TEST_CASE("dereference of a mismatched cast stays refused") {
+  // A narrower or non-integer cast cannot be reassembled from the buffer's
+  // element type, so the named refusal still fires — for `const` and
+  // `device`-only cast spellings alike (the final guard only sees
+  // `const T*`).
+  const char* source =
+      "[[kernel]] void bad_cast(\n"
+      "    const device int64_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = (float)(*((const device float*)(grid + i)));\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source, 1), std::runtime_error);
+  const char* source_device =
+      "[[kernel]] void bad_cast_device(\n"
+      "    const device int64_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = (float)(*((device float*)(grid + i)));\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source_device, 1), std::runtime_error);
+  const char* source_narrow =
+      "[[kernel]] void bad_cast_narrow(\n"
+      "    const device int64_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = (float)(*((device int8_t*)(grid + i)));\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source_narrow, 1), std::runtime_error);
+}
+
+TEST_CASE("cast-bound pointer arithmetic scales the offset") {
+  // `(T*)base + off` counts `off` in cast-type elements; `base` is the
+  // int8 grid buffer, so `(int64_t*)grid + gi` reads the 8 bytes at
+  // `gi * 8`. Lowering must scale — `grid[(gi)]` silently reads the
+  // wrong row (glslang accepts it, so only the index text proves it).
+  const char* source =
+      "[[kernel]] void scaled(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  int64_t gv = *((const device int64_t*)grid + i);\n"
+      "  int64_t gw = *((const device int64_t*)(grid) + i);\n"
+      "  y[i] = (float)gv + (float)gw;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(char)") == std::string::npos);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg0[((i) * 8)]") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg0[((i) * 8)+7]") != std::string::npos);
+}
+
+TEST_CASE("multiplication is not a dereference") {
+  // `*` before `(` after an operand is binary multiply: `2.0f * (x + 1.0f)`
+  // must keep its `*`, not lose it to a `x[(1.0f)]` rewrite. And
+  // `3.0f * *(x + i)` is a binary `*` then a unary read — the read still
+  // lowers.
+  const char* source =
+      "[[kernel]] void mul(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = 2.0f * (x + 1.0f) + 3.0f * *(x + i);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("2.0f * (_mlx_arg0 + 1.0f)") != std::string::npos);
+  CHECK(glsl.find("3.0f * _mlx_arg0[(i)]") != std::string::npos);
+}
+
+TEST_CASE("uncovered buffer pointer arithmetic still refuses by name") {
+  // `*(base - off)` and `*base++` are pointer arithmetic the lowering
+  // does not cover — a broken `*(_b0.data - i)` emit or a silent
+  // `base[(0)]++` element-increment rewrite are both worse than the
+  // named refusal.
+  const char* source_minus =
+      "[[kernel]] void minus_off(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = *(x - i);\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source_minus, 1), std::runtime_error);
+  const char* source_inc =
+      "[[kernel]] void post_inc(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = *x++;\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source_inc, 1), std::runtime_error);
+}
+
+TEST_CASE("postfix ++ is not an add in a dereference operand") {
+  // `x++ + tid` increments the pointer then adds — the `+` scanner must
+  // not split on the `++` and emit `x[(+ + tid)]` (glslang accepts it,
+  // silently reading a wrong index). It is uncovered pointer arithmetic:
+  // refuse by name.
+  const char* source =
+      "[[kernel]] void post(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = *(x++ + i);\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source, 1), std::runtime_error);
+  const char* source_cast =
+      "[[kernel]] void post_cast(\n"
+      "    const device int8_t* grid [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = (float)(*((const device int64_t*)grid++ + i));\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(source_cast, 1), std::runtime_error);
+  // Parenthesized forms reach base_offset, which must not split on the
+  // `++` either: `*((x++ + i))` is not `x[(+ + i)]`, and `*((x++))` is
+  // not `x[(+)]`.
+  const auto kernel = [](const char* expr) {
+    static std::string body;
+    body = std::string(
+               "[[kernel]] void post_paren(\n"
+               "    const device float* x [[buffer(0)]],\n"
+               "    const device int8_t* grid [[buffer(1)]],\n"
+               "    device float* y [[buffer(2)]],\n"
+               "    uint i [[thread_position_in_grid]]) {\n"
+               "  y[i] = ") +
+        expr + ";\n}\n";
+    return body.c_str();
+  };
+  CHECK_THROWS_AS(translate(kernel("*((x++ + i))"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*((x++))"), 1), std::runtime_error);
+  CHECK_THROWS_AS(
+      translate(kernel("*((const device int64_t*)(grid++ + i))"), 1),
+      std::runtime_error);
+}
+
+TEST_CASE("a trailing dot keeps multiply binary") {
+  // `2.` is a float literal — `2. * x[i]` is multiply, not a unary `*`.
+  const char* source =
+      "[[kernel]] void dot_mul(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  uint n = i;\n"
+      "  y[i] = 2. * x[i] + 2. * n + sizeof(int) * i;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("2. * _mlx_arg0[i]") != std::string::npos);
+  CHECK(glsl.find("2. * n") != std::string::npos);
+  // `sizeof(int) * i` is multiply — the sizeof argument is not a cast.
+  CHECK(glsl.find("sizeof(int) * i") != std::string::npos);
+}
+
+TEST_CASE("dereference after a control header or cast still lowers") {
+  // `)` closes `if (...)` / `for (...)` conditions and `(T)` casts — the
+  // `*` after them is unary, not binary.
+  const char* source =
+      "[[kernel]] void after_paren(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  if (i < 4) *(y + i) = 1.0f;\n"
+      "  for (int k = 0; k < 2; ++k) *(y + k) = 2.0f;\n"
+      "  y[i] += (float)*(x + i);\n"
+      "  y[i] += (float)*x;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("*(") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(i)] = float(1.0f)") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(k)] = float(2.0f)") != std::string::npos);
+  CHECK(glsl.find("float(_mlx_arg0[(i)])") != std::string::npos);
+  CHECK(glsl.find("float(_mlx_arg0[(0)])") != std::string::npos);
+}
+
+TEST_CASE("unshaped dereference operands on buffers refuse by name") {
+  // `*(++x)`, `*++x`, `*((x) - 1)`, `*(1 + x)` touch a buffer pointer but
+  // fit no lowering shape — refuse instead of emitting `*(_b0.data...)`.
+  const auto kernel = [](const char* expr) {
+    static std::string body;
+    body = std::string(
+               "[[kernel]] void bad(\n"
+               "    const device float* x [[buffer(0)]],\n"
+               "    device float* y [[buffer(1)]],\n"
+               "    uint i [[thread_position_in_grid]]) {\n"
+               "  y[i] = ") +
+        expr + ";\n}\n";
+    return body.c_str();
+  };
+  CHECK_THROWS_AS(translate(kernel("*(++x)"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*++x"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*((x) - 1)"), 1), std::runtime_error);
+  CHECK_THROWS_AS(translate(kernel("*(1 + x)"), 1), std::runtime_error);
+}
+
+TEST_CASE("statement keywords do not register local arrays") {
+  // `else z[0]` is else-statement indexing — the declaration scan must
+  // not register `z` as an `else`-typed array. If it did, `*z` below
+  // would silently rewrite to `z[(0)]` — valid GLSL with the wrong
+  // meaning — instead of staying `*z` for the shader compiler to refuse.
+  const char* source =
+      "[[kernel]] void kw(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  float4 z = float4(x[i], x[i + 1], x[i + 2], x[i + 3]);\n"
+      "  if (z.x > 0.0f) {\n"
+      "    y[i] = z[0];\n"
+      "  } else z[0] = 0.0f;\n"
+      "  y[i] += *z;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("z[(0)]") == std::string::npos);
+}
+
 TEST_CASE("header helper numeric_limits constants map like the body") {
   // The omlx_log1p header helper of the Qwen3.5/Qwen4 GDN kernels tests
   // against metal::numeric_limits<float>::max(); the body-only limits pass
