@@ -70,6 +70,17 @@ for name, digest in approved.items():
         sys.exit(f"prepare-mlx: CBQ port body changed: {name}")
     rows.append(f'constexpr std::string_view {name} = R"CBQ({body.decode("utf-8")})CBQ";\n')
 (staging / "mlx/backend/omarchy/cbq_msl.inc").write_bytes("".join(rows).encode("utf-8"))
+
+approved_bm32 = {
+    "nemotron_bm32_steel_linear_nt": "59b7390f7dd41d6d0f3be72c6bd413e5a2268ba29ef0284cc1a4d8fa567fdee1",
+}
+rows = []
+for name, digest in approved_bm32.items():
+    body = (source / f"{name}.msl").read_bytes()
+    if hashlib.sha256(body).hexdigest() != digest:
+        sys.exit(f"prepare-mlx: BM32 port body changed: {name}")
+    rows.append(f'constexpr std::string_view {name} = R"BM32({body.decode("utf-8")})BM32";\n')
+(staging / "mlx/backend/omarchy/bm32_msl.inc").write_bytes("".join(rows).encode("utf-8"))
 PY
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-build.patch"

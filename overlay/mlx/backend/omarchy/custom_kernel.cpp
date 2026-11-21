@@ -57,7 +57,15 @@ struct Parameter {
   bool constant_space;
 };
 
-enum CbqPort { CbqNone, CbqGather, CbqSitu, CbqGlu, CbqGradD, CbqGradX };
+enum CbqPort {
+  CbqNone,
+  CbqGather,
+  CbqSitu,
+  CbqGlu,
+  CbqGradD,
+  CbqGradX,
+  SteelBm32
+};
 
 struct CbqDispatch {
   CbqPort port = CbqNone;
@@ -2557,6 +2565,7 @@ constexpr std::string_view bf16_glsl_helpers =
     "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
 
 #include "custom_kernel_cbq.h"
+#include "custom_kernel_bm32.h"
 
 Translation translate_msl(
     const std::string& source,
@@ -2585,6 +2594,11 @@ Translation translate_msl(
           source, marker, arguments_open, arguments_close, body_open, body_close,
           parameters, grid, threadgroup, output_count)) {
     return std::move(*cbq);
+  }
+  if (auto bm32 = translate_bm32(
+          source, marker, arguments_open, arguments_close, body_open, body_close,
+          parameters, grid, threadgroup, output_count)) {
+    return std::move(*bm32);
   }
 
   std::string header;
@@ -3763,16 +3777,21 @@ bool parse_translation(const std::string& blob, Translation& translation) {
     remaining -= 2;
   }
   uint64_t port = 0;
-  if (!get_u64(blob, cursor, remaining, port) || port > CbqGradX) {
+  if (!get_u64(blob, cursor, remaining, port) || port > SteelBm32) {
     return false;
   }
   translation.cbq = {};
   if (port != CbqNone) {
     uint64_t k = 0, o = 0, r = 0;
     if (!get_u64(blob, cursor, remaining, k) || k == 0 || k > INT32_MAX ||
-        k % 256 != 0 ||
         !get_u64(blob, cursor, remaining, o) || o == 0 || o > INT32_MAX ||
         !get_u64(blob, cursor, remaining, r) || r == 0 || r > INT32_MAX) {
+      return false;
+    }
+    const bool dims_ok = static_cast<CbqPort>(port) == SteelBm32
+        ? (k % 16 == 0 && o % 64 == 0 && r % 32 == 0)
+        : (k % 256 == 0);
+    if (!dims_ok) {
       return false;
     }
     translation.cbq = {static_cast<CbqPort>(port), static_cast<int>(k),
@@ -4101,18 +4120,25 @@ void CustomKernel::eval_gpu(
         m2v_prefix + "generated binding count mismatch",
         out_for_error);
   }
-  const bool cbq = translation->cbq.port != CbqNone;
+  const auto port = translation->cbq.port;
+  const bool cbq = port != CbqNone && port != SteelBm32;
   if (cbq && !cbq_dispatch_matches(
           translation->cbq, checked_inputs, outputs, init_value_.has_value())) {
     omarchy::unsupported(
         m2v_prefix + "unsupported CBQ kernel buffer shape, layout or initialization",
         out_for_error);
   }
-  if (cbq) {
+  if (port == SteelBm32 &&
+      !bm32_dispatch_matches(translation->cbq, checked_inputs, outputs)) {
+    omarchy::unsupported(
+        m2v_prefix + "unsupported BM32 kernel buffer shape or layout",
+        out_for_error);
+  }
+  if (port != CbqNone) {
     const auto& caps = encoder.device().hardware_capabilities();
     if (!caps.shader_int16 || !caps.storage_buffer_16bit_access) {
       omarchy::unsupported(
-          m2v_prefix + "CBQ requires shaderInt16 and storageBuffer16BitAccess",
+          m2v_prefix + "hand-ported kernels require shaderInt16 and storageBuffer16BitAccess",
           out_for_error);
     }
   }

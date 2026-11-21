@@ -159,12 +159,12 @@ jobs:
           command -v spirv-val
           command -v spirv-dis
           python3 -c 'import pytest'
-      - name: Run CBQ Vulkan translation acceptance
+      - name: Run custom-kernel Vulkan translation acceptance
         env:
           CBQ_TRANSLATE_DUMP: .work/build/tests/omarchy/omarchy_custom_kernel_translate_dump
         run: |
           set -o pipefail
-          python3 -m pytest tests/test_cbq_vulkan_translation.py -v | tee .work/cbq-translation.out
+          python3 -m pytest tests/test_cbq_vulkan_translation.py tests/test_nemotron_bm32_translation.py -v | tee .work/cbq-translation.out
           # Count floor, not exact: the suite grows as contracts get exercised
           # (15 was the nine shipped bodies plus the original refusal set).
           # pipefail fails the step on any pytest failure or error.

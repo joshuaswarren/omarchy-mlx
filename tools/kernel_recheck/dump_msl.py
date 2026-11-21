@@ -43,26 +43,30 @@ DTYPE_STR = {
     "bool": "bool",
 }
 
+# (attribute, MSL type) in upstream metal_kernel.cpp order. Index attributes
+# are scalar uint, not uint3 — writing them as uint3 makes the replica sign
+# a different ABI than metal_kernel emits at runtime (PR 562 r3 refusal).
 METAL_ATTRS = [
-    "dispatch_quadgroups_per_threadgroup",
-    "dispatch_simdgroups_per_threadgroup",
-    "dispatch_threads_per_threadgroup",
-    "grid_origin",
-    "grid_size",
-    "quadgroup_index_in_threadgroup",
-    "quadgroups_per_threadgroup",
-    "simdgroup_index_in_threadgroup",
-    "simdgroups_per_threadgroup",
-    "thread_execution_width",
-    "thread_index_in_quadgroup",
-    "thread_index_in_simdgroup",
-    "thread_index_in_threadgroup",
-    "thread_position_in_grid",
-    "thread_position_in_threadgroup",
-    "threadgroup_position_in_grid",
-    "threadgroups_per_grid",
-    "threads_per_grid",
-    "threads_per_threadgroup",
+    ("dispatch_quadgroups_per_threadgroup", "uint"),
+    ("dispatch_simdgroups_per_threadgroup", "uint"),
+    ("dispatch_threads_per_threadgroup", "uint3"),
+    ("grid_origin", "uint3"),
+    ("grid_size", "uint3"),
+    ("quadgroup_index_in_threadgroup", "uint"),
+    ("quadgroups_per_threadgroup", "uint"),
+    ("simdgroup_index_in_threadgroup", "uint"),
+    ("simdgroups_per_threadgroup", "uint"),
+    ("thread_execution_width", "uint"),
+    ("thread_index_in_quadgroup", "uint"),
+    ("thread_index_in_simdgroup", "uint"),
+    ("thread_index_in_threadgroup", "uint"),
+    ("thread_position_in_grid", "uint3"),
+    ("thread_position_in_threadgroup", "uint3"),
+    ("threadgroup_position_in_grid", "uint3"),
+    ("threadgroups_per_grid", "uint3"),
+    ("threads_per_grid", "uint3"),
+    ("threads_per_simdgroup", "uint"),
+    ("threads_per_threadgroup", "uint3"),
 ]
 
 
@@ -144,7 +148,7 @@ def generated_msl(name):
             t = f"atomic<{t}>"
         params.append(f"  device {t}* {on} [[buffer({index})]]")
         index += 1
-    params.extend(f"  uint3 {a} [[{a}]]" for a in METAL_ATTRS if a in source)
+    params.extend(f"  {t} {a} [[{a}]]" for a, t in METAL_ATTRS if a in source)
     pieces.extend((",\n".join(params), ") {\n"))
     pieces.append(source)
     pieces.append("\n}\n")
