@@ -196,32 +196,38 @@ and date:
 | `custom_depthwise_conv1d` | PASS | maxdiff 7.13119e-05 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
 | `qk_relu_squared` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
 | `mlx_audio_phonon_unpack_base5_v1` | PASS | exact, maxdiff 0 | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-07 |
-| `cbq_gather_mm` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) — proves the guard rejects raw device-pointer indexing before wrong addressing can be emitted: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_gather_mm_v2` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) — proves the guard rejects raw device-pointer indexing before wrong addressing can be emitted: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_gather_mm_v3` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) — proves unsupported bit-reinterpret casts are rejected, not mis-translated: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_gather_mm_v4` | REFUSED | `as_type<bfloat4>` (2026-11-08 rerun: unchanged, the guard is by design) — proves unsupported packed 4-bit vector casts are rejected, not mis-translated: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_gather_mm_v3_situ` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) — proves unsupported bit-reinterpret casts are rejected, not mis-translated: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_gather_mm_v4_situ` | REFUSED | `as_type<bfloat4>` (2026-11-08 rerun: unchanged, the guard is by design) — proves unsupported packed 4-bit vector casts are rejected, not mis-translated: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_gather_mm_glu` | REFUSED | `as_type<char4>` (2026-11-08 rerun: unchanged, the guard is by design) — proves unsupported bit-reinterpret casts are rejected, not mis-translated: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_grad_d` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) — proves the guard rejects raw device-pointer indexing before wrong addressing can be emitted: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
-| `cbq_grad_x` | REFUSED | `device pointer arithmetic` (2026-11-08 rerun: unchanged, the guard is by design) — proves the guard rejects raw device-pointer indexing before wrong addressing can be emitted: fail-closed, no silent CPU path | `d04e8da83` | M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH` | 2026-11-08 |
+| `cbq_gather_mm` | PASS | maxdiff 0.00657895 under the bounded exact-match port (#524, `6f5e6a827`); the general translator still refuses `device pointer arithmetic` for non-exact bodies — fail-closed preserved (tests 17/17) | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_gather_mm_v2` | PASS | maxdiff 0.00657895 under the bounded exact-match port (#524, `6f5e6a827`); general translator still refuses `device pointer arithmetic` for non-exact bodies | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_gather_mm_v3` | PASS | maxdiff 0.00657895 under the bounded exact-match port (#524, `6f5e6a827`); general translator still refuses `as_type<char4>` for non-exact bodies | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_gather_mm_v4` | PASS | maxdiff 0.00657895 under the bounded exact-match port (#524, `6f5e6a827`); general translator still refuses `as_type<bfloat4>` for non-exact bodies | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_gather_mm_v3_situ` | PASS | exact, maxdiff 0 under the bounded exact-match port (#524, `6f5e6a827`); general translator still refuses `as_type<char4>` for non-exact bodies | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_gather_mm_v4_situ` | PASS | exact, maxdiff 0 under the bounded exact-match port (#524, `6f5e6a827`); general translator still refuses `as_type<bfloat4>` for non-exact bodies | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_gather_mm_glu` | PASS | exact, maxdiff 0 under the bounded exact-match port (#524, `6f5e6a827`); general translator still refuses `as_type<char4>` for non-exact bodies | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_grad_d` | WRONG | 33/65536 outputs over the harness per-element rel-1e-4 gate (max rel err 0.2098 on a near-zero element; worst abs element -67541.72 vs -67541.71637359262); bit-identical signature on M1 Max at `3a4e7c99` (#538) — chip-independent; within upstream's declared rel-L2 ≤1e-5 bar for `atomic_outputs` kernels (rel-L2 3.648e-08). Which gate is authoritative is tracked in #564 | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
+| `cbq_grad_x` | WRONG | 1/4096 outputs over the harness per-element rel-1e-4 gate (rel err 1.037e-4, margin 4e-6); bit-identical signature on M1 Max at `3a4e7c99` (#538) — chip-independent; within upstream's rel-L2 ≤1e-5 bar (rel-L2 3.571e-08). Which gate is authoritative is tracked in #564 | [receipt](../receipts/2026-11-21-cbq-nine-rerun/README.md) | M1 (T8103) | `7.3.0-2-20261110.1-lab-ARCH` | 2026-11-21 |
 | `kda_glue_pre` | PASS | maxdiff 3.75977e-07 on the gate output, q, k, v and the conv states bit-exact (13/12288 q elements were off by up to 2 bf16 ulp before: the translator treated the literal `bfloat16_t` type as plain float, so casts, initializers and reassignments skipped the bf16 rounding Metal applies and only the output store rounded; on the 13-inch M1 (G13G) dump, device q matched a model that rounds only at the store on 12288 of 12288 elements and the Metal-faithful model on 5533 of 12288) | [receipt](../receipts/2026-11-13-kda-glue-literal-bf16/README.md) | M1 Max (G13C) | Linux 7.1.12 | 2026-11-13 |
 | `kda_glue_post` | PASS | exact, maxdiff 0 (53/12288 outputs were off by up to 3 bf16 ulp before; same cause as `kda_glue_pre`, fixed by the same change; the cause of this row was inferred from the `kda_glue_pre` dump, the row itself went from 53 bad to exact on rerun) | [receipt](../receipts/2026-11-13-kda-glue-literal-bf16/README.md) | M1 Max (G13C) | Linux 7.1.12 | 2026-11-13 |
 | `moe_route_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 | `situ_pair_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 
-**Counts: 17 PASS / 0 WRONG / 0 COMPILE-FAIL / 9 REFUSED = 26** (the two `kda_glue` rows were rerun on the M1 Max (G13C) on 2026-11-13 with the literal-bfloat16 rounding fix; the other 24 rows reproduce the 2026-11-13 pre-fix rerun on the same chip line for line)
+**Counts: 24 PASS / 2 WRONG / 0 COMPILE-FAIL / 0 REFUSED = 26** (the nine `cbq_*` rows were rerun on M1 (T8103) on 2026-11-21 at `f0f6563fc`; the two `kda_glue` rows were rerun on the M1 Max (G13C) on 2026-11-13 with the literal-bfloat16 rounding fix; the remaining 15 rows reproduce the earlier reruns noted per row)
 
 `maxdiff` is the runner's worst relative error against the reference. `0` is
 an exact integer or bit match. `1e+308` is the runner's sentinel for equal
-±inf values, which make the difference undefined. The `cbq_*`,
-`kda_glue_*`, `moe_route_fused` and `situ_*` rows were rerun on the
+±inf values, which make the difference undefined. The `kda_glue_*`,
+`moe_route_fused` and `situ_*` rows were rerun on the
 current translator on 2026-11-08 except the last three rows, which still
-carry their 2026-10-08 results. The nine `cbq_*` rows refuse by design
-(device
-pointer arithmetic, `as_type<char4>`, `as_type<bfloat4>`): they need new
-translator support, not a rerun. The four WRONG rows of the first 2026-11-07
+carry their 2026-10-08 results. The nine `cbq_*` rows ran on 2026-11-21
+under the bounded exact-match port of #524 (commit `6f5e6a827`) at wheel
+`f0f6563fc` on M1 (T8103): the seven gather kernels pass against the CPU
+reference; the two gradient kernels are deterministically WRONG under the
+harness's per-element rel-1e-4 gate — the identical signature (same bad
+counts, indices and values) was recorded on M1 Max at `3a4e7c99` under
+#538, where they pass upstream's rel-L2 ≤1e-5 bar for `atomic_outputs`
+kernels. Which criterion is authoritative is tracked in #564. The general translator still
+fails closed on `device pointer arithmetic`, `as_type<char4>` and
+`as_type<bfloat4>` for any body that is not an exact CBQ match. The four WRONG rows of the first 2026-11-07
 rerun were proven to be artifacts outside the kernels: a wrong value still
 fails the run (exit 3). The regex-based rewrite failures behind the
 2026-10-08 COMPILE-FAIL rows (three attempts, each failing differently) are
