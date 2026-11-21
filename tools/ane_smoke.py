@@ -13,6 +13,11 @@ result bit-for-bit against a CPU model. This tool adds the kit-side node
 answer the card needs and nothing else: an absent node is a normal state
 before the node lands, not a failure.
 
+The node the tool probes is the node the driver is told to open: the driver
+opens `/dev/accel/accelN`, so the index is forwarded in `ANE_DEVICE` and the
+answer names the same node the result describes. A path the driver cannot be
+pointed at is refused, not run.
+
 Answers, one JSON line on stdout:
 
 - node absent: `{"ane": "absent", ...}` and exit 0 - a normal state before
@@ -20,7 +25,10 @@ Answers, one JSON line on stdout:
 - node present: the driver's smoke runs. `match` exits 0; `mismatch` exits 1
   with the driver's reason; `unavailable` exits 1 with the reason (no
   packaged program for this SoC, the driver is not bound, the smoke is not
-  installed, or the run failed).
+  installed, the run failed, or the driver's answer carried no per-call
+  evidence).
+
+The `ane` field is the answer; the exit code only says "absent or match".
 
 No hardware is needed to test this file: `--ane-node` points detection at any
 path, and the tests inject the smoke runner.
@@ -29,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -38,6 +47,8 @@ NODE_CANDIDATES = ("/dev/accel/accel0", "/dev/ane")
 SMOKE = "omarchy-ane-smoke"
 DT_COMPATIBLE = "sys/firmware/devicetree/base/compatible"
 RUN_TIMEOUT_S = 120
+NO_JSON = "the driver smoke printed no JSON"
+ACCEL_PREFIX = "/dev/accel/accel"
 
 
 def pick_node(candidates: tuple[str, ...] = NODE_CANDIDATES) -> str | None:
@@ -46,6 +57,18 @@ def pick_node(candidates: tuple[str, ...] = NODE_CANDIDATES) -> str | None:
         if Path(node).exists():
             return node
     return None
+
+
+def device_index(node: str) -> int | None:
+    """The device index the driver opens for a node path, else None.
+
+    The driver's libane enumerates /dev/accel/accelN and takes the Nth node
+    it opens, so only that path shape can be forwarded to it.
+    """
+    if not node.startswith(ACCEL_PREFIX):
+        return None
+    suffix = node[len(ACCEL_PREFIX) :]
+    return int(suffix) if suffix.isdigit() else None
 
 
 def chip(root: str = "/") -> str | None:
@@ -60,16 +83,37 @@ def chip(root: str = "/") -> str | None:
     return None
 
 
-def run_smoke(timeout: int) -> dict:
+def smoke_json(lines: list[str]) -> dict:
+    """The driver's JSON answer: the last line that parses as an object."""
+    for line in reversed(lines):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {"available": False, "reason": NO_JSON}
+
+
+def run_smoke(timeout: int, env: dict) -> dict:
     """One `omarchy-ane-smoke` call, parsed from its one JSON stdout line."""
     cmd = [shutil.which(SMOKE) or SMOKE, "--timeout", str(timeout)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 60, check=False)
-    lines = proc.stdout.strip().splitlines()
-    try:
-        return json.loads(lines[-1]) if lines else {}
-    except json.JSONDecodeError:
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 60,
+        check=False,
+        env=env,
+    )
+    payload = smoke_json(proc.stdout.splitlines())
+    if payload.get("reason") == NO_JSON:
         err = proc.stderr.strip().splitlines()
-        return {"available": False, "reason": err[-1] if err else "the smoke printed no JSON"}
+        payload["reason"] = err[-1] if err else NO_JSON
+    return payload
 
 
 def check(node: str | None = None, smoke_runner=None, timeout: int = RUN_TIMEOUT_S) -> dict:
@@ -83,13 +127,20 @@ def check(node: str | None = None, smoke_runner=None, timeout: int = RUN_TIMEOUT
             answer["chip"] = soc
         return answer
     answer: dict[str, object] = {"ane": "unavailable", "node": node}
+    device = device_index(node)
+    if device is None:
+        answer["error"] = (
+            f"the driver opens {ACCEL_PREFIX}N and cannot be told to use {node}"
+        )
+        return answer
     if smoke_runner is None:
         if shutil.which(SMOKE) is None:
             answer["error"] = f"{SMOKE} is missing. Reinstall omarchy-ane-dkms."
             return answer
         smoke_runner = run_smoke
+    env = {**os.environ, "ANE_DEVICE": str(device)}
     try:
-        payload = smoke_runner(timeout)
+        payload = smoke_runner(timeout, env)
     except Exception as err:  # noqa: BLE001 - one line, named, exit 1
         answer["error"] = f"{SMOKE} failed: {type(err).__name__}: {err}"
         return answer
@@ -99,10 +150,21 @@ def check(node: str | None = None, smoke_runner=None, timeout: int = RUN_TIMEOUT
     if not payload.get("available", False):
         answer["error"] = payload.get("reason", "the driver smoke reports no available ANE")
         return answer
-    errors = payload.get("errors", 0)
     hashes = payload.get("sha256") or []
-    answer["ane"] = "match" if errors == 0 else "mismatch"
     answer["calls"] = len(hashes)
+    errors = payload.get("errors")
+    if not isinstance(errors, int) or isinstance(errors, bool):
+        answer["error"] = payload.get(
+            "reason", "the driver smoke reported no errors count"
+        )
+        return answer
+    answer["errors"] = errors
+    if not hashes:
+        answer["error"] = payload.get(
+            "reason", "the driver smoke reported no calls"
+        )
+        return answer
+    answer["ane"] = "match" if errors == 0 else "mismatch"
     answer["golden_sha256"] = payload.get("golden_sha256")
     if hashes:
         answer["sha256"] = hashes[0]
