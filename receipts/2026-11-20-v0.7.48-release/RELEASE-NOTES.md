@@ -1,4 +1,4 @@
-# omarchy-mlx v0.7.47
+# omarchy-mlx v0.7.48
 
 Draft. Entries accumulate as changes land on main; the release owner fills
 the asset, gate and measured sections at cut time.
@@ -15,4 +15,5 @@ the asset, gate and measured sections at cut time.
   (`sdpa_decode_mask_layout.h`), covered by the device-free
   `omarchy_sdpa_decode_mask_flag_tests` CTest. Measured on the 16-inch
   M1 Max over five AB and BA pairs: two streams 53.895 -> 68.934 tokens a
-  second, token digests identical, zero GPU timeouts.
+  second, token digests identical, zero GPU timeouts. Today's cap sweep:
+  one stream is unchanged at every cap, two streams gain 26 to 34 percent.
