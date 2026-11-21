@@ -1129,6 +1129,28 @@ void translate_pointer_advance(
   }
 }
 
+// First top-level binary `+` in `s` — `++` and `+=` are not binary adds.
+// Shared by the operand split and the head parse: `x++ + i` only has a
+// binary `+` before `i`, so `x++` stays in the head and refuses.
+size_t first_binary_plus(const std::string& s) {
+  int depth = 0;
+  for (size_t k = 0; k < s.size(); ++k) {
+    if (s[k] == '(') {
+      ++depth;
+    } else if (s[k] == ')') {
+      --depth;
+    } else if (s[k] == '+' && depth == 0) {
+      const bool glued =
+          (k + 1 < s.size() && (s[k + 1] == '+' || s[k + 1] == '=')) ||
+          (k > 0 && s[k - 1] == '+');
+      if (!glued) {
+        return k;
+      }
+    }
+  }
+  return std::string::npos;
+}
+
 // A dereference off a buffer parameter is an indexed read:
 //   `*(base + off)`                    -> `base[(off)]`
 //   `*((const device T*)(base + off))` -> `base[(off)]`  (same pointee type)
@@ -1195,8 +1217,7 @@ void translate_pointer_derefs(
   // `(const device T*)` or `(device T*)` spelled inside the operand.
   static const std::regex cast_text(
       R"(^\s*(?:const\s+)?(?:device|constant)\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*$)");
-  static const std::regex base_offset(
-      R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\s*(.+))?$)");
+  static const std::regex ident_only(R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$)");
   static const std::regex any_ident(R"([A-Za-z_][A-Za-z0-9_]*)");
   const auto refuse = []() {
     throw std::runtime_error(
@@ -1363,26 +1384,7 @@ void translate_pointer_derefs(
       std::string operand = trim(body.substr(next + 1, close - next - 1));
       // First top-level `+` separates the (casted) base expression from
       // the offset, which counts in the result pointer type's elements.
-      size_t plus = std::string::npos;
-      int depth = 0;
-      for (size_t k = 0; k < operand.size(); ++k) {
-        if (operand[k] == '(') {
-          ++depth;
-        } else if (operand[k] == ')') {
-          --depth;
-        } else if (operand[k] == '+' && depth == 0) {
-          // `++` and `+=` are not binary adds — `x++ + tid` splits on the
-          // later `+`, leaving `x ++` in the head to refuse below.
-          const bool glued =
-              (k + 1 < operand.size() &&
-               (operand[k + 1] == '+' || operand[k + 1] == '=')) ||
-              (k > 0 && operand[k - 1] == '+');
-          if (!glued) {
-            plus = k;
-            break;
-          }
-        }
-      }
+      const size_t plus = first_binary_plus(operand);
       std::string head =
           trim(plus == std::string::npos ? operand : operand.substr(0, plus));
       if (!head.empty() && (head.back() == '+' || head.back() == '-')) {
@@ -1423,12 +1425,28 @@ void translate_pointer_derefs(
       }
       std::string inner_off;
       if (shaped) {
-        std::smatch parts;
-        if (std::regex_match(head, parts, base_offset)) {
-          base = parts[1].str();
+        // The head is `base` or `base + off`, split on the same binary
+        // `+` rule: `x++ + i` leaves `x++` as the base and refuses.
+        const size_t head_plus = first_binary_plus(head);
+        const std::string head_base = trim(
+            head_plus == std::string::npos ? head
+                                           : head.substr(0, head_plus));
+        std::smatch id_match;
+        if (std::regex_match(head_base, id_match, ident_only)) {
+          base = id_match[1].str();
           // An offset inside the cast scope counts in buffer elements.
-          inner_off = parts[2].matched ? trim(parts[2].str()) : "0";
-          end = close + 1;
+          inner_off = head_plus == std::string::npos
+              ? "0"
+              : trim(head.substr(head_plus + 1));
+          // `base ++` and other junk offsets do not lower.
+          if (!inner_off.empty() &&
+              inner_off.find_first_of(
+                  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+                  "6789_(") != std::string::npos) {
+            end = close + 1;
+          } else {
+            shaped = false;
+          }
         } else {
           shaped = false;
         }
