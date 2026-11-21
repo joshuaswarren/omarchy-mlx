@@ -1678,6 +1678,10 @@ Device::Device(uint32_t physical_device_index) {
 
 void Device::probe_float_power(CommandEncoder& encoder) {
   std::call_once(float_power_probe_, [&] {
+    // The probe dispatches and synchronizes outside the step model, before
+    // any batch_open marker exists; its events must stay out of the
+    // step-timeline view or the ordering contract reads a violation.
+    timeline::SuppressTimeline probe_suppressed;
     constexpr std::array bases{4.0f, -2.0f, -0.0f, 0.0f};
     constexpr std::array exponents{0.5f, 3.0f, -3.0f, 0.0f};
     constexpr std::array expected{

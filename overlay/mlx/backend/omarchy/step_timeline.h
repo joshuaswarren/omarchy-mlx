@@ -628,6 +628,23 @@ inline bool enabled() noexcept {
   return state != nullptr && state->ring.enabled();
 }
 
+// Startup probes (Device::probe_float_power in new_stream) dispatch and
+// synchronize outside the step model, before any batch_open. Recording them
+// would break the step-timeline ordering contract, so a probe wraps its body
+// in SuppressTimeline and the hooks below drop their events.
+inline thread_local int suppressed_depth = 0;
+
+struct SuppressTimeline {
+  SuppressTimeline() noexcept {
+    ++suppressed_depth;
+  }
+  ~SuppressTimeline() noexcept {
+    --suppressed_depth;
+  }
+  SuppressTimeline(const SuppressTimeline&) = delete;
+  SuppressTimeline& operator=(const SuppressTimeline&) = delete;
+};
+
 inline void record(
     Kind kind,
     SubKind subkind,
@@ -635,7 +652,8 @@ inline void record(
     uint64_t detail_val = 0,
     uint64_t dur_ns = 0) noexcept {
   detail::GlobalState* state = detail::global_state();
-  if (MLX_OMARCHY_TIMELINE_UNLIKELY(state != nullptr)) {
+  if (MLX_OMARCHY_TIMELINE_UNLIKELY(
+          state != nullptr && suppressed_depth == 0)) {
     state->ring.record(
         kind, subkind, monotonic_ns(), dur_ns, stream_id, detail_val);
   }
@@ -649,7 +667,8 @@ inline void record_span(
     uint16_t stream_id = 0,
     uint64_t detail_val = 0) noexcept {
   detail::GlobalState* state = detail::global_state();
-  if (MLX_OMARCHY_TIMELINE_UNLIKELY(state != nullptr)) {
+  if (MLX_OMARCHY_TIMELINE_UNLIKELY(
+          state != nullptr && suppressed_depth == 0)) {
     state->ring.record(
         kind,
         subkind,
@@ -673,7 +692,8 @@ class ScopedEvent {
         detail_(detail_val),
         state_(detail::global_state()) {
     if (MLX_OMARCHY_TIMELINE_UNLIKELY(
-            state_ != nullptr && state_->ring.enabled())) {
+            state_ != nullptr && state_->ring.enabled() &&
+            suppressed_depth == 0)) {
       t0_ns_ = monotonic_ns();
     } else {
       state_ = nullptr;
