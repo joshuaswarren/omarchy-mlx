@@ -1,9 +1,10 @@
 --- a/tests/export_import_tests.cpp
 +++ b/tests/export_import_tests.cpp
-@@ -189,3 +189,44 @@
+@@ -189,3 +189,45 @@
    }
    CHECK(import_function(file_path).metadata() == metadata);
  }
++
 +TEST_CASE("scalar load publishes before cross-stream consumers read it") {
 +  // Issue 537: Load::eval_cpu defers the byte fill; the evaluator fences
 +  // cross-stream consumers immediately after it returns. The fence
@@ -19,12 +20,11 @@
 +
 +  std::string file_path = get_temp_file("scalar_publish.mlxfn");
 +
-+  // Trace shape fixed at trace time: the constant is baked in as a
-+  // constant load, and the broadcast fill is the scalar-copy path.
 +  Stream gpu_stream = new_stream(Device::gpu);
 +  auto fun = [](const std::vector<array>& args) -> std::vector<array> {
-+    auto counts = full({10}, 0.0f, float32);
-+    return {add(counts, astype(full({2}, 1.0f, float32), int32))};
++    // The scalar constant bakes into the export as a size-1 load; the
++    // broadcast fill is the scalar-copy path that host-reads it.
++    return {astype(broadcast(array(2.0f, float32), {10}), int32)};
 +  };
 +  export_function(file_path, fun, {array({0})});
 +  auto imported = import_function(file_path);
@@ -39,7 +39,8 @@
 +    for (int i = 0; i < 10; ++i) {
 +      CHECK_EQ(data[i], expected);
 +      if (data[i] != expected) {
-+        MESSAGE("scalar constant consumed stale at trial " << trial << " position " << i);
++        MESSAGE("scalar constant consumed stale at trial " << trial
++            << " position " << i);
 +        break;
 +      }
 +    }
