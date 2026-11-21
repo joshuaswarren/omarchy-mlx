@@ -1835,6 +1835,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16,
           qmm_vec_q4_multi_subgroup_bf16_r2s16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s8,
+          qmm_vec_q4_word_subgroup_bf16_r2s8_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8_size};
     case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
       return {
           qmm_vec_q4_multi_subgroup_bf16,
