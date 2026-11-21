@@ -12,12 +12,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from reference import comparison
 
 ROOT = Path(__file__).resolve().parent
+PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '900'))
 TAG = 'v0.7.47'
 SOURCE = '83cf322bb3c238ed9781434573b3f133f84273e6'
 WHEEL = 'mlx_omarchy-0.32.4.dev202611181701+83cf322-cp314-cp314-linux_aarch64.whl'
@@ -180,26 +182,35 @@ print(json.dumps({'verified': p['verified'], 'mlx': m.version('mlx' if native el
 
 def suite(py, work, env):
     rows, failures, skips = {}, {}, []
+    paths = sorted((ROOT / 'suite').glob('test_*.py'))
     xml, events = work / 'suite.xml', work / 'suite-events.json'
     suite_env = dict(env, PYTHONPATH=str(ROOT), QUALIFY_SUITE_EVENTS=str(events))
-    for path in sorted((ROOT / 'suite').glob('test_*.py')):
+    for path in paths:
         print(f'Suite: {path.name}', flush=True)
         xml.unlink(missing_ok=True)
         events.unlink(missing_ok=True)
+        started = time.monotonic()
         rc, _ = command([py, '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
-                         '-p', 'suite_events', '--junitxml', xml, path], suite_env, 35, work)
+                         '-p', 'suite_events', '--junitxml', xml, path],
+                        suite_env, PER_FILE_TIMEOUT, work)
+        elapsed = time.monotonic() - started
         num = counts(xml.read_text()) if xml.exists() else None
         data = json.loads(events.read_text()) if events.exists() else None
         complete = bool(num and data and data['invalid'] == 0
                         and data is not None
                         and num['failed'] == len(data['failures'])
                         and num['skipped'] == len(set(data['skips'])))
-        rows[path.name] = {'exit': rc, 'counts': num, 'ids_complete': complete}
-        if rc not in (0, 1) or not complete or data is None:
-            break
-        failures.update(data['failures'])
-        skips.extend(data['skips'])
-    return {'files': rows, 'expected_files': 34, 'failures': failures,
+        row = {'exit': rc, 'counts': num, 'ids_complete': complete,
+               'seconds': round(elapsed, 1)}
+        if rc == 124:
+            row['timed_out'] = True
+        elif rc not in (0, 1):
+            row['aborted'] = True
+        rows[path.name] = row
+        if complete and data is not None:
+            failures.update(data['failures'])
+            skips.extend(data['skips'])
+    return {'files': rows, 'expected_files': len(paths), 'failures': failures,
             'skips': sorted(skips), **{
                 k: sum(r['counts'][k] for r in rows.values() if r['counts'])
                 for k in ('passed', 'failed', 'skipped')}}
