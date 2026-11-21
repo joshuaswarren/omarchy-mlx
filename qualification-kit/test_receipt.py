@@ -38,13 +38,14 @@ class ReceiptTest(unittest.TestCase):
 class PatchStateTest(unittest.TestCase):
     """The kit must know whether the mlx-lm it benchmarks carries the series."""
 
-    def test_unpatched_tree_is_not_applied(self):
+    def test_unpatched_tree_is_stock(self):
         with tempfile.TemporaryDirectory() as tmp:
             site = Path(tmp)
             (site / 'mlx_lm').mkdir()
             (site / 'mlx_lm' / 'generate.py').write_text('x = 1\n')
             state = qualify.patch_state(site)
-            self.assertFalse(state['applied'])
+            self.assertEqual(state['state'], 'stock')
+            self.assertFalse(state['series_present'])
             self.assertIsNone(state['record_sha256'])
             self.assertEqual(state['eager_swiglu_markers'], 0)
 
@@ -57,14 +58,24 @@ class PatchStateTest(unittest.TestCase):
             record = site / 'mlx_lm' / qualify.PATCH_RECORD
             record.write_text('series patches\n')
             state = qualify.patch_state(site)
-            self.assertTrue(state['applied'])
+            self.assertEqual(state['state'], 'patched')
+            self.assertTrue(state['series_present'])
             self.assertEqual(state['record_sha256'], qualify.sha(record))
             self.assertEqual(state['eager_swiglu_markers'], 2)
 
-    def test_missing_site_is_not_applied(self):
+    def test_missing_site_is_stock(self):
         state = qualify.patch_state(None)
-        self.assertFalse(state['applied'])
+        self.assertEqual(state['state'], 'stock')
         self.assertEqual(state['eager_swiglu_markers'], 0)
+
+    def test_stock_arm_is_stock_even_with_the_series_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'mlx_lm').mkdir()
+            (site / 'mlx_lm' / qualify.PATCH_RECORD).write_text('series patches\n')
+            state = qualify.stock_state(site)
+            self.assertEqual(state['state'], 'stock')
+            self.assertTrue(state['series_present'])
 
 
 class PairTest(unittest.TestCase):

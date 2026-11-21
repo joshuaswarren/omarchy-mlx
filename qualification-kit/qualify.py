@@ -23,8 +23,9 @@ from scripts.bench_decode import ids_digest
 
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
-TAG = 'qualification-r5'
+TAG = 'qualification-r6'
 WHEEL_TAG = 'qualification-r4'
+VENDOR_RELEASE = 'v0.7.47'
 SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
 WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
@@ -169,7 +170,7 @@ def compare_receipts(paths):
 def asset(work, cached, name):
     path = cached / name if cached else work / name
     if not cached:
-        release = 'v0.7.47' if name == VENDOR else WHEEL_TAG
+        release = VENDOR_RELEASE if name == VENDOR else WHEEL_TAG
         url = f'https://github.com/joshuaswarren/omarchy-mlx/releases/download/{release}/{name.replace("+", "%2B")}'
         subprocess.run(['curl', '-fLsS', '--max-time', '300', '-o', path, url],
                        check=True, timeout=310)
@@ -197,12 +198,14 @@ def interpreter_site():
 def patch_state(site):
     """The mlx-lm patch state of one site-packages tree.
 
-    ``applied`` says the series wrote its completion record, and the
-    marker count says the patched code is really there. A tree without the
-    record is an unpatched mlx-lm, whatever its version claims.
+    ``series_present`` says the completion record is there, and the marker
+    count says the patched code is really there. ``state`` says what the
+    row means: ``patched`` for the Linux release arm, which applies the
+    series, and ``stock`` for the macOS baseline arm, which does not.
     """
     if site is None:
-        return {'applied': False, 'record_sha256': None, 'eager_swiglu_markers': 0}
+        return {'state': 'stock', 'series_present': False, 'record_sha256': None,
+                'eager_swiglu_markers': 0}
     record = site / 'mlx_lm' / PATCH_RECORD
     markers = 0
     for path in sorted((site / 'mlx_lm').rglob('*.py')):
@@ -210,9 +213,23 @@ def patch_state(site):
             markers += path.read_text(errors='replace').count(PATCH_MARKER)
         except OSError:
             continue
-    return {'applied': record.is_file(),
-            'record_sha256': sha(record) if record.is_file() else None,
+    present = record.is_file()
+    return {'state': 'patched' if present else 'stock', 'series_present': present,
+            'record_sha256': sha(record) if present else None,
             'eager_swiglu_markers': markers}
+
+
+def stock_state(site):
+    """The state of an arm that measures stock mlx-lm by design.
+
+    The macOS baseline arm does not apply the series, so its row says
+    ``stock`` whatever the environment carries. The measured markers and
+    the completion record stay in the receipt so the row cannot be read
+    as a patched one.
+    """
+    state = patch_state(site)
+    state['state'] = 'stock'
+    return state
 
 
 def apply_patch_series(venv, env):
@@ -230,10 +247,15 @@ def apply_patch_series(venv, env):
 
 
 def patched_state(venv, env):
-    """Apply the series to a venv and return the state it left behind."""
+    """Apply the series to a venv and return the state it left behind.
+
+    A run whose state cannot be read is refused rather than measured: a
+    number without a known patch state cannot be compared with any other
+    row.
+    """
     apply_patch_series(venv, env)
     state = patch_state(site_packages(venv))
-    if not state['applied']:
+    if state['state'] != 'patched':
         raise RuntimeError('mlx_lm_patch_state_unreadable')
     return state
 
@@ -250,10 +272,7 @@ def setup(work, args, mac, env, receipt):
         rc, _ = command([sys.executable, '-c', code], env, 15)
         if rc:
             raise RuntimeError('existing_macos_runtime_versions_do_not_match')
-        state = patch_state(interpreter_site())
-        if not state['applied']:
-            raise RuntimeError('mlx_lm_not_patched')
-        receipt['mlx_lm_patches'] = state
+        receipt['mlx_lm_patches'] = stock_state(interpreter_site())
         return Path(sys.executable), None
     print('Setting up isolated Python environment.', flush=True)
     rc, _ = command([sys.executable, '-m', 'venv', work / 'venv'], env, 45)
@@ -278,8 +297,10 @@ def setup(work, args, mac, env, receipt):
         receipt['wheel'] = {'name': WHEEL, 'sha256': ASSETS[WHEEL], 'vendor_sha256': ASSETS[VENDOR]}
     if rc:
         raise RuntimeError(f'pip_install_exit_{rc}')
-    state = patched_state(work / 'venv', env)
-    receipt['mlx_lm_patches'] = state
+    if mac:
+        receipt['mlx_lm_patches'] = stock_state(site_packages(work / 'venv'))
+    else:
+        receipt['mlx_lm_patches'] = patched_state(work / 'venv', env)
     return py, wheel
 
 
