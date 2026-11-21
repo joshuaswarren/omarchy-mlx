@@ -22,4 +22,8 @@ class ElementwiseSpirvTest(unittest.TestCase):
                 str(SHADER), '-o', str(spv),
             ], check=True)
             asm = subprocess.check_output(['spirv-dis', str(spv)], text=True)
-        self.assertNotRegex(asm, r'OpExtInst [^\n]+\bCeil\b')
+        # G18G AGX3 packer refusals (agx3_pack_binary.c 14822/19737): no
+        # grounded encoding for these with a 16-bit operand. The module must
+        # lower them without the reserved set; the operand-width fusion is
+        # guarded by the hardware parity run, not this static check.
+        self.assertNotRegex(asm, r'OpExtInst [^\n]+\b(Ceil|Trunc|Round|RoundEven)\b')
