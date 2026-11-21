@@ -49,6 +49,7 @@ SNAPSHOT_RELPATH = Path("community-data") / "snapshot"
 
 METRIC_UNITS = {"tflops": "TFLOP/s", "median_ms": "ms", "min_ms": "ms",
                 "max_ms": "ms"}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class DatasetError(RuntimeError):
@@ -548,13 +549,21 @@ def cmd_list(records, skipped, source, as_json):
     return 0
 
 
-def cmd_show(records, prefix, args):
-    if args.source == "remote":
-        base = args.base_url.rstrip("/")
-        body = fetch_url(f"{base}/v1/results/{prefix}")
+def _fetch_remote_record(sha, args):
+    base = args.base_url.rstrip("/")
+    url = f"{base}/v1/results/{sha}"
+    body = fetch_url(url)
+    try:
         record = json.loads(body.decode("utf-8"))
-    else:
-        record = find_record(records, prefix)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise DatasetError(f"invalid JSON from {url}") from exc
+    if not isinstance(record, dict):
+        raise DatasetError(
+            f"invalid response from {url}: expected JSON object")
+    return record
+
+
+def _show_record(record):
     note = _correct_swapped_phandle(record)
     if note:
         # Visible in both worlds: a parsed key for JSON consumers, a
@@ -563,6 +572,19 @@ def cmd_show(records, prefix, args):
         print(note, file=sys.stderr)
     print(json.dumps(record, indent=2, sort_keys=True))
     return 0
+
+
+def cmd_show(records, prefix, args):
+    if args.source == "remote":
+        sha = record_sha(find_record(records, prefix))
+        if not SHA256_RE.fullmatch(sha or ""):
+            raise DatasetError(
+                f"matched record for prefix {prefix!r} has invalid "
+                f"sha256 {sha!r}")
+        record = _fetch_remote_record(sha, args)
+    else:
+        record = find_record(records, prefix)
+    return _show_record(record)
 
 
 def compare_groups(records, metric, size):
@@ -663,6 +685,9 @@ def main(argv=None):
         if args.command == "show" and not args.target:
             print("show needs a sha256 prefix.", file=sys.stderr)
             return 1
+        if (args.command == "show" and args.source == "remote"
+                and SHA256_RE.fullmatch(args.target)):
+            return _show_record(_fetch_remote_record(args.target, args))
         records, skipped, source = load_dataset(args, repo_root)
         records = filter_records(records, args)
         if args.command == "list":
