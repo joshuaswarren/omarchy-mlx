@@ -1,4 +1,4 @@
-"""Speculative verify and prompt lookup (mlx-lm 0.31.3 series).
+"""Speculative verify and prompt lookup (mlx-lm 0.31.3 and 0.32 series).
 
 The last-logits patches trim a cached forward to its final position, which left
 the upstream draft-model path with one row of logits for a multi-token verify
@@ -18,9 +18,9 @@ import pytest
 from tests.test_apply_mlxlm_series import SCRIPT, _pristine_venv
 
 
-@pytest.fixture(scope="module")
-def site(tmp_path_factory):
-    root = _pristine_venv(tmp_path_factory.mktemp("spec-lookup"), "0.31.3")
+@pytest.fixture(scope="module", params=["0.31.3", "0.32.0"])
+def site(request, tmp_path_factory):
+    root = _pristine_venv(tmp_path_factory.mktemp("spec-lookup"), request.param)
     r = subprocess.run(["bash", str(SCRIPT), str(root)], capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     return root / "lib" / "python3.11" / "site-packages" / "mlx_lm"
