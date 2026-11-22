@@ -80,7 +80,7 @@ macOS side (do these before touching the installer):
   destructive step in this plan, so its precondition is a backup that is
   known-good, not presumed-good.
 - Disk layout and container sizes are now captured, not pending:
-  [`receipts/2026-09-11-m1max-macos-capture`](../../receipts/2026-09-11-m1max-macos-capture/README.md)
+  `receipts/2026-09-11-m1max-macos-capture`
   holds the pre-repartition partition table, container GUID, boot setting and
   snapshot list to compare against afterwards.
 - **Free space is the blocker, measured 2026-09-11.** The 4 TB container is
@@ -94,9 +94,9 @@ macOS side (do these before touching the installer):
   worst case for it - the backup precondition above is doing real work here,
   not ceremony.
 - The native macOS baseline on this die is already banked, twice:
-  [`receipts/2026-09-10-native-macos-metal-baseline`](../../receipts/2026-09-10-native-macos-metal-baseline/README.md)
+  `receipts/2026-09-10-native-macos-metal-baseline`
   and
-  [`receipts/2026-09-11-m1max-native-baseline`](../../receipts/2026-09-11-m1max-native-baseline/README.md),
+  `receipts/2026-09-11-m1max-native-baseline`,
   with all six canonical digests reproducing across both sessions. That is the
   rule-1 oracle and the same-die denominator; no other machine can produce it,
   and it no longer needs doing before the install.

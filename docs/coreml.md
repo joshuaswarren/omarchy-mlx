@@ -69,7 +69,7 @@ Everything on the plan's section-14 checklist, and nothing invented:
   execution qualification. The report source is declared, not authenticated.
 
 The pinned public encoder report is
-[`2026-09-12-parakeet-h13-coverage.json`](../receipts/2026-09-12-parakeet-h13-coverage.json).
+`2026-09-12-parakeet-h13-coverage.json`.
 Use it with the downloaded encoder:
 
 ```bash
@@ -219,7 +219,7 @@ compiler pinned in `ane-compiler.lock`. `scripts/verify-ane-compiler.sh all`
 checks archive rejection, Linux compilation, compiler tests, and emission
 of a known H13 graph. These are host checks, not ANE execution proof.
 
-The [integration review](../receipts/2026-09-12-coreml-integration-review.json)
+The integration review
 records the executed checks and links the complete encoder coverage table.
 The public encoder remains unqualified. Compiler source `b12b03f` preserves
 contiguous split views and imports the normalized encoder, but rejects its
@@ -238,7 +238,7 @@ at `57cc36a2` remains historical schema-3 evidence. The old compiler release
 archive is incompatible with the new adapter; full compiler qualification
 and a matching immutable archive are required before replacing the pin.
 
-The [licensed reference receipt](../receipts/2026-09-12-licensed-parakeet-reference.json)
+The licensed reference receipt
 replaces the undocumented-rights JFK clip with a byte-verified CC-BY-4.0
 LibriSpeech utterance. ANE and GPU emit the same 104 tokens, including the
 pinned reference's erroneous suffix; CPU emits 100. Encoder tensors pass the
@@ -259,7 +259,7 @@ filterbank, recovered vDSP DFT schedule, vDSP dot-product reduction, guarded
 log, sequential normalization, signed-zero components, and single-rounded
 float32 FMA. The lock pins the capture inputs, stage manifest, and every stage
 tensor rather than trusting adjacent files. The
-[full comparison receipt](../receipts/2026-09-12-parakeet-mel-frontend/receipt.json)
+full comparison receipt
 records bit-pattern equality for all 384,128 mel values and every captured
 stage on the pinned fixture; numeric equality that treats signed zeros as
 identical is refused. Targeted regressions cover FMA midpoint, signed-zero,
@@ -284,7 +284,7 @@ final trace snapshot follows every comparison, so the exact-eight Vulkan
 compute gate includes any lazy work. The comparator maps the `mel_mask`,
 `mel_pinned`, and `mel_stepwise` aliases explicitly. The
 comparison receipt is
-[`2026-09-13-parakeet-vulkan-mel`](../receipts/2026-09-13-parakeet-vulkan-mel/receipt.json).
+`2026-09-13-parakeet-vulkan-mel`.
 The historical Apple run remains evidence only for the pinned ordinary-input
 fixture. The first finite-range rerun passed 8,192 full-exponent FMA triples,
 then failed the `2^-120` DFT with 1,028 real-component bit mismatches (first
