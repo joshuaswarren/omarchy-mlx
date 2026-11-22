@@ -50,7 +50,7 @@ env MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
 #    runs/score-bench-ab.json are the rerun: each leg printed its provenance line first, and each Qwen3-4B leg
 #    held the GPU lock and waited for 1-minute load under 1.0 before starting.
 # Quiet gate (Qwen3-4B legs):
-for i in $(seq 1 360); do awk -v l=$(cut -d' ' -f1 /proc/loadavg) 'BEGIN{exit !(l < 1.0)}' && break; sleep 5; done; echo quiet_gate_loadavg $(cat /proc/loadavg)
+for i in $(seq 1 360); do awk -v l=$(cut -d' ' -f1 /proc/loadavg) 'BEGIN{exit !(l < 1.0)}' && break; sleep 5; done; echo quiet_gate_loadavg $(cat /proc/loadavg); awk -v l=$(cut -d' ' -f1 /proc/loadavg) 'BEGIN{exit !(l < 1.0)}' || { echo QUIET_GATE_TIMEOUT; exit 4; }
 # Default arm: env -u MLX_OMARCHY_BATCH_WORK; 15000 arm: env MLX_OMARCHY_BATCH_WORK=15000 (same prefix on both commands)
 env -u MLX_OMARCHY_BATCH_WORK [venv-base]/bin/python -I -c "import sys; sys.path.insert(0, '[checkout]/scripts'); from pathlib import Path; import mlx_provenance as mp; p = mp.installed_provenance(expect_wheel=Path('[wheel-base]')); print(mp.provenance_line(p)); sys.exit(0 if p['verified'] == 'match' and p['version_match'] is True else 3)" \
   && env -u MLX_OMARCHY_BATCH_WORK MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
