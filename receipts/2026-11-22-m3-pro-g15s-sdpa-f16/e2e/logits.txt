@@ -1,0 +1,4 @@
+processes: {'off': 6, 'on': 6}
+{"ctx": "ctx64", "steps": 48, "vocab": 151936, "within_arm_bit_identical": {"off": true, "on": true}, "max_abs_dlogprob_full_vocab": 0.062408447265625, "max_abs_dlogprob_top1_off": 0.016080856323242188, "kl_off_on_mean": 2.306354092929275e-05, "kl_off_on_max": 8.843043603408333e-05, "argmax_equal_steps": 48}
+{"ctx": "ctx1100", "steps": 48, "vocab": 151936, "within_arm_bit_identical": {"off": true, "on": true}, "max_abs_dlogprob_full_vocab": 0.05609321594238281, "max_abs_dlogprob_top1_off": 0.010313987731933594, "kl_off_on_mean": 1.688704234779355e-05, "kl_off_on_max": 5.5625595222900275e-05, "argmax_equal_steps": 48}
+{"ctx": "ctx3000", "steps": 48, "vocab": 151936, "within_arm_bit_identical": {"off": true, "on": true}, "max_abs_dlogprob_full_vocab": 0.11878585815429688, "max_abs_dlogprob_top1_off": 0.016765594482421875, "kl_off_on_mean": 1.7563721200682688e-05, "kl_off_on_max": 8.880072842150615e-05, "argmax_equal_steps": 48}

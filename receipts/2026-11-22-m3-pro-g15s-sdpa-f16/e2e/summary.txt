@@ -1,0 +1,8 @@
+provenance: ['provenance: mlx-omarchy 0.32.4.dev202611220252+52ac565fc mx=0.32.4.dev202611220252+52ac565fc verified=match harness=4e3b83d2a-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:107b3cd434130872', 'provenance: mlx-omarchy 0.32.4.dev202611220252+52ac565fc mx=0.32.4.dev202611220252+52ac565fc verified=match harness=79d99c90c-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:107b3cd434130872']
+budget ctx | off tok/s mean [min-max] | on tok/s mean [min-max] | on/off | ids off/on | dispatches/token off -> on
+15000          64 |  39.58 [39.57-39.58] |  47.79 [47.65-47.90] | 1.207 (+20.7%) | ['93a508eefb889fa3']/['93a508eefb889fa3'] | [450.83] -> [378.27]
+15000        1100 |  16.82 [16.82-16.84] |  39.69 [39.60-39.78] | 2.359 (+135.9%) | ['7f41940d1af2018e']/['7f41940d1af2018e'] | [450.83] -> [414.55]
+15000        3000 |   8.16 [8.14-8.17] |  33.14 [33.04-33.21] | 4.059 (+305.9%) | ['58d209ddda254758']/['58d209ddda254758'] | [456.65] -> [420.37]
+unset(5000)    64 |  37.24 [37.21-37.26] |  44.95 [44.89-45.03] | 1.207 (+20.7%) | ['93a508eefb889fa3']/['93a508eefb889fa3'] | [450.83] -> [378.27]
+unset(5000)  1100 |  16.06 [16.04-16.07] |  36.36 [36.34-36.40] | 2.264 (+126.4%) | ['7f41940d1af2018e']/['7f41940d1af2018e'] | [450.83] -> [414.55]
+unset(5000)  3000 |   8.03 [8.02-8.04] |  30.71 [30.70-30.71] | 3.824 (+282.4%) | ['58d209ddda254758']/['58d209ddda254758'] | [456.65] -> [420.37]

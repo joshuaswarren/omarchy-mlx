@@ -80,6 +80,11 @@ nothing about Linux execution.
   76.1 / 370.5, Qwen3-4B-Instruct-2507 4-bit 43.9 / 195.3. Decode runs
   with zero CPU tensor dispatches
   ([2026-11-21 receipt](../receipts/2026-11-21-m3-pro-g15s-linux/README.md)).
+  f16 single-query attention runs the fused decode kernel by default:
+  Qwen3-4B-Instruct-2507 4-bit in f16 decodes at 45.0 / 36.4 / 30.7
+  tokens per second at 64 / 1100 / 3000 context tokens, against
+  37.2 / 16.1 / 8.0 on the composition, with identical token ids
+  ([2026-11-22 receipt](../receipts/2026-11-22-m3-pro-g15s-sdpa-f16/README.md)).
   ANE: Untested.
 - M4 (Mac mini, J773g / T8132, GPU G16G). GPU: Experimental. Requires the out-of-tree G16G GPU kernel driver (kernel 7.1.13, `asahi_m4`) and Mesa Honeykrisp with the Apple9 compute port (techmore/mesa `m4-honeykrisp-compute`), with `AGX_APPLE9_MAX_SHARED=32768`. With the M4 changes of #316-#321 the standing battery runs every suite and every capability-simulation profile; 34 of 800 cases fail, the same 34 that fail on `main` there, 32 of them compute pipelines the driver rejects (complex ops, eig, wide-row partition). Decode, 64 greedy tokens, mlx-lm 0.31.3: granite-4.0-1b-4bit 51.3 tok/s, Qwen2.5-1.5B-Instruct-4bit 63.2, gemma-3-1b-it-4bit 54.0, Qwen3.5-4B-MLX-4bit 15.7, Mistral-7B-Instruct-v0.3-4bit 18.6 ([receipt](../receipts/2026-11-01-m4-g16g-part1/README.md)). The receipt covers the numerical battery, the dispatch trace and device reopen. ANE: Data-only; h16 bring-up module.
 

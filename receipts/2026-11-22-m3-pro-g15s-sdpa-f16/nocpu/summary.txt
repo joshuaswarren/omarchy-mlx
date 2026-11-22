@@ -1,0 +1,18 @@
+provenance: mlx-omarchy 0.32.4.dev202611220507+nocpu.4e3b83d2a mx=0.32.4.dev202611220507+nocpu.4e3b83d2a verified=match harness=4e3b83d2a-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:645159aecef6255e
+switch off: 0 on: None
+16 8 128    37 disp 3->1 ind    43.1 ->   15.2 (2.84x) max|on-off| 4.88e-04
+16 8 128   263 disp 3->1 ind   147.8 ->   20.6 (7.17x) max|on-off| 1.22e-04
+16 8 128  1100 disp 3->2 ind   543.7 ->   91.8 (5.92x) max|on-off| 6.10e-05
+16 8 128  4096 disp 3->2 ind  2021.3 ->  254.2 (7.95x) max|on-off| 3.05e-05
+32 8 128    64 disp 3->1 ind    86.5 ->   17.6 (4.91x) max|on-off| 2.44e-04
+32 8 128   263 disp 3->1 ind   268.3 ->   29.2 (9.19x) max|on-off| 1.22e-04
+32 8 128  1024 disp 3->2 ind   941.9 ->  122.0 (7.72x) max|on-off| 6.10e-05
+32 8 128  1100 disp 3->2 ind  1011.1 ->  149.7 (6.75x) max|on-off| 6.10e-05
+32 8 128  2048 disp 3->2 ind  1878.3 ->  214.1 (8.77x) max|on-off| 6.10e-05
+32 8 128  4096 disp 3->2 ind  3880.9 ->  377.5 (10.28x) max|on-off| 3.05e-05
+32 8 64   263 disp 3->1 ind   160.3 ->   16.9 (9.49x) max|on-off| 1.22e-04
+32 8 64  1100 disp 3->2 ind   596.1 ->  102.2 (5.83x) max|on-off| 6.10e-05
+32 8 64  4096 disp 3->2 ind  2296.8 ->  176.7 (13.00x) max|on-off| 3.05e-05
+e2e ctx 64: 37.25 -> 44.95 tok/s (+20.7%) ids ['93a508eefb889fa3']/['93a508eefb889fa3'] disp 450.83->378.27
+e2e ctx 1100: 16.08 -> 36.36 tok/s (+126.1%) ids ['7f41940d1af2018e']/['7f41940d1af2018e'] disp 450.83->414.55
+e2e ctx 3000: 8.04 -> 30.73 tok/s (+282.2%) ids ['58d209ddda254758']/['58d209ddda254758'] disp 456.65->420.37

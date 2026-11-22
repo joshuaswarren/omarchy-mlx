@@ -1,0 +1,56 @@
+{
+ "label": "D03-head-default",
+ "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220450+4e3b83d2a mx=0.32.4.dev202611220450+4e3b83d2a verified=match harness=4e3b83d2a-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:10345795df2c7e2d",
+ "model": "qwen3-4b-2507-4bit",
+ "dtype": "float16 (set_dtype)",
+ "env_MLX_OMARCHY_SDPA_F16_NO_COOPMAT": null,
+ "env_MLX_OMARCHY_BATCH_WORK": null,
+ "peak_gpu_gib": 4.769,
+ "rows": [
+  {
+   "ctx": 64,
+   "gen": 128,
+   "decode_tps": [
+    44.853,
+    44.77,
+    44.914
+   ],
+   "decode_tps_median": 44.853,
+   "ids_sha": "93a508eefb889fa3",
+   "vk_compute_dispatches_per_token": 378.27,
+   "submissions_per_token": 20.711,
+   "forced_steps": 48,
+   "text": ", and run inference. ## High Level Architecture ``` +-------------------------+ | Host (CPU) | | - Scheduling | | - Buff"
+  },
+  {
+   "ctx": 1100,
+   "gen": 128,
+   "decode_tps": [
+    36.247,
+    36.098,
+    36.332
+   ],
+   "decode_tps_median": 36.247,
+   "ids_sha": "7f41940d1af2018e",
+   "vk_compute_dispatches_per_token": 414.55,
+   "submissions_per_token": 41.062,
+   "forced_steps": 48,
+   "text": ", and memory management. ## ANE The ANE is a static, pre-compiled, and pre-optimized C++ binary that runs on the GPU. It"
+  },
+  {
+   "ctx": 3000,
+   "gen": 128,
+   "decode_tps": [
+    30.409,
+    30.597,
+    30.643
+   ],
+   "decode_tps_median": 30.597,
+   "ids_sha": "58d209ddda254758",
+   "vk_compute_dispatches_per_token": 420.37,
+   "submissions_per_token": 44.102,
+   "forced_steps": 48,
+   "text": "`MLX_OMARCHY_DEVICE=0`, it defaults to `honeykrisp` and uses `honeykrisp` as the device name. The `honeykrisp` ICD is a "
+  }
+ ]
+}

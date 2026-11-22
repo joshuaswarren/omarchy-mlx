@@ -1,0 +1,2 @@
+gpu add ok [2.0, 2.0, 2.0, 2.0]
+cpu add refused: vector::_M_range_check: __n (which is 0) >= this->size() (which is 0)
