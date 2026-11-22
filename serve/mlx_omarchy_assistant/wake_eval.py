@@ -27,19 +27,22 @@ MIN_SECONDS = 2.0  # pad short clips so the detector sees streaming context
 def load_pcm(path: Path) -> bytes:
     """Read a clip as 16 kHz mono int16 PCM, padded to MIN_SECONDS.
 
-    16 kHz mono files come through the stdlib wave module, so the tests
-    need nothing beyond numpy. Other rates are resampled with
-    soundfile/scipy — the generator's espeak output is 22.05 kHz.
+    16 kHz mono WAV comes through the stdlib wave module, so the tests
+    need nothing beyond numpy. Anything else (other rates, FLAC) goes
+    through soundfile, and the generator's espeak output is 22.05 kHz.
     """
     import wave
-    with wave.open(str(path), "rb") as handle:
-        native = (handle.getnchannels() == 1
-                  and handle.getsampwidth() == 2
-                  and handle.getframerate() == SAMPLE_RATE)
-        if native:
-            pcm = handle.readframes(handle.getnframes())
-        else:
-            pcm = _resample_to_16k(path)
+    try:
+        with wave.open(str(path), "rb") as handle:
+            native = (handle.getnchannels() == 1
+                      and handle.getsampwidth() == 2
+                      and handle.getframerate() == SAMPLE_RATE)
+            if native:
+                pcm = handle.readframes(handle.getnframes())
+            else:
+                pcm = _resample_to_16k(path)
+    except wave.Error:
+        pcm = _resample_to_16k(path)
     need = int(MIN_SECONDS * SAMPLE_RATE) * 2  # bytes
     if len(pcm) < need:
         pcm = pcm + bytes(need - len(pcm))
@@ -240,33 +243,112 @@ def direct_sweep(manifest: list[dict], clips_dir: Path, model_path: str,
             for t in thresholds for f in floors]
 
 
+def corpus_row(files: list[Path], model_path: str, threshold: float,
+               floor: float, gap_seconds: float = 0.5, session=None) -> dict:
+    """Stream non-wake audio through one detector and count the wakes.
+
+    This is the false-wake-per-hour measurement: one continuous stream
+    through one model, the way a listener runs, with the wake events
+    counted instead of the clips. Files are joined by a short silence so
+    one utterance cannot bleed into the next.
+    """
+    from mlx_omarchy_assistant import wake_word
+    step = detector_chunk() * 2
+    gap = bytes(int(gap_seconds * SAMPLE_RATE) * 2)
+    detector = wake_word.WakeWordDetector(
+        model_path, threshold=threshold, vad_rms_floor=floor, session=session)
+    wakes = 0
+    audio_bytes = 0
+    for path in files:
+        pcm = load_pcm(path)
+        audio_bytes += len(pcm)
+        for off in range(0, len(pcm), step):
+            piece = pcm[off:off + step]
+            if len(piece) < step:
+                piece = piece + bytes(step - len(piece))
+            if detector.process(piece):
+                wakes += 1
+        for off in range(0, len(gap), step):
+            piece = gap[off:off + step]
+            if len(piece) < step:
+                piece = piece + bytes(step - len(piece))
+            if detector.process(piece):
+                wakes += 1
+    hours = audio_bytes / 2 / SAMPLE_RATE / 3600
+    return {
+        "threshold": threshold,
+        "vad_rms_floor": floor,
+        "files": len(files),
+        "hours": round(hours, 4),
+        "wakes": wakes,
+        "wakes_per_hour": round(wakes / hours, 3) if hours else None,
+    }
+
+
+def corpus_sweep(files: list[Path], model_path: str, thresholds: list[float],
+                 floors: list[float], session=None) -> list[dict]:
+    return [corpus_row(files, model_path, t, f, session=session)
+            for t in thresholds for f in floors]
+
+
 def main(argv: list[str] | None = None, session=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--clips-dir", required=True, type=Path)
+    parser.add_argument("--manifest", type=Path,
+                        help="clip manifest (JSON list of file/variant/text/label)")
+    parser.add_argument("--clips-dir", type=Path,
+                        help="directory the manifest's files live in")
+    parser.add_argument("--corpus-dir", type=Path,
+                        help="directory of non-wake audio, streamed in order")
+    parser.add_argument("--corpus-list", type=Path,
+                        help="text file: one audio path per line, in order")
     parser.add_argument("--model", required=True)
     parser.add_argument("--thresholds", default="0.3,0.35,0.4,0.45,0.5,0.55,0.6")
     parser.add_argument("--floors", default="0,150,300,450,600")
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--mode", choices=["direct", "curve"], default="direct",
-                        help="direct: the shipped detector (ground truth); "
-                             "curve: fast scan over recorded score curves")
+    parser.add_argument("--mode", choices=["direct", "curve", "corpus"],
+                        default="direct",
+                        help="direct: the shipped detector over a manifest "
+                             "(ground truth); curve: fast scan over recorded "
+                             "score curves; corpus: one continuous stream over "
+                             "non-wake audio, counting wakes per hour")
     args = parser.parse_args(argv)
 
-    manifest = json.loads(args.manifest.read_text())
     thresholds = [float(t) for t in args.thresholds.split(",")]
     floors = [float(f) for f in args.floors.split(",")]
     curves = []
-    if args.mode == "direct":
-        rows = direct_sweep(manifest, args.clips_dir, args.model,
-                            thresholds, floors, session=session)
+    if args.mode == "corpus":
+        if args.corpus_list:
+            files = [Path(line.strip()) for line in
+                     args.corpus_list.read_text().splitlines() if line.strip()]
+        elif args.corpus_dir:
+            files = sorted(p for p in args.corpus_dir.iterdir()
+                           if p.suffix.lower() in (".wav", ".flac"))
+        else:
+            parser.error("--mode corpus needs --corpus-dir or --corpus-list")
+        rows = corpus_sweep(files, args.model, thresholds, floors,
+                            session=session)
     else:
-        curves = build_curves(manifest, args.clips_dir, args.model,
-                              session=session)
-        rows = sweep(curves, thresholds, floors)
+        if not args.manifest or not args.clips_dir:
+            parser.error(f"--mode {args.mode} needs --manifest and --clips-dir")
+        manifest = json.loads(args.manifest.read_text())
+        if args.mode == "direct":
+            rows = direct_sweep(manifest, args.clips_dir, args.model,
+                                thresholds, floors, session=session)
+        else:
+            curves = build_curves(manifest, args.clips_dir, args.model,
+                                  session=session)
+            rows = sweep(curves, thresholds, floors)
     args.out.write_text(json.dumps(
         {"rows": rows, "curves": curves}, indent=1) + "\n")
     print(f"mode={args.mode}")
+    if args.mode == "corpus":
+        print(f"{'threshold':>9} {'vad_floor':>9} {'files':>6} {'hours':>8} "
+              f"{'wakes':>6} {'per hour':>9}")
+        for row in rows:
+            print(f"{row['threshold']:>9} {row['vad_rms_floor']:>9} "
+                  f"{row['files']:>6} {row['hours']:>8} {row['wakes']:>6} "
+                  f"{row['wakes_per_hour']:>9}")
+        return 0
     print(f"{'threshold':>9} {'vad_floor':>9} {'TPR':>7} {'FPR':>7}  (tp fn fp tn)")
     for row in rows:
         print(f"{row['threshold']:>9} {row['vad_rms_floor']:>9} "
