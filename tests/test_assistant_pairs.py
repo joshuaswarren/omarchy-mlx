@@ -988,7 +988,7 @@ class StubWorkerLifecycleTests(BasePairTest):
         chat_record, decision_record = budget.admit_and_reserve_batch(
             [("chat", 1024, ""), ("decision", 1024, "")],
             pair_id="everyday", home=self.home, available_bytes=10 * GiB)
-        chat_port, decision_port = managed.free_port(), managed.free_port()
+        chat_port, decision_port = managed.free_ports(2)
         chat = self.spawn("chat", chat_port, 4096, chat_record)
         decision = self.spawn("decision", decision_port, 4096, decision_record)
         self.assertTrue(managed.wait_health(
