@@ -234,6 +234,10 @@ void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream);
 // dispatch (the MLX_OMARCHY_FUSED_CHAIN gate also covers it).
 bool kv_direct_enabled();
 
+// MLX_OMARCHY_ROPE_NORM_FOLD=0 keeps the RMSNorm -> RoPE fold off (the
+// MLX_OMARCHY_FUSED_CHAIN gate also covers it); on by default.
+bool rope_norm_fold_enabled();
+
 class Device;
 
 // One fused decode route variable (MLX_OMARCHY_FUSED_GEMV or
