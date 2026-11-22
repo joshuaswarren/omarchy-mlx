@@ -843,6 +843,43 @@ TEST_CASE("a chip-scoped mesa-git-sha file binds the driver to that chip") {
   std::filesystem::remove_all(prefix);
 }
 
+TEST_CASE("a driver chip scope matches a whole token of the device name") {
+  using mlx::core::omarchy::require_packaged_driver_chip;
+  CHECK_NOTHROW(require_packaged_driver_chip("G17C", "G17C"));
+  CHECK_NOTHROW(require_packaged_driver_chip("G17C", "Apple M5 Max (G17C B0)"));
+  CHECK_THROWS(require_packaged_driver_chip("G17", "Apple M5 Max (G17C B0)"));
+  CHECK_THROWS(require_packaged_driver_chip("G17", "Apple M5 Pro (G17S B0)"));
+  CHECK_THROWS(require_packaged_driver_chip("G17C", "Apple M5 (G17C0)"));
+  CHECK_THROWS(require_packaged_driver_chip("G13", "Apple M1 (G13G B1)"));
+  CHECK_THROWS(require_packaged_driver_chip("17C", "Apple M5 Max (G17C B0)"));
+}
+
+TEST_CASE("the mesa-git-sha fields come from the first line only") {
+  using namespace mlx::core::omarchy;
+  const auto prefix = std::filesystem::temp_directory_path() /
+      ("runtimegate-fields-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(prefix);
+  std::filesystem::create_directories(
+      std::filesystem::path(packaged_mesa_git_sha_path(prefix.string()))
+          .parent_path());
+  const auto check = [&](const char* text, const char* sha, const char* chip) {
+    {
+      std::ofstream output(packaged_mesa_git_sha_path(prefix.string()),
+                           std::ios::binary | std::ios::trunc);
+      REQUIRE(output.good());
+      output << text;
+    }
+    CHECK(packaged_mesa_git_sha(prefix.string()) == sha);
+    CHECK(packaged_mesa_git_sha_chip(prefix.string()) == chip);
+  };
+  check(" \t d4ad4a4dce \t G17C \t \n", "d4ad4a4dce", "G17C");
+  check("d4ad4a4dce G17C", "d4ad4a4dce", "G17C");
+  check("d4ad4a4dce G17C\r\n", "d4ad4a4dce", "G17C");
+  check("d4ad4a4dce\r\n", "d4ad4a4dce", "");
+  check("d4ad4a4dce\nG17C\n", "d4ad4a4dce", "");
+  std::filesystem::remove_all(prefix);
+}
+
 TEST_CASE("ANE lock files are created and repaired to world access") {
   using mlx::core::omarchy::ane::detail::RuntimeOwnership;
   const auto directory = std::filesystem::temp_directory_path() /

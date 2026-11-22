@@ -410,10 +410,29 @@ inline std::string packaged_mesa_git_sha_chip(const std::string& prefix) {
   return fields.size() < 2 ? std::string{} : fields[1];
 }
 
+// True when |chip| is a whole token of |device_name|: no letter or digit
+// directly before or after it ("G17C" matches "(G17C B0)", not "G17C0").
+inline bool device_name_has_chip(
+    const std::string& device_name,
+    const std::string& chip) {
+  const auto is_word = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0;
+  };
+  for (size_t at = device_name.find(chip); at != std::string::npos;
+       at = device_name.find(chip, at + 1)) {
+    const size_t end = at + chip.size();
+    if ((at == 0 || !is_word(device_name[at - 1])) &&
+        (end == device_name.size() || !is_word(device_name[end]))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 inline void require_packaged_driver_chip(
     const std::string& chip,
     const std::string& device_name) {
-  if (!chip.empty() && device_name.find(chip) == std::string::npos) {
+  if (!chip.empty() && !device_name_has_chip(device_name, chip)) {
     throw std::runtime_error(
         "Honeykrisp driver package is qualified for " + chip +
         " only, found device '" + device_name + "'");

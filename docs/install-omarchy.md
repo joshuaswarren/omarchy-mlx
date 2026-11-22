@@ -455,7 +455,7 @@ Expected SHA (`resolve_expected_sha_policy`):
 - When that variable is unset and the packaged ICD was selected, the
   expected value is the first field of `mesa-git-sha`. A second field
   is a chip name, and startup refuses a device whose name does not
-  contain it.
+  contain it as a whole word (`G17C` matches `(G17C B0)`, not `G17C0`).
   `expected_sha_source` is `packaged file`. A missing or unreadable file
   leaves the expectation empty.
 - The check runs when the device's Vulkan driver id is the Honeykrisp id
