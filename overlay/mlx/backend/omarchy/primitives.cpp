@@ -4994,6 +4994,27 @@ size_t linalg_batch_count(const Shape& shape) {
   return batch;
 }
 
+// G18G runs the latency-bound float linalg workgroups at 128 lanes (M6X-08);
+// every other part keeps the 256-lane kernel.
+omarchy::ComputeKernel linalg_g18_kernel(
+    omarchy::CommandEncoder& encoder,
+    omarchy::ComputeKernel kernel) {
+  if (encoder.device().capabilities().device_name.find("G18G") ==
+      std::string::npos) {
+    return kernel;
+  }
+  switch (kernel) {
+    case omarchy::ComputeKernel::LinalgInverseF32:
+      return omarchy::ComputeKernel::LinalgInverseF32G18;
+    case omarchy::ComputeKernel::LinalgQrF32:
+      return omarchy::ComputeKernel::LinalgQrF32G18;
+    case omarchy::ComputeKernel::LinalgEigF32:
+      return omarchy::ComputeKernel::LinalgEigF32G18;
+    default:
+      return kernel;
+  }
+}
+
 // Every linalg kernel runs one workgroup per batch matrix and reads
 // matrix = aux_offset + gl_WorkGroupID.x with no grid-stride loop, so the
 // host chunks the batch: no dispatch requests more than the 65535
@@ -7517,7 +7538,11 @@ void Inverse::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(work), binding(out), binding(scratch)};
   dispatch_linalg_batch(
-      encoder, omarchy::ComputeKernel::LinalgInverseF32, bindings, params, batch);
+      encoder,
+      linalg_g18_kernel(encoder, omarchy::ComputeKernel::LinalgInverseF32),
+      bindings,
+      params,
+      batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -8100,7 +8125,10 @@ void QRF::eval_gpu(
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(work), binding(q), binding(r)};
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgQrF32, bindings, params, batch);
+      linalg_g18_kernel(encoder, omarchy::ComputeKernel::LinalgQrF32),
+      bindings,
+      params,
+      batch);
 }
 namespace {
 
@@ -12885,7 +12913,11 @@ void Eig::eval_gpu(
       binding(scratch),
       compute_ev ? binding(vacc) : binding(work)};
   dispatch_linalg_batch(
-      encoder, omarchy::ComputeKernel::LinalgEigF32, bindings, params, batch);
+      encoder,
+      linalg_g18_kernel(encoder, omarchy::ComputeKernel::LinalgEigF32),
+      bindings,
+      params,
+      batch);
   linalg_check_status(
       scratch,
       encoder,

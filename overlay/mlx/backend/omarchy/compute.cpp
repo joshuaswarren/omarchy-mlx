@@ -665,6 +665,9 @@
 #include "linalg_qr_f32.h"
 #include "linalg_eigh_f32.h"
 #include "linalg_eig_f32.h"
+#include "linalg_eig_f32_g18.h"
+#include "linalg_inverse_f32_g18.h"
+#include "linalg_qr_f32_g18.h"
 #include "linalg_svd_f32.h"
 #include "linalg_svd_finalize_f32.h"
 #include "complex_elementwise.h"
@@ -1376,16 +1379,22 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {linalg_cholesky_f32, linalg_cholesky_f32_size};
     case ComputeKernel::LinalgInverseF32:
       return {linalg_inverse_f32, linalg_inverse_f32_size};
+    case ComputeKernel::LinalgInverseF32G18:
+      return {linalg_inverse_f32_g18, linalg_inverse_f32_g18_size};
     case ComputeKernel::LinalgLuF32:
       return {linalg_lu_f32, linalg_lu_f32_size};
     case ComputeKernel::LinalgQrF32:
       return {linalg_qr_f32, linalg_qr_f32_size};
+    case ComputeKernel::LinalgQrF32G18:
+      return {linalg_qr_f32_g18, linalg_qr_f32_g18_size};
     case ComputeKernel::LinalgEighF32:
       return {linalg_eigh_f32, linalg_eigh_f32_size};
     case ComputeKernel::LinalgSvdF32:
       return {linalg_svd_f32, linalg_svd_f32_size};
     case ComputeKernel::LinalgEigF32:
       return {linalg_eig_f32, linalg_eig_f32_size};
+    case ComputeKernel::LinalgEigF32G18:
+      return {linalg_eig_f32_g18, linalg_eig_f32_g18_size};
     case ComputeKernel::LinalgSvdFinalizeF32:
       return {linalg_svd_finalize_f32, linalg_svd_finalize_f32_size};
     // Complex64Transport: complex64 transport and elementwise. See

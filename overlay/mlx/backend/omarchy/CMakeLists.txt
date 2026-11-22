@@ -876,6 +876,11 @@ omarchy_shader(linalg_eigh_f32 shaders/linalg_eigh.comp)
 omarchy_shader(linalg_eig_f32 shaders/linalg_eig.comp)
 omarchy_shader(linalg_svd_f32 shaders/linalg_svd.comp)
 omarchy_shader(linalg_svd_finalize_f32 shaders/linalg_svd_finalize.comp)
+# G18G runs the latency-bound float linalg workgroups at 128 lanes (M6X-08);
+# the 256-lane blobs above stay the default on every other part.
+omarchy_shader(linalg_inverse_f32_g18 shaders/linalg_inverse.comp -DLINALG_WG=128)
+omarchy_shader(linalg_qr_f32_g18 shaders/linalg_qr.comp -DLINALG_WG=128)
+omarchy_shader(linalg_eig_f32_g18 shaders/linalg_eig.comp -DLINALG_WG=128)
 omarchy_shader(fast_rms_norm_f32 shaders/fast_norm.comp)
 omarchy_shader(fast_rms_norm_f16 shaders/fast_norm.comp -DUSE_FP16=1)
 omarchy_shader(fast_rms_norm_bf16 shaders/fast_norm.comp -DUSE_BF16=1)

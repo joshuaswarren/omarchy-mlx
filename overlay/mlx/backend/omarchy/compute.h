@@ -1161,6 +1161,12 @@ enum class ComputeKernel : uint16_t {
   ElementwisePowerF32,
   ElementwisePowerF16,
   ElementwisePowerBF16,
+  // G18G builds of the latency-bound float linalg kernels at 128 lanes
+  // (M6X-08); the 256-lane kernels above stay the default elsewhere.
+  // Appended to keep profile kernel ids stable.
+  LinalgInverseF32G18,
+  LinalgQrF32G18,
+  LinalgEigF32G18,
   Count,
 };
 
