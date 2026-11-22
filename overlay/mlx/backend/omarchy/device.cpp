@@ -274,12 +274,17 @@ HoneykrispIcdSelection configure_honeykrisp_icd() {
   const std::vector<std::string> candidates = system_icd_candidates();
   const char* driver_files = std::getenv("VK_DRIVER_FILES");
   const char* icd_filenames = std::getenv("VK_ICD_FILENAMES");
+  const char* foreign_allowed = std::getenv("MLX_OMARCHY_FOREIGN_ICD");
   HoneykrispIcdSelection selection;
   if (driver_files != nullptr && driver_files[0] != '\0') {
-    selection = resolve_honeykrisp_icd_detail(candidates, driver_files, {});
+    selection =
+        resolve_honeykrisp_icd_detail(candidates, driver_files, {},
+                                      foreign_allowed);
     selection.user_override = true;
   } else if (icd_filenames != nullptr && icd_filenames[0] != '\0') {
-    selection = resolve_honeykrisp_icd_detail(candidates, icd_filenames, {});
+    selection =
+        resolve_honeykrisp_icd_detail(candidates, icd_filenames, {},
+                                      foreign_allowed);
     selection.user_override = true;
   } else {
     // No user override: the packaged recipe ICD wins over a stock system
