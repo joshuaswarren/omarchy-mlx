@@ -295,13 +295,6 @@ inline bool batch_over_budget(
 // batch against Honeykrisp's 7.56 GiB heap without this (2026-09-08).
 inline constexpr size_t kBatchByteBudgetDivisor = 16;
 
-// One buffered node's access sets for wave scheduling: the byte ranges a
-// node reads and writes (SPIR-V reflected readonly/writeonly split).
-struct WaveNode {
-  std::span<const TrackedRange> reads;
-  std::span<const TrackedRange> writes;
-};
-
 // Greedy earliest-wave schedule for one batch: level[i] is the smallest
 // wave index such that every earlier tape node that node i hazards sits
 // in a strictly smaller wave. A hazard is RAW (i reads a range an earlier
@@ -675,6 +668,18 @@ class MLX_API CommandEncoder {
   // outlive its pool.
   std::vector<std::shared_ptr<void>> retired_pools_;
   std::vector<std::function<void()>> completed_handlers_;
+
+  // Per-submission scratch (the per-token arena): this storage survives
+  // submit(), so emit_pending() and submit() stop re-allocating the same
+  // vectors on every batch.
+  std::vector<WaveNode> wave_nodes_;
+  std::vector<uint32_t> wave_levels_buf_;
+  WaveIndex wave_index_;
+  std::vector<VkSemaphore> submit_wait_sems_;
+  std::vector<uint64_t> submit_wait_values_;
+  std::vector<VkPipelineStageFlags> submit_wait_stages_;
+  std::vector<VkSemaphore> submit_signal_sems_;
+  std::vector<uint64_t> submit_signal_values_;
 };
 
 MLX_API CommandEncoder& get_command_encoder(Stream s);
