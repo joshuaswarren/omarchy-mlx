@@ -388,7 +388,7 @@ case "${1:-}" in
     purge=0
     [[ "${2:-}" == "--purge" ]] && purge=1
     rm -rf "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info" \
-      "$BIN/mlx-omarchy-serve" "$BIN/omarchy-mlx-serve" \
+      "$BIN/mlx-omarchy-parakeet" "$BIN/mlx-omarchy-serve" "$BIN/omarchy-mlx-serve" \
       "$APPS/mlx-omarchy-chat.desktop" "$APPS/mlx-omarchy-demo.desktop" \
       "$HOME/.config/systemd/user/mlx-omarchy-chat.service"
     if ((purge)); then

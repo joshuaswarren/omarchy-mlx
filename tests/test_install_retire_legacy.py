@@ -19,6 +19,7 @@ LAUNCHERS = (
     "mlx-omarchy-demo",
     "mlx-omarchy-chat",
     "mlx-omarchy-info",
+    "mlx-omarchy-parakeet",
     "mlx-omarchy-serve",
     "omarchy-mlx-serve",
 )

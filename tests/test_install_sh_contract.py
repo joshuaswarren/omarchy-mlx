@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 
 INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
-LAUNCHERS = ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat", "mlx-omarchy-info")
+LAUNCHERS = ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat", "mlx-omarchy-info",
+             "mlx-omarchy-parakeet")
 
 # Deterministic offline contract tests: never resolve the latest release
 # over the network (api.github.com rate limits make that flake).
