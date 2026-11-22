@@ -112,16 +112,22 @@ that bounds it.
    no f32 round-trip. They carry zero ordering risk. Then build, run the
    llvmpipe battery, run `python3 scripts/bench_decode.py
    --self-test`, and write a value-test for the new paths.
-7. Dependency-gated barriers. The blanket pre+post dispatch barrier pair
-   costs ~35 us per intra-submission gap. Also, 71-75% of consecutive
-   dispatch pairs are provably disjoint
-   (`receipts/2026-09-02-gpu-profile-decode.md`). A dependency tracker is
-   the second-order lever. It emits a barrier only when a dispatch's
-   bindings overlap an unsynced written range. **A missed dependency is a
-   silent wrong value.** It is the exact class that produced the v0.3.0
-   defects. The tracker must be conservative. It must over-approximate.
-   Gate it by name where uncertain. Add a dependency-trace test that
-   asserts every refusal is reproduced after the swap.
+7. Dependency-gated barriers (shipped, default on). The command encoder
+   tracks per-buffer read and write byte ranges per open batch
+   (`DependencyTracker` in `overlay/mlx/backend/omarchy/dep_tracker.h`,
+   `CommandEncoder::gated_barriers()` in
+   `overlay/mlx/backend/omarchy/encoder.cpp`), using SPIR-V reflected
+   read/write binding masks for dispatches, and emits a barrier at batch
+   head and whenever a dispatch, copy, fill, or inline update overlaps an
+   unsynced range. `MLX_OMARCHY_GATED_BARRIERS=0` restores unconditional
+   pre+post barriers. See `docs/install-omarchy.md` ("Development
+   override") for the barrier behavior, and
+   `overlay/tests/omarchy/test_dep_tracker.cpp` and
+   `overlay/tests/omarchy/test_runtime.cpp` for the tracker and hazard
+   tests. Wave scheduling (`MLX_OMARCHY_WAVE_SCHED`) builds on this
+   tracker with per-part defaults in `wave_sched_default_part`
+   (`overlay/mlx/backend/omarchy/device.h`); qualifying additional Apple
+   chips for default-on wave scheduling requires Apple hardware.
 8. Value tests for the four still-live defects in v0.3.1. `nn.gelu_approx`
    and `gelu_fast_approx` are pytest-context only. `fast_sdpa_vector`
    disagrees with its own decomposition. No standalone repro exists yet.
