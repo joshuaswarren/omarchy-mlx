@@ -6571,6 +6571,118 @@ TEST_CASE("gather_qmm multi-output decode rows give the one-output kernel's outp
   }
 }
 
+TEST_CASE("gather_qmm staged index broadcast: every output row uses its own lhs/rhs element") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // The G18G staged-index guard lives in gather_qmm.comp. Pin the scalar
+  // kernel so no subgroup or tiled route can mask the index path under
+  // test; the staged broadcast then carries the lhs/rhs words.
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  setenv("MLX_OMARCHY_GATHER_QMM_TILE", "0", 1);
+  setenv("MLX_OMARCHY_GATHER_QMM_ROWS", "0", 1);
+  std::mt19937 gen(83);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  auto dtype_round_trip = [&](const std::vector<float>& values, Dtype dtype) {
+    array f32(values.begin(),
+              Shape{static_cast<int>(values.size())},
+              float32);
+    array round = astype(astype(f32, dtype, stream), float32, stream);
+    round.eval();
+    synchronize(stream);
+    const float* data = round.data<float>();
+    return std::vector<float>(data, data + round.size());
+  };
+  const int experts = 8;
+  const std::vector<uint32_t> rhs_pattern{7, 1, 4, 1, 0, 6, 2, 5};
+  // index_count 8 exercises the staged broadcast (decode shape); 300
+  // crosses the stage bound and exercises the direct-load fallback.
+  for (int index_count : {8, 300}) {
+    for (Dtype dtype : {bfloat16, float16, float32}) {
+      if (dtype == float16 && !float16_available()) {
+        continue;
+      }
+      const int k = 128;
+      const int n = 64;
+      std::vector<uint32_t> w_all;
+      std::vector<float> scales_all;
+      std::vector<float> biases_all;
+      std::vector<HostQuantizedWeights> host_w;
+      for (int e = 0; e < experts; ++e) {
+        std::vector<float> matrix(static_cast<size_t>(n) * k);
+        for (auto& value : matrix) {
+          value = dist(gen);
+        }
+        HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 64, 4);
+        // The host reference sees the same rounded scales/biases the
+        // kernel sees, so row mismatches name the index path, not
+        // quantization rounding.
+        host.scales = dtype_round_trip(host.scales, dtype);
+        host.biases = dtype_round_trip(host.biases, dtype);
+        host_w.push_back(host);
+        w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+        scales_all.insert(scales_all.end(), host.scales.begin(), host.scales.end());
+        biases_all.insert(biases_all.end(), host.biases.begin(), host.biases.end());
+      }
+      std::vector<float> x_all(static_cast<size_t>(index_count) * k);
+      for (auto& value : x_all) {
+        value = dist(gen);
+      }
+      // Same contract as the scales: the reference and the kernel both
+      // see the dtype-rounded activations.
+      x_all = dtype_round_trip(x_all, dtype);
+      std::vector<uint32_t> lhs_v(index_count);
+      std::vector<uint32_t> rhs_v(index_count);
+      for (int b = 0; b < index_count; ++b) {
+        lhs_v[b] = static_cast<uint32_t>(b);
+        rhs_v[b] = rhs_pattern[b % rhs_pattern.size()];
+      }
+      array w_words(w_all.begin(), Shape{experts, n, k / 8}, uint32);
+      array scales = astype(
+          array(scales_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+      array biases = astype(
+          array(biases_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+      array x = astype(
+          array(x_all.begin(), Shape{index_count, 1, k}, float32), dtype, stream);
+      array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+      array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+      array out = gather_qmm(x, w_words, scales, biases, lhs, rhs,
+          /*transpose=*/true, 64, 4, "affine", std::nullopt,
+          /*sorted_indices=*/false, stream);
+      REQUIRE(evaluation_error(out).empty());
+      const int64_t kernel =
+          omarchy::trace::counters().last_dispatched_kernel.load();
+      const omarchy::ComputeKernel expected =
+          dtype == float32 ? omarchy::ComputeKernel::GatherQmmF32
+          : dtype == float16 ? omarchy::ComputeKernel::GatherQmmF16
+                             : omarchy::ComputeKernel::GatherQmmBF16;
+      INFO("index_count=" << index_count << " dtype=" << dtype);
+      CHECK(kernel == static_cast<int64_t>(expected));
+      const std::vector<float> values = readback_f32(stream, out);
+      REQUIRE_EQ(values.size(), static_cast<size_t>(index_count) * n);
+      const double tol =
+          dtype == float32 ? 1e-4 : dtype == float16 ? 2e-3 : 8e-3;
+      for (int b = 0; b < index_count; ++b) {
+        const float* x_row = x_all.data() + static_cast<size_t>(b) * k;
+        std::vector<float> x_row_v(x_row, x_row + k);
+        const std::vector<float> ref = host_quantized_matmul(
+            host_w[rhs_v[b]], x_row_v, 1, n, k, 64, 4);
+        INFO("batch element " << b << " rhs=" << rhs_v[b]);
+        for (int c = 0; c < n; ++c) {
+          const double got = values[static_cast<size_t>(b) * n + c];
+          const double want = ref[c];
+          CHECK_LE(std::fabs(got - want),
+              tol * (1.0 + std::fabs(want)));
+        }
+      }
+    }
+  }
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+}
+
 TEST_CASE("gather_qmm mxfp4 decode: the subgroup kernel matches the scalar kernel and a host reference") {
   if (!compute_available()) {
     return;
