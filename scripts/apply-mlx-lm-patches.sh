@@ -85,6 +85,7 @@ SERIES_PATCHES=(
   mlx-lm-prefill-step-memory.patch
   mlx-lm-kv-presize.patch
   mlx-lm-speculative-verify.patch
+  mlx-lm-gdn-verify-seq.patch
   mlx-lm-kv-host-offset.patch
 )
 series_already_applied() {
@@ -337,6 +338,12 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-eager-swiglu.py" "$VENV"
 # stream_generate). Both series; the 0.32 file carries the same change on the
 # newer generate.py API (direct cache imports, the stream parameter).
 apply mlx-lm-speculative-verify.patch
+# Qwen3.5 GDN layers in a verify pass: the S > 1 route (conv1d over the window and the
+# multi-token gated delta) does not give the S == 1 route's bits, so prompt lookup
+# changed the greedy ids of a hybrid model (Qwen3.8-2B code prompt). Verify and replay
+# passes (MLX_OMARCHY_GDN_SEQ_ROWS, set by _omarchy_verify_pass) feed GDN layers one
+# token at a time through the S == 1 route. Both series.
+apply mlx-lm-gdn-verify-seq.patch
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
