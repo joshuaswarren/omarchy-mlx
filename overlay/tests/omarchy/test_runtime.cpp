@@ -883,6 +883,15 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
         omarchy::batch_work_fallback());
 
+  // The G15S row (M3 Pro, 14 GPU cores) takes 15000
+  // (receipts/2026-11-22-m3-pro-g15s-batch-work): Qwen3-4B decode p50
+  // 3.98 ms / p99 4.31 ms, all-submissions tail stays at the 5000
+  // single-dispatch prefill floor (p99 45.17 ms / max 45.52 ms vs
+  // 44.80 / 44.89 ms; 20000 raised 4B p99 to 65.14 ms and 30000
+  // reached 80.08 ms with 7.40 ms decode p50).
+  CHECK(omarchy::calibrated_batch_work("Apple M3 Pro (G15S B1)") == 15000);
+  CHECK(omarchy::calibrated_batch_work("Apple M3 (G15G B1)") == 0);
+
   // The G16S row (M4 Pro) takes 15000 (receipts/2026-11-15-m4-pro-g16s-batch-work):
   // the largest swept budget whose submission tail stays at the 5000 level
   // (Qwen3-4B p99 27.8 ms, Qwen3-8B max 54.7 ms); 20000 raised the 4B
@@ -933,6 +942,7 @@ TEST_CASE("work budget resolves per device name, not per process") {
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
   CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M3 Pro (G15S B1)") == 15000);
   CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
