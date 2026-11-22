@@ -1741,7 +1741,7 @@ struct IntElementwiseG18OpBlobs {
 };
 
 const IntElementwiseG18OpBlobs& int_elementwise_g18_blobs(Dtype dtype) {
-  static const IntElementwiseG18OpBlobs i64_ops{{
+  static const IntElementwiseG18OpBlobs i64_ops{{{
       {omarchy::shaders::elementwise_i64_g18_op0,
        omarchy::shaders::elementwise_i64_g18_op0_size},
       {omarchy::shaders::elementwise_i64_g18_op1,
@@ -1780,8 +1780,8 @@ const IntElementwiseG18OpBlobs& int_elementwise_g18_blobs(Dtype dtype) {
        omarchy::shaders::elementwise_i64_g18_op17_size},
       {omarchy::shaders::elementwise_i64_g18_op18,
        omarchy::shaders::elementwise_i64_g18_op18_size},
-  }};
-  static const IntElementwiseG18OpBlobs u64_ops{{
+  }}};
+  static const IntElementwiseG18OpBlobs u64_ops{{{
       {omarchy::shaders::elementwise_u64_g18_op0,
        omarchy::shaders::elementwise_u64_g18_op0_size},
       {omarchy::shaders::elementwise_u64_g18_op1,
@@ -1820,7 +1820,7 @@ const IntElementwiseG18OpBlobs& int_elementwise_g18_blobs(Dtype dtype) {
        omarchy::shaders::elementwise_u64_g18_op17_size},
       {omarchy::shaders::elementwise_u64_g18_op18,
        omarchy::shaders::elementwise_u64_g18_op18_size},
-  }};
+  }}};
   return dtype == uint64 ? u64_ops : i64_ops;
 }
 
