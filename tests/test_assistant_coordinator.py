@@ -1,7 +1,10 @@
+import sys
 import threading
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
 from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, validate_decision, explanation_disagrees, format_decision_event
 
