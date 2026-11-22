@@ -415,6 +415,21 @@ class LayaState:
         return Path(args.model).resolve().name
 
 
+def _criteria_error(qtype, crit):
+    """Why sequence.render_options cannot render these criteria, or None."""
+    if qtype == "choice":
+        if not (isinstance(crit, dict)
+                or isinstance(crit, list) and all(isinstance(c, str) for c in crit)):
+            return "'criteria' must be an object or a list of strings"
+    elif qtype == "score":
+        if not isinstance(crit, list):
+            return "'criteria' must be a list"
+    elif crit and not (isinstance(crit, dict)
+                       and all(isinstance(crit.get(k) or "", str) for k in ("false", "true"))):
+        return "'criteria' must be an object whose 'false' and 'true' are strings"
+    return None
+
+
 def _make_handler(state: LayaState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "mlx-omarchy-laya/0.1"
@@ -493,6 +508,9 @@ def _make_handler(state: LayaState):
             except json.JSONDecodeError as exc:
                 self._send_json(400, {"error": "invalid JSON: %s" % exc})
                 return
+            if not isinstance(req, dict):
+                self._send_json(400, {"error": "request body must be a JSON object"})
+                return
             if not isinstance(req.get("state"), (str, dict, list)):
                 self._send_json(400, {"error": "'state' must be a string or JSON object"})
                 return
@@ -510,6 +528,10 @@ def _make_handler(state: LayaState):
                     return
                 if "instructions" not in qdef:
                     self._send_json(400, {"error": "question %r: missing 'instructions'" % qid})
+                    return
+                error = _criteria_error(qdef["type"], qdef.get("criteria"))
+                if error:
+                    self._send_json(400, {"error": "question %r: %s" % (qid, error)})
                     return
             try:
                 result = state.engine.system_one(req["state"], questions)
