@@ -6772,6 +6772,48 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     const float* ref_data = reference.data<float>();
     std::vector<float> expected(ref_data, ref_data + reference.size());
 
+    // CPU reference (the G18G guard check): dequant the exact words, scales
+    // and biases the device buffers carry and contract in double on the
+    // host. The tile kernel can then be proven identical to a reference
+    // that never ran on the GPU - the guard this test exists for is a
+    // driver defect, so a GPU-built reference could share it.
+    parts[0].eval();
+    parts[1].eval();
+    parts[2].eval();
+    array x_f32 = astype(x, float32, stream);
+    x_f32.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const uint32_t* w_words_h = parts[0].data<uint32_t>();
+    std::vector<float> scales_h =
+        readback_f32(stream, astype(parts[1], float32, stream));
+    std::vector<float> biases_h =
+        readback_f32(stream, astype(parts[2], float32, stream));
+    const float* x_h = x_f32.data<float>();
+    const int words_per_row = k / 8;
+    const int groups = k / 64;
+    std::vector<float> expected_cpu(static_cast<size_t>(rows) * n);
+    for (int p = 0; p < rows; ++p) {
+      const uint32_t* expert_words =
+          w_words_h + static_cast<size_t>(rhs_v[p]) * n * words_per_row;
+      const float* expert_scales =
+          scales_h.data() + static_cast<size_t>(rhs_v[p]) * n * groups;
+      const float* expert_biases =
+          biases_h.data() + static_cast<size_t>(rhs_v[p]) * n * groups;
+      for (int c = 0; c < n; ++c) {
+        double acc = 0.0;
+        for (int inner = 0; inner < k; ++inner) {
+          uint32_t word = expert_words[c * words_per_row + inner / 8];
+          uint32_t code = (word >> (4 * (inner % 8))) & 0xfu;
+          int group = inner / 64;
+          double dequant = static_cast<double>(code) *
+                  expert_scales[c * groups + group] +
+              expert_biases[c * groups + group];
+          acc += static_cast<double>(x_h[p * k + inner]) * dequant;
+        }
+        expected_cpu[static_cast<size_t>(p) * n + c] = static_cast<float>(acc);
+      }
+    }
+
     auto run_gather = [&](const char* tile) {
       setenv("MLX_OMARCHY_GATHER_QMM_TILE", tile, 1);
       array out = gather_qmm(
@@ -6806,6 +6848,7 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
 
     double vs_ref = rel_l2(tiled.first, expected);
     double vs_row = rel_l2(tiled.first, per_row.first);
+    double vs_cpu = rel_l2(tiled.first, expected_cpu);
     size_t identical = 0;
     for (size_t i = 0; i < expected.size(); ++i) {
       identical += tiled.first[i] == per_row.first[i];
@@ -6813,21 +6856,34 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     std::cout << "[gather_qmm_tile] rows=" << rows << " E=" << experts << " N=" << n
               << " K=" << k << (dtype == float16 ? " f16" : " bf16")
               << (shuffled ? " shuffled" : "") << " tile-vs-f32-ref " << vs_ref
+              << " tile-vs-cpu-ref " << vs_cpu
               << " tile-vs-per-row " << vs_row << " bit-identical "
               << identical << "/" << expected.size() << "\n";
     std::string what_ref = "tile route vs f32 reference, rel L2 " +
         std::to_string(vs_ref) + " rows=" + std::to_string(rows);
+    std::string what_cpu = "tile route vs CPU reference, rel L2 " +
+        std::to_string(vs_cpu) + " rows=" + std::to_string(rows);
     std::string what_row = "tile route vs per-row route, rel L2 " +
         std::to_string(vs_row) + " rows=" + std::to_string(rows);
     CHECK_MESSAGE(vs_ref <= tolerance, what_ref);
+    CHECK_MESSAGE(vs_cpu <= tolerance, what_cpu);
     CHECK_MESSAGE(vs_row <= tolerance, what_row);
   };
 
   run_case({50, 0, 31, 33, 64, 22}, 128, 128, bfloat16, false, 0.01);
   run_case({1, 95}, 64, 192, bfloat16, false, 0.01);
   run_case({50, 0, 31, 33, 64, 22}, 128, 128, bfloat16, true, 0.01);
+  // M6X-01 (mesa#737 guard): runs so short that one 32-row tile holds 8+
+  // expert runs. On the old 256-lane kernel, subgroups 4-7 read expert 0
+  // and scanned different run boundaries - divergent barriers, the exact
+  // hang shape. The 128-lane kernel must produce the CPU-reference output.
+  run_case({4, 4, 4, 4, 4, 4, 4, 4, 32, 28}, 128, 128, bfloat16, false, 0.01);
+  run_case({2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 32, 32}, 64, 128,
+           bfloat16, false, 0.01);
   if (float16_available()) {
     run_case({40, 40, 40}, 192, 64, float16, false, 0.005);
+    run_case({4, 4, 4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 24, 32}, 128, 64, float16,
+             false, 0.005);
   }
 }
 
