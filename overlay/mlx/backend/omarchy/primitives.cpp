@@ -173,6 +173,23 @@ const QmmGeometry& qmm_geometry() {
   return geometry;
 }
 
+// MLX_OMARCHY_QMM_NARROW_COLS=<n> (unset: off): a 2x16 decode multi call
+// whose members total at most <n> output columns runs the 2x4 geometry
+// instead, so a 2560-output matvec launches 320 workgroups, not 80. The
+// per-lane chain is the same in both geometries, so the bytes match.
+const QmmGeometry& qmm_geometry_for(uint32_t total_columns) {
+  static const uint32_t narrow = [] {
+    const char* env = std::getenv("MLX_OMARCHY_QMM_NARROW_COLS");
+    return env == nullptr ? 0u : static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }();
+  static const QmmGeometry narrow_geometry{
+      8u, omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16,
+      omarchy::ComputeKernel::QmmVecQ4MultiSubgroupBF16, "2x4"};
+  const QmmGeometry& geometry = qmm_geometry();
+  return geometry.columns == 32u && total_columns <= narrow ? narrow_geometry
+                                                            : geometry;
+}
+
 bool apple_norm_2560_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_2560");
@@ -9543,10 +9560,17 @@ bool dispatch_quantized_gemv_group(
   uint32_t total_groups = 0;
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi kernel only.
+  uint32_t member_columns = 0;
+  for (auto& member : members) {
+    if (member.node.inputs().size() == 4 && member.node.inputs()[1].ndim() == 2) {
+      member_columns += static_cast<uint32_t>(member.node.inputs()[1].shape(0));
+    }
+  }
+  const QmmGeometry& call_geometry = qmm_geometry_for(member_columns);
   const uint32_t group_columns =
       (!token_route && outgate == nullptr && dtype == bfloat16 &&
        subgroup_ready)
-      ? qmm_geometry().columns
+      ? call_geometry.columns
       : 8u;
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -9790,7 +9814,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            call_geometry.multi)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
