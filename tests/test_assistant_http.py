@@ -2,11 +2,14 @@ import http.client
 import json
 import os
 import tempfile
+import sys
 import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
 from mlx_omarchy_assistant import server as server_module
 from mlx_omarchy_assistant.server import AssistantServer, voice_ready
