@@ -792,6 +792,20 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
   return device_name.find("G16S") != std::string::npos;
 }
+
+// mxfp4 fp-mode subgroup gather decode (gather_qmm_sub.comp -DFP_MODE).
+// On G18G (Apple M6) that kernel reads the e8m0 scale byte wrong — every
+// output lands ~2^-125 below expected (omarchy-mlx#655) — so the part
+// keeps the scalar kernel until the driver fix lands. Measured wrong on
+// m6, correct on M1 (jwm1) with the same kernel dispatched.
+// MLX_OMARCHY_GATHER_QMM_SUB=1 forces the route on for bisection; =0
+// forces it off everywhere, as before. Pure.
+inline bool gather_qmm_sub_fp_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G18G") == std::string::npos;
+}
 // Row rule of the two-pass route: the dequantize pass costs one weight read and one bf16 write per call, which enough rows amortize.
 // G16S, milliseconds per call, single-kernel against two-pass (best of three runs of six calls):
 //   N x K 4096x4096: 256 rows 1.76 against 3.03, 512 rows 3.34 against 3.06, 2048 rows 12.65 against 10.66

@@ -6211,6 +6211,20 @@ std::vector<float> alpha1_pattern(size_t count, uint32_t seed) {
 
 }  // namespace
 
+TEST_CASE("gather_qmm fp subgroup decode defaults off on G18G") {
+  // omarchy-mlx#655: gather_qmm_sub.comp -DFP_MODE reads the e8m0 scale
+  // byte wrong on G18G (outputs ~2^-125 low); the scalar kernel is right.
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "1", 1);
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+}
+
 TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain") {
   if (!compute_available()) {
     return;

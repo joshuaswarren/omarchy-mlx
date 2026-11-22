@@ -3468,10 +3468,10 @@ void dispatch_gather_qmm(
   // MLX_OMARCHY_GATHER_QMM_SUB=0 turns it off too. nvfp4 (group 16) and mxfp8 (bits 8) stay scalar.
   bool use_sub_fp = false;
   if (fp_mode && m == 1 && transpose && bits == 4u && group_size == 32u && !out_global_scale) {
-    const char* sub_fp_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& fp_caps = encoder.device().capabilities();
     const auto& fp_hw = encoder.device().hardware_capabilities();
-    use_sub_fp = (sub_fp_env == nullptr || sub_fp_env[0] != '0') &&
+    use_sub_fp = omarchy::gather_qmm_sub_fp_default_part(
+            fp_caps.device_name) &&
         fp_caps.subgroup_size == 32u &&
         (fp_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         fp_caps.storage_buffer_16bit_access;
