@@ -1831,20 +1831,29 @@ void dispatch_int_elementwise64(
     std::span<const omarchy::ComputeBinding> bindings,
     omarchy::ComputeKernel kernel,
     uint32_t count) {
+  const uint32_t groups = omarchy::compute_dispatch_group_count(count);
+  if (groups == 0) {
+    return;
+  }
   static std::atomic<bool> split_i64{false};
   static std::atomic<bool> split_u64{false};
   auto& split = dtype == uint64 ? split_u64 : split_i64;
-  if (!split.load(std::memory_order_relaxed)) {
+  bool use_split = split.load(std::memory_order_relaxed);
+  if (!use_split) {
+    // Probe only the pipeline creation inside the try: dispatch_compute
+    // mutates encoder state before later throw sites (descriptor sets,
+    // batch work, device loss), and catching those here would rerun the
+    // dispatch on faulted state and hide the real error.
     try {
-      encoder.dispatch_compute(
-          kernel,
-          bindings,
-          params,
-          omarchy::compute_dispatch_group_count(count));
-      return;
+      (void)encoder.device().compute().pipeline(kernel);
     } catch (const std::runtime_error&) {
       split.store(true, std::memory_order_relaxed);
+      use_split = true;
     }
+  }
+  if (!use_split) {
+    encoder.dispatch_compute(kernel, bindings, params, groups);
+    return;
   }
   const auto& [bytes, size] = int_elementwise_g18_blobs(dtype).ops.at(
       params.operation);
@@ -1856,7 +1865,7 @@ void dispatch_int_elementwise64(
           size / sizeof(uint32_t)},
       bindings,
       params,
-      omarchy::compute_dispatch_group_count(count));
+      groups);
 }
 
 // The params fill and dispatch behind dispatch_int_elementwise,
