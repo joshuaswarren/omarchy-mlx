@@ -172,6 +172,8 @@ _FAKE_WORKER = textwrap.dedent(
             os._exit(9)
         if mode == "hang-second" and submits == 2:
             time.sleep(600)
+        if mode == "slow-first" and submits == 1:
+            time.sleep(float(os.environ.get("MLX_FAKE_SLOW_MS", "6000")) / 1000)
         # Echo the submit's own payload back on every emitted output, so
         # the parent can prove these bytes crossed on this submit.
         sys.stdout.flush()
@@ -462,6 +464,77 @@ class ResidentAneWorkerTest(unittest.TestCase):
         ledger = self._ledger()
         self.assertIn("open", ledger[ledger.index("batch"):])
         self.assertIn("close", ledger[ledger.index("batch", 2):])
+
+    def test_the_first_submit_gets_the_staging_window(self):
+        # First-time staging of a large bundle can outlast the
+        # steady-state job deadline: the first submit after session open
+        # is bounded by the staging deadline, not the job deadline.
+        # "slow-first" stalls only the first submit for longer than
+        # deadline_ms + the client grace.
+        session = self._session(mode="slow-first", deadline_ms=200)
+        session.staging_deadline_ms = 30000
+        session.start()
+        results = session.submit(
+            bundle="A", tag="L00", inputs={"q": b"ab"}, outputs=("y",)
+        )
+        self.assertEqual(results["y"], b"ab")
+        self.assertEqual(session.submissions, 1)
+        self.assertEqual(session.timeouts, 0)
+        # The second submit is back under the steady-state deadline.
+        results = session.submit(
+            bundle="A", tag="L01", inputs={"q": b"cd"}, outputs=("y",)
+        )
+        self.assertEqual(results["y"], b"cd")
+
+    def test_a_submit_near_the_window_end_renews_the_scope(self):
+        # A submit that starts while the window still has time -- but
+        # less than the submit's own budget -- dies mid-submit on the
+        # worker's own clock (until = batch_until). The scope must
+        # renew when the remaining window cannot cover one submit, not
+        # only after it has fully expired. Here the 6 s window is
+        # larger than the submit's deadline+grace budget but nearly
+        # consumed when the submit starts.
+        session = self._session(deadline_ms=200)
+        with session:
+            session.begin_batch(6000)
+            time.sleep(1.0)  # ~5.0 s left of a 6 s window
+            results = session.submit(
+                bundle="A", tag="L00", inputs={"q": b"ab"}, outputs=("y",)
+            )
+            self.assertEqual(results["y"], b"ab")
+            self.assertEqual(session.timeouts, 0)
+            counters = session.counters()
+            self.assertEqual(counters["batch_opens"], 2)
+            self.assertEqual(counters["submissions"], 1)
+
+    def test_an_expired_batch_scope_renews_before_the_next_submit(self):
+        # A session held open past its batch deadline must not make every
+        # later submit fail: the next submit closes the stale scope and
+        # opens a fresh window instead of dying on an expired deadline.
+        session = self._session()
+        with session:
+            session.begin_batch(80)
+            time.sleep(0.15)
+            results = session.submit(
+                bundle="A", tag="L00", inputs={"q": b"ab"}, outputs=("y",)
+            )
+            self.assertEqual(results["y"], b"ab")
+            self.assertEqual(session.timeouts, 0)
+            counters = session.counters()
+            self.assertEqual(counters["batch_opens"], 2)
+            self.assertEqual(counters["submissions"], 1)
+
+    def test_alive_is_false_once_the_worker_child_has_exited(self):
+        session = self._session()
+        session.start()
+        self.assertTrue(session.alive)
+        # A death outside the client's own error path (a stray signal,
+        # a daemon teardown) leaves the Popen held but dead; a liveness
+        # check that only tests handle presence would let a caller
+        # reuse the corpse.
+        session._process.kill()
+        session._process.wait()
+        self.assertFalse(session.alive)
 
     def test_batch_scope_refusals_are_named(self):
         session = self._session()
