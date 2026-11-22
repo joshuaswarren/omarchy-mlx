@@ -97,10 +97,10 @@ struct GateExpectations {
   bool coopmat_claim;
   bool subgroup32_arithmetic; // qmm vec subgroup gate
   bool bf16_gemv_gate;        // subgroup32 + SHUFFLE_RELATIVE
-  bool sdpa_native_gate;      // (coopmat or G16S)+32+wg>=1024+smem+ops
+  bool sdpa_native_gate;      // (coopmat or G16S / G15S one-pass)+32+wg>=1024+smem+ops
 };
 
-GateExpectations expectations() {
+GateExpectations expectations(uint32_t sdpa_keys = 64u) {
   const auto& c = caps();
   constexpr VkSubgroupFeatureFlags kDecodeOps =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
@@ -115,7 +115,7 @@ GateExpectations expectations() {
       (c.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
   e.sdpa_native_gate = (c.cooperative_matrix_f32_8 ||
                         omarchy::sdpa_decode_f16_without_coopmat_part(
-                            c.device_name)) &&
+                            c.device_name, sdpa_keys)) &&
       c.subgroup_size == 32u &&
       c.max_compute_work_group_invocations >= 1024u &&
       c.max_compute_work_group_size[0] >= 1024u &&
@@ -273,15 +273,15 @@ bool coopmat_backed() {
 }
 
 // True when the runtime hardware itself meets the fused decode SDPA gate
-// (cooperative matrix or a G16S part, subgroup32, 1024-lane workgroup,
-// shared stream, basic+arithmetic+shuffle).
-bool sdpa_native_backed() {
+// (cooperative matrix, G16S, or G15S in the one-pass range; subgroup32,
+// 1024-lane workgroup, shared stream, basic+arithmetic+shuffle).
+bool sdpa_native_backed(uint32_t keys) {
   constexpr VkSubgroupFeatureFlags kDecodeOps =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
   const auto& c = hw();
   return (c.cooperative_matrix_f32_8 ||
-          omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&
+          omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name, keys)) &&
       c.subgroup_size == 32u &&
       c.max_compute_work_group_invocations >= 1024u &&
       c.max_compute_work_group_size[0] >= 1024u &&
@@ -754,12 +754,12 @@ TEST_CASE("sdpa decode routes per the profile") {
     return;
   }
   Stream stream = gpu_stream();
-  const auto e = expectations();
 
   constexpr int heads = 2;
   constexpr int kv_heads = 2;
   constexpr int keys = 64;
   constexpr int width = 64;
+  const auto e = expectations(static_cast<uint32_t>(keys));
   std::mt19937 gen(13);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   std::vector<float> q_values(heads * width);
@@ -827,7 +827,8 @@ TEST_CASE("sdpa decode routes per the profile") {
       q, k, v, 1.0f / std::sqrt(float(width)), "", {}, std::nullopt, false,
       stream);
   std::string error = evaluation_error(output);
-  if (e.sdpa_native_gate && !sdpa_native_backed()) {
+  const bool backed = sdpa_native_backed(static_cast<uint32_t>(keys));
+  if (e.sdpa_native_gate && !backed) {
     unsetenv("MLX_OMARCHY_SDPA_DECODE_NATIVE");
     std::cout << "[capsim sdpa] profile=" << g_profile
               << " -> named refusal\n";
@@ -843,7 +844,7 @@ TEST_CASE("sdpa decode routes per the profile") {
   std::cout << "[capsim sdpa] profile=" << g_profile << " -> "
             << (e.sdpa_native_gate ? "SdpaDecodeNativeF16"
                                    : "composed f16 SDPA")
-            << " (backed=" << sdpa_native_backed() << ")\n";
+            << " (backed=" << backed << ")\n";
 }
 
 // The composition-exact bf16 decode SDPA arm (sdpa_decode_native.comp
