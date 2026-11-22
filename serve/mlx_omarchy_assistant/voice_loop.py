@@ -348,6 +348,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="mlx-omarchy-voice-loop",
         description="Offline wake -> STT -> local reply -> TTS loop")
     parser.add_argument("--home", type=Path, required=True)
+    parser.add_argument("--prepare", action="store_true",
+                        help="download and verify the wake, VAD, speech recognition and "
+                             "speech models, then exit (the only step that uses the network)")
     parser.add_argument("--reply-url", default="http://127.0.0.1:8080/v1/chat/completions")
     parser.add_argument("--model", default="default")
     parser.add_argument("--wake-model", default="hey_jarvis")
@@ -386,6 +389,48 @@ def build_endpointer(args, home: Path, session=None, detector=None):
                       prefilter_floor=args.vad_prefilter_floor), notice
 
 
+def prepare_models(args) -> int:
+    """Fetch and hash-verify every model the loop uses. Verified files are
+    skipped and a half-written one is fetched again, so a rerun is safe."""
+    import sys
+
+    from . import vad as vad_mod
+    from . import wake_word
+    from .recognition import Recognition
+    from .synthesis import Synthesis
+
+    failed = []
+
+    def step(name, fetch):
+        try:
+            result = fetch()
+        except Exception as exc:  # every fetcher's refusal names the file
+            failed.append(f"{name}: {exc}")
+            return
+        if isinstance(result, dict) and not result.get("verified"):
+            failed.append(f"{name}: {result.get('reason', 'not verified')}")
+            return
+        where = result.get("path") or result.get("backend") if isinstance(result, dict) else result
+        print(f"{name}: ok ({where})")
+
+    def approved(cls):
+        def fetch():
+            model = cls(args.home)
+            try:
+                return model.prepare(True)
+            finally:
+                model.close()
+        return fetch
+
+    step("wake word", lambda: wake_word.prepare(args.home, args.wake_model))
+    step("voice activity", lambda: vad_mod.prepare(args.home))
+    step("speech recognition", approved(Recognition))
+    step("speech synthesis", approved(Synthesis))
+    for line in failed:
+        print(f"error: {line}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def main(argv=None) -> int:
     import sys
 
@@ -394,6 +439,8 @@ def main(argv=None) -> int:
     from .synthesis import Synthesis
 
     args = build_arg_parser().parse_args(argv)
+    if args.prepare:
+        return prepare_models(args)
     detector = wake_word.WakeWordDetector(
         wake_word.prepare(args.home, args.wake_model), threshold=args.wake_threshold)
     endpointer, notice = build_endpointer(args, args.home, detector=detector)

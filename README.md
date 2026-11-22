@@ -77,7 +77,10 @@ mlx-lm, oMLX, mlx-serve, TensorFold, sushi, llama.cpp (Vulkan) and MCDMA have be
   the resident Parakeet model, streams the reply from a local
   `mlx_lm.server` or oMLX, and speaks each sentence with Kokoro as soon
   as it is written. Audio plays through PipeWire's default sink. The
-  reply URL must be a loopback address.
+  reply URL must be a loopback address. Run it once with `--prepare` to
+  download and verify the wake, voice activity, Parakeet and Kokoro
+  models; a rerun skips verified files and fetches a half-written one
+  again.
 
 Chat models download from Hugging Face the first time you use them. You
 approve each download first. The default pairs: Everyday is Qwen3.5-9B

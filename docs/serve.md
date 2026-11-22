@@ -520,9 +520,10 @@ mlx-omarchy-serve serve qwen3.5-9b-mlx-4bit --context 4096
 ```
 
 The command checks memory and disk before asking for download approval.
+`mlx-omarchy-serve pull <target>` runs the same checks and approval and downloads the model without starting it. It prints `target:` and `model:` lines. A second run finds the complete snapshot and downloads nothing; an interrupted download resumes, and an incomplete snapshot is refused.
 Manual unqualified targets print a warning. Noninteractive download requires `--yes` and an explicit target.
 Targets can be catalog IDs, Hugging Face repository IDs, or local model directories.
-Use `--help` to inspect the flags for `recommend`, `plan`, `serve`, `catalog`, `reserve`, and `unreserve`.
+Use `--help` to inspect the flags for `recommend`, `plan`, `serve`, `pull`, `catalog`, `reserve`, and `unreserve`.
 With all recommendation flags false, `recommend` selects no model.
 
 ## Memory and context
