@@ -1,114 +1,7 @@
 {
   "wheel": "0.32.4.dev202611220356+nocpu.cec6771e5",
   "build": "MLX_BUILD_CPU=OFF Release (docs/parity-contract.md 2.1); compiled backend/no_cpu/{primitives,device_info,compiled}.cpp and only backend/cpu/{encoder,eval}.cpp",
-  "harness_note": "harness=cec6771e5-dirty: the checkout carried uncommitted edits to comments (encoder.h), docs/install-omarchy.md and this receipt's README.md/commands.txt only; scripts/mlx_provenance.py and the tools used were unchanged",
-  "controls": {
-    "provenance": {
-      "output": {
-        "dist": "mlx-omarchy",
-        "verified": "match",
-        "mismatch": null,
-        "files": [
-          {
-            "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
-            "label": "mlx.core extension",
-            "sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
-            "record_sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
-            "match": true
-          },
-          {
-            "path": "mlx/lib/libmlx.so",
-            "label": "mlx/lib/libmlx.so",
-            "sha256": "dbb12cbd45e326ec15216ca7da8b06be6c6266c4dd66195c410dcc03ff0891d4",
-            "record_sha256": "dbb12cbd45e326ec15216ca7da8b06be6c6266c4dd66195c410dcc03ff0891d4",
-            "match": true
-          }
-        ],
-        "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
-        "mx_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
-        "version_match": true,
-        "expected_wheel": "[nocpu-wheel]/mlx_omarchy-0.32.4.dev202611220356+nocpu.cec6771e5-cp314-cp314-linux_aarch64.whl"
-      },
-      "leg": {
-        "exit": 0,
-        "wall_s": 0.16,
-        "gpu_kernel_lines_before": 36,
-        "gpu_kernel_lines_after": 36,
-        "new_gpu_kernel_lines": "(none)",
-        "temps_before": [
-          "NAND_Flash_Temperature 40C",
-          "Battery_Hotspot 33C",
-          "Charge_Regulator_Temp 55C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "temps_after": [
-          "NAND_Flash_Temperature 40C",
-          "Battery_Hotspot 33C",
-          "Charge_Regulator_Temp 55C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "loadavg_before": "0.68 1.30 1.11 2/1318 2140161",
-        "governor": "schedutil",
-        "ac_online": "1",
-        "timeout_s": 120
-      }
-    },
-    "gpu_add": {
-      "command": "mx.add(mx.arange(1,1025,f32), mx.full((1024,),2.0)) on the default device",
-      "output": "device Device(gpu, 0) gpu_add_sum 526848.0 expected_ok True",
-      "leg": {
-        "exit": 0,
-        "wall_s": 0.05,
-        "gpu_kernel_lines_before": 36,
-        "gpu_kernel_lines_after": 36,
-        "new_gpu_kernel_lines": "(none)",
-        "temps_before": [
-          "NAND_Flash_Temperature 40C",
-          "Battery_Hotspot 33C",
-          "Charge_Regulator_Temp 55C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "temps_after": [
-          "NAND_Flash_Temperature 40C",
-          "Battery_Hotspot 33C",
-          "Charge_Regulator_Temp 55C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "loadavg_before": "0.68 1.30 1.11 3/1323 2140301",
-        "governor": "schedutil",
-        "ac_online": "1",
-        "timeout_s": 120
-      }
-    },
-    "cpu_negative": {
-      "command": "s = mx.new_stream(mx.cpu); mx.eval(mx.add(mx.array([1.,2.]), mx.array([3.,4.]), stream=s))",
-      "expected": "Add has no CPU implementation.",
-      "output": "refusal: Add has no CPU implementation.",
-      "leg": {
-        "exit": 0,
-        "wall_s": 0.04,
-        "gpu_kernel_lines_before": 36,
-        "gpu_kernel_lines_after": 36,
-        "new_gpu_kernel_lines": "(none)",
-        "temps_before": [
-          "NAND_Flash_Temperature 40C",
-          "Battery_Hotspot 33C",
-          "Charge_Regulator_Temp 55C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "temps_after": [
-          "NAND_Flash_Temperature 40C",
-          "Battery_Hotspot 33C",
-          "Charge_Regulator_Temp 55C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "loadavg_before": "0.68 1.30 1.11 2/1323 2140431",
-        "governor": "schedutil",
-        "ac_online": "1",
-        "timeout_s": 120
-      }
-    }
-  },
+  "harness_note": "harness=cec6771e5-dirty (decode legs) and harness=b228b44ee-dirty (controls): the checkout carried uncommitted edits to comments (encoder.h), docs/install-omarchy.md and this receipt's README.md/commands.txt only; scripts/mlx_provenance.py and the tools were unchanged (tools/wheel_controls.py ran byte-identical from outside the checkout and was then added here)",
   "decode": {
     "nc-2b-5000-2": {
       "label": "nc-2b-5000-2",
@@ -575,6 +468,155 @@
       "submits_per_token_15000": 8.0,
       "submits_per_token_5000": 20.0,
       "ids_sha256": "31e0cd14a8057dfd72babdff3c274b7d3b5c687ac879a4e93291e7e14e9a196f"
+    }
+  },
+  "controls": {
+    "provenance": {
+      "output": {
+        "dist": "mlx-omarchy",
+        "verified": "match",
+        "mismatch": null,
+        "files": [
+          {
+            "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
+            "label": "mlx.core extension",
+            "sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
+            "record_sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
+            "match": true
+          },
+          {
+            "path": "mlx/lib/libmlx.so",
+            "label": "mlx/lib/libmlx.so",
+            "sha256": "dbb12cbd45e326ec15216ca7da8b06be6c6266c4dd66195c410dcc03ff0891d4",
+            "record_sha256": "dbb12cbd45e326ec15216ca7da8b06be6c6266c4dd66195c410dcc03ff0891d4",
+            "match": true
+          }
+        ],
+        "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+        "mx_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+        "version_match": true,
+        "expected_wheel": "[nocpu-wheel]/mlx_omarchy-0.32.4.dev202611220356+nocpu.cec6771e5-cp314-cp314-linux_aarch64.whl"
+      },
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.16,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "loadavg_before": "0.68 1.30 1.11 2/1318 2140161",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 120
+      }
+    },
+    "gpu_add": {
+      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py gpu-add [nocpu-wheel]/<wheel> [checkout]",
+      "output": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec\ndevice Device(gpu, 0) gpu_add_sum 526848.0 expected 526848.0 vk_compute_dispatches_delta 1 vk_submissions_delta 1",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.16,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "timeout_s": 120
+      }
+    },
+    "cpu_negative": {
+      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py cpu-negative [nocpu-wheel]/<wheel> [checkout]",
+      "expected": "Add has no CPU implementation.",
+      "output": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec\nrefusal: Add has no CPU implementation.",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.16,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "timeout_s": 120
+      }
+    },
+    "reopen_head_wheel": {
+      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [dist-head]/<wheel> [checkout]",
+      "output": "provenance: mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54\nDevice(gpu, 0) 524800.0 True",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.22,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "timeout_s": 120
+      }
+    },
+    "reopen_nocpu_wheel": {
+      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [nocpu-wheel]/<wheel> [checkout]",
+      "output": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec\nDevice(gpu, 0) 524800.0 True",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.16,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "timeout_s": 120
+      }
     }
   }
 }

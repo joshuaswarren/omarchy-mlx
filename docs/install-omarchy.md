@@ -179,9 +179,9 @@ Qmm geometry, 5000 split a Qwen3-8B token into about 48 submissions. 15000 decod
 18 % faster on three models with identical greedy ids, and its release-build submission
 tail (DRM scheduler timestamps) matches 5000: Qwen3-4B p99 27.8 ms against 27.2 ms, no
 submission near 78 ms (`receipts/2026-11-15-m4-pro-g16s-batch-work`). The M3 Pro
-(G15S) row is 15000, measured on the 14-core GPU: decode +5 to +7 % on Qwen3.8-2B and Qwen3-4B with
-identical greedy ids, Qwen3-4B decode submissions p50 3.98 ms, and a Qwen3-4B tail
-that matches 5000 (p99 45.2 ms against 44.8 ms;
+(G15S) row is 15000, measured on the 14-core GPU: decode +5 to +7 % on
+Qwen3.8-2B and Qwen3-4B with identical greedy ids, Qwen3-4B decode submissions
+p50 3.98 ms, and a Qwen3-4B tail that matches 5000 (p99 45.2 ms against 44.8 ms;
 `receipts/2026-11-22-m3-pro-g15s-batch-work`). Scheduling only: every submission
 already waits on the stream's previous completion. Splitting preserves
 order, and results are bit-identical (greedy ids digests identical in every

@@ -4,7 +4,9 @@
 # except for the 8 capability-simulation profiles.
 # Placeholders: [checkout] = repository checkout, [venv-base] = Release wheel venv (9d6f4b188),
 # [venv-head] = Release wheel venv (bb10aab9a), [wheel-base] / [wheel-head] = built wheel paths,
-# [models] = local model snapshot directory, [build] = .work/mlx/build-head, [out] = output directory.
+# [models] = local model snapshot directory, [build] = .work/mlx/build-head, [out] = output directory,
+# [venv-build] = build venv, [dist-base] / [dist-head] = base / head wheel directories,
+# [nocpu-wheel] = CPU-disabled wheel directory, [venv-nocpu] = CPU-disabled wheel venv.
 
 # 1. Build Release wheel of base commit 9d6f4b188 (fresh cache, -j6)
 bash scripts/prepare-mlx.sh
@@ -78,7 +80,7 @@ gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --ar
 [build]/tools/mlx-omarchy-info/mlx-omarchy-info --json
 [venv-head]/bin/python -I -c "import mlx.core as mx; a=mx.arange(1,1025,dtype=mx.float32).reshape(32,32); b=mx.eye(32); c=(a@b).sum(); mx.eval(c); s=float(c); print(mx.default_device(), s, s==float(1024*1025//2))"
 
-# 9. CPU-disabled head Release wheel (docs/parity-contract.md 2.1), fresh work dir
+# 10. CPU-disabled Release wheel of cec6771e5 (docs/parity-contract.md 2.1), fresh work dir
 export MLX_OMARCHY_WORK_DIR=[checkout]/.work/parity-nocpu-cec6771e5 MLX_OMARCHY_LOCAL_VERSION=nocpu.cec6771e5
 export DEV_RELEASE=1 CMAKE_BUILD_PARALLEL_LEVEL=6 CMAKE_GENERATOR=Ninja
 scripts/prepare-mlx.sh
@@ -88,13 +90,14 @@ export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD
 [venv-build]/bin/python -m pip wheel --no-build-isolation --no-deps --wheel-dir [nocpu-wheel] $MLX_OMARCHY_WORK_DIR/mlx
 # [venv-nocpu]: the [venv-head] package set with this wheel, then bash install.sh --patch-venv [venv-nocpu]
 [venv-nocpu]/bin/python scripts/mlx_provenance.py --expect-wheel [nocpu-wheel]/<wheel>
-# GPU control and CPU negative control (separate processes, timeout 120 s each)
-env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I -c 'import mlx.core as mx; x=mx.arange(1,1025,dtype=mx.float32); z=mx.add(x, mx.full((1024,),2.0)); mx.eval(z); print(float(z.sum()))'
-env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I -c 'import mlx.core as mx; s=mx.new_stream(mx.cpu); mx.eval(mx.add(mx.array([1.,2.]), mx.array([3.,4.]), stream=s))'
+# GPU control, CPU negative control and fresh-process reopens (one process each, timeout 120 s each);
+# tools/wheel_controls.py prints the verified provenance line first and exits non-zero on any wrong result
+env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py gpu-add [nocpu-wheel]/<wheel> [checkout]
+env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py cpu-negative [nocpu-wheel]/<wheel> [checkout]
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [dist-head]/<wheel> [checkout]
+env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [nocpu-wheel]/<wheel> [checkout]
 # Balanced decode A/B on this wheel (default, 5000, 5000, default per model; timeout 300 s each)
 env -u MLX_OMARCHY_BATCH_WORK MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_sub.py [models]/<model> [out]/<tag>.json <tag> <128|96> [nocpu-wheel]/<wheel> [checkout]
 env MLX_OMARCHY_BATCH_WORK=5000 MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_sub.py [models]/<model> [out]/<tag>.json <tag> <128|96> [nocpu-wheel]/<wheel> [checkout]
-# Head-wheel reopen with its provenance line printed by the same process
-env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c 'import mlx_provenance as mp, mlx.core as mx; ...; print(mp.provenance_line(p)); a=mx.arange(1,1025,dtype=mx.float32).reshape(32,32); print(float((a@mx.eye(32)).sum()))'

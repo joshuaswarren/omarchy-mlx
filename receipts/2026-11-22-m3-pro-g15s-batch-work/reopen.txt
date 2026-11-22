@@ -17,6 +17,10 @@ Device(gpu, 0) 524800.0 True
 === mlx-omarchy-info --json before == after ===
 identical=True
 
-=== fresh head-wheel 32x32 matmul sum, provenance printed by the measuring process (rerun) ===
-provenance: mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54
+=== fresh-process reopens, tools/wheel_controls.py reopen (provenance printed by the measuring process) ===
+-- head wheel +bb10aab9a --
+provenance: mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54
+Device(gpu, 0) 524800.0 True
+-- CPU-disabled wheel +nocpu.cec6771e5 --
+provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec
 Device(gpu, 0) 524800.0 True
