@@ -16,7 +16,9 @@ CMAKE_ARGS="$CMAKE_ARGS -DLAPACK_INCLUDE_DIRS=/usr/include/openblas -DBLAS_INCLU
 
 # 2. Release-build DRM scheduler ftrace sweep (base wheel +9d6f4b188, timeout 600s per budget)
 # Budgets: default (unset -> 5000), 8000, 10000, 15000, 20000, 30000, 40000, 60000, 80000, 0
-# Tracepoints: gpu_scheduler:drm_sched_job_{queue,run,done} (read-only tracefs, clock=mono, buffer=65536 KB)
+# Tracepoints: gpu_scheduler:drm_sched_job_{queue,run,done} (clock=mono, buffer=65536 KB).
+# As recorded: the capture used the global tracefs instance. It clears the global trace and event
+# selection, sets the clock and buffer size, and leaves global tracing off afterwards.
 T=/sys/kernel/tracing
 sudo sh -c "echo 0 > $T/tracing_on; echo > $T/trace; echo mono > $T/trace_clock; echo 65536 > $T/buffer_size_kb; echo > $T/set_event; \
   for e in queue run done; do echo 1 > $T/events/gpu_scheduler/drm_sched_job_\$e/enable; done; echo 1 > $T/tracing_on"
@@ -26,6 +28,12 @@ env MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [models]/<model> 64 [wheel-base] [checkout] > [out]/<label>.drv 2>&1
 sudo sh -c "echo 0 > $T/tracing_on; cat $T/trace" > [out]/<label>.trace
 sudo sh -c "echo 0 > $T/events/gpu_scheduler/enable; echo > $T/trace; echo local > $T/trace_clock"
+# To reproduce without touching global tracefs, use a dedicated instance instead:
+#   I=/sys/kernel/tracing/instances/batch-work
+#   sudo sh -c "mkdir $I; echo mono > $I/trace_clock; echo 65536 > $I/buffer_size_kb; \
+#     for e in queue run done; do echo 1 > $I/events/gpu_scheduler/drm_sched_job_\$e/enable; done; echo 1 > $I/tracing_on"
+#   (run the model leg as above)
+#   sudo sh -c "echo 0 > $I/tracing_on; cat $I/trace" > [out]/<label>.trace; sudo rmdir $I
 # Parse only the benchmark PID (from the .drv PID line); other jobs count as foreign_jobs_in_window (0 in every window)
 python3 -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/parse_ftrace.py [out]/<label>.drv [out]/<label>.trace > [out]/<label>.json
 
@@ -69,3 +77,24 @@ gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --ar
 [build]/tools/mlx-omarchy-info/mlx-omarchy-info --trace-smoke
 [build]/tools/mlx-omarchy-info/mlx-omarchy-info --json
 [venv-head]/bin/python -I -c "import mlx.core as mx; a=mx.arange(1,1025,dtype=mx.float32).reshape(32,32); b=mx.eye(32); c=(a@b).sum(); mx.eval(c); s=float(c); print(mx.default_device(), s, s==float(1024*1025//2))"
+
+# 9. CPU-disabled head Release wheel (docs/parity-contract.md 2.1), fresh work dir
+export MLX_OMARCHY_WORK_DIR=[checkout]/.work/parity-nocpu-cec6771e5 MLX_OMARCHY_LOCAL_VERSION=nocpu.cec6771e5
+export DEV_RELEASE=1 CMAKE_BUILD_PARALLEL_LEVEL=6 CMAKE_GENERATOR=Ninja
+scripts/prepare-mlx.sh
+export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=OFF -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF \
+  -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF -DMLX_OMARCHY_GPU_PROFILING=OFF -DCMAKE_INSTALL_LIBDIR=lib \
+  -DBLAS_INCLUDE_DIRS=/usr/include/openblas -DLAPACK_INCLUDE_DIRS=/usr/include/openblas"
+[venv-build]/bin/python -m pip wheel --no-build-isolation --no-deps --wheel-dir [nocpu-wheel] $MLX_OMARCHY_WORK_DIR/mlx
+# [venv-nocpu]: the [venv-head] package set with this wheel, then bash install.sh --patch-venv [venv-nocpu]
+[venv-nocpu]/bin/python scripts/mlx_provenance.py --expect-wheel [nocpu-wheel]/<wheel>
+# GPU control and CPU negative control (separate processes, timeout 120 s each)
+env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I -c 'import mlx.core as mx; x=mx.arange(1,1025,dtype=mx.float32); z=mx.add(x, mx.full((1024,),2.0)); mx.eval(z); print(float(z.sum()))'
+env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I -c 'import mlx.core as mx; s=mx.new_stream(mx.cpu); mx.eval(mx.add(mx.array([1.,2.]), mx.array([3.,4.]), stream=s))'
+# Balanced decode A/B on this wheel (default, 5000, 5000, default per model; timeout 300 s each)
+env -u MLX_OMARCHY_BATCH_WORK MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
+  [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_sub.py [models]/<model> [out]/<tag>.json <tag> <128|96> [nocpu-wheel]/<wheel> [checkout]
+env MLX_OMARCHY_BATCH_WORK=5000 MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
+  [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_sub.py [models]/<model> [out]/<tag>.json <tag> <128|96> [nocpu-wheel]/<wheel> [checkout]
+# Head-wheel reopen with its provenance line printed by the same process
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c 'import mlx_provenance as mp, mlx.core as mx; ...; print(mp.provenance_line(p)); a=mx.arange(1,1025,dtype=mx.float32).reshape(32,32); print(float((a@mx.eye(32)).sum()))'

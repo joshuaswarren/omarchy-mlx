@@ -138,8 +138,8 @@ inline int batch_node_budget() {
 // desktop and not only the median does. Where one prefill dispatch
 // already holds the 5000 tail above ~40 ms (it runs whole at any budget),
 // the tail must stay at that 5000 floor instead (G16S Qwen3-8B, G15S
-// Qwen3-4B). The other rows were picked before that tail rule and carry
-// their own tail data where the receipt has it:
+// Qwen3-4B). Each row's receipt, with its tail data where the receipt
+// has it:
 // receipts/2026-10-02-submission-cap-19 (G14C),
 // receipts/2026-10-12-submission-cap-calibration (G13C),
 // receipts/2026-11-21-g13g-batch-work-20000 (G13G, tail rule),

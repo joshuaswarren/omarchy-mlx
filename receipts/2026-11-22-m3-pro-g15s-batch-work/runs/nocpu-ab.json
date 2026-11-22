@@ -1,0 +1,580 @@
+{
+  "wheel": "0.32.4.dev202611220356+nocpu.cec6771e5",
+  "build": "MLX_BUILD_CPU=OFF Release (docs/parity-contract.md 2.1); compiled backend/no_cpu/{primitives,device_info,compiled}.cpp and only backend/cpu/{encoder,eval}.cpp",
+  "harness_note": "harness=cec6771e5-dirty: the checkout carried uncommitted edits to comments (encoder.h), docs/install-omarchy.md and this receipt's README.md/commands.txt only; scripts/mlx_provenance.py and the tools used were unchanged",
+  "controls": {
+    "provenance": {
+      "output": {
+        "dist": "mlx-omarchy",
+        "verified": "match",
+        "mismatch": null,
+        "files": [
+          {
+            "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
+            "label": "mlx.core extension",
+            "sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
+            "record_sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
+            "match": true
+          },
+          {
+            "path": "mlx/lib/libmlx.so",
+            "label": "mlx/lib/libmlx.so",
+            "sha256": "dbb12cbd45e326ec15216ca7da8b06be6c6266c4dd66195c410dcc03ff0891d4",
+            "record_sha256": "dbb12cbd45e326ec15216ca7da8b06be6c6266c4dd66195c410dcc03ff0891d4",
+            "match": true
+          }
+        ],
+        "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+        "mx_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+        "version_match": true,
+        "expected_wheel": "[nocpu-wheel]/mlx_omarchy-0.32.4.dev202611220356+nocpu.cec6771e5-cp314-cp314-linux_aarch64.whl"
+      },
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.16,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "loadavg_before": "0.68 1.30 1.11 2/1318 2140161",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 120
+      }
+    },
+    "gpu_add": {
+      "command": "mx.add(mx.arange(1,1025,f32), mx.full((1024,),2.0)) on the default device",
+      "output": "device Device(gpu, 0) gpu_add_sum 526848.0 expected_ok True",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.05,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "loadavg_before": "0.68 1.30 1.11 3/1323 2140301",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 120
+      }
+    },
+    "cpu_negative": {
+      "command": "s = mx.new_stream(mx.cpu); mx.eval(mx.add(mx.array([1.,2.]), mx.array([3.,4.]), stream=s))",
+      "expected": "Add has no CPU implementation.",
+      "output": "refusal: Add has no CPU implementation.",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.04,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "loadavg_before": "0.68 1.30 1.11 2/1323 2140431",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 120
+      }
+    }
+  },
+  "decode": {
+    "nc-2b-5000-2": {
+      "label": "nc-2b-5000-2",
+      "model": "qwen3.8-2b-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "5000",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 128,
+      "decode_tok_s": 73.141,
+      "submits_per_token": 12.0,
+      "dispatches_per_token": 235.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "cdf6b6529b0aa39fadb3e638ed3af1e95519dd7ddd445c5c9a8c1f0df5293032",
+      "ids_head": [
+        16,
+        13,
+        561,
+        3712,
+        314,
+        9338,
+        11690,
+        303,
+        58252,
+        477,
+        13,
+        220,
+        17,
+        13,
+        561,
+        3712
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 8.17,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 54C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "loadavg_before": "0.58 1.25 1.10 1/1308 2140737",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-2b-5000-3": {
+      "label": "nc-2b-5000-3",
+      "model": "qwen3.8-2b-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "5000",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 128,
+      "decode_tok_s": 73.208,
+      "submits_per_token": 12.0,
+      "dispatches_per_token": 235.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "cdf6b6529b0aa39fadb3e638ed3af1e95519dd7ddd445c5c9a8c1f0df5293032",
+      "ids_head": [
+        16,
+        13,
+        561,
+        3712,
+        314,
+        9338,
+        11690,
+        303,
+        58252,
+        477,
+        13,
+        220,
+        17,
+        13,
+        561,
+        3712
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 8.19,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 54C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 54C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "loadavg_before": "0.53 1.23 1.09 1/1345 2141303",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-2b-default-1": {
+      "label": "nc-2b-default-1",
+      "model": "qwen3.8-2b-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "unset",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 128,
+      "decode_tok_s": 78.06,
+      "submits_per_token": 4.0,
+      "dispatches_per_token": 235.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "cdf6b6529b0aa39fadb3e638ed3af1e95519dd7ddd445c5c9a8c1f0df5293032",
+      "ids_head": [
+        16,
+        13,
+        561,
+        3712,
+        314,
+        9338,
+        11690,
+        303,
+        58252,
+        477,
+        13,
+        220,
+        17,
+        13,
+        561,
+        3712
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 8.4,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 40C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "loadavg_before": "0.68 1.30 1.11 1/1322 2140561",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-2b-default-4": {
+      "label": "nc-2b-default-4",
+      "model": "qwen3.8-2b-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "unset",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 128,
+      "decode_tok_s": 78.127,
+      "submits_per_token": 4.0,
+      "dispatches_per_token": 235.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "cdf6b6529b0aa39fadb3e638ed3af1e95519dd7ddd445c5c9a8c1f0df5293032",
+      "ids_head": [
+        16,
+        13,
+        561,
+        3712,
+        314,
+        9338,
+        11690,
+        303,
+        58252,
+        477,
+        13,
+        220,
+        17,
+        13,
+        561,
+        3712
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 7.98,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 54C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 33C",
+          "Charge_Regulator_Temp 54C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "loadavg_before": "0.60 1.23 1.09 1/1339 2141630",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-4b-5000-6": {
+      "label": "nc-4b-5000-6",
+      "model": "qwen3-4b-2507-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "5000",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 96,
+      "decode_tok_s": 36.025,
+      "submits_per_token": 20.0,
+      "dispatches_per_token": 333.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "31e0cd14a8057dfd72babdff3c274b7d3b5c687ac879a4e93291e7e14e9a196f",
+      "ids_head": [
+        16,
+        13,
+        3555,
+        374,
+        279,
+        1887,
+        4522,
+        315,
+        279,
+        1467,
+        30,
+        220,
+        17,
+        13,
+        3555,
+        374
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 11.23,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 42C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 58C",
+          "WiFi/BT_Module_Temp 60C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 42C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 57C",
+          "WiFi/BT_Module_Temp 59C"
+        ],
+        "loadavg_before": "0.31 0.72 0.92 1/1322 2143932",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-4b-5000-7": {
+      "label": "nc-4b-5000-7",
+      "model": "qwen3-4b-2507-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "5000",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 96,
+      "decode_tok_s": 36.381,
+      "submits_per_token": 20.0,
+      "dispatches_per_token": 333.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "31e0cd14a8057dfd72babdff3c274b7d3b5c687ac879a4e93291e7e14e9a196f",
+      "ids_head": [
+        16,
+        13,
+        3555,
+        374,
+        279,
+        1887,
+        4522,
+        315,
+        279,
+        1467,
+        30,
+        220,
+        17,
+        13,
+        3555,
+        374
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 11.19,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "loadavg_before": "0.50 0.59 0.83 1/1320 2145881",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-4b-default-5": {
+      "label": "nc-4b-default-5",
+      "model": "qwen3-4b-2507-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "unset",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 96,
+      "decode_tok_s": 38.158,
+      "submits_per_token": 8.0,
+      "dispatches_per_token": 333.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "31e0cd14a8057dfd72babdff3c274b7d3b5c687ac879a4e93291e7e14e9a196f",
+      "ids_head": [
+        16,
+        13,
+        3555,
+        374,
+        279,
+        1887,
+        4522,
+        315,
+        279,
+        1467,
+        30,
+        220,
+        17,
+        13,
+        3555,
+        374
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 11.15,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 42C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 59C",
+          "WiFi/BT_Module_Temp 61C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 42C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 58C",
+          "WiFi/BT_Module_Temp 60C"
+        ],
+        "loadavg_before": "0.36 0.75 0.93 1/1334 2143630",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    },
+    "nc-4b-default-8": {
+      "label": "nc-4b-default-8",
+      "model": "qwen3-4b-2507-4bit",
+      "device": "Device(gpu, 0)",
+      "batch_work_env": "unset",
+      "provenance": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec",
+      "dist_version": "0.32.4.dev202611220356+nocpu.cec6771e5",
+      "verified": "match",
+      "tokens": 96,
+      "decode_tok_s": 38.107,
+      "submits_per_token": 8.0,
+      "dispatches_per_token": 333.0,
+      "finalize_per_token": 1.0,
+      "ids_sha256": "31e0cd14a8057dfd72babdff3c274b7d3b5c687ac879a4e93291e7e14e9a196f",
+      "ids_head": [
+        16,
+        13,
+        3555,
+        374,
+        279,
+        1887,
+        4522,
+        315,
+        279,
+        1467,
+        30,
+        220,
+        17,
+        13,
+        3555,
+        374
+      ],
+      "leg": {
+        "exit": 0,
+        "wall_s": 11.05,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 56C",
+          "WiFi/BT_Module_Temp 57C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 35C",
+          "Charge_Regulator_Temp 55C",
+          "WiFi/BT_Module_Temp 56C"
+        ],
+        "loadavg_before": "0.42 0.57 0.82 1/1317 2146108",
+        "governor": "schedutil",
+        "ac_online": "1",
+        "timeout_s": 300
+      }
+    }
+  },
+  "summary": {
+    "2b": {
+      "row_15000_mean_tok_s": 78.09,
+      "budget_5000_mean_tok_s": 73.17,
+      "gain_pct": 6.72,
+      "submits_per_token_15000": 4.0,
+      "submits_per_token_5000": 12.0,
+      "ids_sha256": "cdf6b6529b0aa39fadb3e638ed3af1e95519dd7ddd445c5c9a8c1f0df5293032"
+    },
+    "4b": {
+      "row_15000_mean_tok_s": 38.13,
+      "budget_5000_mean_tok_s": 36.2,
+      "gain_pct": 5.33,
+      "submits_per_token_15000": 8.0,
+      "submits_per_token_5000": 20.0,
+      "ids_sha256": "31e0cd14a8057dfd72babdff3c274b7d3b5c687ac879a4e93291e7e14e9a196f"
+    }
+  }
+}
