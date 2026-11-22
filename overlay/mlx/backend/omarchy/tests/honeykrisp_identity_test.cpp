@@ -116,21 +116,47 @@ int main() {
   expect_throws("hatch-refuses-real-mesa-lvp-json", "software", {},
                 real_lvp.c_str(), "", real_lvp.c_str());
 
-  // 3c. a symlink named by the hatch compares against its target, so a
-  // symlink that resolves into the marker-less real Mesa lvp JSON is
-  // refused: canonicalization sees through the alias (wB1 review finding).
+  // 3c. a symlink named by the hatch is refused outright: the alias could
+  // resolve anywhere, so it never even reaches the content filter.
   {
     const auto sub = dir / "alias";
     std::filesystem::create_directories(sub);
     const auto alias = sub / "intel_icd.json";
     std::filesystem::create_symlink(real_lvp, alias);
-    expect_throws("hatch-refuses-symlink-to-software-icd", "software", {},
-                  alias.string().c_str(), "", alias.string().c_str());
+    expect_throws("hatch-refuses-symlink-to-software-icd", "does not match",
+                  {}, alias.string().c_str(), "", alias.string().c_str());
   }
 
-  // hatch mismatch: a user ICD other than the named one stays refused.
+  // 4. hatch mismatch: a user ICD other than the named one stays refused.
   expect_throws("hatch-mismatch-refuses", "does not match", {}, intel.c_str(),
                 "", lvp.c_str());
+
+  // 4b. relative raw strings never match the hatch: weakly_canonical would
+  // silently bind them to the process cwd (wB1 second-round finding). The
+  // file exists at the cwd, so only the absolute rule can refuse it.
+  {
+    const auto cwd_file = std::filesystem::current_path() /
+        "w7b-rel-icd.json";
+    std::ofstream(cwd_file)
+        << "{\"ICD\":{\"library_path\":"
+           "\"/usr/lib/x86_64-linux-gnu/libvulkan_intel.so\"}}\n";
+    expect_throws("hatch-refuses-relative-pair", "does not match", {},
+                  "w7b-rel-icd.json", "", "w7b-rel-icd.json");
+    std::filesystem::remove(cwd_file);
+  }
+
+  // 4c. a symlink named by the hatch is refused outright: the alias could
+  // resolve anywhere (wB1 second-round finding).
+  {
+    const auto sub = dir / "hwalias";
+    std::filesystem::create_directories(sub);
+    const auto alias = sub / "intel_icd.json";
+    std::filesystem::create_symlink(intel, alias);
+    expect_throws("hatch-refuses-symlink-override", "does not match", {},
+                  alias.string().c_str(), "", alias.string().c_str());
+    expect_throws("hatch-refuses-symlink-hatch", "does not match", {},
+                  intel.c_str(), "", alias.string().c_str());
+  }
 
   // honeykrisp names stay accepted with and without the hatch.
   {
