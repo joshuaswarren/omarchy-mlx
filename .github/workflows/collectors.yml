@@ -12,6 +12,7 @@ on:
       - 'scripts/mlx_provenance.py'
       - 'scripts/bench_matrix.py'
       - 'tests/**'
+      - 'packaging/**'
       - 'qualification-kit/**'
       - 'services/community-data/schema/**'
       - '.github/workflows/collectors.yml'
@@ -26,6 +27,7 @@ on:
       - 'scripts/mlx_provenance.py'
       - 'scripts/bench_matrix.py'
       - 'tests/**'
+      - 'packaging/**'
       - 'qualification-kit/**'
       - 'services/community-data/schema/**'
       - '.github/workflows/collectors.yml'
@@ -58,6 +60,14 @@ jobs:
       # the collector steps above.
       - run: pytest tests -q
         if: runner.os == 'Linux'
+      # The --no-deps voice wheels (a few MB) against requirements-lock.in:
+      # a version bump that adds a dependency fails here, not in a release.
+      - name: Check the --no-deps voice wheels' dependencies are vendored
+        if: runner.os == 'Linux' && matrix.python == '3.14'
+        run: |
+          pip download --no-deps --only-binary=:all: -r packaging/requirements-nodeps.in -d "$RUNNER_TEMP/nodeps"
+          python packaging/check-nodeps-closure.py --nodeps packaging/requirements-nodeps.in \
+            --wheels "$RUNNER_TEMP/nodeps" --lock packaging/requirements-lock.in
       - name: Run installer-backed CPU regressions
         if: runner.os == 'Linux' && matrix.python == '3.11'
         env:

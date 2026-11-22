@@ -40,4 +40,11 @@ if [[ -n $wheel ]]; then
 fi
 "$self_dir/gen-vendor-lock.sh" "$out" >"$out/requirements-lock.txt"
 "$self_dir/verify-vendor.sh" "$out" "$out/requirements-lock.txt"
+"$py" "$self_dir/check-nodeps-closure.py" --nodeps "$self_dir/requirements-nodeps.in" \
+  --wheels "$out" --lock "$out/requirements-lock.txt"
+if [[ -n $wheel ]]; then
+  "$self_dir/verify-voice-venv.sh" "$out"
+else
+  echo "==> no --wheel: offline voice import proof skipped (a release passes --wheel)"
+fi
 echo "==> vendored wheels + lock written under $out"

@@ -95,6 +95,75 @@ class VoiceSetTest(unittest.TestCase):
         self.assertIn("--no-deps", nodeps[0])
 
 
+CHECK = PACKAGING / "check-nodeps-closure.py"
+
+
+class NodepsClosureCheckTest(unittest.TestCase):
+    """check-nodeps-closure.py: every Requires-Dist of a --no-deps wheel is in the lock."""
+
+    def run_check(self, requires, lock_lines, nodeps_extra=""):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            wheels = tmp / "wheels"
+            wheels.mkdir()
+            make_wheel(wheels, "voicepkg", "1.0", requires=requires)
+            nodeps = tmp / "nodeps.in"
+            nodeps.write_text("voicepkg==1.0\n" + nodeps_extra)
+            lock = tmp / "lock.txt"
+            lock.write_text("\n".join(lock_lines) + "\n")
+            return subprocess.run([sys.executable, str(CHECK), "--nodeps", str(nodeps),
+                                   "--wheels", str(wheels), "--lock", str(lock)],
+                                  capture_output=True, text=True)
+
+    def test_covered_dependencies_pass(self):
+        result = self.run_check(["scipy>=1.10", "tqdm"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64,
+                                                          "tqdm==4.67.1 --hash=sha256:" + "1" * 64])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_dependency_missing_from_the_lock_fails_by_name(self):
+        result = self.run_check(["scipy>=1.10", "einops>=0.8"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("einops", result.stdout + result.stderr)
+
+    def test_a_pinned_version_outside_the_specifier_fails(self):
+        result = self.run_check(["scipy>=1.20"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("scipy", result.stdout + result.stderr)
+
+    def test_extras_and_other_platforms_are_ignored(self):
+        result = self.run_check(['torch>=2; extra == "full"', 'pywin32; sys_platform == "win32"'], ["tqdm==1"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_declared_not_vendored_dependency_passes(self):
+        result = self.run_check(["mlx>=0.31.1"], ["tqdm==1"],
+                                nodeps_extra="# not-vendored: mlx  mlx-omarchy provides it\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_specifier_lines_of_the_input_file_count_as_covered(self):
+        result = self.run_check(["scipy>=1.10"], ["scipy>=1.10.0"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_real_nodeps_file_declares_its_exemptions(self):
+        text = NODEPS_IN.read_text()
+        for name in ("mlx", "tflite-runtime", "docopt"):
+            self.assertRegex(text, rf"(?m)^# not-vendored: {re.escape(name)}\s+\S")
+
+    def test_vendor_wheels_runs_the_check_on_the_real_lock(self):
+        script = (PACKAGING / "vendor-wheels.sh").read_text()
+        self.assertIn("check-nodeps-closure.py", script)
+
+
+class VoiceVenvProofTest(unittest.TestCase):
+    def test_release_vendoring_runs_the_offline_voice_import_proof(self):
+        script = (PACKAGING / "vendor-wheels.sh").read_text()
+        self.assertIn("verify-voice-venv.sh", script)
+        proof = (PACKAGING / "verify-voice-venv.sh").read_text()
+        self.assertIn("unshare", proof)
+        for module in ("mlx_omarchy_assistant.voice_loop", "mlx_omarchy_assistant.synthesis",
+                       "mlx_audio", "onnxruntime", "openwakeword", "misaki.en"):
+            self.assertIn(module, proof)
+
+
 class BuildVenvClosureTest(unittest.TestCase):
     def test_locked_closure_installs_without_resolving_dependencies(self):
         # mlx-audio declares mlx; the vendor set satisfies it with mlx-omarchy,
