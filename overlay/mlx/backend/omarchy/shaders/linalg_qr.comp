@@ -14,7 +14,11 @@
 // min(M, N), and output_size the batch matrix count.
 #version 460
 
-layout(local_size_x = 256) in;
+// Workgroup lanes; G18G builds with -DLINALG_WG=128 (M6X-08).
+#ifndef LINALG_WG
+#define LINALG_WG 256
+#endif
+layout(local_size_x = LINALG_WG) in;
 
 layout(set = 0, binding = 0, std430) coherent buffer Work {
   float values[];
@@ -50,7 +54,7 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared float red[256];
+shared float red[LINALG_WG];
 
 void main() {
   uint tid = gl_LocalInvocationID.x;
@@ -65,14 +69,14 @@ void main() {
   // the trailing columns have been updated.
   for (uint j = 0u; j < k; ++j) {
     float part = 0.0;
-    for (uint i = j + tid; i < m; i += 256u) {
+    for (uint i = j + tid; i < m; i += uint(LINALG_WG)) {
       float x = work.values[base + i * n + j];
       part += x * x;
     }
     red[tid] = part;
       memoryBarrierBuffer();
     barrier();
-    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    for (uint stride = uint(LINALG_WG / 2); stride > 0u; stride >>= 1u) {
       if (tid < stride) {
         red[tid] += red[tid + stride];
       }
@@ -91,13 +95,13 @@ void main() {
       r_out.values[matrix * k * n + j * n + j] = a;
       // v^T v = v0^2 + (||x||^2 - x0^2); zero means a zero column and an
       // identity reflector, so the apply step below skips it.
-      red[255] = v0 * v0 + (red[0] - x0 * x0);
+      red[LINALG_WG - 1] = v0 * v0 + (red[0] - x0 * x0);
     }
       memoryBarrierBuffer();
     barrier();
-    float vtv = red[255];
+    float vtv = red[LINALG_WG - 1];
     if (vtv > 0.0) {
-      for (uint c = j + 1u + tid; c < n; c += 256u) {
+      for (uint c = j + 1u + tid; c < n; c += uint(LINALG_WG)) {
         float w = 0.0;
         for (uint i = j; i < m; ++i) {
           w += work.values[base + i * n + c] *
@@ -116,7 +120,7 @@ void main() {
 
   // Phase 2: Q = H_0 H_1 ... H_{k-1} built by replaying the reflectors in
   // reverse onto an identity.
-  for (uint idx = tid; idx < m * k; idx += 256u) {
+  for (uint idx = tid; idx < m * k; idx += uint(LINALG_WG)) {
     uint r = idx / k;
     uint c = idx % k;
     q_out.values[matrix * m * k + idx] = (r == c) ? 1.0 : 0.0;
@@ -125,14 +129,14 @@ void main() {
   barrier();
   for (uint j = k; j-- > 0u;) {
     float part = 0.0;
-    for (uint i = j + tid; i < m; i += 256u) {
+    for (uint i = j + tid; i < m; i += uint(LINALG_WG)) {
       float v = work.values[base + i * n + j];
       part += v * v;
     }
     red[tid] = part;
       memoryBarrierBuffer();
     barrier();
-    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    for (uint stride = uint(LINALG_WG / 2); stride > 0u; stride >>= 1u) {
       if (tid < stride) {
         red[tid] += red[tid + stride];
       }
@@ -141,7 +145,7 @@ void main() {
     }
     float vtv = red[0];
     if (vtv > 0.0) {
-      for (uint c = tid; c < k; c += 256u) {
+      for (uint c = tid; c < k; c += uint(LINALG_WG)) {
         float w = 0.0;
         for (uint i = j; i < m; ++i) {
           w += work.values[base + i * n + j] *
@@ -160,7 +164,7 @@ void main() {
 
   // Phase 3: R is the upper trapezoid of the factored work copy. The
   // diagonal cells already hold the values stored during phase 1.
-  for (uint idx = tid; idx < k * n; idx += 256u) {
+  for (uint idx = tid; idx < k * n; idx += uint(LINALG_WG)) {
     uint r = idx / n;
     uint c = idx % n;
     if (c == r) {

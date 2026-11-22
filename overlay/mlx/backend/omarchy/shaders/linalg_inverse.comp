@@ -15,7 +15,11 @@
 // convention (triangular mode only).
 #version 460
 
-layout(local_size_x = 256) in;
+// Workgroup lanes; G18G builds with -DLINALG_WG=128 (M6X-08).
+#ifndef LINALG_WG
+#define LINALG_WG 256
+#endif
+layout(local_size_x = LINALG_WG) in;
 
 layout(set = 0, binding = 0, std430) coherent buffer Work {
   float values[];
@@ -51,14 +55,14 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared float red[256];
-shared uint redi[256];
+shared float red[LINALG_WG];
+shared uint redi[LINALG_WG];
 
 void inverse_triangular(uint tid, uint n, uint base, bool upper) {
-  // Thread t owns columns t, t+256, ... Each column solves T x = e_j with
+  // Thread t owns columns t, t+LINALG_WG, ... Each column solves T x = e_j with
   // a plain substitution walk; reads stay inside the work buffer and
   // writes inside the accumulator, so no synchronization is needed.
-  for (uint j = tid; j < n; j += 256u) {
+  for (uint j = tid; j < n; j += uint(LINALG_WG)) {
     if (upper) {
       // Back-substitution over every row; entries below row j come out
       // exactly zero through the recurrence.
@@ -104,7 +108,7 @@ void inverse_general(uint tid, uint n, uint base) {
     // is deterministic.
     float best = 0.0;
     uint best_i = k;
-    for (uint i = k + tid; i < n; i += 256u) {
+    for (uint i = k + tid; i < n; i += uint(LINALG_WG)) {
       float v = abs(work.values[base + i * n + k]);
       if (best_i == k || v > best) {
         best = v;
@@ -115,7 +119,7 @@ void inverse_general(uint tid, uint n, uint base) {
     redi[tid] = best_i;
       memoryBarrierBuffer();
     barrier();
-    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    for (uint stride = uint(LINALG_WG / 2); stride > 0u; stride >>= 1u) {
       if (tid < stride && red[tid + stride] > red[tid]) {
         red[tid] = red[tid + stride];
         redi[tid] = redi[tid + stride];
@@ -126,16 +130,16 @@ void inverse_general(uint tid, uint n, uint base) {
     // The reduce leaves the winner in slot 0; republish so every phase
     // below reads one synchronized copy.
     if (tid == 0u) {
-      red[255] = red[0];
-      redi[255] = redi[0];
+      red[LINALG_WG - 1] = red[0];
+      redi[LINALG_WG - 1] = redi[0];
       if (red[0] == 0.0) {
         status.values[gl_WorkGroupID.x] = 2u;
       }
     }
       memoryBarrierBuffer();
     barrier();
-    uint pivot_row = redi[255];
-    for (uint c = tid; c < n; c += 256u) {
+    uint pivot_row = redi[LINALG_WG - 1];
+    for (uint c = tid; c < n; c += uint(LINALG_WG)) {
       float t = work.values[base + k * n + c];
       work.values[base + k * n + c] = work.values[base + pivot_row * n + c];
       work.values[base + pivot_row * n + c] = t;
@@ -146,18 +150,18 @@ void inverse_general(uint tid, uint n, uint base) {
       memoryBarrierBuffer();
     barrier();
     if (tid == 0u) {
-      red[254] = 1.0 / work.values[base + k * n + k];
+      red[LINALG_WG - 2] = 1.0 / work.values[base + k * n + k];
     }
       memoryBarrierBuffer();
     barrier();
-    float pinv = red[254];
-    for (uint c = tid; c < n; c += 256u) {
+    float pinv = red[LINALG_WG - 2];
+    for (uint c = tid; c < n; c += uint(LINALG_WG)) {
       work.values[base + k * n + c] *= pinv;
       acc.values[base + k * n + c] *= pinv;
     }
       memoryBarrierBuffer();
     barrier();
-    for (uint i = tid; i < n; i += 256u) {
+    for (uint i = tid; i < n; i += uint(LINALG_WG)) {
       if (i != k) {
         float f = work.values[base + i * n + k];
         for (uint c = 0u; c < n; ++c) {
@@ -176,7 +180,7 @@ void main() {
   uint n = params.matrix_n;
   uint base = gl_WorkGroupID.x * n * n;
 
-  for (uint idx = tid; idx < n * n; idx += 256u) {
+  for (uint idx = tid; idx < n * n; idx += uint(LINALG_WG)) {
     uint r = idx / n;
     acc.values[base + idx] = (r == idx % n) ? 1.0 : 0.0;
   }

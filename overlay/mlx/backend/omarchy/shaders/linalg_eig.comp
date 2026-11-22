@@ -33,7 +33,11 @@
 
 #version 460
 
-layout(local_size_x = 256) in;
+// Workgroup lanes; G18G builds with -DLINALG_WG=128 (M6X-08).
+#ifndef LINALG_WG
+#define LINALG_WG 256
+#endif
+layout(local_size_x = LINALG_WG) in;
 
 layout(set = 0, binding = 0, std430) coherent buffer Work {
   float values[];
@@ -81,7 +85,7 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared float red[256];
+shared float red[LINALG_WG];
 shared float sh_norm;
 shared float sh_h;
 shared float sh_ortm;
@@ -154,7 +158,7 @@ void main() {
   // compute_ev: writing identity into `work` would clobber the matrix
   // (the Eigh values-only lesson).
   if (compute_ev) {
-    for (uint idx = tid; idx < uint(nn) * uint(nn); idx += 256u) {
+    for (uint idx = tid; idx < uint(nn) * uint(nn); idx += uint(LINALG_WG)) {
       uint r = idx / uint(nn);
       uint c = idx % uint(nn);
       accum.values[g_base + idx] = (r == c) ? 1.0 : 0.0;
@@ -197,7 +201,7 @@ void main() {
     barrier();
     if (sh_skip == 0u) {
       // H = (I - u u^T / h) H (I - u u^T / h): columns, then rows.
-      for (int j = m + int(tid); j < nn; j += 256) {
+      for (int j = m + int(tid); j < nn; j += LINALG_WG) {
         float f = 0.0;
         for (int i = high; i >= m; i--) {
           f += ort[i] * h_at(i, j);
@@ -209,7 +213,7 @@ void main() {
       }
       memoryBarrierBuffer();
       barrier();
-      for (int i = int(tid); i <= high; i += 256) {
+      for (int i = int(tid); i <= high; i += LINALG_WG) {
         float f = 0.0;
         for (int j = high; j >= m; j--) {
           f += ort[j] * h_at(i, j);
@@ -248,7 +252,7 @@ void main() {
       memoryBarrierShared();
       barrier();
       if (sh_skip == 0u) {
-        for (int j = m + int(tid); j <= high; j += 256) {
+        for (int j = m + int(tid); j <= high; j += LINALG_WG) {
           float g = 0.0;
           for (int i = m; i <= high; i++) {
             g += ort[i] * v_at(i, j);
@@ -268,7 +272,7 @@ void main() {
   // ---- Real Schur form (JAMA hqr2, Francis double-shift QR) ----
   // Matrix norm: sum of |H[i][j]| over j >= max(i - 1, 0).
   float partial = 0.0;
-  for (int i = int(tid); i < nn; i += 256) {
+  for (int i = int(tid); i < nn; i += LINALG_WG) {
     for (int j = max(i - 1, 0); j < nn; j++) {
       partial += abs(h_at(i, j));
     }
@@ -278,7 +282,7 @@ void main() {
   barrier();
   if (tid == 0u) {
     float total = 0.0;
-    for (uint k = 0u; k < 256u; k++) {
+    for (uint k = 0u; k < uint(LINALG_WG); k++) {
       total += red[k];
     }
     sh_norm = total;
@@ -368,7 +372,7 @@ void main() {
         p = p / r;
         q = q / r;
         // Row modification.
-        for (int j = en - 1 + int(tid); j < nn; j += 256) {
+        for (int j = en - 1 + int(tid); j < nn; j += LINALG_WG) {
           float zj = h_at(en - 1, j);
           h_set(en - 1, j, q * zj + p * h_at(en, j));
           h_set(en, j, q * h_at(en, j) - p * zj);
@@ -376,7 +380,7 @@ void main() {
         memoryBarrierBuffer();
         barrier();
         // Column modification.
-        for (int i = int(tid); i <= en; i += 256) {
+        for (int i = int(tid); i <= en; i += LINALG_WG) {
           float zi = h_at(i, en - 1);
           h_set(i, en - 1, q * zi + p * h_at(i, en));
           h_set(i, en, q * h_at(i, en) - p * zi);
@@ -384,7 +388,7 @@ void main() {
         memoryBarrierBuffer();
         barrier();
         if (compute_ev) {
-          for (int i = int(tid); i <= high; i += 256) {
+          for (int i = int(tid); i <= high; i += LINALG_WG) {
             float zi = v_at(i, en - 1);
             v_set(i, en - 1, q * zi + p * v_at(i, en));
             v_set(i, en, q * v_at(i, en) - p * zi);
@@ -481,7 +485,7 @@ void main() {
       }
 
       // Zero the bulge tail.
-      for (int i = m + 2 + int(tid); i <= en; i += 256) {
+      for (int i = m + 2 + int(tid); i <= en; i += LINALG_WG) {
         h_set(i, i - 2, 0.0);
         if (i > m + 2) {
           h_set(i, i - 3, 0.0);
@@ -524,7 +528,7 @@ void main() {
           q = q / p;
           r = r / p;
           // Row modification.
-          for (int j = k + int(tid); j < nn; j += 256) {
+          for (int j = k + int(tid); j < nn; j += LINALG_WG) {
             float pj = h_at(k, j) + q * h_at(k + 1, j);
             if (notlast) {
               pj = pj + r * h_at(k + 2, j);
@@ -537,7 +541,7 @@ void main() {
           barrier();
           // Column modification.
           int imax = min(en, k + 3);
-          for (int i = int(tid); i <= imax; i += 256) {
+          for (int i = int(tid); i <= imax; i += LINALG_WG) {
             float pi2 = x * h_at(i, k) + y * h_at(i, k + 1);
             if (notlast) {
               pi2 = pi2 + z * h_at(i, k + 2);
@@ -550,7 +554,7 @@ void main() {
           barrier();
           if (compute_ev) {
             // Accumulate the transformation.
-            for (int i = int(tid); i <= high; i += 256) {
+            for (int i = int(tid); i <= high; i += LINALG_WG) {
               float pi3 = x * v_at(i, k) + y * v_at(i, k + 1);
               if (notlast) {
                 pi3 = pi3 + z * v_at(i, k + 2);
@@ -741,7 +745,7 @@ void main() {
     // form, column by column. Each column j only reads columns <= j,
     // which are untouched, so one barrier per column is enough.
     for (int j = nn - 1; j >= 0; j--) {
-      for (int i = int(tid); i < nn; i += 256) {
+      for (int i = int(tid); i < nn; i += LINALG_WG) {
         float acc = 0.0;
         for (int k = 0; k <= j; k++) {
           acc += v_at(i, k) * h_at(k, j);
@@ -758,7 +762,7 @@ void main() {
   // of a conjugate pair first.
   memoryBarrierShared();
   barrier();
-  for (int i = int(tid); i < nn; i += 256) {
+  for (int i = int(tid); i < nn; i += LINALG_WG) {
     uint oi = (matrix * uint(nn) + uint(i)) * 2u;
     values.values[oi] = d_arr[i];
     values.values[oi + 1u] = e_arr[i];
@@ -772,7 +776,7 @@ void main() {
   // component to be real and positive (LAPACK dgeev normalization), and
   // interleave the pair columns into complex64 output. Column j of the
   // output is eigenvector j (v[:, i] convention).
-  for (int j = int(tid); j < nn; j += 256) {
+  for (int j = int(tid); j < nn; j += LINALG_WG) {
     float ej = e_arr[j];
     if (ej == 0.0) {
       float nrm = 0.0;
