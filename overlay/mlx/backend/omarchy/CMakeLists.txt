@@ -344,6 +344,9 @@ omarchy_shader(qmm_bf16 shaders/qmm.comp -DUSE_BF16=1)
 omarchy_shader(fused_chain_f32 shaders/fused_chain.comp)
 omarchy_shader(fused_chain_f16 shaders/fused_chain.comp -DUSE_FP16=1)
 omarchy_shader(fused_chain_bf16 shaders/fused_chain.comp -DUSE_BF16=1)
+omarchy_shader(fused_chain_f32_l128 shaders/fused_chain.comp -DLOCAL_SIZE_X=128)
+omarchy_shader(fused_chain_f16_l128 shaders/fused_chain.comp -DUSE_FP16=1 -DLOCAL_SIZE_X=128)
+omarchy_shader(fused_chain_bf16_l128 shaders/fused_chain.comp -DUSE_BF16=1 -DLOCAL_SIZE_X=128)
 # DecodeGemv: dedicated matrix-vector kernels for the decode shape
 # (lhs single row); qmm_vec fuses affine dequantization into the dot,
 # the same shader compiled with USE_SUBGROUP=1 produces the

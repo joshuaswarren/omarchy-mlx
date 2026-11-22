@@ -1167,6 +1167,13 @@ enum class ComputeKernel : uint16_t {
   LinalgInverseF32G18,
   LinalgQrF32G18,
   LinalgEigF32G18,
+  // 128-lane fused_chain variants (shaders/fused_chain.comp
+  // -DLOCAL_SIZE_X=128): four subgroups instead of eight, the reference
+  // layout the G18G shared-program fetch is checked against. Appended to
+  // keep profile kernel ids stable.
+  FusedChainF32L128,
+  FusedChainF16L128,
+  FusedChainBF16L128,
   Count,
 };
 

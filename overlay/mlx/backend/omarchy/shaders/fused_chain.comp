@@ -42,7 +42,17 @@ uint16_t bf16_store(float value) {
 #endif
 #include "omarchy_half.h"
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+
+layout(local_size_x = LOCAL_SIZE_X) in;
+
+// Chain programs cap at 8 packed words (kMaxChainInstrs). On G18G the
+// per-invocation program_buf fetch runs a phantom chain in subgroups
+// 4-7, so lane 0 stages the program into shared memory and every lane
+// executes the identical words.
+shared uint program_words[8];
 
 layout(set = 0, binding = 0, std430) readonly buffer LeafA {
   STORAGE_TYPE values[];
@@ -107,6 +117,12 @@ float eval_operand(uint operand, uint index, float regs[8]) {
 }
 
 void main() {
+  if (gl_LocalInvocationIndex == 0u) {
+    for (uint i = 0u; i < params.instr_count && i < 8u; ++i) {
+      program_words[i] = program_buf.words[i];
+    }
+  }
+  barrier();
   // Grid stride, mirroring elementwise.comp: the dispatcher caps the
   // group count at the device limit, so one invocation covers several
   // chain elements when count exceeds one full grid.
@@ -114,8 +130,8 @@ void main() {
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   while (index < params.count) {
     float regs[8];
-    for (uint i = 0; i < params.instr_count; ++i) {
-      uint word = program_buf.words[i];
+    for (uint i = 0; i < params.instr_count && i < 8u; ++i) {
+      uint word = program_words[i];
       uint op = word & 0xffu;
       uint a = (word >> 8) & 0xffu;
       uint b = (word >> 16) & 0xffu;
