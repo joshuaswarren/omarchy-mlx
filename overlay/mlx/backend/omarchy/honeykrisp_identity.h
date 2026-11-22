@@ -99,12 +99,59 @@ inline std::string find_honeykrisp_icd_in_list(const std::string& value) {
   return {};
 }
 
+// Software/CPU rasterizers stay refused even through the foreign-ICD hatch:
+// the omarchy backend never runs a tensor primitive on CPU in a release
+// build. Match the JSON text, which carries the driver library name.
+inline bool is_software_icd_json(const std::string& path) {
+  std::ifstream file(path);
+  if (!file) {
+    return false;
+  }
+  std::string text((std::istreambuf_iterator<char>(file)),
+                   std::istreambuf_iterator<char>());
+  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  for (const std::string marker :
+       {"llvmpipe", "lavapipe", "swrast", "softpipe", "swiftshader",
+        "lvp_icd", "libvulkan_lvp"}) {
+    if (text.find(marker) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Same file, spelled the same way: both raw strings absolute (a relative
+// path would silently bind to the process cwd), with no symlink anywhere
+// on either path - final component or parent directory - so the string
+// names exactly the file it will read, then plain lexical equality.
+inline bool same_icd_path(const std::string& a, const std::string& b) {
+  namespace fs = std::filesystem;
+  const fs::path pa = fs::path(a).lexically_normal();
+  const fs::path pb = fs::path(b).lexically_normal();
+  if (!pa.is_absolute() || !pb.is_absolute()) {
+    return false;
+  }
+  std::error_code ec;
+  const fs::path ca = fs::weakly_canonical(pa, ec);
+  if (ec || ca != pa) {
+    return false;
+  }
+  ec.clear();
+  const fs::path cb = fs::weakly_canonical(pb, ec);
+  return !ec && cb == pb && pa == pb;
+}
+
 struct HoneykrispIcdSelection {
   std::string path;
   // True when the packaged recipe ICD was selected (no user override).
   bool packaged{false};
   // True when VK_DRIVER_FILES or VK_ICD_FILENAMES picked the ICD.
   bool user_override{false};
+  // True when the selection came through the MLX_OMARCHY_FOREIGN_ICD escape
+  // hatch (a named non-Apple discrete ICD; Main decision 2026-11-22).
+  bool foreign{false};
 };
 
 // Apple M3/M4-family chip ids (omarchy-ane data/ane-soc records; t6034
@@ -149,7 +196,8 @@ inline std::string apple_m3_m4_chip_note() {
 inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
     const std::vector<std::string>& candidates,
     const char* user_files,
-    const std::string& packaged_path) {
+    const std::string& packaged_path,
+    const char* foreign_allowed = nullptr) {
   if (user_files != nullptr && user_files[0] != '\0') {
     const std::string value(user_files);
     const std::string item = find_honeykrisp_icd_in_list(value);
@@ -161,7 +209,42 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
             " not exist: " +
             item);
       }
-      return {item, false, true};
+      return {item, false, true, false};
+    }
+    // Escape hatch (Main decision 2026-11-22 01:15 CST): one named
+    // non-Apple discrete ICD may be accepted, opt-in per deployment via
+    // MLX_OMARCHY_FOREIGN_ICD. The default stays Honeykrisp-only, and
+    // software/CPU ICDs stay refused with the hatch set.
+    if (foreign_allowed != nullptr && foreign_allowed[0] != '\0') {
+      size_t start = 0;
+      while (start <= value.size()) {
+        const size_t end = value.find(':', start);
+        const std::string item = value.substr(start, end - start);
+        if (!item.empty() && same_icd_path(item, foreign_allowed)) {
+          std::error_code existence;
+          if (!std::filesystem::exists(item, existence) || existence) {
+            throw std::runtime_error(
+                "Honeykrisp ICD selection refused: MLX_OMARCHY_FOREIGN_ICD"
+                " names a user Vulkan ICD JSON that does not exist: " +
+                item);
+          }
+          if (is_software_icd_json(item)) {
+            throw std::runtime_error(
+                "Honeykrisp ICD selection refused: MLX_OMARCHY_FOREIGN_ICD"
+                " names a software renderer; CPU ICDs stay refused: " +
+                item);
+          }
+          return {item, false, true, true};
+        }
+        if (end == std::string::npos) {
+          break;
+        }
+        start = end + 1;
+      }
+      throw std::runtime_error(
+          "Honeykrisp ICD selection refused: user Vulkan ICD value excludes"
+          " Honeykrisp and does not match MLX_OMARCHY_FOREIGN_ICD (" +
+          std::string(foreign_allowed) + "): " + value);
     }
     throw std::runtime_error(
         "Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: " +
@@ -172,12 +255,12 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
   if (!packaged_path.empty()) {
     std::error_code existence;
     if (std::filesystem::exists(packaged_path, existence) && !existence) {
-      return {packaged_path, true, false};
+      return {packaged_path, true, false, false};
     }
   }
   for (const auto& candidate : candidates) {
     if (is_honeykrisp_icd(candidate)) {
-      return {candidate, false, false};
+      return {candidate, false, false, false};
     }
   }
   throw std::runtime_error("Honeykrisp Vulkan ICD JSON was not found" +
