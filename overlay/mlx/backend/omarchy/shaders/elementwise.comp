@@ -795,7 +795,9 @@ void main() {
         break;
 #endif  // LITE
       default:
-        return;
+        // An operation this variant does not handle stores NaN, never a stale value (issue 544).
+        value = uintBitsToFloat(0x7fc00000u);
+        break;
     }
 #endif
     output_data.values[params.output_offset + index] = STORE_VALUE(value);

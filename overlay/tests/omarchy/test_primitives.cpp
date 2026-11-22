@@ -12,6 +12,7 @@
 #include <limits>
 #include <optional>
 #include <functional>
+#include <utility>
 #include <vector>
 #include <numeric>
 #include <random>
@@ -660,6 +661,89 @@ TEST_CASE("compute shaders handle offsets, multiple workgroups, and NaN") {
   nan_result.eval();
   omarchy::get_command_encoder(stream).synchronize();
   CHECK(std::isnan(nan_result.data<float>()[0]));
+}
+
+TEST_CASE("an elementwise operation the switch does not handle stores NaN") {
+  // Issue 544: a case that falls through to the default arm returned without
+  // a store, so the output kept whatever the buffer held (zeros) and wrong
+  // results looked like real ones. The default arm must store NaN instead.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  array source = add(array({1.0f, 2.0f, 3.0f, 4.0f}, float32), array(0.0f), stream);
+  source.eval();
+  auto& encoder = omarchy::get_command_encoder(stream);
+  encoder.synchronize();
+  auto binding = [](const array& value) {
+    auto* buffer =
+        static_cast<const omarchy::VulkanBuffer*>(value.buffer().ptr());
+    return omarchy::ComputeBinding{buffer->buffer, 0, buffer->size};
+  };
+  // {kernel, operation}: an unknown code on the full switch, and Power (37)
+  // sent to the lean variant, which only has ops 0-10.
+  const std::array<std::pair<omarchy::ComputeKernel, uint32_t>, 2> cases{{
+      {omarchy::ComputeKernel::ElementwiseF32, 999u},
+      {omarchy::ComputeKernel::ElementwiseLiteF32, omarchy::kFloatPowerOperation},
+  }};
+  for (const auto& [kernel, operation] : cases) {
+    array output = add(source, array(6.0f), stream);
+    output.eval();
+    encoder.synchronize();
+    omarchy::ComputeParams params;
+    params.count = params.lhs_size = params.rhs_size = params.output_size = 4;
+    params.operation = operation;
+    std::array<omarchy::ComputeBinding, 3> bindings{
+        binding(source), binding(source), binding(output)};
+    encoder.dispatch_compute(kernel, bindings, params, 1);
+    encoder.synchronize();
+    CAPTURE(operation);
+    for (int index = 0; index < 4; ++index) {
+      CHECK(std::isnan(output.data<float>()[index]));
+    }
+  }
+}
+
+TEST_CASE("issue 544 elementwise probes match the CPU reference") {
+  // The ops w7G's M6 (G18G) run found wrong on the GPU: Power in every
+  // exponent class and in f16, Sign, Remainder, ArcCos beyond one ulp, and
+  // the gradient of sum((x @ w) ** 2), which goes through Power.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto pow2 = [&](std::vector<float> base, std::vector<float> exponent, Dtype dtype = float32) {
+    array b(base.begin(), Shape{2}, float32);
+    array e(exponent.begin(), Shape{2}, float32);
+    return astype(power(astype(b, dtype, stream), astype(e, dtype, stream), stream), float32, stream);
+  };
+  check_values(pow2({0.25f, 2.0f}, {1.0f, 1.0f}), {0.25f, 2.0f}, stream);
+  check_values(pow2({-0.25f, 0.0f}, {1.0f, 1.0f}), {-0.25f, 0.0f}, stream);
+  check_values(pow2({0.25f, 2.0f}, {0.0f, 0.0f}), {1.0f, 1.0f}, stream);
+  check_values(pow2({1.0f, 1.0f}, {3.0f, -2.0f}), {1.0f, 1.0f}, stream);
+  check_values(pow2({0.25f, 2.0f}, {-1.0f, -2.0f}), {4.0f, 0.25f}, stream);
+  check_values(pow2({4.0f, 9.0f}, {0.5f, 0.5f}), {2.0f, 3.0f}, stream);
+  check_values(pow2({0.25f, 2.0f}, {1.0f, 1.0f}, float16), {0.25f, 2.0f}, stream);
+
+  check_values(sign(array({0.25f, 4.0f, -1.5f}, float32), stream), {1.0f, 1.0f, -1.0f}, stream);
+  check_values(
+      remainder(array({4.5f, 9.0f, -2.5f}, float32), array({2.0f, 2.0f, 2.0f}, float32), stream),
+      {0.5f, 1.0f, 1.5f},
+      stream);
+  check_values(
+      arccos(array({0.25f, -0.5f, 0.0f}, float32), stream),
+      {std::acos(0.25f), std::acos(-0.5f), std::acos(0.0f)},
+      stream,
+      2.4e-7);
+
+  array x({0.5f, -0.25f}, float32);
+  array w({1.0f, 2.0f, 3.0f, 4.0f}, {2, 2}, float32);
+  auto loss = [&](const std::vector<array>& inputs) {
+    return sum(power(matmul(x, inputs[0], stream), array(2.0f), stream), stream);
+  };
+  auto [value, grads] = value_and_grad(loss, std::vector<int>{0})({w});
+  check_values(value, {0.0625f}, stream);
+  check_values(grads[0], {-0.25f, 0.0f, 0.125f, 0.0f}, stream);
 }
 
 TEST_CASE("FP32 and FP16 Matmul support dense and transposed weights") {
