@@ -26,6 +26,7 @@ import importlib.util
 import json
 import struct
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +74,84 @@ def _register_bare_package(name: str) -> None:
     sys.modules[name] = importlib.util.module_from_spec(spec)
 
 
+STAGES = ("load", "resample", "mel", "encoder", "decoder", "joint", "post")
+
+
+def _mx():
+    import mlx.core as mx
+
+    return mx
+
+
+class StageClock:
+    """Per-stage millisecond accumulators for one transcribe request.
+
+    Plain floats and one dict, so the clocks add nothing to the mlx graph
+    and cost nothing when the response is built.
+    """
+
+    def __init__(self):
+        self.ms = {name: 0.0 for name in STAGES}
+
+    def reset(self):
+        for name in self.ms:
+            self.ms[name] = 0.0
+
+    def add(self, stage: str, seconds: float):
+        self.ms[stage] += seconds * 1000.0
+
+
+class _StageProxy:
+    """Route calls to a model seam through the clock; delegate the rest.
+
+    Assigned with ``object.__setattr__`` so mlx's ``Module.__setattr__``
+    never registers the proxy as a child module. Shortcut: the proxies sit
+    in the instance dict, so mlx module walks no longer see encoder or
+    joint; fine while this worker only infers.
+    """
+
+    def __init__(self, clock: StageClock, stage: str, target):
+        self._clock = clock
+        self._stage = stage
+        self._target = target
+
+    def __call__(self, *args, **kwargs):
+        started = time.perf_counter()
+        try:
+            out = self._target(*args, **kwargs)
+            if self._stage == "encoder":
+                # The conformer call is lazy; its compute lands in the
+                # mx.eval decode() issues right after, so the eval happens
+                # inside the timed window instead.
+                mx = _mx()
+                outputs = out if isinstance(out, tuple) else (out,)
+                mx.eval(*[a for a in outputs if isinstance(a, mx.array)])
+            return out
+        finally:
+            self._clock.add(self._stage, time.perf_counter() - started)
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+
+def instrument(model, clock: StageClock):
+    """Wrap the pipeline seams once so each stage accumulates ms.
+
+    Seams: ``_log_mel_spectrogram`` (mel), ``encoder`` (the conformer),
+    ``_tdt_step`` (the decoder loop), ``joint``. A model without a seam
+    keeps the stages it has; resample and post are timed in ``_transcribe``
+    either way.
+    """
+    for attr, stage in (("_log_mel_spectrogram", "mel"), ("encoder", "encoder"),
+                        ("_tdt_step", "decoder"), ("joint", "joint")):
+        target = getattr(model, attr, None)
+        if target is None or isinstance(target, _StageProxy):
+            continue
+        object.__setattr__(model, attr, _StageProxy(clock, stage, target))
+    object.__setattr__(model, "_stage_clock", clock)
+    return model
+
+
 def voiced_seconds(xp, audio) -> float:
     """Seconds of 20 ms frames louder than both the recorder's no-speech
     level and 12 dB over the clip's own background (10th-percentile frame).
@@ -97,7 +176,8 @@ def decode_with_retry(generate, xp, audio, noise) -> str:
     return generate(xp.concatenate([noise[:n], audio, noise[-n:]]))
 
 
-def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
+def _transcribe(model, payload: bytes, rate: int, noise,
+                load_ms: float | None = None) -> dict:
     import mlx.core as mx
 
     from .gpu_stt import resample_to_16k
@@ -112,12 +192,27 @@ def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
     def generate(audio) -> str:
         return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
 
+    clock = getattr(model, "_stage_clock", None)
+    if clock is None or getattr(clock, "ms", None) is None:
+        instrument(model, StageClock())
+        clock = model._stage_clock
+    clock.reset()
     try:
+        started = time.perf_counter()
         audio = resample_to_16k(mx.array(samples), rate)
+        clock.add("resample", time.perf_counter() - started)
         text = decode_with_retry(generate, mx, audio, noise)
+        started = time.perf_counter()
+        text = str(text)
+        clock.add("post", time.perf_counter() - started)
     except Exception as exc:
         return {"ok": False, "kind": "unavailable", "error": f"gpu-stt generate failed: {exc}"}
-    return {"ok": True, "transcript": text, "peak_memory_bytes": int(mx.get_peak_memory())}
+    response = {"ok": True, "transcript": text,
+                "peak_memory_bytes": int(mx.get_peak_memory())}
+    if load_ms is not None:
+        response["load_ms"] = float(load_ms)
+    response["stage_ms"] = {name: round(ms, 3) for name, ms in clock.ms.items()}
+    return response
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -132,14 +227,18 @@ def main(argv: list[str] | None = None) -> int:
 
         # A Path (not str) skips mlx-audio's hub resolution: the snapshot
         # directory is loaded as-is, with no network lookup.
+        load_started = time.perf_counter()
         model = load_model(args.model_dir)
-        # The first generate() after load returns "" on this stack; spend
-        # it on one second of silence before declaring readiness.
-        model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
+        load_ms = (time.perf_counter() - load_started) * 1000.0
         noise = mx.array(_PAD_NOISE)
+        # The first generate() after load returns "" on this stack; spend
+        # it on one second of silence before declaring readiness (untimed:
+        # a workaround, not a pipeline stage).
+        model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
     except Exception as exc:
         _send(stdout, {"ok": False, "kind": "unavailable", "error": f"failed to load model: {exc}"})
         return 2
+    instrument(model, StageClock())
     _send(stdout, {"ok": True, "event": "ready", "model": type(model).__name__})
 
     while True:
