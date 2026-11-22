@@ -27,9 +27,20 @@ from typing import Iterator
 
 import numpy as np
 
+from .synthesis import VoiceOutputLimitError
+
 SAMPLE_RATE = 16000
 CHUNK = 1280  # 80 ms, the wake detector's streaming step
 _ANY_END = re.compile(r"(?<=[.!?,;:])\s+")
+_LINE_END = re.compile(r"\s*\n\s*")
+_LIST_MARK = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s+")
+_MARKUP = re.compile(r"[*_`#]+")
+# Spoken replies stay short: a reply is heard, not read. Without these, a
+# chat model answers a bare "nine zero two eight" with a markdown essay that
+# runs past the synthesizer's 30 s output bound (V17 soak, jw16).
+VOICE_SYSTEM_PROMPT = ("You are a voice assistant. Answer in one to three short spoken sentences. "
+                       "Use plain words only: no lists, headings, markdown, code, or emoji.")
+REPLY_MAX_TOKENS = 120
 FIRST_CLAUSE_WORDS = 4  # the first clause goes to TTS early once it has this many words
 # A period after one of these, or after dotted letters (U.S., a.m., e.g., J.), ends no piece.
 _ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "st", "jr", "sr", "prof", "vs", "etc", "no", "mt", "ave", "approx"}
@@ -143,7 +154,7 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedire
 
 
 def stream_reply(url: str, messages: list, *, model: str,
-                 timeout: float = 120.0) -> Iterator[str]:
+                 max_tokens: int = REPLY_MAX_TOKENS, timeout: float = 120.0) -> Iterator[str]:
     """Yield content deltas from a loopback OpenAI-compatible chat server."""
     _require_loopback(url)
     # A seeded request takes mlx_lm.server's single-request path instead of
@@ -152,7 +163,8 @@ def stream_reply(url: str, messages: list, *, model: str,
     # pins greedy decoding (as coordinator.py does), so a server started with
     # --temp above 0 cannot turn the seed into one fixed sampled reply.
     body = json.dumps({"model": model, "messages": messages, "stream": True,
-                       "seed": 0, "temperature": 0}).encode()
+                       "seed": 0, "temperature": 0,
+                       "max_tokens": max_tokens}).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     with _OPENER.open(req, timeout=timeout) as resp:
         for raw in resp:
@@ -176,18 +188,29 @@ def _abbreviation(token: str) -> bool:
 
 
 def _next_cut(text: str, clause_words: int | None):
-    """The first place to cut: after . ! or ? that does not follow an
-    abbreviation, or (when clause_words is set) after , ; or : once the piece
-    has that many words and the mark does not follow an abbreviation."""
+    """The first place to cut: a line break; after . ! or ? that does not
+    follow an abbreviation; or (when clause_words is set) after , ; or : once
+    the piece has that many words and the mark does not follow an abbreviation."""
+    line = _LINE_END.search(text)
+    limit = line.start() if line else len(text)
     for m in _ANY_END.finditer(text):
+        if m.start() >= limit:
+            break
         head = text[:m.start()]
         token = head.split()[-1] if head.split() else ""
-        if _abbreviation(token):
+        if _abbreviation(token) or _LIST_MARK.fullmatch(head + " "):
             continue
         if head.endswith((".", "!", "?")) or (
                 clause_words is not None and len(head.split()) >= clause_words):
             return head, text[m.end():]
+    if line:
+        return text[:line.start()], text[line.end():]
     return None
+
+
+def _speakable(piece: str) -> str:
+    """Drop list markers and markdown characters a synthesizer would read out."""
+    return _MARKUP.sub("", _LIST_MARK.sub("", piece)).strip()
 
 
 def sentences(deltas, first_clause_words: int = FIRST_CLAUSE_WORDS) -> Iterator[str]:
@@ -199,10 +222,10 @@ def sentences(deltas, first_clause_words: int = FIRST_CLAUSE_WORDS) -> Iterator[
         while (cut := _next_cut(pending, first_clause_words if first else None)) is not None:
             head, pending = cut
             first = False
-            if head.strip():
-                yield head.strip()
-    if pending.strip():
-        yield pending.strip()
+            if _speakable(head):
+                yield _speakable(head)
+    if _speakable(pending):
+        yield _speakable(pending)
 
 
 class WavSink:
@@ -241,7 +264,7 @@ class PipeWireSink:
 
 class VoiceLoop:
     def __init__(self, endpointer: Endpointer, transcribe, reply_url: str,
-                 synthesize, sink, *, model: str, system_prompt: str | None = None):
+                 synthesize, sink, *, model: str, system_prompt: str | None = VOICE_SYSTEM_PROMPT):
         _require_loopback(reply_url)
         self._endpointer = endpointer
         self._transcribe = transcribe
@@ -270,17 +293,28 @@ class VoiceLoop:
                 yield delta
 
         spoken = []
-        for sentence in sentences(timed(stream_reply(self._url, self._history, model=self._model))):
-            spoken.append(sentence)
-            for chunk in self._synthesize(sentence, self.cancel):
-                if chunk.sample_rate != self._sink.rate:
-                    raise RuntimeError(f"TTS rate {chunk.sample_rate} != sink rate {self._sink.rate}")
-                self._sink.write(chunk.data)
-                ms.setdefault("first_audio", since())
+        truncated = False
+        pieces = sentences(timed(stream_reply(self._url, self._history, model=self._model)))
+        try:
+            for sentence in pieces:
+                spoken.append(sentence)
+                try:
+                    for chunk in self._synthesize(sentence, self.cancel):
+                        if chunk.sample_rate != self._sink.rate:
+                            raise RuntimeError(f"TTS rate {chunk.sample_rate} != sink rate {self._sink.rate}")
+                        self._sink.write(chunk.data)
+                        ms.setdefault("first_audio", since())
+                except VoiceOutputLimitError:
+                    # The audio already spoken stays; the rest of the reply is dropped
+                    # rather than ending the whole loop on one long piece.
+                    truncated = True
+                    break
+        finally:
+            pieces.close()  # closes the reply stream when the reply is cut short
         ms["total"] = since()
         reply = " ".join(spoken)
         self._history.append({"role": "assistant", "content": reply})
-        return {"heard": heard, "reply": reply, "sentences": len(spoken), "ms": ms}
+        return {"heard": heard, "reply": reply, "sentences": len(spoken), "truncated": truncated, "ms": ms}
 
     def run(self, source) -> list[dict]:
         """Run every turn found in an iterable of 16 kHz PCM chunks."""
