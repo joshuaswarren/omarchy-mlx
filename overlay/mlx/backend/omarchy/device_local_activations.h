@@ -39,7 +39,7 @@ inline uint32_t vram_activation_memory_type(
   if (!opt_in_enabled) {
     return UINT32_MAX;
   }
-  return local_device_memory_type(memory, memory_type_bits);
+  return weight_memory_type(device_type, memory, memory_type_bits);
 }
 
 // Largest DEVICE_LOCAL Vulkan memory heap in bytes (0 if none).
