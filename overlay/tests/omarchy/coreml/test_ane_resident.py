@@ -486,6 +486,27 @@ class ResidentAneWorkerTest(unittest.TestCase):
         )
         self.assertEqual(results["y"], b"cd")
 
+    def test_a_submit_near_the_window_end_renews_the_scope(self):
+        # A submit that starts while the window still has time -- but
+        # less than the submit's own budget -- dies mid-submit on the
+        # worker's own clock (until = batch_until). The scope must
+        # renew when the remaining window cannot cover one submit, not
+        # only after it has fully expired. Here the 6 s window is
+        # larger than the submit's deadline+grace budget but nearly
+        # consumed when the submit starts.
+        session = self._session(deadline_ms=200)
+        with session:
+            session.begin_batch(6000)
+            time.sleep(1.0)  # ~5.0 s left of a 6 s window
+            results = session.submit(
+                bundle="A", tag="L00", inputs={"q": b"ab"}, outputs=("y",)
+            )
+            self.assertEqual(results["y"], b"ab")
+            self.assertEqual(session.timeouts, 0)
+            counters = session.counters()
+            self.assertEqual(counters["batch_opens"], 2)
+            self.assertEqual(counters["submissions"], 1)
+
     def test_an_expired_batch_scope_renews_before_the_next_submit(self):
         # A session held open past its batch deadline must not make every
         # later submit fail: the next submit closes the stale scope and

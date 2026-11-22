@@ -507,20 +507,28 @@ class ResidentAneWorker:
         if bundle not in self.bundles:
             raise ResidentWorkerError(f"unknown resident bundle {bundle!r}")
 
-        if self._batch_until is not None and self._batch_until <= time.monotonic():
-            # A scope held open past its absolute window would make this
-            # submit fail on a dead clock -- the client guard and, on
-            # the wire path, the worker's own deadline both read the
-            # expired timestamp. Close the stale scope and open a fresh
-            # one so a long-lived session (the dictation worker holds
-            # one for its whole lifetime) is not wedged by its own
-            # bookkeeping. The close itself reads through _fill, which
-            # still honors the old clock, so give it a fresh window.
-            self._batch_until = (
-                time.monotonic() + _CLIENT_GRACE_MS / 1000
+        if self._batch_until is not None:
+            # A submit needs its whole budget inside the window: the
+            # worker's own clock kills a submit that starts near the
+            # end of a stale scope (until = batch_until), so renew the
+            # scope when the remaining window cannot cover this submit
+            # -- the staging budget on the first submit of a session,
+            # the job budget after it. A long-lived session (the
+            # dictation worker holds one for its whole lifetime) is
+            # then never wedged by its own bookkeeping. The close
+            # itself reads through _fill, which still honors the old
+            # clock, so give it a fresh window first.
+            budget_ms = _CLIENT_GRACE_MS + (
+                self.staging_deadline_ms
+                if self.submissions == 0
+                else self.deadline_ms
             )
-            self.end_batch()
-            self.begin_batch(self._batch_deadline_ms)
+            if self._batch_until - time.monotonic() < budget_ms / 1000:
+                self._batch_until = (
+                    time.monotonic() + _CLIENT_GRACE_MS / 1000
+                )
+                self.end_batch()
+                self.begin_batch(self._batch_deadline_ms)
 
         in_bytes = 0
         ordered = list(inputs.items())
