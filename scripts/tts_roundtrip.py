@@ -191,15 +191,38 @@ def _resolve_from_list(wavs: list, n: int) -> list:
 
 
 def _mlx_transcriber(model_path: str | None):
-    """Parakeet TDT via mlx_audio (hardware path; lazy import)."""
-    import numpy as np  # noqa: F401
+    """Parakeet TDT via mlx_audio (hardware path; lazy import).
+
+    Same call shape as serve/mlx_omarchy_assistant/gpu_stt_worker.py:
+    float32 16 kHz mono samples to ``model.generate(audio,
+    verbose=False).text``, a silence prime (the first generate after
+    load returns ""), and one noise-padded retry on an empty transcript.
+    ffmpeg decodes the wav, matching the ASR harness decode."""
+    import subprocess
+
+    import mlx.core as mx
     from mlx_audio.stt.utils import load_model
 
     model = load_model(model_path or PARAKEET_REPO)
+    model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
+
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    noise = mx.array((rng.standard_normal(2400) * 1e-4).astype(np.float32))
 
     def transcribe(wav_path: Path) -> str:
-        result = model.generate(str(wav_path))
-        return getattr(result, "text", result) or ""
+        pcm = subprocess.run(
+            ["ffmpeg", "-nostdin", "-v", "error", "-i", str(wav_path),
+             "-ar", "16000", "-ac", "1", "-f", "f32le", "pipe:1"],
+            capture_output=True, check=True).stdout
+        audio = mx.array(np.frombuffer(pcm, dtype="<f4"))
+        text = str(getattr(model.generate(audio, verbose=False), "text", "") or "")
+        if not text:
+            n = noise.shape[0] // 2
+            audio = mx.concatenate([noise[:n], audio, noise[-n:]])
+            text = str(getattr(model.generate(audio, verbose=False), "text", "") or "")
+        return text
 
     return transcribe
 
