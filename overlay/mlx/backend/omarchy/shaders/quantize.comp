@@ -87,6 +87,14 @@ layout(set = 0, binding = 3, std430) writeonly buffer Biases {
 } biases_data;
 #endif
 
+#ifdef FP_MODE
+// nvfp4 global-scale staging slot. The bound scalar is one word for the
+// whole dispatch; lane 0 stages it here so the workgroup reads a shared
+// copy instead of every invocation issuing the same buffer word read,
+// which G18G answers with 0.
+shared uint global_scale_word;
+#endif
+
 layout(push_constant) uniform Params {
   uint count;
   uint operation;
@@ -260,8 +268,11 @@ void main() {
   bool has_global_scale = (params.flags & 2u) != 0u;
   float global_enc = 1.0;
   if (has_global_scale) {
-    global_enc =
-        uintBitsToFloat(global_scale_data.values[params.aux_size]);
+    if (gl_LocalInvocationIndex == 0u) {
+      global_scale_word = global_scale_data.values[params.aux_size];
+    }
+    barrier();
+    global_enc = uintBitsToFloat(global_scale_word);
     global_enc = 2688.0 / global_enc;
   }
   for (uint group = gl_GlobalInvocationID.x; group < params.count;
