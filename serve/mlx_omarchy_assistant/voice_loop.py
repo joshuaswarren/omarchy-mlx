@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 import urllib.parse
 import urllib.request
 import wave
@@ -68,6 +69,7 @@ class Endpointer:
 
     def _reset(self):
         self._listening = False
+        self.last_quiet_s = 0.0
         self._buf = []
         self._waited = self._quiet = self._spoken = 0.0
 
@@ -87,8 +89,9 @@ class Endpointer:
         self._spoken += seconds
         self._quiet = 0.0 if voiced else self._quiet + seconds
         if self._quiet >= self._end or self._spoken >= self._max:
-            utterance = b"".join(self._buf)
+            utterance, quiet = b"".join(self._buf), self._quiet
             self._reset()
+            self.last_quiet_s = quiet
             return utterance
         return None
 
@@ -181,21 +184,35 @@ class VoiceLoop:
         self._history = [{"role": "system", "content": system_prompt}] if system_prompt else []
         self.cancel = threading.Event()
 
-    def turn(self, utterance: bytes) -> dict | None:
+    def turn(self, utterance: bytes, endpoint_s: float = 0.0) -> dict | None:
+        """One turn. ms: endpoint is the silence waited before the turn closed
+        (audio time); the rest are wall time from the turn's close."""
+        t0 = time.monotonic()
+        ms = {"endpoint": round(endpoint_s * 1000)}
+        since = lambda: round((time.monotonic() - t0) * 1000, 1)  # noqa: E731
         heard = self._transcribe(wav_bytes(utterance), self.cancel).strip()
+        ms["stt"] = since()
         if not heard:
             return None
         self._history.append({"role": "user", "content": heard})
+
+        def timed(deltas):
+            for delta in deltas:
+                ms.setdefault("first_token", since())
+                yield delta
+
         spoken = []
-        for sentence in sentences(stream_reply(self._url, self._history, model=self._model)):
+        for sentence in sentences(timed(stream_reply(self._url, self._history, model=self._model))):
             spoken.append(sentence)
             for chunk in self._synthesize(sentence, self.cancel):
                 if chunk.sample_rate != self._sink.rate:
                     raise RuntimeError(f"TTS rate {chunk.sample_rate} != sink rate {self._sink.rate}")
                 self._sink.write(chunk.data)
+                ms.setdefault("first_audio", since())
+        ms["total"] = since()
         reply = " ".join(spoken)
         self._history.append({"role": "assistant", "content": reply})
-        return {"heard": heard, "reply": reply, "sentences": len(spoken)}
+        return {"heard": heard, "reply": reply, "sentences": len(spoken), "ms": ms}
 
     def run(self, source) -> list[dict]:
         """Run every turn found in an iterable of 16 kHz PCM chunks."""
@@ -205,7 +222,7 @@ class VoiceLoop:
                 break
             utterance = self._endpointer.feed(pcm)
             if utterance is not None:
-                result = self.turn(utterance)
+                result = self.turn(utterance, self._endpointer.last_quiet_s)
                 if result:
                     turns.append(result)
         return turns

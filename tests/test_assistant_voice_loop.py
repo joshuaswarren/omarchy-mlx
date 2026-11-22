@@ -120,7 +120,12 @@ class LoopbackRoundTrip(unittest.TestCase):
         self.assertEqual(spoken, ["It is noon.", "The sun is up!"])
         self.assertTrue(seen["tts_before_rest"], "the first sentence was not spoken while the reply was still streaming")
         self.assertEqual((rate, frames), (24000, 240 + 480))
+        ms = turns[0].pop("ms")
         self.assertEqual(turns, [{"heard": "what time is it", "reply": "It is noon. The sun is up!", "sentences": 2}])
+        self.assertEqual(set(ms), {"endpoint", "stt", "first_token", "first_audio", "total"})
+        self.assertGreaterEqual(ms["endpoint"], 500)  # the configured end silence, in whole 80 ms chunks
+        self.assertLessEqual(ms["endpoint"], 580)
+        self.assertTrue(0 <= ms["stt"] <= ms["first_token"] <= ms["first_audio"] <= ms["total"], ms)
 
 
 class Offline(unittest.TestCase):
