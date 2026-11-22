@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
 from mlx_omarchy_assistant import voice_loop  # noqa: E402
-from mlx_omarchy_assistant.synthesis import PcmChunk  # noqa: E402
+from mlx_omarchy_assistant.synthesis import PcmChunk, VoiceOutputLimitError  # noqa: E402
 
 RATE = 16000
 
@@ -123,16 +123,44 @@ class LoopbackRoundTrip(unittest.TestCase):
         self.assertEqual(seen["body"]["stream"], True)
         self.assertEqual(seen["body"]["seed"], 0)  # mlx_lm.server serves a seeded request on its single-request path
         self.assertEqual(seen["body"]["temperature"], 0)  # so the seed can never pin a sampled reply
+        self.assertEqual(seen["body"]["messages"][0], {"role": "system", "content": voice_loop.VOICE_SYSTEM_PROMPT})
+        self.assertEqual(seen["body"]["max_tokens"], voice_loop.REPLY_MAX_TOKENS)
         self.assertEqual(seen["body"]["messages"][-1], {"role": "user", "content": "what time is it"})
         self.assertEqual(spoken, ["It is noon.", "The sun is up!"])
         self.assertTrue(seen["tts_before_rest"], "the first sentence was not spoken while the reply was still streaming")
         self.assertEqual((rate, frames), (24000, 240 + 480))
         ms = turns[0].pop("ms")
-        self.assertEqual(turns, [{"heard": "what time is it", "reply": "It is noon. The sun is up!", "sentences": 2}])
+        self.assertEqual(turns, [{"heard": "what time is it", "reply": "It is noon. The sun is up!", "sentences": 2, "truncated": False}])
         self.assertEqual(set(ms), {"endpoint", "stt", "first_token", "first_audio", "total"})
         self.assertGreaterEqual(ms["endpoint"], 500)  # the configured end silence, in whole 80 ms chunks
         self.assertLessEqual(ms["endpoint"], 580)
         self.assertTrue(0 <= ms["stt"] <= ms["first_token"] <= ms["first_audio"] <= ms["total"], ms)
+
+
+class OutputBound(unittest.TestCase):
+    def test_the_output_bound_truncates_the_reply_instead_of_aborting(self):
+        server, _seen = sse_server(["A very long first sentence. ", "A second one."])
+        self.addCleanup(server.shutdown)
+        spoken = []
+
+        def synthesize(text, cancel):
+            spoken.append(text)
+            yield PcmChunk(24000, bytes(480))
+            raise VoiceOutputLimitError("synthesis exceeded the 30s output bound")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = voice_loop.WavSink(Path(tmp) / "r.wav", 24000)
+            loop = voice_loop.VoiceLoop(
+                voice_loop.Endpointer(PhraseEndDetector(), rms_floor=500), lambda wav, c=None: "tell me everything",
+                "http://127.0.0.1:%d/v1/chat/completions" % server.server_port, synthesize, sink, model="m")
+            result = loop.turn(bytes(3200))
+            sink.close()
+            with wave.open(str(Path(tmp) / "r.wav")) as w:
+                frames = w.getnframes()
+        self.assertEqual(spoken, ["A very long first sentence."])
+        self.assertEqual(frames, 240)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["reply"], "A very long first sentence.")
 
 
 class Offline(unittest.TestCase):
@@ -179,6 +207,11 @@ class Offline(unittest.TestCase):
         turns = [u for u in map(ep.feed, voice_loop.chunks(source)) if u is not None]
         self.assertEqual(len(turns), 1)
         self.assertGreaterEqual(len(turns[0]) / 2 / RATE, 0.8 + 0.72 + 0.8)
+
+    def test_line_breaks_end_a_piece_and_markdown_is_not_spoken(self):
+        self.assertEqual(
+            list(voice_loop.sentences(["Here are", " the options\n\n- **Sum**: 20\n", "### Next\n1. `Product` is 30"])),
+            ["Here are the options", "Sum: 20", "Next", "Product is 30"])
 
     def test_sentences_split_on_terminal_punctuation_and_flush_the_rest(self):
         self.assertEqual(list(voice_loop.sentences(["Hi", " there. How", " are you? Fine"])),
