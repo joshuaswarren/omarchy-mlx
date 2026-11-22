@@ -6,6 +6,8 @@ so the class-level hooks work identically."""
 import importlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -138,6 +140,57 @@ class Bonsai2IdsProbeTests(unittest.TestCase):
                          f"expected 2 flush events total, got {len(events)}")
         for e in events:
             self.assertEqual(e["ids"], [7, 8])
+
+
+# Runs serve_main from an install.sh-shaped package (no ids_probe.py) with
+# a stub mlx.core. Exit 42 means serve_main got past the probe gate to the
+# model load; exit 43 means it called install_ids_probe.
+_SERVE_MAIN = """
+import sys, types
+mx = types.ModuleType("mlx.core")
+mx.gpu = "gpu"
+mx.default_device = lambda: mx.gpu
+sys.modules["mlx"] = types.ModuleType("mlx")
+sys.modules["mlx"].core = sys.modules["mlx.core"] = mx
+sys.path.insert(0, sys.argv[1])
+if sys.argv[2] == "stub-probe":
+    probe = types.ModuleType("mlx_omarchy_bonsai2.ids_probe")
+    def install_ids_probe():
+        raise SystemExit(43)
+    probe.install_ids_probe = install_ids_probe
+    sys.modules[probe.__name__] = probe
+from mlx_omarchy_bonsai2 import server
+def reached_model_load(args):
+    raise SystemExit(42)
+server.Bonsai2State = reached_model_load
+server.serve_main(["--model", "unused"])
+"""
+
+
+class Bonsai2ServeMainProbeGateTests(unittest.TestCase):
+    def _serve_main(self, probe_env, stub):
+        prefix = tempfile.TemporaryDirectory()
+        self.addCleanup(prefix.cleanup)
+        shutil.copytree(REPO_ROOT / "serve" / "mlx_omarchy_bonsai2",
+                        Path(prefix.name) / "mlx_omarchy_bonsai2",
+                        ignore=shutil.ignore_patterns("ids_probe.py",
+                                                      "__pycache__"))
+        env = dict(os.environ)
+        env.pop("MLX_OMARCHY_SERVE_IDS_PROBE", None)
+        if probe_env is not None:
+            env["MLX_OMARCHY_SERVE_IDS_PROBE"] = probe_env
+        return subprocess.run(
+            [sys.executable, "-I", "-c", _SERVE_MAIN, prefix.name, stub],
+            env=env, stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, timeout=60)
+
+    def test_installed_server_starts_without_ids_probe_module(self):
+        proc = self._serve_main(None, "no-stub")
+        self.assertEqual(proc.returncode, 42, proc.stderr)
+
+    def test_probe_env_installs_probe(self):
+        proc = self._serve_main("1", "stub-probe")
+        self.assertEqual(proc.returncode, 43, proc.stderr)
 
 
 if __name__ == "__main__":
