@@ -84,6 +84,37 @@ class CancelBeforeStartTest(unittest.TestCase):
             )
 
 
+class SessionErrorIsOneRequestTest(unittest.TestCase):
+    def test_a_dead_session_refuses_one_request_and_keeps_the_worker(self):
+        # A session-level failure (dead resident worker, expired batch
+        # window, device refusal) used to escape transcribe_waveform and
+        # kill the worker process, so every later request 503'd on the
+        # respawn. It must surface as a DictationRefusal -- one
+        # "unavailable" answer -- with the transcriber still open.
+        from coreml.ane_resident import ResidentWorkerError
+
+        transcriber = pd.DictationTranscriber()
+        transcriber._started = True
+        transcriber._mx = None
+        transcriber._np = np
+        transcriber._fixture_samples_sha = None
+        transcriber._tokenizer = type(
+            "T", (), {"decode": staticmethod(lambda tokens: "")}
+        )()
+
+        def dead_session(*_args):
+            raise ResidentWorkerError(
+                "resident worker closed its output"
+            )
+
+        transcriber._transcribe_chunk = dead_session
+        with self.assertRaises(pd.DictationRefusal):
+            transcriber.transcribe_waveform(
+                np.zeros(16_000, dtype=np.float32), 16_000
+            )
+        self.assertFalse(transcriber._closed)
+
+
 class ProbeTest(unittest.TestCase):
     def test_probe_reports_named_facts(self):
         probe = pd.probe_runtime()

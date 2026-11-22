@@ -180,6 +180,7 @@ class ResidentAneWorker:
         seal_libane_sha: str | None = None,
         daemon_socket: str | os.PathLike[str] | None = None,
         daemon_connect_ms: int = 1000,
+        staging_deadline_ms: int | None = None,
     ):
         if not bundles:
             raise ResidentWorkerError("a resident session needs at least one bundle")
@@ -193,6 +194,15 @@ class ResidentAneWorker:
         self.scratch = Path(scratch)
         self.deadline_ms = deadline_ms
         self.iterations = iterations
+        # The first submit of a fresh session pays the bundle's
+        # first-time device staging cost on top of the steady-state
+        # exec cost; on the resident path that staging (a ~458 MB
+        # whole-encoder bundle on parakeet) legitimately outlasts the
+        # job deadline. Unset -> staging shares deadline_ms, the
+        # previous behavior.
+        self.staging_deadline_ms = (
+            deadline_ms if staging_deadline_ms is None else staging_deadline_ms
+        )
         # Relay-bypass: the worker subprocess is invoked with
         # --relay-bypass so it becomes a pure splice(2) pump between
         # its stdin/stdout and the resident socketpair. The runner
@@ -271,13 +281,19 @@ class ResidentAneWorker:
         self._banner: list[str] = []
         self._inbox = bytearray()
         self._batch_until: float | None = None
+        self._batch_deadline_ms = 0
         self._bypass_batch_base = 0
 
     # ------------------------------------------------------------ lifecycle
     @property
     def alive(self) -> bool:
-        """True while the session's transport is open (protocol-level)."""
-        return self._process is not None or self._socket is not None
+        """True while the session's transport is live, not just held."""
+        if self._process is not None:
+            # A dead worker still holds its Popen until _finish reaps
+            # it; reporting handle presence here let callers reuse a
+            # corpse (the persistent-unavailable path).
+            return self._process.poll() is None
+        return self._socket is not None
 
     @property
     def transport(self) -> str:
@@ -491,6 +507,21 @@ class ResidentAneWorker:
         if bundle not in self.bundles:
             raise ResidentWorkerError(f"unknown resident bundle {bundle!r}")
 
+        if self._batch_until is not None and self._batch_until <= time.monotonic():
+            # A scope held open past its absolute window would make this
+            # submit fail on a dead clock -- the client guard and, on
+            # the wire path, the worker's own deadline both read the
+            # expired timestamp. Close the stale scope and open a fresh
+            # one so a long-lived session (the dictation worker holds
+            # one for its whole lifetime) is not wedged by its own
+            # bookkeeping. The close itself reads through _fill, which
+            # still honors the old clock, so give it a fresh window.
+            self._batch_until = (
+                time.monotonic() + _CLIENT_GRACE_MS / 1000
+            )
+            self.end_batch()
+            self.begin_batch(self._batch_deadline_ms)
+
         in_bytes = 0
         ordered = list(inputs.items())
         for _, payload in ordered:
@@ -611,6 +642,7 @@ class ResidentAneWorker:
             raise ResidentWorkerError("no resident session is open")
         if deadline_ms <= 0:
             raise ResidentWorkerError("a batch scope needs a positive deadline")
+        self._batch_deadline_ms = deadline_ms
         if self.relay_bypass:
             # The batch scope was always parent-side bookkeeping (the
             # stock AneWorker::open_batch sends nothing to the
@@ -692,16 +724,27 @@ class ResidentAneWorker:
 
     def _fill(self, what: str) -> None:
         """Read whatever the worker has ready, inside the client guard."""
-        deadline = time.monotonic() + (self.deadline_ms + _CLIENT_GRACE_MS) / 1000
+        # The first submit of a session pays first-time device staging;
+        # it is bounded by the staging budget, not the steady-state job
+        # deadline, so the deadline must not fire while the bundle is
+        # being staged for the first time.
+        basis_ms = (
+            self.staging_deadline_ms
+            if self.submissions == 0
+            else self.deadline_ms
+        )
+        deadline = time.monotonic() + (basis_ms + _CLIENT_GRACE_MS) / 1000
         if self._batch_until is not None:
-            deadline = self._batch_until + _CLIENT_GRACE_MS / 1000
+            deadline = max(
+                deadline, self._batch_until + _CLIENT_GRACE_MS / 1000
+            )
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self.timeouts += 1
                 self._die(
                     f"resident worker did not produce the {what} within "
-                    f"{self.deadline_ms + _CLIENT_GRACE_MS} ms"
+                    f"{basis_ms + _CLIENT_GRACE_MS} ms"
                 )
             if self._channel_kind == "socket":
                 sock = self._socket

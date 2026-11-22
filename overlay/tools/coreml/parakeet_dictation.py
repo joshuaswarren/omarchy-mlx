@@ -186,6 +186,31 @@ def probe_runtime(*, verify_cache: bool = False) -> dict:
     return {"ok": not reasons, "reasons": reasons, "facts": facts}
 
 
+def _session_error_kinds() -> tuple[type[BaseException], ...]:
+    """Failures that end the resident ANE session, resolved lazily.
+
+    ``vulkan_encoder`` imports ``mlx.core`` at module load, so its error
+    class resolves only inside a real transcription -- in the worker
+    process mlx is always present; in host tests only the ane_resident
+    half resolves.
+    """
+    kinds: list[type[BaseException]] = []
+    for module_name, class_name in (
+        ("coreml.ane_resident", "ResidentWorkerError"),
+        ("ane_resident", "ResidentWorkerError"),
+        ("coreml.vulkan_encoder", "EncoderRunError"),
+        ("vulkan_encoder", "EncoderRunError"),
+    ):
+        try:
+            module = __import__(module_name, fromlist=[class_name])
+        except ImportError:
+            continue
+        error_kind = getattr(module, class_name, None)
+        if error_kind is not None and error_kind not in kinds:
+            kinds.append(error_kind)
+    return tuple(kinds)
+
+
 def plan_chunks(sample_count: int, chunk_samples: int = _CHUNK_SAMPLES) -> list[int]:
     if sample_count <= 0:
         raise ValueError(f"sample_count must be positive, got {sample_count}")
@@ -454,19 +479,28 @@ class DictationTranscriber:
             samples = np.ascontiguousarray(waveform)
             duration_aware = not _is_pinned_samples(
                 samples, self._fixture_samples_sha)
-            for length in plan_chunks(int(samples.size)):
-                if self._cancelled(cancel):
-                    raise DictationCancelled("cancelled at a chunk boundary")
-                if time.monotonic() - started > deadline / 1000.0:
-                    raise DictationTimedOut(
-                        f"transcription exceeded its {deadline} ms deadline"
+            session_errors = _session_error_kinds()
+            try:
+                for length in plan_chunks(int(samples.size)):
+                    if self._cancelled(cancel):
+                        raise DictationCancelled("cancelled at a chunk boundary")
+                    if time.monotonic() - started > deadline / 1000.0:
+                        raise DictationTimedOut(
+                            f"transcription exceeded its {deadline} ms deadline"
+                        )
+                    chunk = samples[:length]
+                    samples = samples[length:]
+                    chunk_tokens, hidden, cell = self._transcribe_chunk(
+                        chunk, hidden, cell, cancel, duration_aware
                     )
-                chunk = samples[:length]
-                samples = samples[length:]
-                chunk_tokens, hidden, cell = self._transcribe_chunk(
-                    chunk, hidden, cell, cancel, duration_aware
-                )
-                tokens.extend(chunk_tokens)
+                    tokens.extend(chunk_tokens)
+            except session_errors as error:
+                # The resident session (or its worker/daemon) ended
+                # under this request. Refusing this one request keeps
+                # the worker alive; the island already dropped the dead
+                # session, so the next request rebuilds it instead of
+                # failing on the corpse.
+                raise DictationRefusal(str(error)) from error
             return self._tokenizer.decode(tokens)
 
     def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel,
