@@ -224,8 +224,15 @@ def main():
     say(f"   device={meta['device']} period={period}ns "
         f"valid_bits={valid_bits}")
     if cal is not None:
-        say(f"   calibrated floor={cal['floor_ns']}ns "
-            f"({cal['samples']} lone-submit samples)"
+        floor = cal.get("floor_ns")
+        samples = cal.get("samples")
+        if not isinstance(floor, (int, float)) or not isinstance(
+                samples, (int, float)):
+            print("malformed cal record: floor_ns/samples missing or "
+                  "not numeric", file=sys.stderr)
+            sys.exit(2)
+        say(f"   calibrated floor={int(floor)}ns "
+            f"({int(samples)} lone-submit samples)"
             + (f" gpu_epoch={cal['gpu_epoch']}"
                if "gpu_epoch" in cal else ""))
     say(f"   dispatches={len(dispatches)} submissions={len(submits)} "

@@ -20,6 +20,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -46,33 +47,55 @@ VkPhysicalDeviceVulkan13Features cap_f13{
 bool seen_f16 = false;
 VkPhysicalDevice16BitStorageFeatures cap_f16{
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
+bool seen_fa = false;
+VkPhysicalDeviceShaderAtomicFloatFeaturesEXT cap_fa{
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+bool seen_cm = false;
+#ifdef VK_KHR_cooperative_matrix
+VkPhysicalDeviceCooperativeMatrixFeaturesKHR cap_cm{
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+#endif
+bool seen_bf16 = false;
+#ifdef VK_KHR_shader_bfloat16
+VkPhysicalDeviceShaderBfloat16FeaturesKHR cap_bf16{
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
+#endif
 
-// Feature-struct layout is {sType; pNext; VkBool32 fields...}. Counting
-// nonzero VkBool32 slots after the two leading members catches every
-// set feature, including ones a named check would have to list one by
-// one.
-uint32_t true_fields(const void* s, size_t size) {
-  constexpr size_t kHeader = sizeof(VkStructureType) + sizeof(void*);
-  const auto* fields =
-      reinterpret_cast<const uint32_t*>(reinterpret_cast<const char*>(s) +
-                                        kHeader);
+// Count nonzero VkBool32 fields in [first_off, last_off] of struct s.
+// Feature structs lead with {sType; pNext} then run contiguous VkBool32
+// fields; offsetof bounds keep the scan off the header and off any tail
+// padding, and each field is read through memcpy.
+template <typename T>
+uint32_t true_span(const T& s, size_t first_off, size_t last_off) {
+  const auto* base = reinterpret_cast<const char*>(&s);
   uint32_t n = 0;
-  for (size_t off = 0; off + sizeof(uint32_t) <= size - kHeader;
-       off += sizeof(uint32_t)) {
-    if (fields[off / sizeof(uint32_t)] != 0) {
+  for (size_t off = first_off; off <= last_off; off += sizeof(VkBool32)) {
+    VkBool32 v;
+    std::memcpy(&v, base + off, sizeof v);
+    if (v != 0) {
       ++n;
     }
   }
   return n;
 }
 
+#define TRUE_FIELDS(s, first, last) \
+  true_span(s, offsetof(decltype(s), first), offsetof(decltype(s), last))
+
 VkResult VKAPI_CALL capture_create_device(
     VkPhysicalDevice pd,
     const VkDeviceCreateInfo* ci,
     const VkAllocationCallbacks* cb,
     VkDevice* out) {
+  // The device-create path can retry once (queue-priority fallback), so
+  // every capture clears at entry: the last call is the one the driver
+  // actually received.
   captured = true;
   captured_enabled_features = ci->pEnabledFeatures != nullptr;
+  unexpected_stypes.clear();
+  enabled_exts.clear();
+  seen_f2 = seen_f12 = seen_f13 = seen_f16 = seen_fa = seen_cm =
+      seen_bf16 = false;
   for (const auto* s =
            reinterpret_cast<const VkBaseInStructure*>(ci->pNext);
        s != nullptr;
@@ -102,11 +125,30 @@ VkResult VKAPI_CALL capture_create_device(
         seen_f16 = true;
         break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT:
+        cap_fa =
+            *reinterpret_cast<
+                const VkPhysicalDeviceShaderAtomicFloatFeaturesEXT*>(s);
+        cap_fa.pNext = nullptr;
+        seen_fa = true;
+        break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR:
-#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR
-      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR:
+#ifdef VK_KHR_cooperative_matrix
+        cap_cm =
+            *reinterpret_cast<
+                const VkPhysicalDeviceCooperativeMatrixFeaturesKHR*>(s);
+        cap_cm.pNext = nullptr;
+        seen_cm = true;
 #endif
         break;
+#ifdef VK_KHR_shader_bfloat16
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR:
+        cap_bf16 =
+            *reinterpret_cast<
+                const VkPhysicalDeviceShaderBfloat16FeaturesKHR*>(s);
+        cap_bf16.pNext = nullptr;
+        seen_bf16 = true;
+        break;
+#endif
       default:
         unexpected_stypes.push_back(s->sType);
         break;
@@ -137,8 +179,11 @@ bool allowed_extension(const std::string& name) {
 
 TEST_CASE("VkDeviceCreateInfo requests only the audited feature set") {
   using namespace mlx::core::omarchy;
+  WARN_MESSAGE(
+      device_count() > 0,
+      "Skipping: no Vulkan device on this host; nothing to capture");
   if (device_count() == 0) {
-    return; // no Vulkan device on this host; nothing to capture
+    return;
   }
   auto& it = vk::instance_table();
   REQUIRE(it.CreateDevice != nullptr);
@@ -184,18 +229,47 @@ TEST_CASE("VkDeviceCreateInfo requests only the audited feature set") {
   // Whitelists: every set feature bit is one the backend or its shaders
   // consume. The count catches additions a named check would miss.
   CHECK(
-      true_fields(&cap_f2, sizeof(cap_f2)) ==
+      TRUE_FIELDS(cap_f2.features, robustBufferAccess, inheritedQueries) ==
       (cap_f2.features.shaderInt16 ? 1 : 0) +
           (cap_f2.features.shaderInt64 ? 1 : 0));
   CHECK(
-      true_fields(&cap_f12, sizeof(cap_f12)) ==
+      TRUE_FIELDS(
+          cap_f12, samplerMirrorClampToEdge, subgroupBroadcastDynamicId) ==
       (cap_f12.timelineSemaphore ? 1 : 0) + (cap_f12.shaderFloat16 ? 1 : 0));
   CHECK(
-      true_fields(&cap_f13, sizeof(cap_f13)) ==
+      TRUE_FIELDS(cap_f13, robustImageAccess, maintenance4) ==
       (cap_f13.subgroupSizeControl ? 1 : 0));
   CHECK(
-      true_fields(&cap_f16, sizeof(cap_f16)) ==
+      TRUE_FIELDS(
+          cap_f16, storageBuffer16BitAccess, storageInputOutput16) ==
       (cap_f16.storageBuffer16BitAccess ? 1 : 0));
+
+  // The extension structs get the same field-level whitelist.
+  if (seen_fa) {
+    CHECK(
+        TRUE_FIELDS(
+            cap_fa, shaderBufferFloat32Atomics, sparseImageFloat32AtomicAdd) ==
+        (cap_fa.shaderBufferFloat32AtomicAdd ? 1 : 0));
+  }
+#ifdef VK_KHR_cooperative_matrix
+  if (seen_cm) {
+    CHECK(!cap_cm.cooperativeMatrixRobustBufferAccess);
+    CHECK(
+        TRUE_FIELDS(
+            cap_cm, cooperativeMatrix, cooperativeMatrixRobustBufferAccess) ==
+        (cap_cm.cooperativeMatrix ? 1 : 0));
+  }
+#endif
+#ifdef VK_KHR_shader_bfloat16
+  if (seen_bf16) {
+    CHECK(!cap_bf16.shaderBFloat16DotProduct);
+    CHECK(
+        TRUE_FIELDS(
+            cap_bf16, shaderBFloat16Type, shaderBFloat16CooperativeMatrix) ==
+        (cap_bf16.shaderBFloat16Type ? 1 : 0) +
+            (cap_bf16.shaderBFloat16CooperativeMatrix ? 1 : 0));
+  }
+#endif
 
   for (const auto& ext : enabled_exts) {
     CHECK_MESSAGE(

@@ -44,10 +44,7 @@
 //                     mode accounts dispatches through the k=d records)
 //   {"k":"cal",...}   once, after meta: the calibrated submission floor —
 //                     median host cost of an empty command buffer submitted
-//                     alone and waited ("floor_ns"), its sample count, and,
-//                     when the queue writes timestamps, "gpu_epoch" = a
-//                     [tick, host_ns] pair anchoring GPU ticks to the host
-//                     clock for analysis-side alignment
+//                     alone and waited ("floor_ns"), and its sample count
 //
 // The k=cal record adopts aurora-lily's timestamp+calibration model
 // (src/vulkan.rs ProfileStamps + calibrate_profile): lily measures the
@@ -57,6 +54,10 @@
 // spans; floor_ns exists so analysis can subtract the same fixed cost
 // from the host-side submit/join spans (k=s, k=q, k=j) and so the
 // figure itself is on record per driver.
+//
+// Calibration submits are strictly command-free: a command buffer that
+// carries only a timestamp write submits empty on compute-only chips
+// (#526), so no GPU-tick epoch is anchored here.
 //
 // GPU ticks convert to nanoseconds with meta.period_ns; tick wraparound
 // wraps at 2^valid_bits. Kernel enum values map to names by their
@@ -616,9 +617,9 @@ class GpuProfiler {
 
   // aurora-lily's calibrate_profile (src/vulkan.rs): measure the fixed
   // cost of one lone submit+wait of an empty command buffer and record
-  // it as the profiling floor. The last sample carries a timestamp
-  // query so GPU ticks can be anchored to the host clock (gpu_epoch),
-  // the cheap cousin of lily's VK_KHR_calibrated_timestamps offset.
+  // it as the profiling floor. Buffers stay strictly command-free — a
+  // timestamp-only stream submits empty on compute-only chips (#526), so
+  // no stamped epoch is anchored here.
   void calibrate(const Device& device) {
     if (calibrated_) {
       return;
@@ -636,95 +637,67 @@ class GpuProfiler {
         VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pci.queueFamilyIndex = device.queue_family();
     VkCommandPool pool = VK_NULL_HANDLE;
-    if (dt.CreateCommandPool(device.handle(), &pci, nullptr, &pool) !=
-        VK_SUCCESS) {
-      return;
-    }
-    VkCommandBufferAllocateInfo ai{
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    ai.commandPool = pool;
-    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = 1;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
-    if (dt.AllocateCommandBuffers(device.handle(), &ai, &cmd) != VK_SUCCESS) {
-      dt.DestroyCommandPool(device.handle(), pool, nullptr);
-      return;
+    bool ok = dt.CreateCommandPool(device.handle(), &pci, nullptr, &pool) ==
+        VK_SUCCESS;
+    if (ok) {
+      VkCommandBufferAllocateInfo ai{
+          VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      ai.commandPool = pool;
+      ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      ai.commandBufferCount = 1;
+      ok = dt.AllocateCommandBuffers(device.handle(), &ai, &cmd) ==
+          VK_SUCCESS;
     }
-    VkQueryPool stamps = VK_NULL_HANDLE;
-    if (valid_bits_ != 0 && dt.CreateQueryPool && dt.DestroyQueryPool &&
-        dt.CmdResetQueryPool && dt.CmdWriteTimestamp &&
-        dt.GetQueryPoolResults) {
-      VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-      qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-      qi.queryCount = 1;
-      if (dt.CreateQueryPool(device.handle(), &qi, nullptr, &stamps) !=
-          VK_SUCCESS) {
-        stamps = VK_NULL_HANDLE;
-      }
-    }
+    constexpr int kWarmup = 2;
     constexpr int kSamples = 32;
     std::vector<uint64_t> spans;
-    spans.reserve(kSamples);
-    uint64_t gpu_tick = 0;
-    uint64_t gpu_host = 0;
-    {
+    if (ok) {
       // No MLX work exists at attach time, so calibration submits are the
       // only traffic; take the queue mutex anyway to match every other
       // submission site.
       std::lock_guard<std::mutex> queue_lock(
           const_cast<Device&>(device).queue_mutex());
-      for (int i = 0; i < kSamples; ++i) {
+      for (int i = 0; ok && i < kWarmup + kSamples; ++i) {
         VkCommandBufferBeginInfo bi{
             VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        dt.ResetCommandBuffer(cmd, 0);
-        dt.BeginCommandBuffer(cmd, &bi);
-        if (stamps != VK_NULL_HANDLE && i == kSamples - 1) {
-          dt.CmdResetQueryPool(cmd, stamps, 0, 1);
-          dt.CmdWriteTimestamp(
-              cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, stamps, 0);
+        ok = dt.ResetCommandBuffer(cmd, 0) == VK_SUCCESS &&
+            dt.BeginCommandBuffer(cmd, &bi) == VK_SUCCESS &&
+            dt.EndCommandBuffer(cmd) == VK_SUCCESS;
+        if (!ok) {
+          break;
         }
-        dt.EndCommandBuffer(cmd);
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd;
         uint64_t t0 = host_ns();
-        dt.QueueSubmit(device.queue(), 1, &si, VK_NULL_HANDLE);
-        dt.QueueWaitIdle(device.queue());
-        uint64_t t1 = host_ns();
-        spans.push_back(t1 - t0);
-        if (stamps != VK_NULL_HANDLE && i == kSamples - 1 &&
-            dt.GetQueryPoolResults(
-                device.handle(),
-                stamps,
-                0,
-                1,
-                sizeof(gpu_tick),
-                &gpu_tick,
-                sizeof(gpu_tick),
-                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) ==
-                VK_SUCCESS) {
-          gpu_host = t1;
+        ok = dt.QueueSubmit(device.queue(), 1, &si, VK_NULL_HANDLE) ==
+                VK_SUCCESS &&
+            dt.QueueWaitIdle(device.queue()) == VK_SUCCESS;
+        if (ok && i >= kWarmup) {
+          spans.push_back(host_ns() - t0);
         }
       }
     }
-    if (stamps != VK_NULL_HANDLE) {
-      dt.DestroyQueryPool(device.handle(), stamps, nullptr);
+    if (cmd != VK_NULL_HANDLE) {
+      dt.FreeCommandBuffers(device.handle(), pool, 1, &cmd);
     }
-    dt.FreeCommandBuffers(device.handle(), pool, 1, &cmd);
-    dt.DestroyCommandPool(device.handle(), pool, nullptr);
+    if (pool != VK_NULL_HANDLE) {
+      dt.DestroyCommandPool(device.handle(), pool, nullptr);
+    }
     if (spans.empty()) {
       return;
     }
     std::sort(spans.begin(), spans.end());
-    floor_ns_ = spans[spans.size() / 2];
-    emitf("{\"k\":\"cal\",\"floor_ns\":%" PRIu64 ",\"samples\":%zu",
+    // Even sample count: average the two middle samples.
+    size_t n = spans.size();
+    floor_ns_ = (spans[n / 2 - 1] + spans[n / 2]) / 2;
+    emitf("{\"k\":\"cal\",\"floor_ns\":%" PRIu64 ",\"samples\":%zu"
+          ",\"warmup\":%d}\n",
           floor_ns_,
-          spans.size());
-    if (gpu_host != 0) {
-      emitf(",\"gpu_epoch\":[%" PRIu64 ",%" PRIu64 "]", gpu_tick, gpu_host);
-    }
-    emitf("}\n");
+          spans.size(),
+          kWarmup);
   }
 
   Ctx* find(const void* owner) {

@@ -934,7 +934,6 @@ target_compile_options(omarchy_feature_chain_tests
 target_link_options(omarchy_feature_chain_tests
                     PRIVATE ${SANITIZER_LINK_FLAGS})
 
-doctest_discover_tests(omarchy_feature_chain_tests)
 add_test(NAME omarchy_feature_chain_tests
          COMMAND omarchy_feature_chain_tests)
 set_tests_properties(omarchy_feature_chain_tests

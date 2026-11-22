@@ -226,5 +226,47 @@ class MalformedInputTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class CalibrationRecordTests(unittest.TestCase):
+    def test_cal_floor_reported(self):
+        rec = PROFILE + [
+            {"k": "cal", "floor_ns": 152000, "samples": 32, "warmup": 2},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("calibrated floor=152000ns", r.stdout)
+        self.assertIn("32 lone-submit samples", r.stdout)
+
+    def test_cal_gpu_epoch_tolerated_when_present(self):
+        rec = PROFILE + [
+            {"k": "cal", "floor_ns": 90000, "samples": 32,
+             "gpu_epoch": [1234567, 7654321]},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gpu_epoch=[1234567, 7654321]", r.stdout)
+
+    def test_cal_missing_floor_exits_2(self):
+        rec = PROFILE + [{"k": "cal", "samples": 32}]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("malformed cal record", r.stderr)
+
+    def test_cal_non_numeric_samples_exits_2(self):
+        rec = PROFILE + [
+            {"k": "cal", "floor_ns": 90000, "samples": "thirty-two"},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("malformed cal record", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 # VkDeviceCreateInfo feature-chain audit (PR-LILYVFT)
 
-2026-11-22, lane w70. aurora-lily measured sparse residency, robust
+2026-11-22. aurora-lily measured sparse residency, robust
 access, and buffer-device-address capture/replay as individually costly
 on Honeykrisp-M5 and stripped them. This audit applies the same test to
 the omarchy `VkDeviceCreateInfo` built in
@@ -27,7 +27,7 @@ the omarchy `VkDeviceCreateInfo` built in
 | `subgroupSizeControl` | required subgroup size | coopmat / fixed-subgroup kernels |
 | `shaderBufferFloat32AtomicAdd` (EXT) | hardware reports it | scatter-add kernels |
 | `cooperativeMatrix` (KHR) | hw f32 coopmat | `matmul_coopmat_*` kernels |
-| `shaderBFloat16{,CooperativeMatrix}` | `OMARCHY_BF16_CMAT` build + hw | bf16 coopmat kernels |
+| `shaderBFloat16Type` + `shaderBFloat16CooperativeMatrix` | `OMARCHY_BF16_CMAT` build + hw | bf16 coopmat kernels |
 
 ## lily's costly features: status
 
@@ -58,10 +58,10 @@ whitelist — or any of lily's costly features — is ever enabled.
 
 `gpu_profiler.h` now emits one `{"k":"cal"}` record after `meta`:
 `floor_ns` is the median host cost of 32 empty command buffers each
-submitted alone and waited — the same lone-submit job cost lily
-subtracts (~150 us on M5 Honeykrisp; measured here per driver). When the
-queue writes timestamps, the last sample carries a `BOTTOM_OF_PIPE`
-timestamp whose `[gpu_tick, host_ns]` pair is emitted as `gpu_epoch`,
-anchoring GPU ticks to the host clock for analysis-side alignment.
-`floor_ns` is for subtracting from host-side spans (k=s/k=q/k=j); the
-k=d GPU spans already bracket the dispatch inside the command buffer.
+submitted alone and waited (after 2 untimed warmups) — the same
+lone-submit job cost lily subtracts (~150 us on M5 Honeykrisp; measured
+here per driver). The buffers stay strictly command-free: a
+timestamp-only stream submits empty on compute-only chips (#526), so no
+GPU-tick epoch is anchored here. `floor_ns` is for subtracting from
+host-side spans (k=s/k=q/k=j); the k=d GPU spans already bracket the
+dispatch inside the command buffer.
