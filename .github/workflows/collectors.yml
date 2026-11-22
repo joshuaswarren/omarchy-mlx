@@ -52,7 +52,7 @@ jobs:
       - run: python scripts/test_collect_macos.py
       - run: python -m unittest discover -s tests -p test_mlx_provenance.py
       - run: python scripts/bench_matrix.py --self-test
-      - run: python -m pytest -q qualification-kit/test_receipt.py qualification-kit/test_reference.py qualification-kit/test_m5_kit.py
+      - run: python -m pytest -q qualification-kit/test_receipt.py qualification-kit/test_reference.py qualification-kit/test_m5_kit.py qualification-kit/test_decode_harness.py
       # tests/ covers the serve, assistant and ANE stack, which runs on Linux
       # only (/proc, /usr/bin/bash, process start times). The macOS legs keep
       # the collector steps above.
