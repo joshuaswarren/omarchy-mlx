@@ -718,6 +718,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p_serve.add_argument("--yes", action="store_true",
                          help="noninteractive explicit opt-in; requires an explicit target")
 
+    p_pull = sub.add_parser("pull", help="plan, require approval, download; never launch")
+    common(p_pull)
+    p_pull.add_argument("--host", default="127.0.0.1")
+    p_pull.add_argument("--port", type=int, default=8080)
+    p_pull.add_argument("--yes", action="store_true",
+                        help="noninteractive explicit opt-in; requires an explicit target")
+
     p_cat = sub.add_parser("catalog", help="catalog list/status/refresh")
     csub = p_cat.add_subparsers(dest="catalog_command", required=True)
     for name, help_text in (
@@ -773,7 +780,7 @@ def cmd_recommend(args, cat, home) -> int:
 
 def build_resolved(args, cat) -> Resolved:
     resolved = resolve_target(args.target, cat)
-    if resolved.target is None and args.command in ("serve", "plan"):
+    if resolved.target is None and args.command in ("serve", "plan", "pull"):
         fits, ranked, _soc = pick_recommended(
             cat, "chat", args.context, None
         )
@@ -814,7 +821,7 @@ def do_plan(args, cat, home) -> tuple[Resolved, list[str], budget.Admission | No
                 f"module {module!r} is not in the audited allowlist {sorted(MODULE_ALLOWLIST)}; "
                 "catalog data must never select executable code"
             )
-    if resolved.entry is not None and args.command in ("serve", "plan"):
+    if resolved.entry is not None and args.command in ("serve", "plan", "pull"):
         reason = auto_serve_reason(resolved.entry)
         if reason is not None and resolved.named_explicitly:
             warn(f"{resolved.entry['id']}: {reason}; you named it explicitly, proceeding "
@@ -979,6 +986,12 @@ def cmd_serve(args, cat, home) -> int:
         return fail("omlx backend has no verified server-side context cap; "
                     "refusing to launch (memory safety cannot be enforced). "
                     "Use --server mlx-lm", 3)
+    if args.command == "pull":
+        # Everything serve checks before a launch has passed; stop here.
+        label = resolved.entry["id"] if resolved.entry is not None else (resolved.repo or str(model_dir))
+        print(f"target: {label}")
+        print(f"model:  {model_dir}")
+        return 0
     if host_nonlocal(args.host):
         warn(f"{args.host} is not loopback: this development server has no authentication")
 
@@ -1108,7 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_recommend(args, cat, home)
         if args.command == "plan":
             return cmd_plan(args, cat, home)
-        if args.command == "serve":
+        if args.command in ("serve", "pull"):
             return cmd_serve(args, cat, home)
         if args.command == "catalog":
             return cmd_catalog(args, cat, home)

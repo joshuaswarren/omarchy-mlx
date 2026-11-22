@@ -1079,3 +1079,64 @@ class CatalogCommandTests(CliTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PullTests(CliTestBase):
+    """pull: plan, approve, download; never launch. Safe to run twice."""
+
+    def complete_dir(self):
+        model_dir = Path(self.tmp.name) / "model"
+        model_dir.mkdir(exist_ok=True)
+        (model_dir / "model.safetensors").write_bytes(b"x" * 64)
+        (model_dir / "config.json").write_text("{}")
+        (model_dir / "tokenizer.json").write_text("{}")
+        return model_dir
+
+    def no_launch(self, *a, **k):
+        raise AssertionError("pull must never start a server")
+
+    def test_pull_downloads_and_does_not_launch(self):
+        model_dir = self.complete_dir()
+        seen = []
+        with unittest.mock.patch.object(serve_cli, "probe_snapshot", lambda _r, _p=None: None), \
+             unittest.mock.patch.object(serve_cli, "download_snapshot",
+                                        lambda r, p=None: seen.append(r.repo) or model_dir), \
+             unittest.mock.patch.object(serve_cli.subprocess, "Popen", self.no_launch):
+            code, out, err = self.run_cli(["pull", "--yes", "test-chat-4b"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(seen, ["mlx-community/Test-Chat-4b"])
+        self.assertIn("target: test-chat-4b", out)
+
+    def test_second_pull_finds_the_complete_snapshot_and_downloads_nothing(self):
+        model_dir = self.complete_dir()
+
+        def no_download(*a, **k):
+            raise AssertionError("a complete snapshot must not download again")
+        with unittest.mock.patch.object(serve_cli, "probe_snapshot", lambda _r, _p=None: model_dir), \
+             unittest.mock.patch.object(serve_cli, "download_snapshot", no_download), \
+             unittest.mock.patch.object(serve_cli.subprocess, "Popen", self.no_launch):
+            code, out, err = self.run_cli(["pull", "--yes", "test-chat-4b"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("target: test-chat-4b", out)
+
+    def test_a_partial_snapshot_is_downloaded_again_and_refused_if_still_partial(self):
+        partial = Path(self.tmp.name) / "partial"
+        partial.mkdir()
+        (partial / "config.json").write_text("{}")  # weights never arrived
+        seen = []
+        with unittest.mock.patch.object(serve_cli, "probe_snapshot", lambda _r, _p=None: None), \
+             unittest.mock.patch.object(serve_cli, "download_snapshot",
+                                        lambda r, p=None: seen.append(r.repo) or partial), \
+             unittest.mock.patch.object(serve_cli.subprocess, "Popen", self.no_launch):
+            code, out, err = self.run_cli(["pull", "--yes", "test-chat-4b"])
+        self.assertEqual(seen, ["mlx-community/Test-Chat-4b"])
+        self.assertEqual(code, 3)
+        self.assertIn("incomplete", err)
+        self.assertNotIn("target:", out)
+
+    def test_pull_yes_without_a_named_target_refuses(self):
+        with unittest.mock.patch.object(serve_cli, "probe_snapshot", lambda _r, _p=None: None):
+            code, _, err = self.run_cli(["pull", "--yes"])
+        self.assertEqual(code, 1)
+        self.assertIn("explicitly named target", err)
+
