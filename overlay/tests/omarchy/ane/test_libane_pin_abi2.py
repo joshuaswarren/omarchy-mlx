@@ -78,20 +78,19 @@ print("handle=%d" % (lib.__ane_init(sys.argv[2].encode(), 0) or 0))
 def probe(model):
     """__ane_init(model, 0) the way the worker calls it.
 
-    Returns (handle, stderr). A child that crashes, refuses to load, or
-    never prints a handle line is a failure, not a silent 0."""
+    Returns (handle, stderr) or raises: a child that crashes, refuses
+    to load the .so, or never prints a handle line is a failure, never
+    a synthesized 0 the assertions could skim past."""
     env = {"PATH": "/usr/bin:/bin"}
-    try:
-        child = subprocess.run(
-            [sys.executable, "-c", CHILD, str(SO), str(model)],
-            env=env, capture_output=True, text=True, timeout=120)
-    except OSError as err:
-        return 0, f"probe could not run: {err}"
+    child = subprocess.run(
+        [sys.executable, "-c", CHILD, str(SO), str(model)],
+        env=env, capture_output=True, text=True, timeout=120)
     if child.returncode != 0:
-        note = "probe child exited %d" % child.returncode
-        return 0, note + "\n" + child.stderr
+        raise AssertionError(
+            "probe child exited %d:\n%s" % (child.returncode, child.stderr))
     if "handle=" not in child.stdout:
-        return 0, "probe child printed no handle line\n" + child.stderr
+        raise AssertionError(
+            "probe child printed no handle line:\n" + child.stderr)
     handle = int(re.search(r"handle=(\d+)", child.stdout).group(1))
     return handle, child.stderr
 
@@ -121,10 +120,11 @@ class TestLibanePinAbi2(unittest.TestCase):
                          "pinned libane rejects the local ANE driver "
                          "(ABI/name gate); the pin predates ABI 2")
         if HOST_NEEDS_H14 and not override:
-            # H13 bundles cannot fully load on the ABI-2 path; the gate
-            # above is the pin on a T6021 host without an H14 anec.
-            # Set LIBANE_PIN_MODEL to an H14 anec (w73's staged M2 h14
-            # kit, or a fresh hwxv2-to-anec compile) for the e2e green.
+            # H13 bundles cannot fully load on the ABI-2 path (documented
+            # above); probe() has already raised on any real load failure
+            # before this return, so reaching here means the device gate
+            # opened cleanly. LIBANE_PIN_MODEL=<H14 anec> upgrades this
+            # run to full init plus the handle check below.
             return
         self.assertNotEqual(handle, 0,
                             "__ane_init(model, 0) failed:\n" + stderr)
