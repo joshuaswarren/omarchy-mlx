@@ -112,6 +112,13 @@ class VulkanAllocator : public allocator::Allocator {
  public:
   Buffer malloc(size_t size) override;
   Buffer malloc_weight(size_t size);
+  // Bytes currently live in card-memory inference weights. The placement
+  // gate reads this per load, so it takes the mutex like the other
+  // accounting getters.
+  size_t weight_memory_bytes() const {
+    std::unique_lock lk(mutex_);
+    return weight_memory_;
+  }
   void free(Buffer buffer) override;
   size_t size(Buffer buffer) const override;
 

@@ -123,7 +123,11 @@ bool consume_test_staging_timeout() {
 
 namespace {
 
-VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
+VulkanBuffer make_weight_buffer(
+    Device& dev,
+    size_t size,
+    bool staging,
+    size_t live_weight_bytes) {
   auto& dt = vk::device_table();
   const auto handle = dev.handle();
   VulkanBuffer buf{};
@@ -146,7 +150,8 @@ VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
               dev.physical_type(),
               memory,
               requirements.memoryTypeBits,
-              requirements.size);
+              requirements.size,
+              live_weight_bytes);
     if (type == UINT32_MAX) {
       throw std::runtime_error(staging
           ? "[omarchy] no compatible host memory for weight staging"
@@ -202,7 +207,7 @@ void Device::upload_weights(
     throw std::runtime_error("[omarchy] previous weight upload did not complete");
   }
   if (weight_staging_ == VK_NULL_HANDLE) {
-    const auto staging = make_weight_buffer(*this, kWeightStagingBytes, true);
+    const auto staging = make_weight_buffer(*this, kWeightStagingBytes, true, 0);
     weight_staging_ = staging.buffer;
     weight_staging_memory_ = staging.memory;
     weight_staging_data_ = staging.data;
@@ -792,8 +797,14 @@ Buffer VulkanAllocator::malloc(size_t size) {
 
 Buffer VulkanAllocator::malloc_weight(size_t size) {
   auto buf = std::make_unique<VulkanBuffer>();
-  *buf = make_weight_buffer(device(), (size + 3) & ~size_t{3}, false);
+  // Snapshot the live total before building the buffer: reading it inside
+  // make_weight_buffer would race concurrent weight frees.
   std::unique_lock lk(mutex_);
+  const size_t live_weight_bytes = weight_memory_;
+  lk.unlock();
+  *buf = make_weight_buffer(
+      device(), (size + 3) & ~size_t{3}, false, live_weight_bytes);
+  lk.lock();
   try {
     live_by_handle_.emplace(buf->buffer, buf.get());
   } catch (...) {
