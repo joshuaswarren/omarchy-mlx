@@ -119,10 +119,10 @@ Interleaved pairs (3 pairs per model, fresh process per run) comparing base Rele
 
 Release wheel `0.32.4.dev202611220356+nocpu.cec6771e5` built from `cec6771e5` with `MLX_BUILD_CPU=OFF`: the build compiled `backend/no_cpu/{primitives,device_info,compiled}.cpp` and, from `backend/cpu/`, only the host scheduling files `encoder.cpp` and `eval.cpp`. `cec6771e5` changes comments, docs and this receipt only, so its compiled backend matches `bb10aab9a`. Records, controls and per-leg device state: `runs/nocpu-ab.json`.
 
-Provenance: `mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec` for the decode legs, `harness=b228b44ee-dirty` for the controls (the `-dirty` edits were comments, `docs/install-omarchy.md` and this README and `commands.txt`; the tools were unchanged).
+Provenance: `mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec` for the decode legs; the controls show `harness=b228b44ee-dirty` and, for the elementwise GPU add, a clean `harness=8fada1956` (`cec6771e5-dirty`: the `encoder.h` comment, `docs/install-omarchy.md`, this README and `commands.txt`; `b228b44ee-dirty`: `docs/install-omarchy.md`, this README, `commands.txt`, `reopen.txt` and `runs/nocpu-ab.json`; no compiled source or tool changed).
 
 - Controls (`tools/wheel_controls.py`, one process each, provenance line printed first):
-  - GPU add of two 1024-element float32 arrays on `Device(gpu, 0)`: sum `526848.0` as expected, `vk_compute_dispatches` delta 1, `vk_submissions` delta 1.
+  - GPU add of two 1024-element float32 arrays on `Device(gpu, 0)`: every element equals 3..1026 exactly (sum `526848.0`), `vk_compute_dispatches` delta 1, `vk_submissions` delta 1.
   - CPU add on a new `mx.cpu` stream: refused with `Add has no CPU implementation.`
   - Fresh-process reopen, 32x32 matmul sum `524800.0`, on this wheel and on the head wheel `+bb10aab9a`.
 - Decode, same wheel, balanced order (`default, 5000, 5000, default`), `tools/decode_sub.py`:
@@ -132,7 +132,7 @@ Provenance: `mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202
 | Qwen3.8-2B 4-bit (128 tok) | 78.06 / 78.13 (mean 78.09) | 73.14 / 73.21 (mean 73.17) | +6.7% | 4 vs 12 | `cdf6b6529b0aa39f` |
 | Qwen3-4B-2507 4-bit (96 tok) | 38.16 / 38.11 (mean 38.13) | 36.03 / 36.38 (mean 36.20) | +5.3% | 8 vs 20 | `31e0cd14a8057dfd` |
 
-The ids match every CPU-enabled arm above. All 16 legs (14 on this wheel, 2 head-wheel reopens) exited 0 with no new GPU kernel log lines.
+The ids match every CPU-enabled arm above. All 17 legs in `runs/nocpu-ab.json` (15 on this wheel, 2 head-wheel reopens; earlier runs of the controls kept under `controls.superseded`) exited 0 with no new GPU kernel log lines.
 
 ## Standing battery on head (`bb10aab9a`)
 
@@ -145,7 +145,7 @@ Fresh Release build of `bb10aab9a` (`suite/summary.txt`):
 
 ## Backend dispatch trace (head wheel `+bb10aab9a`, `MLX_OMARCHY_BATCH_WORK` unset)
 
-Run under `receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py` and `receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py` (`trace/summary.json`):
+Run under `receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py` and `receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py` (`trace/summary.json`). A rerun of all three arms printed the provenance line in the same leg (`mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match harness=8fada1956 core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54`) and reproduced every count and token digest below (`provenance_rerun`):
 
 | Arm | CPU encoder calls | GPU primitive dispatches | Vulkan compute dispatches | Vulkan submissions |
 |---|---:|---:|---:|---:|
@@ -157,7 +157,7 @@ The breakpoint resolved in all three arms (`resolved_while_running: true`), prov
 
 ## Timing, thermal, and device reopen record
 
-Every GPU leg ran serialized under `flock /tmp/m1-gpu.lock` with a bounded foreground timeout (`timeout --foreground --kill-after=30s`), recording load average, memory, the four exposed SMC temperatures (`hwmon7`), governor (`schedutil`), AC online state (`1`), `vulkaninfo --summary`, and kernel GPU log counts before and after (`runs/timing-thermal.json`). Across all 164 GPU legs (148 for the sweep and head verification, 16 for the CPU-disabled wheel and the controls):
+Every GPU leg ran serialized under `flock /tmp/m1-gpu.lock` with a bounded foreground timeout (`timeout --foreground --kill-after=30s`), recording load average, memory, the four exposed SMC temperatures (`hwmon7`), governor (`schedutil`), AC online state (`1`), `vulkaninfo --summary`, and kernel GPU log counts before and after (`runs/timing-thermal.json`, `runs/nocpu-ab.json`, `trace/summary.json`). Across all 168 GPU legs (148 for the sweep and head verification, 17 for the CPU-disabled wheel and the controls, 3 for the trace rerun):
 - **0 new GPU kernel log lines** (boot baseline 36 lines unchanged).
 - `env/info-before.json` and `env/info-after.json` are identical.
 - Final reopen checks (`reopen.txt`):

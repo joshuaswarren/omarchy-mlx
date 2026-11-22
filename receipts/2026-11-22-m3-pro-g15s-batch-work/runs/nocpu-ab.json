@@ -1,7 +1,7 @@
 {
   "wheel": "0.32.4.dev202611220356+nocpu.cec6771e5",
   "build": "MLX_BUILD_CPU=OFF Release (docs/parity-contract.md 2.1); compiled backend/no_cpu/{primitives,device_info,compiled}.cpp and only backend/cpu/{encoder,eval}.cpp",
-  "harness_note": "harness=cec6771e5-dirty (decode legs) and harness=b228b44ee-dirty (controls): the checkout carried uncommitted edits to comments (encoder.h), docs/install-omarchy.md and this receipt's README.md/commands.txt only; scripts/mlx_provenance.py and the tools were unchanged (tools/wheel_controls.py ran byte-identical from outside the checkout and was then added here)",
+  "harness_note": "harness stamps: cec6771e5-dirty (decode legs, N00-N02, N20) carried uncommitted edits to the encoder.h comment, docs/install-omarchy.md and this receipt's README.md and commands.txt; b228b44ee-dirty (C01-C04) carried edits to docs/install-omarchy.md, README.md, commands.txt, reopen.txt and runs/nocpu-ab.json; 8fada1956 (C11) was clean. No compiled source or tool changed in either dirty set; tools/wheel_controls.py ran byte-identical from outside the checkout before each committed copy",
   "decode": {
     "nc-2b-5000-2": {
       "label": "nc-2b-5000-2",
@@ -521,30 +521,6 @@
         "timeout_s": 120
       }
     },
-    "gpu_add": {
-      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py gpu-add [nocpu-wheel]/<wheel> [checkout]",
-      "output": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec\ndevice Device(gpu, 0) gpu_add_sum 526848.0 expected 526848.0 vk_compute_dispatches_delta 1 vk_submissions_delta 1",
-      "leg": {
-        "exit": 0,
-        "wall_s": 0.16,
-        "gpu_kernel_lines_before": 36,
-        "gpu_kernel_lines_after": 36,
-        "new_gpu_kernel_lines": "(none)",
-        "temps_before": [
-          "NAND_Flash_Temperature 41C",
-          "Battery_Hotspot 36C",
-          "Charge_Regulator_Temp 56C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "temps_after": [
-          "NAND_Flash_Temperature 41C",
-          "Battery_Hotspot 36C",
-          "Charge_Regulator_Temp 56C",
-          "WiFi/BT_Module_Temp 58C"
-        ],
-        "timeout_s": 120
-      }
-    },
     "cpu_negative": {
       "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py cpu-negative [nocpu-wheel]/<wheel> [checkout]",
       "expected": "Add has no CPU implementation.",
@@ -571,7 +547,7 @@
       }
     },
     "reopen_head_wheel": {
-      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [dist-head]/<wheel> [checkout]",
+      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [wheel-head] [checkout]",
       "output": "provenance: mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54\nDevice(gpu, 0) 524800.0 True",
       "leg": {
         "exit": 0,
@@ -616,6 +592,129 @@
           "WiFi/BT_Module_Temp 57C"
         ],
         "timeout_s": 120
+      }
+    },
+    "gpu_add": {
+      "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py gpu-add [nocpu-wheel]/<wheel> [checkout]",
+      "output": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=8fada1956 core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec\ndevice Device(gpu, 0) gpu_add_elementwise_exact True first [3.0, 4.0, 5.0] last [1024.0, 1025.0, 1026.0] sum 526848.0 vk_compute_dispatches_delta 1 vk_submissions_delta 1",
+      "leg": {
+        "exit": 0,
+        "wall_s": 0.16,
+        "gpu_kernel_lines_before": 36,
+        "gpu_kernel_lines_after": 36,
+        "new_gpu_kernel_lines": "(none)",
+        "temps_before": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 57C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "temps_after": [
+          "NAND_Flash_Temperature 41C",
+          "Battery_Hotspot 36C",
+          "Charge_Regulator_Temp 57C",
+          "WiFi/BT_Module_Temp 58C"
+        ],
+        "timeout_s": 120
+      }
+    },
+    "superseded": {
+      "note": "earlier runs of the same controls, replaced by the tools/wheel_controls.py runs above; kept so every GPU leg has a record",
+      "N01_gpu_add_inline": {
+        "command": "gpuleg N01-gpu-control 120 env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I -c '\nimport mlx.core as mx\nx = mx.arange(1, 1025, dtype=mx.float32); y = mx.full((1024,), 2.0)\nz = mx.add(x, y); mx.eval(z)\nok = float(z.sum()) == float(sum(range(1, 1025)) + 2048)\nprint(\"device\", mx.default_device(), \"gpu_add_sum\", float(z.sum()), \"expected_ok\", ok)\nraise SystemExit(0 if ok else 1)'",
+        "output": "device Device(gpu, 0) gpu_add_sum 526848.0 expected_ok True",
+        "leg": {
+          "exit": 0,
+          "wall_s": 0.05,
+          "gpu_kernel_lines_before": 36,
+          "gpu_kernel_lines_after": 36,
+          "new_gpu_kernel_lines": "(none)",
+          "temps_before": [
+            "NAND_Flash_Temperature 40C",
+            "Battery_Hotspot 33C",
+            "Charge_Regulator_Temp 55C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "temps_after": [
+            "NAND_Flash_Temperature 40C",
+            "Battery_Hotspot 33C",
+            "Charge_Regulator_Temp 55C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "timeout_s": 120
+        }
+      },
+      "N02_cpu_negative_inline": {
+        "command": "gpuleg N02-cpu-negative 120 env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I -c '\nimport mlx.core as mx\ns = mx.new_stream(mx.cpu)\na = mx.array([1.0, 2.0], dtype=mx.float32); b = mx.array([3.0, 4.0], dtype=mx.float32)\ntry:\n    r = mx.add(a, b, stream=s); mx.eval(r)\n    print(\"UNEXPECTED_SUCCESS\", r.tolist()); raise SystemExit(1)\nexcept RuntimeError as e:\n    msg = str(e); print(\"refusal:\", msg)\n    raise SystemExit(0 if msg == \"Add has no CPU implementation.\" else 1)'",
+        "output": "refusal: Add has no CPU implementation.",
+        "leg": {
+          "exit": 0,
+          "wall_s": 0.04,
+          "gpu_kernel_lines_before": 36,
+          "gpu_kernel_lines_after": 36,
+          "new_gpu_kernel_lines": "(none)",
+          "temps_before": [
+            "NAND_Flash_Temperature 40C",
+            "Battery_Hotspot 33C",
+            "Charge_Regulator_Temp 55C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "temps_after": [
+            "NAND_Flash_Temperature 40C",
+            "Battery_Hotspot 33C",
+            "Charge_Regulator_Temp 55C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "timeout_s": 120
+        }
+      },
+      "N20_reopen_head_wheel_inline": {
+        "command": "gpuleg N20-reopen-head-wheel 120 env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c \"\nimport sys; sys.path.insert(0, '[checkout]/scripts')\nfrom pathlib import Path\nimport mlx_provenance as mp\np = mp.installed_provenance(expect_wheel=Path('[wheel-head]')); print(mp.provenance_line(p))\nassert p['verified'] == 'match' and p['version_match'] is True\nimport mlx.core as mx\na = mx.arange(1, 1025, dtype=mx.float32).reshape(32, 32); b = mx.eye(32); c = (a @ b).sum(); mx.eval(c); s = float(c)\nprint(mx.default_device(), s, s == float(1024 * 1025 // 2))\"",
+        "output": "provenance: mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match harness=cec6771e5-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54\nDevice(gpu, 0) 524800.0 True",
+        "leg": {
+          "exit": 0,
+          "wall_s": 0.25,
+          "gpu_kernel_lines_before": 36,
+          "gpu_kernel_lines_after": 36,
+          "new_gpu_kernel_lines": "(none)",
+          "temps_before": [
+            "NAND_Flash_Temperature 41C",
+            "Battery_Hotspot 35C",
+            "Charge_Regulator_Temp 57C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "temps_after": [
+            "NAND_Flash_Temperature 41C",
+            "Battery_Hotspot 35C",
+            "Charge_Regulator_Temp 57C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "timeout_s": 120
+        }
+      },
+      "C01_gpu_add_sum_only": {
+        "command": "env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py gpu-add [nocpu-wheel]/<wheel> [checkout]  (tools/wheel_controls.py as committed in 8fada1956: sum and dispatch-count check only)",
+        "output": "provenance: mlx-omarchy 0.32.4.dev202611220356+nocpu.cec6771e5 mx=0.32.4.dev202611220356+nocpu.cec6771e5 verified=match harness=b228b44ee-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:dbb12cbd45e326ec\ndevice Device(gpu, 0) gpu_add_sum 526848.0 expected 526848.0 vk_compute_dispatches_delta 1 vk_submissions_delta 1",
+        "leg": {
+          "exit": 0,
+          "wall_s": 0.16,
+          "gpu_kernel_lines_before": 36,
+          "gpu_kernel_lines_after": 36,
+          "new_gpu_kernel_lines": "(none)",
+          "temps_before": [
+            "NAND_Flash_Temperature 41C",
+            "Battery_Hotspot 36C",
+            "Charge_Regulator_Temp 56C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "temps_after": [
+            "NAND_Flash_Temperature 41C",
+            "Battery_Hotspot 36C",
+            "Charge_Regulator_Temp 56C",
+            "WiFi/BT_Module_Temp 58C"
+          ],
+          "timeout_s": 120
+        }
       }
     }
   }

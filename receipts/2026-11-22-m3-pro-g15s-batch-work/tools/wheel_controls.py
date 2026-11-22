@@ -6,9 +6,9 @@ Usage: wheel_controls.py gpu-add|cpu-negative|reopen EXPECT_WHEEL REPO_ROOT
 Every mode prints the verified provenance line first and exits non-zero
 on any unexpected result.
   gpu-add       adds two 1024-element float32 arrays on the default device;
-                requires the exact sum and a positive vk_compute_dispatches
-                delta across the add (inputs are evaluated before the first
-                counter snapshot).
+                requires every output element to equal 3..1026 exactly and a
+                positive vk_compute_dispatches delta across the add (inputs
+                are evaluated before the first counter snapshot).
   cpu-negative  adds two float32 values on a new explicit CPU stream;
                 requires exactly "Add has no CPU implementation.".
   reopen        a fresh process evaluates a 32x32 matmul sum on the default
@@ -56,12 +56,14 @@ if mode == "gpu-add":
     z = mx.add(x, y)
     mx.eval(z)
     s1 = snap()
-    total = float(z.sum())
-    want = float(sum(range(1, 1025)) + 2 * 1024)
+    got = z.tolist()
+    want = [float(v) for v in range(3, 1027)]
+    exact = got == want
     dk = s1.compute - s0.compute
-    print(f"device {mx.default_device()} gpu_add_sum {total} expected {want} "
+    print(f"device {mx.default_device()} gpu_add_elementwise_exact {exact} "
+          f"first {got[:3]} last {got[-3:]} sum {sum(got)} "
           f"vk_compute_dispatches_delta {dk} vk_submissions_delta {s1.submissions - s0.submissions}")
-    sys.exit(0 if total == want and dk > 0 else 1)
+    sys.exit(0 if exact and dk > 0 else 1)
 
 if mode == "cpu-negative":
     s = mx.new_stream(mx.cpu)

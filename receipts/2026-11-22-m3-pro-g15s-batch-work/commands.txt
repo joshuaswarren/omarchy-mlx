@@ -69,7 +69,9 @@ cmake --build .work/mlx/build-head --parallel 6 --target <25 standing suites> om
 # 3 interleaved pairs of decode_sub.py (base +9d6f4b188 vs head +bb10aab9a, both MLX_OMARCHY_BATCH_WORK unset) on 2B and 4B
 # score_bench.py on head +bb10aab9a (MLX_OMARCHY_BATCH_WORK unset) on 2B and 4B
 
-# 8. Backend dispatch trace on head wheel (+bb10aab9a, MLX_OMARCHY_BATCH_WORK unset)
+# 8. Backend dispatch trace on head wheel (+bb10aab9a, MLX_OMARCHY_BATCH_WORK unset). The rerun (trace/summary.json
+#    provenance_rerun) printed the provenance line in the same leg, immediately before each traced process:
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c "import sys; sys.path.insert(0, '[checkout]/scripts'); from pathlib import Path; import mlx_provenance as mp; p = mp.installed_provenance(expect_wheel=Path('[wheel-head]')); print(mp.provenance_line(p)); sys.exit(0 if p['verified'] == 'match' and p['version_match'] is True else 3)"
 gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3.8-2b-4bit 1 --cpu-control
 gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3.8-2b-4bit 32
 gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3-4b-2507-4bit 32
@@ -94,7 +96,7 @@ export CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD
 # tools/wheel_controls.py prints the verified provenance line first and exits non-zero on any wrong result
 env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py gpu-add [nocpu-wheel]/<wheel> [checkout]
 env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py cpu-negative [nocpu-wheel]/<wheel> [checkout]
-env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [dist-head]/<wheel> [checkout]
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [wheel-head] [checkout]
 env -u MLX_OMARCHY_BATCH_WORK [venv-nocpu]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/wheel_controls.py reopen [nocpu-wheel]/<wheel> [checkout]
 # Balanced decode A/B on this wheel (default, 5000, 5000, default per model; timeout 300 s each)
 env -u MLX_OMARCHY_BATCH_WORK MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
