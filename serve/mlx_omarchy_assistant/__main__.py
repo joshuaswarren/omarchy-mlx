@@ -17,6 +17,7 @@ from pathlib import Path
 import mlx_omarchy_paths
 
 from .server import AssistantServer
+from . import wake_word
 
 
 def request(runtime, method, path, body=None):
@@ -140,7 +141,7 @@ def stop_server(server, runtime_file):
         raise failures[0]
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(prog="mlx-omarchy-assistant", description="Local MLX Chat and typed decisions")
     parser.add_argument("--home", type=Path, default=mlx_omarchy_paths.default_data_home())
     parser.add_argument("--port", type=int, default=0)
@@ -156,8 +157,15 @@ def main(argv=None):
     parser.add_argument("--wake-word", nargs="?", const="hey_jarvis", default=None,
                         help="opt-in wake word listener (default phrase: hey_jarvis); "
                              "approves the one-time pinned openWakeWord model download")
-    parser.add_argument("--wake-threshold", type=float, default=0.5,
-                        help="wake word score threshold (default 0.5)")
+    parser.add_argument("--wake-threshold", type=float,
+                        default=wake_word.WAKE_THRESHOLD_DEFAULT,
+                        help="wake word score threshold "
+                             f"(default {wake_word.WAKE_THRESHOLD_DEFAULT})")
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
     args = parser.parse_args(argv)
     if os.environ.get("MLX_OMARCHY_TTFT_TRACE") == "1":
         # Diagnostic: SIGUSR1 dumps every thread's stack to stderr so a
