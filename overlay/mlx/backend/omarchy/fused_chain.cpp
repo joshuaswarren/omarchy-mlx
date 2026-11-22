@@ -1497,7 +1497,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready = caps.subgroup_size == 32u &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    // The group dispatch refuses every group while the Q4 word path is off
+    // (MLX_OMARCHY_QMM_VEC_Q4_WORD=0); adopting the fold then would leave the
+    // deleted product unmaterialized.
     if (plan.x.dtype() != bfloat16 || !subgroup_ready ||
+        !qmm_vec_q4_word_enabled() ||
         encoder.device().compute().binding_limit() <
             kQmmVecMultiBindings + 3 ||
         plan.gate.dtype() != plan.x.dtype() ||
