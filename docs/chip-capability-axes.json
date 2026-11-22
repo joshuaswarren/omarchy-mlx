@@ -28,6 +28,10 @@
         "stock_mesa_26_2_3": "stock_mesa_honeykrisp: Mesa 26.2.3-arch1.1 (Arch/Asahi `mesa 1:26.2.3-1`), DRIVER_ID_MESA_HONEYKRISP, API 1.4.354",
         "honeykrisp_omarchy_6f6afc89": "honeykrisp_fork: mesa-honeykrisp-omarchy built from packaging/ at 6f6afc89, Mesa 26.3.0-devel (git-6f6afc8968), API 1.4.359, loaded via private ICD",
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": "stock_mesa_honeykrisp: system Mesa 26.3.0-devel (git-a196911147), Borealis, derived from Honeykrisp (`mesa-aurora`/`vulkan-aurora` 1:26.3.0_devel.20261031), DRIVER_ID_MESA_HONEYKRISP (26), API 1.4.363, system ICD asahi_icd.aarch64.json",
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -50,6 +54,10 @@
         "stock_mesa_26_2_3": false,
         "honeykrisp_omarchy_6f6afc89": true,
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": false,
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -73,6 +81,10 @@
         "stock_mesa_26_2_3": 32,
         "honeykrisp_omarchy_6f6afc89": 32,
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": 32,
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -98,6 +110,10 @@
         "stock_mesa_26_2_3": "BASIC|VOTE|ARITHMETIC|BALLOT|SHUFFLE|SHUFFLE_RELATIVE|CLUSTERED|QUAD|ROTATE|ROTATE_CLUSTERED",
         "honeykrisp_omarchy_6f6afc89": "BASIC|VOTE|ARITHMETIC|BALLOT|SHUFFLE|SHUFFLE_RELATIVE|CLUSTERED|QUAD|ROTATE|ROTATE_CLUSTERED",
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": "BASIC|VOTE|ARITHMETIC|BALLOT|SHUFFLE|SHUFFLE_RELATIVE|CLUSTERED|QUAD|ROTATE|ROTATE_CLUSTERED",
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -120,6 +136,10 @@
         "stock_mesa_26_2_3": 32768,
         "honeykrisp_omarchy_6f6afc89": 32768,
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": 32768,
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -163,6 +183,15 @@
           "size_z": 1024
         },
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": {
+          "invocations": 1024,
+          "size_x": 1024,
+          "size_y": 1024,
+          "size_z": 64
+        },
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -185,6 +214,10 @@
         "stock_mesa_26_2_3": false,
         "honeykrisp_omarchy_6f6afc89": false,
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": false,
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -207,6 +240,10 @@
         "stock_mesa_26_2_3": "uma_coherent",
         "honeykrisp_omarchy_6f6afc89": "uma_coherent",
         "receipt": "receipts/2026-09-19-t6020-coopmat-fork-icd/receipt.json"
+      },
+      "t6030_measured": {
+        "system_borealis_a196911147": "uma_coherent",
+        "receipt": "receipts/2026-11-21-m3-pro-g15s-linux/README.md"
       }
     },
     {
@@ -264,7 +301,8 @@
     "m1_g13": "reference row; historical dated evidence from prior m1-test-host Linux boots only (m1-test-host fresh Arch boot reported 2026-09-20; Omarchy provisioning and benchmark recertification pending)",
     "m1_max": "Linux GPU and ANE measured on t6001-test-host (T6001); see docs/chip-portability.md and dated receipts. The per-axis unknown lists above preserve the 2026-09-11 audit, not current fleet status. Never substitute the M1 G13G reference values for this die or another driver build.",
     "m2_max": "GPU verified third-silicon on Honeykrisp / Vulkan 1.4.354 (ane-linux-experiments/receipts/2026-09-23-m2-gpu-qwen38/README.md); t6021-test-host Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND, no /dev/accel/accel0. ANE is NOT live-inference-qualified on the Linux driver (macOS ANE numbers are macOS CoreML / aned measurements, not Linux-side execution). Apple GPU and Apple ANE are separate lanes.",
-    "m3": "Asahi has installer support but software rendering only: no Honeykrisp GPU driver -> backend refuses at device discovery unless run under a software driver via MLX_OMARCHY_ALLOW_NON_APPLE=1 (development only)",
+    "m3": "Base M3 (apple,t8122, G15G) and M3 Max (apple,t6031): community collector rows only (docs/TESTED-HARDWARE.md). The T6030 M3 Pro row is m3_pro.",
+    "m3_pro": "MEASURED 2026-11-21 (receipts/2026-11-21-m3-pro-g15s-linux): MacBook Pro 14-inch M3 Pro Nov 2023, apple,t6030 J514s, G15S B1, 14-core GPU (core mask 0x6f5bd), 18 GB, Omarchy, linux-aurora 7.2.11. System Mesa 26.3.0-devel Borealis (git-a196911147), driverID 26, API 1.4.363: subgroup 32 with the full consumed ops mask, shared 32768, workgroup 1024 invocations at 1024x1024x64, f16/i16/16-bit storage, UMA coherent, no coopmat, no atomic-float, no shader bfloat16. Standing battery 747/747 cases and the 8 capability-simulation profiles on source build a893cae5c; release wheel v0.7.49 decode/prefill 512: Qwen3.8-2B 4-bit 76.14/370.49, Qwen3-4B-Instruct-2507 4-bit 43.94/195.29 tok/s. Per-axis values in t6030_measured.",
     "m4": "GPU support TBA upstream: everything unknown",
     "m5_m6": "arrive ~2026-10: everything unknown; all axes must come from runtime discovery, never from a chip-name table",
     "m2_pro": "MEASURED 2026-09-19 (receipts/2026-09-19-t6020-coopmat-fork-icd): MacBook Pro 14-inch M2 Pro 2023, apple,t6020 J414s, G14S B1, Omarchy. Stock Mesa 26.2.3: subgroup 32 with the full consumed ops mask, shared 32768, workgroup 1024^3, f16/i16/16-bit storage, UMA coherent, no coopmat, no atomic-float; Q4 digests equal the pins; decode 155.7/124.5/83.0 tok/s. honeykrisp-omarchy 6f6afc89 via private ICD: coopmat advertised and taken, decode 177.0/170.9/149.1 tok/s, prefill 405/1829/2266, native-pinned digests unchanged, q4_long moved to f873dc2bdd34c0fe. Not a §4 qualification (see receipt limitations); per-axis values in t6020_measured."
