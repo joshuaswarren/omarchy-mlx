@@ -7,12 +7,12 @@ failed. Open an issue and say so.
 `mlx-omarchy` runs Apple MLX on Apple Silicon Linux through Mesa's
 Honeykrisp Vulkan driver. The published v0.3.6 wheels support
 `linux_aarch64` on M1 and `linux_x86_64` for development. The
-[downloaded v0.3.6 wheel](../receipts/2026-09-06-release-v036/public-m1-generation.log)
+downloaded v0.3.6 wheel
 measured 28.42 tok/s in one pinned 4-bit release smoke run.
 
-The [development measurement](../receipts/2026-09-04-m1-performance-gates.md)
+The development measurement
 at `a34cdc5` reached 31.1 tok/s for short 4-bit Qwen2.5-0.5B decode.
-[Native MLX 0.32.2 on the same M1](../receipts/native-baseline-2026-09-06/native-2026-09-06-nocompile-summary.json)
+Native MLX 0.32.2 on the same M1
 measured 150.8 tok/s with compilation disabled. These are distinct
 measurements. They are not proof of functional or performance parity. See
 the README for the workload table and the remaining token-identity mismatch.
