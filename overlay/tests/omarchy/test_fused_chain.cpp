@@ -524,6 +524,89 @@ TEST_CASE("fused chain kernel strides one forced workgroup") {
   }
 }
 
+TEST_CASE("fused chain 256-lane output is byte-identical to 128-lane") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // G18G ran a phantom chain in subgroups 4-7 of the 256-lane
+  // workgroup because every invocation fetched program_buf itself.
+  // The program now travels lane 0 -> shared memory, so the 256-lane
+  // and 128-lane (four-subgroup) variants must agree byte for byte.
+  // 600 elements covers two+ workgroups at 256 lanes and five at 128.
+  constexpr uint32_t kCount = 600;
+  std::vector<float> gv(kCount);
+  std::vector<float> uv(kCount);
+  for (uint32_t i = 0; i < kCount; ++i) {
+    gv[i] = static_cast<float>(i % 7) - 3.0f;
+    uv[i] = static_cast<float>(i % 5) - 2.0f;
+  }
+  array gate = array(gv.begin(), Shape{static_cast<int>(kCount)}, float32);
+  array up = array(uv.begin(), Shape{static_cast<int>(kCount)}, float32);
+  array reference = gate * sigmoid(gate) * up;
+  gate.eval();
+  up.eval();
+  reference.eval();
+  auto& encoder = omarchy::get_command_encoder(stream);
+  encoder.synchronize();
+
+  // The swiglu program with two direct leaves:
+  // r0 = sigmoid(leaf0); r1 = r0 * leaf0; out = r1 * leaf1.
+  std::array<uint32_t, 3> words = {
+      5u | (0x10u << 8) | (0x10u << 16) | (0u << 24),
+      1u | (0x00u << 8) | (0x10u << 16) | (1u << 24),
+      1u | (0x01u << 8) | (0x11u << 16) | (2u << 24)};
+  auto program_buffer =
+      omarchy::allocator().malloc(words.size() * sizeof(uint32_t));
+  auto* program_vk = static_cast<omarchy::VulkanBuffer*>(program_buffer.ptr());
+  std::memcpy(program_vk->data, words.data(), words.size() * sizeof(uint32_t));
+
+  auto binding = [](const array& value) {
+    auto* buffer =
+        static_cast<const omarchy::VulkanBuffer*>(value.buffer().ptr());
+    return omarchy::ComputeBinding{buffer->buffer, 0, buffer->size};
+  };
+  omarchy::ComputeParams params;
+  params.count = kCount;
+  params.operation = static_cast<uint32_t>(words.size());
+  params.lhs_size = kCount; // last_dim: direct leaves
+  params.rhs_size = 2;      // dst_final register
+  params.reduce_size = 0;   // leaf_offset[0]
+  params.output_size = 0;   // leaf_offset[1]
+  params.lhs_offset = 0;    // leaf_offset[2]
+  params.rhs_offset = 0;    // leaf_mode[0] = direct
+  params.output_offset = 0; // leaf_mode[1] = direct
+  params.aux_size = 0;      // leaf_mode[2] = direct
+
+  auto run_variant = [&](omarchy::ComputeKernel kernel) {
+    array output = zeros({static_cast<int>(kCount)}, float32, stream);
+    output.eval();
+    encoder.synchronize();
+    std::array<omarchy::ComputeBinding, 5> bindings{
+        binding(gate),
+        binding(up),
+        binding(output),
+        omarchy::ComputeBinding{program_vk->buffer, 0, program_vk->size},
+        binding(output)};
+    encoder.dispatch_compute(
+        kernel, bindings, params,
+        (kCount + 255u) / 256u);
+    encoder.synchronize();
+    return output;
+  };
+
+  array wide = run_variant(omarchy::ComputeKernel::FusedChainF32);
+  array narrow = run_variant(omarchy::ComputeKernel::FusedChainF32L128);
+
+  REQUIRE_EQ(wide.nbytes(), narrow.nbytes());
+  CHECK_EQ(std::memcmp(
+               wide.data<float>(), narrow.data<float>(), wide.nbytes()),
+           0);
+  CHECK_EQ(std::memcmp(
+               wide.data<float>(), reference.data<float>(), wide.nbytes()),
+           0);
+}
+
 TEST_CASE("residual add chain (tape-input leaf) matches eager") {
   if (!compute_available()) {
     return;

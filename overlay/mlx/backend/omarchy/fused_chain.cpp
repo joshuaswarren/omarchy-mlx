@@ -662,11 +662,19 @@ void dispatch_chain(
     }
   }
 
-  auto kernel = ComputeKernel::FusedChainF32;
+  // MLX_OMARCHY_FUSED_CHAIN_LANES=128 selects the four-subgroup
+  // variants. The 256-lane and 128-lane kernels must produce
+  // byte-identical output; the fused-chain test asserts it.
+  const char* lanes_env = std::getenv("MLX_OMARCHY_FUSED_CHAIN_LANES");
+  const bool lanes128 = lanes_env && std::strcmp(lanes_env, "128") == 0;
+  auto kernel = lanes128 ? ComputeKernel::FusedChainF32L128
+                         : ComputeKernel::FusedChainF32;
   if (out.dtype() == float16) {
-    kernel = ComputeKernel::FusedChainF16;
+    kernel = lanes128 ? ComputeKernel::FusedChainF16L128
+                      : ComputeKernel::FusedChainF16;
   } else if (out.dtype() == bfloat16) {
-    kernel = ComputeKernel::FusedChainBF16;
+    kernel = lanes128 ? ComputeKernel::FusedChainBF16L128
+                      : ComputeKernel::FusedChainBF16;
   }
   encoder.dispatch_compute(
       kernel,
