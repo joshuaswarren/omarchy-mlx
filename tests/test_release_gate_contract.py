@@ -191,7 +191,8 @@ class ReleaseGateHarnessTests(unittest.TestCase):
 
     def run_g7a(self, names, tag=None, **extra):
         """Run gate 7a against a temp packaged dir holding ``names``; return
-        the ICD names it published and the one the runtime resolver picks."""
+        the ICD names it published and the one the runtime resolver picks.
+        The completed gate run is kept as ``self.g7a_run``."""
         with tempfile.TemporaryDirectory() as tmp:
             tag = tag or "g7a-test-" + Path(tmp).name
             dest = Path("/tmp") / f"{tag}-sysinst"
@@ -209,12 +210,38 @@ class ReleaseGateHarnessTests(unittest.TestCase):
             env = {"PATH": os.environ["PATH"], "HOME": tmp, "TAG": tag,
                    "GATE_ROOT": tmp, "GATE_HOME": str(info.parents[2]),
                    "SYSTEM_ICD_DIR": str(prefix / "vulkan"), **extra}
-            subprocess.run(["bash", str(self.HARNESS / "g7a-packaged-icd.sh")],
-                           env=env, capture_output=True, text=True,
-                           timeout=60, check=False)
+            self.g7a_run = subprocess.run(
+                ["bash", str(self.HARNESS / "g7a-packaged-icd.sh")],
+                env=env, capture_output=True, text=True, timeout=60,
+                check=False)
             vdst = dest / "usr" / "lib" / "omarchy-mlx" / "vulkan"
             published = sorted(p.name for p in vdst.glob("*_icd.*.json"))
             return published, paths.packaged_honeykrisp_icd(prefix).name
+
+    def test_g7a_exit_status_follows_the_icd_contract(self):
+        passing = ('{"icd_source": "packaged", "expected_sha": "abc", '
+                   '"driver_sha": "abc"}')
+        cases = (  # (info JSON, info exit, contract verdict, gate exit)
+            (passing, 0, "PASS", 0),
+            (passing.replace('"packaged"', '"system"'), 0, "FAIL", 1),
+            (passing.replace('"driver_sha": "abc"', '"driver_sha": "def"'),
+             0, "FAIL", 1),
+            (passing.replace('"abc"', '""'), 0, "FAIL", 1),
+            (passing, 3, "PASS", 3),
+        )
+        for info, info_rc, verdict, rc in cases:
+            with self.subTest(info=info, info_rc=info_rc), \
+                    tempfile.TemporaryDirectory() as tmp:
+                stub = Path(tmp) / ".local" / "bin" / "mlx-omarchy-info"
+                stub.parent.mkdir(parents=True)
+                stub.write_text(f"#!/bin/sh\necho '{info}'\nexit {info_rc}\n")
+                stub.chmod(0o755)
+                self.run_g7a(["borealis_icd.aarch64.json"], GATE_HOME=tmp,
+                             LOG_DIR=tmp)
+                log = (Path(tmp) / "g7a-packaged-icd.log").read_text()
+                self.assertIn(f"ICD_CONTRACT {verdict}\n", self.g7a_run.stdout)
+                self.assertIn(f"GATE7A_EXIT {rc}\n", log)
+                self.assertEqual(self.g7a_run.returncode, rc)
 
     def test_g7a_publishes_the_icd_the_runtime_loads(self):
         both = ["borealis_icd.aarch64.json", "honeykrisp_icd.aarch64.json"]
