@@ -1663,6 +1663,7 @@ Device::Device(uint32_t physical_device_index) {
   VKX_LOAD_DEVICE_FN(ResetEvent, vkResetEvent)
   VKX_LOAD_DEVICE_FN(CmdSetEvent, vkCmdSetEvent)
   VKX_LOAD_DEVICE_FN(CreateQueryPool, vkCreateQueryPool)
+  VKX_LOAD_DEVICE_FN(DestroyQueryPool, vkDestroyQueryPool)
   VKX_LOAD_DEVICE_FN(GetQueryPoolResults, vkGetQueryPoolResults)
   VKX_LOAD_DEVICE_FN(CmdResetQueryPool, vkCmdResetQueryPool)
   VKX_LOAD_DEVICE_FN(CmdWriteTimestamp, vkCmdWriteTimestamp)

@@ -100,6 +100,7 @@ def main():
 
     meta = None
     end_rec = None
+    cal = None
     dispatches = []
     joins = []
     submits = []
@@ -128,6 +129,8 @@ def main():
                 submits.append(rec)
             elif kind == "q" and rec.get("close") == 0:
                 empty_subs.add(rec["s"])
+            elif kind == "cal":
+                cal = rec
             elif kind == "end":
                 end_rec = rec
 
@@ -220,6 +223,18 @@ def main():
     say(f"== profile {args.profile}")
     say(f"   device={meta['device']} period={period}ns "
         f"valid_bits={valid_bits}")
+    if cal is not None:
+        floor = cal.get("floor_ns")
+        samples = cal.get("samples")
+        if not isinstance(floor, (int, float)) or not isinstance(
+                samples, (int, float)):
+            print("malformed cal record: floor_ns/samples missing or "
+                  "not numeric", file=sys.stderr)
+            sys.exit(2)
+        say(f"   calibrated floor={int(floor)}ns "
+            f"({int(samples)} lone-submit samples)"
+            + (f" gpu_epoch={cal['gpu_epoch']}"
+               if "gpu_epoch" in cal else ""))
     say(f"   dispatches={len(dispatches)} submissions={len(submits)} "
         f"joins={len(joins)}")
     if markers:

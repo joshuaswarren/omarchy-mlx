@@ -920,3 +920,23 @@ set_tests_properties(omarchy_load_scalar_publish_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                      TIMEOUT 120)
+
+# PR-LILYVFT: VkDeviceCreateInfo feature-chain contract. aurora-lily
+# measured sparse residency, robust access, and buffer-device-address
+# capture/replay as costly on Honeykrisp-M5; the omarchy chain requests
+# none of them, and this test pins that whitelist by intercepting the
+# vkCreateDevice call. Software Vulkan (lavapipe) is enough.
+add_executable(omarchy_feature_chain_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_feature_chain.cpp)
+target_link_libraries(omarchy_feature_chain_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_feature_chain_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_feature_chain_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+add_test(NAME omarchy_feature_chain_tests
+         COMMAND omarchy_feature_chain_tests)
+set_tests_properties(omarchy_feature_chain_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 120)

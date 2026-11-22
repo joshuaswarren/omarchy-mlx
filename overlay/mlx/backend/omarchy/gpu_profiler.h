@@ -42,6 +42,22 @@
 //                     "barriers_skipped"; transfer/fill decisions included);
 //                     buffer mode adds "dispatches_total" (per-dispatch
 //                     mode accounts dispatches through the k=d records)
+//   {"k":"cal",...}   once, after meta: the calibrated submission floor —
+//                     median host cost of an empty command buffer submitted
+//                     alone and waited ("floor_ns"), and its sample count
+//
+// The k=cal record adopts aurora-lily's timestamp+calibration model
+// (src/vulkan.rs ProfileStamps + calibrate_profile): lily measures the
+// ~150 us fixed cost of one lone submit+wait and subtracts it from every
+// host-timed kernel sample. Our per-dispatch GPU ticks already bracket
+// the dispatch inside the command buffer, so job cost is not in k=d
+// spans; floor_ns exists so analysis can subtract the same fixed cost
+// from the host-side submit/join spans (k=s, k=q, k=j) and so the
+// figure itself is on record per driver.
+//
+// Calibration submits are strictly command-free: a command buffer that
+// carries only a timestamp write submits empty on compute-only chips
+// (#526), so no GPU-tick epoch is anchored here.
 //
 // GPU ticks convert to nanoseconds with meta.period_ns; tick wraparound
 // wraps at 2^valid_bits. Kernel enum values map to names by their
@@ -80,6 +96,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string_view>
 #include <memory>
 #include <span>
@@ -595,6 +612,94 @@ class GpuProfiler {
           stderr,
           "[prof] queue reports no timestamp support; host costs only\n");
     }
+    calibrate(device);
+  }
+
+  // aurora-lily's calibrate_profile (src/vulkan.rs): measure the fixed
+  // cost of one lone submit+wait of an empty command buffer and record
+  // it as the profiling floor. Buffers stay strictly command-free — a
+  // timestamp-only stream submits empty on compute-only chips (#526), so
+  // no stamped epoch is anchored here.
+  void calibrate(const Device& device) {
+    if (calibrated_) {
+      return;
+    }
+    calibrated_ = true;
+    auto& dt = vk::device_table();
+    if (!dt.CreateCommandPool || !dt.AllocateCommandBuffers ||
+        !dt.BeginCommandBuffer || !dt.EndCommandBuffer ||
+        !dt.ResetCommandBuffer || !dt.QueueSubmit || !dt.QueueWaitIdle ||
+        !dt.FreeCommandBuffers || !dt.DestroyCommandPool) {
+      return;
+    }
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+        VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pci.queueFamilyIndex = device.queue_family();
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    bool ok = dt.CreateCommandPool(device.handle(), &pci, nullptr, &pool) ==
+        VK_SUCCESS;
+    if (ok) {
+      VkCommandBufferAllocateInfo ai{
+          VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      ai.commandPool = pool;
+      ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      ai.commandBufferCount = 1;
+      ok = dt.AllocateCommandBuffers(device.handle(), &ai, &cmd) ==
+          VK_SUCCESS;
+    }
+    constexpr int kWarmup = 2;
+    constexpr int kSamples = 32;
+    std::vector<uint64_t> spans;
+    if (ok) {
+      // No MLX work exists at attach time, so calibration submits are the
+      // only traffic; take the queue mutex anyway to match every other
+      // submission site.
+      std::lock_guard<std::mutex> queue_lock(
+          const_cast<Device&>(device).queue_mutex());
+      for (int i = 0; ok && i < kWarmup + kSamples; ++i) {
+        VkCommandBufferBeginInfo bi{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        ok = dt.ResetCommandBuffer(cmd, 0) == VK_SUCCESS &&
+            dt.BeginCommandBuffer(cmd, &bi) == VK_SUCCESS &&
+            dt.EndCommandBuffer(cmd) == VK_SUCCESS;
+        if (!ok) {
+          break;
+        }
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        uint64_t t0 = host_ns();
+        ok = dt.QueueSubmit(device.queue(), 1, &si, VK_NULL_HANDLE) ==
+                VK_SUCCESS &&
+            dt.QueueWaitIdle(device.queue()) == VK_SUCCESS;
+        if (ok && i >= kWarmup) {
+          spans.push_back(host_ns() - t0);
+        }
+      }
+    }
+    if (cmd != VK_NULL_HANDLE) {
+      dt.FreeCommandBuffers(device.handle(), pool, 1, &cmd);
+    }
+    if (pool != VK_NULL_HANDLE) {
+      dt.DestroyCommandPool(device.handle(), pool, nullptr);
+    }
+    if (spans.empty()) {
+      return;
+    }
+    std::sort(spans.begin(), spans.end());
+    // Even sample count: average the two middle samples; a partial run
+    // that left an odd count takes the middle one.
+    size_t n = spans.size();
+    floor_ns_ = n % 2 == 0 ? (spans[n / 2 - 1] + spans[n / 2]) / 2
+                           : spans[n / 2];
+    emitf("{\"k\":\"cal\",\"floor_ns\":%" PRIu64 ",\"samples\":%zu"
+          ",\"warmup\":%d}\n",
+          floor_ns_,
+          spans.size(),
+          kWarmup);
   }
 
   Ctx* find(const void* owner) {
@@ -620,6 +725,8 @@ class GpuProfiler {
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
   bool dispatch_enabled_{true};
+  uint64_t floor_ns_{0};
+  bool calibrated_{false};
   uint64_t dispatches_{0};
   uint64_t dispatches_total_{0};
   uint64_t submissions_{0};
