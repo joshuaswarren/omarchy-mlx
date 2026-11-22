@@ -134,6 +134,16 @@ Linux only, measured 2026-11-21 with the v0.7.49 release wheel on Omarchy (Arch 
 
 Raw JSON, model revisions and the stack: `receipts/2026-11-21-m3-pro-g15s-linux/`.
 
+## Results on the M6 mini (G18G)
+
+Linux only, first receipt on this machine, measured 2026-11-22 through the idle-guard (m6 GPU ticket `3d8aec7c`) on the installed release wheel `mlx_omarchy-0.32.4.dev202611181701+83cf322` (0.7.47 series) in `/usr/lib/omarchy-mlx/venv`, Omarchy Linux, kernel 7.1.12-aurora-m6usb-ARCH, CPU governor performance. Same `score_bench.py`, prompts and counts as the section above. The GPU driver is a local Vulkan ICD build, sha256 `ee5fbac9500bfbf71c09a0d20153e9cad66712a0a2337580b85de2bac4fb2b6d`, with the mesa git sha for that build not recorded; the kernel module sha256 is `3f192f53ea1fc1b6784283d91fd07b78dc343464632d08d458783fbe8f9fbc46`. Tokens per second:
+
+| Machine | Qwen3.8-2B decode | Qwen3.8-2B prefill 512 | Qwen3-4B-Instruct-2507 decode | Qwen3-4B-Instruct-2507 prefill 512 |
+|---|---:|---:|---:|---:|
+| Mac mini, M6 (G18G, j873g), 12-core CPU, 31 GB | 7.087 | 196.656 | 5.230 | 74.922 |
+
+Decode stdev 0.038 (2B) and 0.031 (4B); prefill stdev 4.9 (2B) and 0.3 (4B). The G18G driver is early: these rows are not comparable with the Borealis-driver rows above, and this run used the performance governor against the M3 Pro row's schedutil. Raw JSON and provenance: `receipts/2026-11-22-m6-mini-g18g-linux/`.
+
 ## Rows on the newer driver
 
 These rows ran on the newer patched driver, Mesa git `69bde15340` (the installed package library), measured on 2026-10-11. The wheel is main at `e57cb301` for every row. The reference is the private ICD at Mesa git `6543eeb7df7`, called v3 below. Nothing in this section compares with macOS.
