@@ -74,24 +74,37 @@ def prefill_input(ids):
 
 def snapshot_candidates():
     home = Path(os.path.expanduser("~"))
-    return [
-        home / "Library/Caches/huggingface/hub" / HF_REPO / "snapshots" / SNAPSHOT,  # macOS
-        home / ".cache/huggingface/hub" / HF_REPO / "snapshots" / SNAPSHOT,          # Linux
-    ]
+    hubs = []
+    hub_cache = os.environ.get("HF_HUB_CACHE", "").strip()
+    if hub_cache:
+        hubs.append(Path(os.path.expanduser(hub_cache)))
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    if hf_home:
+        hubs.append(Path(os.path.expanduser(hf_home)) / "hub")
+    hubs.extend([
+        home / "Library/Caches/huggingface/hub",  # macOS
+        home / ".cache/huggingface/hub",          # Linux
+    ])
+    unique = {}  # resolved path -> first spelling seen, so HF_HOME=~/.cache/huggingface lists once
+    for hub in hubs:
+        cand = hub / HF_REPO / "snapshots" / SNAPSHOT
+        unique.setdefault(cand.resolve(), cand)
+    return list(unique.values())
 
 
 def preflight():
-    """Loud abort unless exactly one platform's snapshot dir exists."""
-    hits = [p for p in snapshot_candidates() if p.is_dir()]
+    """Loud abort if no candidate snapshot dir exists; return the first hit."""
+    candidates = snapshot_candidates()
+    hits = [p for p in candidates if p.is_dir()]
     if not hits:
         print("=" * 72)
         print("ABORT: HF cache is missing the pinned model snapshot.")
         print(f"  repo:     {HF_REPO}")
         print(f"  snapshot: {SNAPSHOT}")
         print("  looked in:")
-        for p in snapshot_candidates():
+        for p in candidates:
             print(f"    {p}")
-        print("Fetch it once (from the box that has it) or fix HF_HOME before the window.")
+        print("Fetch it once (from the box that has it) or fix HF_HOME or HF_HUB_CACHE before the window.")
         print("=" * 72)
         raise SystemExit(2)
     print(f"PREFLIGHT OK: {hits[0]}")
