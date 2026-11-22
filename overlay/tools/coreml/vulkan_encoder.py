@@ -711,12 +711,19 @@ class AneIsland:
 
     def _record_round(self, tag: str, bundle: str, elapsed: int, session,
                       marshal_ns: int, back_ns: int, in_bytes: int,
-                      out_bytes: int, batched: int = 1) -> None:
+                      out_bytes: int, batched: int = 1,
+                      count_exec: bool = True, child=None) -> None:
         self.rounds += 1
-        self.exec_ns += elapsed
+        # In a pipelined batch the wall clock between the shared write
+        # and the last response belongs to the BATCH; the caller adds it
+        # to exec_ns once. Each record keeps its own response window
+        # from the session's log instead of re-counting the batch here.
+        if count_exec:
+            self.exec_ns += elapsed
         self.input_bytes += in_bytes
         record = {"tag": tag, "bundle": bundle, "elapsed_ns": elapsed, "round": True}
-        child = getattr(session, "log", [None])[-1] if session.log else None
+        if child is None:
+            child = getattr(session, "log", [None])[-1] if session.log else None
         if child:
             for key in ("write_ns", "read_ns", "stage_ms", "save_ms", "elapsed_ms"):
                 if key in child:
@@ -773,13 +780,14 @@ class AneIsland:
             payload, in_bytes, marshal_ns = self._marshal_inputs(inputs)
             self.marshal_ns += marshal_ns
             marshalled.append(
-                (bundle, tag, payload, list(outputs), marshal_ns, in_bytes)
+                (bundle, tag, payload, outputs, marshal_ns, in_bytes)
             )
         started = time.monotonic_ns()
+        log_base = len(getattr(session, "log", []) or [])
         try:
             results_many = session.submit_many(
                 [
-                    (bundle, tag, payload, out_names)
+                    (bundle, tag, payload, list(out_names))
                     for bundle, tag, payload, out_names, _, _ in marshalled
                 ]
             )
@@ -793,20 +801,29 @@ class AneIsland:
             raise EncoderRunError(
                 f"ANE batched rounds {tags} failed: {error}"
             ) from error
+        # One batch, one wall: exec_ns takes the shared-write-to-last-
+        # response window exactly once, and each job's record cites its
+        # own session log entry so wire timings never come from a
+        # sibling job.
         elapsed = time.monotonic_ns() - started
         packed_many = []
-        for (bundle, tag, _, outputs, marshal_ns, in_bytes), results in zip(
-            marshalled, results_many
+        for position, ((bundle, tag, _, outputs, marshal_ns, in_bytes), results) in enumerate(
+            zip(marshalled, results_many)
         ):
+            session_log = getattr(session, "log", []) or []
+            child = session_log[log_base + position] if log_base + position < len(session_log) else None
+            job_elapsed = child.get("elapsed_ns", 0) if child else 0
             back_started = time.monotonic_ns()
             packed, out_bytes = self._pack_results(results, outputs, tag)
             back_ns = time.monotonic_ns() - back_started
             self.back_ns += back_ns
             self._record_round(
-                tag, bundle, elapsed, session, marshal_ns, back_ns,
+                tag, bundle, job_elapsed, session, marshal_ns, back_ns,
                 in_bytes, out_bytes, batched=len(jobs),
+                count_exec=False, child=child,
             )
             packed_many.append(packed)
+        self.exec_ns += elapsed
         return packed_many
 
     def submit(self, bundle: str, tag: str, inputs: dict, outputs: dict) -> dict:

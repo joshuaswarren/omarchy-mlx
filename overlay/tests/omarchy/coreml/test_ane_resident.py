@@ -622,6 +622,77 @@ class ResidentAneWorkerTest(unittest.TestCase):
             session.counters()["input_bytes"], tensor.nbytes * 3
         )
 
+    def test_submit_many_counts_exec_once_and_keeps_own_timings(self):
+        """A pipelined batch adds its wall to exec_ns ONCE, not per job.
+
+        The batch's shared write means the wall between the write and
+        the last response belongs to the batch. Before the fix every
+        record took the whole-batch elapsed, so exec_ns over-counted by
+        the job factor and every record carried the last job's wire
+        timings. Two jobs are enough to prove both: exec_ns equals the
+        batch wall exactly, and each record cites its own session log
+        entry for elapsed_ns/write_ns.
+        """
+        import numpy as np
+
+        import vulkan_encoder
+
+        class _FakeSession:
+            transport = "private"
+            log = []
+
+        fake = _FakeSession()
+        fake.log = [
+            {"tag": "L00-A", "elapsed_ns": 300, "write_ns": 111, "read_ns": 189},
+            {"tag": "L00-C", "elapsed_ns": 400, "write_ns": 0, "read_ns": 400},
+        ]
+        def _fake_submit_many(jobs):
+            for job, record in zip(jobs, fake.log):
+                session_record = dict(record)
+                session_record["tag"] = job[1]
+                fake.log.append(session_record)
+            return [{"y": bytes(job[2]["q"])} for job in jobs]
+
+        fake.submit_many = _fake_submit_many
+
+        # Two marshals (2 calls each), batch start, batch wall, then two
+        # back windows (2 calls each) = 10 calls.
+        # Batch wall = 5000 - 3000 = 2000; exec_ns must equal that ONCE.
+        clock = iter([100, 150, 200, 250, 3000, 5000, 5050, 6000, 6050, 6100])
+        real_monotonic_ns = vulkan_encoder.time.monotonic_ns
+        vulkan_encoder.time.monotonic_ns = lambda: next(clock, 10 ** 12)
+        try:
+            island = vulkan_encoder.AneIsland(
+                worker=Path("unused"), libane=Path("unused"),
+                bundles=self.root / "bundles", scratch=self.root / "scratch",
+            )
+            island._mode = "resident-batch"
+            island._session = fake
+            island._session_shared = False
+            with mock.patch.object(island, "_ensure_session", return_value=fake):
+                packed = island.submit_many(
+                    [
+                        ("A", "L00-A", {"q": np.arange(2, dtype=np.float32)},
+                         {"y": ((2,), "fp32")}),
+                        ("C", "L00-C", {"q": np.arange(4, dtype=np.float32)},
+                         {"y": ((4,), "fp32")}),
+                    ]
+                )
+        finally:
+            vulkan_encoder.time.monotonic_ns = real_monotonic_ns
+
+        self.assertEqual(len(packed), 2)
+        self.assertEqual(island.exec_ns, 2000)  # the batch wall, ONCE
+        self.assertEqual(island.rounds, 2)
+        self.assertEqual(len(island.log), 2)
+        first, second = island.log
+        self.assertEqual(first["elapsed_ns"], 300)
+        self.assertEqual(first["write_ns"], 111)
+        self.assertEqual(second["elapsed_ns"], 400)
+        self.assertEqual(second["write_ns"], 0)  # its OWN record's value
+        self.assertNotEqual(second["write_ns"], first["write_ns"])
+        self.assertEqual([r["tag"] for r in island.log], ["L00-A", "L00-C"])
+
     def test_submit_many_pipelines_on_the_bypass_protocol(self):
         """The same batching works on the resident's raw protocol."""
         os.environ["MLX_FAKE_MODE"] = "ok"
