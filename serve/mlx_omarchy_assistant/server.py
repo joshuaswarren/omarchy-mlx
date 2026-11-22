@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .history import BusyError, ConversationStore, EventGap
 from . import synthesis
+from . import wake_word
 
 CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
@@ -156,9 +157,9 @@ class AssistantServer(ThreadingHTTPServer):
                     result["error"] = self.setup_state["message"]
             return result
 
-    def start_wake_word(self, model: str = "hey_jarvis", threshold: float = 0.5) -> None:
+    def start_wake_word(self, model: str = "hey_jarvis",
+                        threshold: float = wake_word.WAKE_THRESHOLD_DEFAULT) -> None:
         """Opt-in wake listener; --wake-word is the model-download approval."""
-        from . import wake_word
         state = wake_word.WakeState(model, threshold)
         self.wake = state
 

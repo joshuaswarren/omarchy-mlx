@@ -63,7 +63,13 @@ mlx-lm, oMLX, mlx-serve, TensorFold, sushi, llama.cpp (Vulkan) and MCDMA have be
 - An opt-in wake word. `mlx-omarchy-chat --wake-word hey_jarvis`
   listens through openWakeWord ONNX models on the CPU (SHA-256-pinned
   files, downloaded once on first use) and hands the microphone to the
-  chat when it hears the phrase. It is off by default.
+  chat when it hears the phrase. It is off by default. The score
+  threshold is 0.5 and lives in one place
+  (`wake_word.WAKE_THRESHOLD_DEFAULT`). Measure it on your own
+  microphone with
+  `python -m mlx_omarchy_assistant.wake_eval --manifest clips.json
+  --clips-dir clips --model <wake model> --out results.json`
+  ([receipt](receipts/2026-11-21-wake-eval-v10/README.md)).
 
 Chat models download from Hugging Face the first time you use them. You
 approve each download first. The default pairs: Everyday is Qwen3.5-9B

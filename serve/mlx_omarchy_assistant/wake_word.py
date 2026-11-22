@@ -36,6 +36,12 @@ WAKE_MODELS = {"hey_jarvis": "hey_jarvis_v0.1.onnx"}
 SAMPLE_RATE = 16000
 CHUNK = 1280  # 80 ms at 16 kHz: the streaming step the listener asks for
 
+# The one place the wake score threshold lives. Still 0.5: the tuning
+# table in receipts/2026-11-21-wake-eval-v10/README.md says 0.45 would
+# catch more phrases on espeak clips, and moving the default waits for
+# the false-wake-per-hour measurement that table cannot make.
+WAKE_THRESHOLD_DEFAULT = 0.5
+
 
 class WakeModelError(RuntimeError):
     pass
@@ -87,12 +93,22 @@ def prepare(home, model: str = "hey_jarvis", fetch=None) -> Path:
 
 
 class WakeWordDetector:
-    """Scores 16 kHz mono little-endian int16 PCM and fires once per refractory window."""
+    """Scores 16 kHz mono little-endian int16 PCM and fires once per refractory window.
 
-    def __init__(self, model_path, threshold: float = 0.5,
-                 refractory_seconds: float = 1.5, session=None):
+    vad_rms_floor is a speech-validity gate on the crossing frame: a wake
+    counts only when that frame carries speech. openWakeWord scores
+    usually peak on the last chunks of a phrase, often in its decaying
+    tail, so a non-zero floor can veto a real wake. The default is 0
+    (off).
+    """
+
+    def __init__(self, model_path, threshold: float = WAKE_THRESHOLD_DEFAULT,
+                 refractory_seconds: float = 1.5, session=None,
+                 vad_rms_floor: float = 0.0):
         if not 0.0 < threshold < 1.0:
             raise ValueError("threshold must be between 0 and 1")
+        if vad_rms_floor < 0.0:
+            raise ValueError("vad_rms_floor must be non-negative")
         if session is None:
             from openwakeword.model import Model
             directory = Path(model_path).parent
@@ -104,6 +120,7 @@ class WakeWordDetector:
         self._session = session
         self.threshold = threshold
         self._refractory = refractory_seconds
+        self._vad_rms_floor = vad_rms_floor
         self._consumed = 0.0
         self._last_fire = float("-inf")
         self._peak = 0.0
@@ -113,14 +130,23 @@ class WakeWordDetector:
         if samples == 0:
             return False
         import numpy as np
-        scores = self._session.predict(np.frombuffer(pcm, dtype=np.int16))
         self._consumed += samples / SAMPLE_RATE
+        x = np.frombuffer(pcm, dtype=np.int16)
+        scores = self._session.predict(x)
         score = max(scores.values())
         if score > self._peak:
             self._peak = score
         if score < self.threshold:
             return False
         if self._consumed - self._last_fire < self._refractory:
+            return False
+        # RMS validity gate: a wake counts only when the frame it lands on
+        # carries speech. The veto can drop a wake whose score peaks in a
+        # quiet frame at the tail of the phrase. The default is 0 (off):
+        # on the measured clip set every floor above 0 cost true positives
+        # and removed no false wake.
+        if self._vad_rms_floor > 0.0 and float(np.sqrt(np.mean(
+                x.astype(np.float64) ** 2))) < self._vad_rms_floor:
             return False
         self._last_fire = self._consumed
         return True

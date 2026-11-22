@@ -47,6 +47,24 @@ def make_detector(scores, default=0.0, **kwargs):
         path, session=ScriptedSession(scores, default=default), **kwargs)
 
 
+class ThresholdDefaultTests(unittest.TestCase):
+    """The tuned wake threshold lives in one place."""
+
+    def test_cli_and_server_use_the_tuned_default(self):
+        from mlx_omarchy_assistant import __main__ as cli
+        from mlx_omarchy_assistant import server, wake_word
+
+        self.assertEqual(wake_word.WAKE_THRESHOLD_DEFAULT, 0.5)
+        parser = cli.build_parser()
+        args = parser.parse_args(["--wake-word"])
+        self.assertEqual(args.wake_threshold, wake_word.WAKE_THRESHOLD_DEFAULT)
+        import inspect
+        self.assertEqual(
+            inspect.signature(server.AssistantServer.start_wake_word)
+            .parameters["threshold"].default,
+            wake_word.WAKE_THRESHOLD_DEFAULT)
+
+
 class DetectorTests(unittest.TestCase):
     def test_fires_at_threshold(self):
         detector = make_detector([0.0, 0.6])
@@ -54,7 +72,7 @@ class DetectorTests(unittest.TestCase):
         self.assertTrue(detector.process(b"\x00" * (wake_word.CHUNK * 2)))
 
     def test_below_threshold_never_fires(self):
-        detector = make_detector([0.49, 0.0])
+        detector = make_detector([wake_word.WAKE_THRESHOLD_DEFAULT - 0.01, 0.0])
         self.assertFalse(detector.process(b"\x00" * (wake_word.CHUNK * 2)))
 
     def test_refractory_suppresses_immediate_refire(self):
@@ -91,6 +109,35 @@ class DetectorTests(unittest.TestCase):
     def test_unknown_model_name_is_rejected_by_prepare(self):
         with self.assertRaises(wake_word.WakeModelError):
             wake_word.prepare(Path("/unused"), model="alexa")
+
+    def test_vad_floor_vetoes_a_wake_on_a_quiet_frame(self):
+        session = ScriptedSession([], default=0.9)
+        detector = wake_word.WakeWordDetector(
+            Path("/unused/hey_jarvis_v0.1.onnx"), session=session,
+            vad_rms_floor=200.0)
+        detector.process(b"\x00" * (wake_word.CHUNK * 2))
+        self.assertEqual(len(session.calls), 1)      # the frame was scored
+        self.assertFalse(detector.process(b"\x00" * wake_word.CHUNK))
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(detector._peak, 0.9)        # scored, but vetoed
+
+    def test_vad_floor_passes_loud_chunks_through(self):
+        detector = make_detector([0.9], vad_rms_floor=200.0)
+        loud = (b"\x01\x10") * (wake_word.CHUNK * 2)  # int16 ~4097 per sample
+        self.assertTrue(detector.process(loud))
+        self.assertGreater(detector._peak, 0.0)
+
+    def test_vad_floor_zero_keeps_legacy_behavior(self):
+        session = ScriptedSession([], default=0.4)
+        detector = wake_word.WakeWordDetector(
+            Path("/unused/hey_jarvis_v0.1.onnx"), session=session,
+            vad_rms_floor=0.0)
+        self.assertFalse(detector.process(b"\x00" * (wake_word.CHUNK * 2)))
+        self.assertEqual(len(session.calls), 1)  # still scored
+
+    def test_vad_floor_rejects_negative(self):
+        with self.assertRaises(ValueError):
+            make_detector([0.0], vad_rms_floor=-1.0)
 
 
 class PrepareTests(unittest.TestCase):
