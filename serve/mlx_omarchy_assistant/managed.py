@@ -49,10 +49,24 @@ class ManagedChild:
     record_name: str  # the reservation record this child claims
 
 
+def free_ports(count: int) -> list[int]:
+    """Distinct free loopback ports. Every probe socket stays open until all
+    are chosen: probed one at a time, the kernel can hand back the port it
+    just gave out, and two workers then race for one port."""
+    socks = []
+    try:
+        for _ in range(count):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socks.append(sock)
+            sock.bind(("127.0.0.1", 0))
+        return [int(sock.getsockname()[1]) for sock in socks]
+    finally:
+        for sock in socks:
+            sock.close()
+
+
 def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+    return free_ports(1)[0]
 
 
 def spawn_supervised(argv: list[str], *, lifetime_read_fd: int, env: dict,

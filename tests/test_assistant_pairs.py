@@ -232,6 +232,22 @@ def stub_argv_builder(role):
     return build
 
 
+_real_bind = __import__("socket").socket.bind
+
+
+def _bind_repeating(port):
+    """A bind that hands out `port` for the first probe of port 0, the way the
+    kernel may after a probe socket closes; later probes bind normally."""
+    used = []
+
+    def bind(self, address):
+        if address[1] == 0 and not used:
+            used.append(port)
+            return _real_bind(self, (address[0], port))
+        return _real_bind(self, address)
+    return bind
+
+
 class BasePairTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -972,7 +988,7 @@ class StubWorkerLifecycleTests(BasePairTest):
         chat_record, decision_record = budget.admit_and_reserve_batch(
             [("chat", 1024, ""), ("decision", 1024, "")],
             pair_id="everyday", home=self.home, available_bytes=10 * GiB)
-        chat_port, decision_port = managed.free_port(), managed.free_port()
+        chat_port, decision_port = managed.free_ports(2)
         chat = self.spawn("chat", chat_port, 4096, chat_record)
         decision = self.spawn("decision", decision_port, 4096, decision_record)
         self.assertTrue(managed.wait_health(
@@ -1168,6 +1184,27 @@ class PairManagerTests(BasePairTest):
         self.assertFalse(self.manager._ready_offline(pair))
         pair["qualification"]["receipt"] = "   "
         self.assertFalse(self.manager._ready_offline(pair))
+
+    def test_start_gives_the_two_workers_distinct_ports_when_the_kernel_repeats_one(self):
+        # bind(0) after close can hand back the port it just gave out (about
+        # 1 in 25,000 pairs on Linux). Two separate probes then gave both
+        # workers one port: the second bind failed, "chat exited early (rc=1)".
+        import socket
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            repeated = probe.getsockname()[1]
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        self.manager.setup("everyday", approve_download=True)
+        with mock.patch.object(managed, "free_port", return_value=repeated), \
+                mock.patch.object(managed.socket.socket, "bind", _bind_repeating(repeated)):
+            result = self.manager.start()
+        self.addCleanup(self.manager.stop)
+        self.assertEqual(result["state"], "ready")
+        status = self.manager.status()
+        chat = int(status["chat_url"].split(":")[2].split("/")[0])
+        decision = int(status["decision_url"].split(":")[2].split("/")[0])
+        self.assertNotEqual(chat, decision)
 
     def test_voice_estimates_admitted_without_readiness_gating(self):
         self.make_chat_snapshot(CHAT_SMALL_ID)

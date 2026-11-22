@@ -1235,8 +1235,7 @@ class PairManager:
             log_dir = self.home / "assistant" / "logs"
             chat_port = decision_port = None
             try:
-                chat_port = managed.free_port()
-                decision_port = managed.free_port()
+                chat_port, decision_port = managed.free_ports(2)
                 specs = {
                     "chat": managed.WorkerSpec("chat", prepared["chat_path"],
                                                chat_port, context, 0),
