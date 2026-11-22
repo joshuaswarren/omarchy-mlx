@@ -203,7 +203,10 @@ def _mlx_transcriber(model_path: str | None):
     import mlx.core as mx
     from mlx_audio.stt.utils import load_model
 
-    model = load_model(model_path or PARAKEET_REPO)
+    # An existing path is loaded as a Path: gpu_stt_worker notes that a Path
+    # skips mlx-audio's hub resolution and reads the snapshot as-is.
+    local = Path(model_path).expanduser() if model_path else None
+    model = load_model(local if local and local.exists() else model_path or PARAKEET_REPO)
     model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
 
     import numpy as np
