@@ -324,7 +324,15 @@ class VoiceLoop:
                 break
             utterance = self._endpointer.feed(pcm)
             if utterance is not None:
-                result = self.turn(utterance, self._endpointer.last_quiet_s)
+                try:
+                    result = self.turn(utterance, self._endpointer.last_quiet_s)
+                except Exception as error:  # one failed turn must not end the session
+                    import sys
+                    print(f"[voice-loop] turn failed, still listening: {error!r}",
+                          file=sys.stderr, flush=True)
+                    while self._history and self._history[-1]["role"] == "user":
+                        self._history.pop()  # drop the dangling exchange so the next turn pairs cleanly
+                    continue
                 if result:
                     turns.append(result)
         return turns
