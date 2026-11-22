@@ -34,6 +34,18 @@ class ScriptedSession:
         pass
 
 
+class SilenceFiresSession:
+    """Scripted session that scores silence high and speech low, so a wake
+    fires inside the joining silence rather than inside a clip."""
+
+    def predict(self, pcm):
+        rms = float(np.sqrt(np.mean(pcm.astype(np.float64) ** 2)))
+        return {"hey_jarvis_v0.1": 0.9 if rms <= 1000 else 0.1}
+
+    def reset(self):
+        pass
+
+
 def write_clip(path: Path, loud_seconds=0.8, silent_seconds=1.2):
     rate = wake_eval.SAMPLE_RATE
     loud = (np.sin(np.arange(int(loud_seconds * rate)) * 0.05) * 8000).astype("int16")
@@ -150,6 +162,14 @@ class WakeEvalTests(unittest.TestCase):
             [self.dir / "pos-a.wav"], "unused", threshold=0.5, floor=0.0,
             session=ScriptedSession())
         self.assertEqual(row["wakes"], 1)  # one phrase, one wake
+
+    def test_corpus_row_counts_wakes_that_fire_in_the_joining_silence(self):
+        loud = self.dir / "loud-full.wav"
+        write_clip(loud, loud_seconds=2.5, silent_seconds=0.0)
+        row = wake_eval.corpus_row(
+            [loud], "unused", threshold=0.5, floor=0.0, gap_seconds=1.0,
+            session=SilenceFiresSession())
+        self.assertEqual(row["wakes"], 1)  # fires in the gap, not in the clip
 
     def test_main_corpus_mode_counts_wakes(self):
         out = self.dir / "results-corpus.json"

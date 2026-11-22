@@ -272,7 +272,8 @@ def corpus_row(files: list[Path], model_path: str, threshold: float,
             piece = gap[off:off + step]
             if len(piece) < step:
                 piece = piece + bytes(step - len(piece))
-            detector.process(piece)
+            if detector.process(piece):
+                wakes += 1
     hours = audio_bytes / 2 / SAMPLE_RATE / 3600
     return {
         "threshold": threshold,
