@@ -42,9 +42,12 @@ the omarchy `VkDeviceCreateInfo` built in
 
 `dci.pEnabledFeatures` stays null; all enabled features ride the pNext
 chain. Device extensions are limited to `VK_EXT_shader_atomic_float`,
-`VK_KHR_cooperative_matrix`, `VK_KHR_shader_bfloat16`, and
-`VK_EXT_global_priority` — each set only when the hardware reports the
-matching capability.
+`VK_KHR_cooperative_matrix`, `VK_KHR_shader_bfloat16`,
+`VK_EXT_global_priority`, the lily pairing `VK_EXT_memory_priority` +
+`VK_EXT_pageable_device_local_memory` (#668: memory-priority hints and
+pageable local memory, enabled only when the driver advertises both),
+and `VK_EXT_calibrated_timestamps` (gated on `MLX_OMARCHY_TRACE_DISPATCH`)
+— each set only when the hardware reports the matching capability.
 
 ## Diff
 

@@ -690,9 +690,11 @@ class GpuProfiler {
       return;
     }
     std::sort(spans.begin(), spans.end());
-    // Even sample count: average the two middle samples.
+    // Even sample count: average the two middle samples; a partial run
+    // that left an odd count takes the middle one.
     size_t n = spans.size();
-    floor_ns_ = (spans[n / 2 - 1] + spans[n / 2]) / 2;
+    floor_ns_ = n % 2 == 0 ? (spans[n / 2 - 1] + spans[n / 2]) / 2
+                           : spans[n / 2];
     emitf("{\"k\":\"cal\",\"floor_ns\":%" PRIu64 ",\"samples\":%zu"
           ",\"warmup\":%d}\n",
           floor_ns_,

@@ -55,6 +55,12 @@ bool seen_cm = false;
 VkPhysicalDeviceCooperativeMatrixFeaturesKHR cap_cm{
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
 #endif
+bool seen_mp = false;
+VkPhysicalDeviceMemoryPriorityFeaturesEXT cap_mp{
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+bool seen_pl = false;
+VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT cap_pl{
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
 bool seen_bf16 = false;
 #ifdef VK_KHR_shader_bfloat16
 VkPhysicalDeviceShaderBfloat16FeaturesKHR cap_bf16{
@@ -94,8 +100,8 @@ VkResult VKAPI_CALL capture_create_device(
   captured_enabled_features = ci->pEnabledFeatures != nullptr;
   unexpected_stypes.clear();
   enabled_exts.clear();
-  seen_f2 = seen_f12 = seen_f13 = seen_f16 = seen_fa = seen_cm =
-      seen_bf16 = false;
+  seen_f2 = seen_f12 = seen_f13 = seen_f16 = seen_fa = seen_cm = seen_mp =
+      seen_pl = seen_bf16 = false;
   for (const auto* s =
            reinterpret_cast<const VkBaseInStructure*>(ci->pNext);
        s != nullptr;
@@ -130,6 +136,20 @@ VkResult VKAPI_CALL capture_create_device(
                 const VkPhysicalDeviceShaderAtomicFloatFeaturesEXT*>(s);
         cap_fa.pNext = nullptr;
         seen_fa = true;
+        break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT:
+        cap_mp =
+            *reinterpret_cast<
+                const VkPhysicalDeviceMemoryPriorityFeaturesEXT*>(s);
+        cap_mp.pNext = nullptr;
+        seen_mp = true;
+        break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT:
+        cap_pl =
+            *reinterpret_cast<
+                const VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT*>(s);
+        cap_pl.pNext = nullptr;
+        seen_pl = true;
         break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR:
 #ifdef VK_KHR_cooperative_matrix
@@ -166,6 +186,9 @@ bool allowed_extension(const std::string& name) {
       "VK_KHR_cooperative_matrix",
       "VK_KHR_shader_bfloat16",
       "VK_EXT_global_priority",
+      "VK_EXT_memory_priority",
+      "VK_EXT_pageable_device_local_memory",
+      "VK_EXT_calibrated_timestamps",
   };
   for (const char* a : allowed) {
     if (name == a) {
@@ -260,6 +283,17 @@ TEST_CASE("VkDeviceCreateInfo requests only the audited feature set") {
         (cap_cm.cooperativeMatrix ? 1 : 0));
   }
 #endif
+  if (seen_mp) {
+    CHECK(
+        TRUE_FIELDS(cap_mp, memoryPriority, memoryPriority) ==
+        (cap_mp.memoryPriority ? 1 : 0));
+  }
+  if (seen_pl) {
+    CHECK(
+        TRUE_FIELDS(
+            cap_pl, pageableDeviceLocalMemory, pageableDeviceLocalMemory) ==
+        (cap_pl.pageableDeviceLocalMemory ? 1 : 0));
+  }
 #ifdef VK_KHR_shader_bfloat16
   if (seen_bf16) {
     CHECK(!cap_bf16.shaderBFloat16DotProduct);
