@@ -8164,3 +8164,24 @@ TEST_CASE("BM32 BF16 projection probe matches the integer oracle for dense and c
     unsetenv(flag);
   }
 }
+
+// SPD-04: the matvec row reduction folded five constant-mask ShuffleDown
+// butterflies into subgroupAdd. A first cut used `acc += subgroupAdd(acc)`,
+// which counts the lane's own value twice (w86: 529 instead of 528 on 1..32).
+// The full 1..32 sum through the gemv route is the smallest test that fails
+// on that exact defect and passes on the fold.
+TEST_CASE("single-row matvec sums 1..32 exactly through the subgroup reduction") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::vector<float> values(32);
+  for (int i = 0; i < 32; ++i) {
+    values[i] = float(i + 1);
+  }
+  auto got = readback_f32(stream, matmul(
+      array(std::vector<float>{1.0f}, Shape{1, 1}),
+      array(values.begin(), Shape{1, 32}, float32), stream));
+  REQUIRE_EQ(got.size(), 1u);
+  CHECK_EQ(got[0], 528.0f);
+}

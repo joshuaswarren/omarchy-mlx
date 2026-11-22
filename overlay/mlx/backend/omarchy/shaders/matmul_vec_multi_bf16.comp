@@ -102,11 +102,13 @@ uint16_t bf16_store(float value) {
   // Constant-mask ShuffleDown butterflies are the general-shuffle cost on \
   // Honeykrisp (four read_invocation selects per step, qmm_vec.comp's measured \
   // pairing) while subgroupAdd is the unlowered hardware reduction. The \
-  // full 32-lane butterfly is exactly that reduction, so fold it. \
-  accumulator0 += subgroupAdd(accumulator0); \
-  accumulator1 += subgroupAdd(accumulator1); \
-  accumulator2 += subgroupAdd(accumulator2); \
-  accumulator3 += subgroupAdd(accumulator3); \
+  // full 32-lane butterfly is exactly that reduction: every lane ends holding \
+  // the total, so this is an assignment - `acc += subgroupAdd(acc)` would \
+  // count the lane's own value twice (w86, PR review). \
+  accumulator0 = subgroupAdd(accumulator0); \
+  accumulator1 = subgroupAdd(accumulator1); \
+  accumulator2 = subgroupAdd(accumulator2); \
+  accumulator3 = subgroupAdd(accumulator3); \
   if (gl_SubgroupInvocationID == 0u) { \
     if ((params.flags & (4096u << MI)) != 0u) { \
       uint base = params.out_strides[MI]; \
