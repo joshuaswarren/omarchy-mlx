@@ -23,7 +23,7 @@ from scripts.bench_decode import ids_digest
 
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
-TAG = 'qualification-r6'
+TAG = 'qualification-r7'
 WHEEL_TAG = 'qualification-r7'
 VENDOR_RELEASE = 'v0.7.47'
 SOURCE = '60ed49829b8e9c580843f692189736eda4c55e65'
