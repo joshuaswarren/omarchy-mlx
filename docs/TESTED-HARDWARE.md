@@ -46,6 +46,34 @@ The same issue reports one warm Qwen2.5-0.5B run. The reporter said it
 is not a speed claim, so it is not in the table.
 
 
+## Apple silicon qualification rows (reporter runs)
+
+Rows from the release qualification kit (`qualification-kit/`): wheel
+verification against the release SHA256SUMS, six MLX correctness
+checks, the 34-file Python suite diffed against the M1 Max reference,
+an ANE step and a pinned 64-token Qwen3-4B benchmark. These are
+reporter runs; the receipts post on
+[issue #537](https://github.com/joshuaswarren/omarchy-mlx/issues/537).
+`Vs reference` counts suite failures and skips that match the M1 Max
+reference on the same kit; `New` counts test IDs that fail here and not
+there. The ANE column is the kit's ANE step on that machine — a chip's
+ANE bring-up state is a separate lane (README hardware table). Rows
+carry the newest recorded kit; an r7 row lands when its receipt posts.
+
+| Board | SoC / GPU | Kit | Status | Suite pass / fail / skip | Vs reference | New failures | MLX checks | Decode / prefill tok/s | Digest | ANE |
+|---|---|---|---|---|---|---|---|---|---|---|
+| MacBook Pro 16-inch M4 Pro, `apple,j616s`, `apple,t6040`, G16S, machine `2adf2b644fdcac6f` | r4 | new_suite_failures | 13,211 / 81 / 81 | 80/80 failures, 81/81 skips | 1 (`test_export_unique`) | 6/6 | 75.71 / 69.92 | `acca26cfaf8e37d0` | unavailable (exit 127: `omarchy-ane-smoke` not on the image) |
+| MacBook Air M4, `apple,j713`, `apple,t8132`, G16G, machine `729c0299075fafa2` | r4 | new_suite_failures | 13,212 / 80 / 81 | 79/80 failures, 81/81 skips | 1 (`test_export_unique`); one reference failure passes here | 6/6 | 25.68 / 94.98 (bring-up GPU driver build; rates not final) | `acca26cfaf8e37d0` | unavailable (exit 127: `omarchy-ane-smoke` not on the image) |
+| Mac mini M4, `apple,j773g`, `apple,t8132`, G16G | | no qualification run recorded; GPU state per the [2026-11-01 part-1 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md) | | | | | | | | not run |
+
+The `qualification-r7` reruns of `apple,j616s` and `apple,j713` and a
+first `apple,j773g` run are staged in
+[#537](https://github.com/joshuaswarren/omarchy-mlx/issues/537). The r4
+rows stand until the r7 receipts post. `test_export_unique` is the one
+new failure on both r4 rows; the r7 wheel carries its fix chain (#558,
+#561, #570, #574, #578, #580).
+
+
 ## Apple silicon capture inventory (community collector rows)
 
 Machine captures from the live community dataset snapshot of 2026-11-22,
