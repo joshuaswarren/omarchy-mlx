@@ -185,6 +185,8 @@ layout(set = 0, binding = 3, std430) readonly buffer AxisMetadata {
   uint values[];
 } axis_data;
 
+shared uint sh_axis_meta[512];
+
 layout(push_constant) uniform Params {
   uint count;
   uint operation;
@@ -439,25 +441,45 @@ bool load_truthy(uint index) {
 }
 #endif
 
+// G18G guard: stage the metadata through shared once per workgroup.
+// Per-lane axis_data reads inside the dim decode loops misread extents
+// for part of the workgroup on matrix_k != 0 dispatches.
+void stage_axis_metadata() {
+  if (params.matrix_k != 0u && gl_LocalInvocationIndex == 0u) {
+    uint staged = min(2u * params.matrix_k, 512u);
+    for (uint i = 0u; i < staged; ++i) {
+      sh_axis_meta[i] = axis_data.values[i];
+    }
+  }
+  barrier();
+}
+
+uint axis_meta(uint index) {
+  if (index < min(2u * params.matrix_k, 512u)) {
+    return sh_axis_meta[index];
+  }
+  return axis_data.values[index];
+}
+
 uint axis_extent(uint index) {
   if (params.matrix_k == 0u) {
     return params.shape[index];
   }
-  return axis_data.values[index];
+  return axis_meta(index);
 }
 
 uint kept_axis_stride(uint index) {
   if (params.matrix_k == 0u) {
     return params.in_strides[index];
   }
-  return axis_data.values[params.matrix_k + index];
+  return axis_meta(params.matrix_k + index);
 }
 
 uint reduced_axis_stride(uint index) {
   if (params.matrix_k == 0u) {
     return params.out_strides[index];
   }
-  return axis_data.values[params.matrix_k + params.dims + index];
+  return axis_meta(params.matrix_k + params.dims + index);
 }
 
 uint decode_kept_offset(uint output_index) {
@@ -483,6 +505,7 @@ uint decode_reduced_offset(uint j) {
 }
 #ifdef BOOL_OUT
 void main() {
+  stage_axis_metadata();
   uint word_stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   if ((params.flags & 1u) != 0u) {
     // Combine phase: one output word per invocation, four output elements.
@@ -566,6 +589,7 @@ void main() {
 }
 #else
 void main() {
+  stage_axis_metadata();
   uint grid = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   if ((params.flags & 1u) != 0u) {
     // Combine phase: one output element per invocation.
