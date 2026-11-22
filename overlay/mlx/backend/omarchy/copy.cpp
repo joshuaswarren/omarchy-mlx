@@ -12,7 +12,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <execinfo.h>
 #include <limits>
 #include <optional>
 #include <string>
@@ -736,37 +735,6 @@ void copy_gpu_inplace(
     omarchy::ComputeKernel kernel;
     if (in.dtype() == out.dtype()) {
       kernel = copy_general_kernel(in.dtype(), out);
-      static int copy_trace = 0;
-      if (in.dtype() == bfloat16 &&
-          std::getenv("MLX_OMARCHY_COPY_TRACE") != nullptr &&
-          copy_trace < 4000) {
-        ++copy_trace;
-        std::fprintf(
-            stderr,
-            "[copyBF16] bytes=%zu out_shape=", out.nbytes());
-        for (auto d : out.shape()) {
-          std::fprintf(stderr, "%d,", static_cast<int>(d));
-        }
-        std::fprintf(stderr, " in_prim=%s consumer=%s in_shape=",
-                     in.has_primitive() ? in.primitive().name() : "<none>",
-                     std::string(omarchy::trace::current_prim()).c_str());
-        for (auto d : in.shape()) {
-          std::fprintf(stderr, "%d,", static_cast<int>(d));
-        }
-        std::fprintf(
-            stderr,
-            " in_rowc=%d in_strides=",
-            static_cast<int>(in.flags().row_contiguous));
-        for (auto s : in.strides()) {
-          std::fprintf(stderr, "%lld,", static_cast<long long>(s));
-        }
-        std::fprintf(stderr, "\n");
-        if (copy_trace < 40) {
-          void* frames[12];
-          int n = backtrace(frames, 12);
-          backtrace_symbols_fd(frames, n, 2);
-        }
-      }
     } else {
       auto cast_kernel = cast_numeric_kernel(in.dtype(), out.dtype(), capabilities);
       if (!cast_kernel) {
