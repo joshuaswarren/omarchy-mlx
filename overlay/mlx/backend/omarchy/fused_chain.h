@@ -179,6 +179,17 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// RMSNorm prologue fold: the group's shared x is the output of a 2048-wide
+// bf16 fast::RMSNorm(|input|, |weight|) whose only readers are the group's
+// members. The kernel recomputes x per workgroup with the norm kernel's
+// reduction order and rounding, and materializes it into |x|.
+struct NormPlan {
+  array input;
+  array weight;
+  array x;
+  float eps;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -197,7 +208,8 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
+    OutgatePlan* outgate = nullptr,
+    NormPlan* norm = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,

@@ -729,6 +729,8 @@ struct GemvGroup {
   // is the deleted Multiply(Sigmoid(gate), out) output. The one
   // dispatch reads gate and out directly and rebuilds x per workgroup.
   std::optional<OutgatePlan> outgate;
+  // RMSNorm prologue fold: the shared x is a deleted fast::RMSNorm output.
+  std::optional<NormPlan> norm;
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1282,6 +1284,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     claimed.insert(sigmoid->id());
     claimed.insert(tail.id());
   }
+  std::unordered_map<std::uintptr_t, NormPlan> norm_plans;
+  if (norm_fold_enabled()) {
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RMSNorm)) || claimed.count(node.id()) ||
+          node.dtype() != bfloat16 || node.inputs().size() != 2 ||
+          node.ndim() < 2 || node.shape(-1) != 2048 || node.shape(-2) != 1 ||
+          node.size() != 2048 || node.inputs()[1].size() != 2048) {
+        continue;
+      }
+      float eps =
+          static_cast<const fast::RMSNorm&>(node.primitive()).state().second;
+      norm_plans.emplace(
+          node.id(), NormPlan{node.inputs()[0], node.inputs()[1], node, eps});
+    }
+  }
   for (size_t i = 1; i < tape.size(); ++i) {
     const array& first = tape[i - 1];
     const array& second = tape[i];
@@ -1441,6 +1458,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       if (worth && start == 0 && x_has_plan) {
         group.outgate = std::move(plan_it->second);
+      }
+      if (start == 0 && x_rows == 1 && !group.outgate &&
+          nodes.size() <= kQmmVecMultiWeights) {
+        if (auto norm_it = norm_plans.find(x_id); norm_it != norm_plans.end()) {
+          group.norm = norm_it->second;
+        }
       }
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
@@ -1880,6 +1903,12 @@ EagerFusionScope::~EagerFusionScope() {
 // M1 Max) but every o_proj workgroup redoes the 4096-element gate on
 // G13G (T8103), where decode dropped ~1.7% versus the wheel without it
 // (H147). MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.
+// RMSNorm prologue fold: off by default until the hardware A/B lands.
+bool norm_fold_enabled() {
+  const char* v = std::getenv("MLX_OMARCHY_NORM_PROLOGUE");
+  return v != nullptr && v[0] == '1' && v[1] == '\0';
+}
+
 bool outgate_fold_enabled() {
   const char* v = std::getenv("MLX_OMARCHY_OUTGATE_FOLD");
   if (v != nullptr && *v != '\0') {
@@ -2142,7 +2171,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
                         stream,
-                        group.outgate ? &*group.outgate : nullptr)
+                        group.outgate ? &*group.outgate : nullptr,
+                        group.norm ? &*group.norm : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {

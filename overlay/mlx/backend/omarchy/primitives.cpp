@@ -9448,7 +9448,11 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    NormPlan* norm) {
+  if (norm != nullptr && outgate != nullptr) {
+    return false;
+  }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -9494,7 +9498,25 @@ bool dispatch_quantized_gemv_group(
   }
   bool subgroup_ready = caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
-  if (outgate != nullptr) {
+  if (norm != nullptr) {
+    // The prologue deletes the RMSNorm that produced x (never evaluated):
+    // bf16 subgroup, one 2048-wide row, the 2x4 geometry the NORM build
+    // uses, and three more bindings than the plain multi.
+    if (encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3 ||
+        dtype != bfloat16 || !subgroup_ready ||
+        qmm_geometry().columns != 8u ||
+        norm->x.id() != x.id() || x.dtype() != dtype || x.ndim() < 2 ||
+        x.shape(-2) != 1 || x.shape(-1) != 2048 ||
+        norm->input.dtype() != dtype || norm->weight.dtype() != dtype ||
+        norm->input.size() != 2048 || norm->weight.size() != 2048 ||
+        !whole_dense(norm->input, norm->input.size()) ||
+        !whole_dense(norm->weight, norm->weight.size()) ||
+        !input_ready(norm->input, stream) ||
+        !input_ready(norm->weight, stream)) {
+      return false;
+    }
+  } else if (outgate != nullptr) {
     // The prologue deletes the Multiply that produced x (it was never
     // evaluated), so x's usual readiness checks do not apply: its
     // shape and dtype still describe the product. Needs the bf16
@@ -9523,7 +9545,7 @@ bool dispatch_quantized_gemv_group(
       x.offset() % x.itemsize() != 0) {
     return false;
   }
-  if (token_route && outgate != nullptr) {
+  if (token_route && (outgate != nullptr || norm != nullptr)) {
     return false;
   }
   const int k = x.shape(-1);
@@ -9681,6 +9703,10 @@ bool dispatch_quantized_gemv_group(
   // Contract satisfied: allocate every output, then bind. Unused
   // weight slots bind the first member's output so every binding the
   // shader declares is a valid buffer.
+  if (norm != nullptr) {
+    // The deleted RMSNorm's output materializes: workgroup 0 writes it.
+    norm->x.set_data(allocator().malloc(norm->x.nbytes()));
+  }
   if (outgate != nullptr) {
     // The deleted Multiply's output materializes: workgroup 0 of the
     // dispatch writes the product it recomputes, so retained
@@ -9744,7 +9770,8 @@ bool dispatch_quantized_gemv_group(
     }
   }
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
-  bindings[0] = binding(outgate != nullptr ? outgate->x : x);
+  bindings[0] = binding(
+      outgate != nullptr ? outgate->x : (norm != nullptr ? norm->x : x));
   const ComputeBinding filler = binding(members[0].node);
   for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
     uint32_t base = 1 + i * kQmmVecMultiBindingsPerWeight;
@@ -9775,7 +9802,16 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
-  auto kernel = outgate != nullptr
+  if (norm != nullptr) {
+    params.flags |= 524288u;  // flags bit 19, the RMSNorm prologue
+    params.alpha = norm->eps;
+    bindings[kQmmVecMultiBindings] = binding(norm->input);
+    bindings[kQmmVecMultiBindings + 1] = binding(norm->weight);
+    bindings[kQmmVecMultiBindings + 2] = binding(norm->x);
+  }
+  auto kernel = norm != nullptr
+      ? ComputeKernel::QmmVecQ4MultiNormBF16
+      : outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
       : token_route
       ? (rows > 4
