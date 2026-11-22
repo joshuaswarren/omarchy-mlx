@@ -180,6 +180,17 @@ class LaneTest(unittest.TestCase):
             self.assertFalse(ane_lane.h16_machine(Path(tmp)))
         self.assertFalse(ane_lane.h16_machine(Path("/nonexistent")))
 
+    def test_h16_machine_reads_a_top_level_aurora_node(self):
+        # Aurora's M4 Pro carries the ANE node at /ane@484000000, not under
+        # soc/ (#537 PR 497 blocker 1): the check must not depend on location.
+        with tempfile.TemporaryDirectory() as tmp:
+            node = Path(tmp) / "ane@484000000"
+            node.mkdir()
+            (node / "compatible").write_bytes(b"apple,t6041-ane\0")
+            self.assertTrue(ane_lane.h16_machine(Path(tmp)))
+            (node / "compatible").write_bytes(b"apple,t6000-ane\0")
+            self.assertFalse(ane_lane.h16_machine(Path(tmp)))
+
     def test_probe_never_opens_a_node_off_an_h16_machine(self):
         # On a lane 1/2 machine the ioctl would wake the ANE before the
         # driver rejects the number, so the device tree must gate the open.

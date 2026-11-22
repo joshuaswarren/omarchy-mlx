@@ -56,9 +56,19 @@ def h16_node(accel_dir: Path = Path("/dev/accel")) -> Path | None:
 
 
 def h16_machine(device_tree: Path = Path("/proc/device-tree")) -> bool:
-    """True when the device tree carries an H16 ANE node."""
+    """True when the device tree carries an H16 ANE node.
+
+    The node sits at soc/ane@* on upstream layouts and at ane@* top level on
+    Aurora (the J616s M4 Pro carries /ane@484000000): glob both, so the
+    answer does not depend on where the SoC hangs the node (#537).
+    """
     try:
-        for node in (Path(device_tree) / "soc").glob("ane@*"):
+        root = Path(device_tree)
+        for node in root.glob("soc/ane@*"):
+            compatible = (node / "compatible").read_bytes()
+            if H16_COMPATIBLE in compatible.split(b"\0"):
+                return True
+        for node in root.glob("ane@*"):
             compatible = (node / "compatible").read_bytes()
             if H16_COMPATIBLE in compatible.split(b"\0"):
                 return True
