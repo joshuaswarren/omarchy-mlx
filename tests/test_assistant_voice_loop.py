@@ -348,3 +348,89 @@ class LoudNever:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrepareModels(unittest.TestCase):
+    """--prepare: the one networked step. Fetch and verify every model, then exit."""
+
+    def run_prepare(self, synthesis_result=None):
+        from unittest import mock
+        calls = []
+
+        class Model:
+            def __init__(self, name, home, result):
+                self.name, self.home, self.result = name, home, result
+
+            def prepare(self, approve_download):
+                calls.append((self.name, approve_download))
+                return self.result
+
+            def close(self):
+                calls.append((self.name, "close"))
+
+        def refuse(*a, **k):
+            raise AssertionError("--prepare must not open the microphone, speaker or detector")
+
+        ok = {"verified": True, "path": "/models"}
+        with mock.patch("mlx_omarchy_assistant.recognition.Recognition",
+                        lambda home: Model("recognition", home, {"verified": True, "backend": "gpu"})), \
+                mock.patch("mlx_omarchy_assistant.synthesis.Synthesis",
+                           lambda home: Model("synthesis", home, synthesis_result or ok)), \
+                mock.patch("mlx_omarchy_assistant.wake_word.prepare",
+                           lambda home, model: calls.append(("wake", str(home), model)) or Path("w.onnx")), \
+                mock.patch("mlx_omarchy_assistant.vad.prepare",
+                           lambda home: calls.append(("vad", str(home))) or Path("v.onnx")), \
+                mock.patch("mlx_omarchy_assistant.wake_word.WakeWordDetector", refuse), \
+                mock.patch.object(voice_loop, "PipeWireSink", refuse), \
+                mock.patch.object(voice_loop, "microphone", refuse):
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err), unittest.mock.patch("sys.stdout", io.StringIO()):
+                code = voice_loop.main(["--home", "/models-home", "--wake-model", "hey_jarvis", "--prepare"])
+        return code, calls, err.getvalue()
+
+    def test_fetches_wake_vad_parakeet_and_kokoro_then_exits(self):
+        code, calls, _ = self.run_prepare()
+        self.assertEqual(code, 0)
+        self.assertIn(("wake", "/models-home", "hey_jarvis"), calls)
+        self.assertIn(("vad", "/models-home"), calls)
+        self.assertIn(("recognition", True), calls)
+        self.assertIn(("synthesis", True), calls)
+        self.assertIn(("recognition", "close"), calls)
+        self.assertIn(("synthesis", "close"), calls)
+
+    def test_an_unverified_model_fails_the_step_by_name(self):
+        code, _, err = self.run_prepare({"verified": False, "reason": "kokoro sha256 mismatch"})
+        self.assertEqual(code, 1)
+        self.assertIn("kokoro sha256 mismatch", err)
+
+
+class ModelFilesAreVerifiedNotTrusted(unittest.TestCase):
+    """Running a fetch twice is safe, and a half-written file is fetched again."""
+
+    def test_vad_refetches_a_truncated_file_and_skips_a_verified_one(self):
+        import hashlib
+        from mlx_omarchy_assistant import vad
+        good = b"silero" * 1000
+        digest = hashlib.sha256(good).hexdigest()
+        with tempfile.TemporaryDirectory() as home:
+            target = Path(home) / "vad" / "silero_vad.onnx"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(good[:100])  # an interrupted earlier run
+            fetched = []
+            vad.prepare(home, fetch=lambda url: fetched.append(url) or good, digest=digest)
+            self.assertEqual(target.read_bytes(), good)
+            self.assertEqual(len(fetched), 1)
+
+            def no_network(url):
+                raise AssertionError("a verified file must not be fetched again")
+            self.assertEqual(vad.prepare(home, fetch=no_network, digest=digest), target)
+
+    def test_vad_refuses_a_truncated_download_and_keeps_nothing(self):
+        import hashlib
+        from mlx_omarchy_assistant import vad
+        good = b"silero" * 1000
+        with tempfile.TemporaryDirectory() as home:
+            with self.assertRaises(vad.VadModelError):
+                vad.prepare(home, fetch=lambda url: good[:10],
+                            digest=hashlib.sha256(good).hexdigest())
+            self.assertEqual(sorted(p.name for p in (Path(home) / "vad").iterdir()), [])
