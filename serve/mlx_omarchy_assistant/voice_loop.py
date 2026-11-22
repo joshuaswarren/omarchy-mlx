@@ -148,10 +148,11 @@ def stream_reply(url: str, messages: list, *, model: str,
     _require_loopback(url)
     # A seeded request takes mlx_lm.server's single-request path instead of
     # its batch generator: warm first token ~70 ms sooner and the first
-    # sentence done ~2x faster on an M1 Max (jw16, 2026-11-22). The seed only
-    # fixes sampling; greedy output is unchanged.
+    # sentence done ~2x faster on an M1 Max (jw16, 2026-11-22). temperature 0
+    # pins greedy decoding (as coordinator.py does), so a server started with
+    # --temp above 0 cannot turn the seed into one fixed sampled reply.
     body = json.dumps({"model": model, "messages": messages, "stream": True,
-                       "seed": 0}).encode()
+                       "seed": 0, "temperature": 0}).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     with _OPENER.open(req, timeout=timeout) as resp:
         for raw in resp:
