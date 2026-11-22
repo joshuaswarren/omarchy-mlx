@@ -1085,6 +1085,37 @@ TEST_CASE("CrossEntropyVJP accepts strided inputs and a broadcast cotangent") {
       "strided cross entropy vjp host math");
 }
 
+TEST_CASE("CrossEntropyVJP matches host math on a >128-lane shape") {
+  // G18G guard: the cotangent/target loads run under the forward
+  // kernel's thread-0-guard pattern with a shared-memory broadcast.
+  // cols > 128 puts every lane's strided load loop past one iteration,
+  // so the broadcast values (not a stale per-lane read) drive the math.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const size_t rows = 3;
+  const size_t cols = 320;
+  auto logits_data = pattern(rows * cols, 79);
+  std::vector<int> targets{0, 137, 319};
+  auto cot_data = pattern(rows, 83);
+  array logits =
+      array(logits_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array targets_arr = array(targets.begin(), Shape{int(rows)}, int32);
+  array cot = array(cot_data.begin(), Shape{int(rows)}, float32);
+  auto fun = [&](const std::vector<array>& inputs) {
+    return std::vector<array>{
+        fast::cross_entropy(inputs[0], targets_arr, stream)};
+  };
+  auto [outputs, grads] = vjp(fun, std::vector<array>{logits}, {cot});
+  require_close(
+      flat(grads[0], stream),
+      host_cross_entropy_vjp(
+          widen(logits_data), targets, widen(cot_data), rows, cols),
+      1e-5,
+      "cross entropy vjp >128-lane host math");
+}
+
 TEST_CASE("native-order decode SDPA handles the strided Qwen KV cache") {
   if (!compute_available()) {
     return;
