@@ -60,6 +60,9 @@ jobs:
       # the collector steps above.
       - run: pytest tests -q
         if: runner.os == 'Linux'
+      - name: Check the Core ML overlay import contract
+        if: runner.os == 'Linux'
+        run: python -m pytest -q tests/coreml/test_import_contract.py
       # The --no-deps voice wheels (a few MB) against requirements-lock.in:
       # a version bump that adds a dependency fails here, not in a release.
       - name: Check the --no-deps voice wheels' dependencies are vendored
