@@ -164,6 +164,19 @@ struct CapabilityReport {
   // family's reported priorities and silently keeps the default when the
   // requested one is absent.
   bool queue_global_priority{false};
+  // VK_EXT_memory_priority with the memoryPriority feature and
+  // VK_EXT_pageable_device_local_memory with pageableDeviceLocalMemory:
+  // enabled only as a pair (pageable memory is what the priority hint
+  // acts on), matching lily's device init on Honeykrisp-M5. Lets a later
+  // change pin weight allocations resident under memory pressure.
+  bool memory_priority{false};
+  bool pageable_device_local_memory{false};
+  // VK_EXT_external_memory_host advertised. Probe only: the extension is
+  // not enabled until the change that imports host weight memory.
+  bool external_memory_host{false};
+  // VK_EXT_calibrated_timestamps advertised. Enabled only under
+  // MLX_OMARCHY_TRACE_DISPATCH, as lily gates it on trace::on().
+  bool calibrated_timestamps{false};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};
