@@ -29,6 +29,8 @@ import numpy as np
 SAMPLE_RATE = 16000
 CHUNK = 1280  # 80 ms, the wake detector's streaming step
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_ANY_END = re.compile(r"(?<=[.!?,;:])\s+")
+FIRST_CLAUSE_WORDS = 4  # the first clause goes to TTS early once it has this many words
 
 
 def chunks(pcm: bytes, size: int = CHUNK) -> Iterator[bytes]:
@@ -59,7 +61,9 @@ class Endpointer:
     first voiced chunk is dropped; a turn with no speech within
     listen_timeout_s, or longer than max_utterance_s, ends early."""
 
-    def __init__(self, detector, *, rms_floor: float, end_silence_s: float = 0.7,
+    # 1.0 s outlasts the pause between two sentences of one question (Kokoro:
+    # up to 0.72 s measured; 0.7 s cut those turns in half).
+    def __init__(self, detector, *, rms_floor: float, end_silence_s: float = 1.0,
                  listen_timeout_s: float = 5.0, max_utterance_s: float = 30.0):
         self._detector = detector
         self._floor = rms_floor
@@ -141,11 +145,30 @@ def stream_reply(url: str, messages: list, *, model: str,
                 yield delta
 
 
-def sentences(deltas) -> Iterator[str]:
-    """Group streamed text into sentences as soon as each one ends."""
-    pending = ""
+def _first_cut(text: str, min_words: int):
+    """The first piece worth speaking: a whole sentence, or a clause ending in
+    , ; or : once it has min_words words."""
+    for m in _ANY_END.finditer(text):
+        head = text[:m.start()]
+        if head.endswith((".", "!", "?")) or len(head.split()) >= min_words:
+            return head, text[m.end():]
+    return None
+
+
+def sentences(deltas, first_clause_words: int = FIRST_CLAUSE_WORDS) -> Iterator[str]:
+    """Group streamed text into sentences as soon as each one ends. The first
+    piece may be a clause, so speech starts before the first sentence ends."""
+    pending, first = "", True
     for delta in deltas:
         pending += delta
+        if first:
+            cut = _first_cut(pending, first_clause_words)
+            if cut is None:
+                continue
+            head, pending = cut
+            first = False
+            if head.strip():
+                yield head.strip()
         *done, pending = _SENTENCE_END.split(pending)
         for sentence in done:
             if sentence.strip():

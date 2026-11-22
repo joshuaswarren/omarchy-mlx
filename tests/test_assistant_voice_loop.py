@@ -139,6 +139,24 @@ class Offline(unittest.TestCase):
             with self.assertRaises(ValueError):
                 list(voice_loop.stream_reply(url, [], model="m"))
 
+    def test_the_first_clause_goes_to_tts_once_it_has_four_words(self):
+        self.assertEqual(list(voice_loop.sentences(["The capital", " of France,", " as you know, is Paris. Next."])),
+                         ["The capital of France,", "as you know, is Paris.", "Next."])
+
+    def test_a_short_first_clause_waits_for_the_sentence(self):
+        self.assertEqual(list(voice_loop.sentences(["Yes, it is.", " Done."])), ["Yes, it is.", "Done."])
+        self.assertEqual(list(voice_loop.sentences(["It costs 1,000 dollars today. Ok."])),
+                         ["It costs 1,000 dollars today.", "Ok."])
+
+    def test_a_pause_between_two_spoken_sentences_stays_one_turn(self):
+        # Kokoro leaves up to 0.72 s between the sentences of one question
+        # (measured on the hardware input); the default end silence must outlast it.
+        ep = voice_loop.Endpointer(PhraseEndDetector(), rms_floor=500)
+        source = tone(0.4) + silence(0.24) + tone(0.8, 6000) + silence(0.72) + tone(0.8, 6000) + silence(1.5)  # whole 80 ms chunks
+        turns = [u for u in map(ep.feed, voice_loop.chunks(source)) if u is not None]
+        self.assertEqual(len(turns), 1)
+        self.assertGreaterEqual(len(turns[0]) / 2 / RATE, 0.8 + 0.72 + 0.8)
+
     def test_sentences_split_on_terminal_punctuation_and_flush_the_rest(self):
         self.assertEqual(list(voice_loop.sentences(["Hi", " there. How", " are you? Fine"])),
                          ["Hi there.", "How are you?", "Fine"])
