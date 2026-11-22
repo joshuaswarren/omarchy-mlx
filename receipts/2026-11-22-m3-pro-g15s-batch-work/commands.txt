@@ -17,19 +17,26 @@ CMAKE_ARGS="$CMAKE_ARGS -DLAPACK_INCLUDE_DIRS=/usr/include/openblas -DBLAS_INCLU
 # 2. Release-build DRM scheduler ftrace sweep (base wheel +9d6f4b188, timeout 600s per budget)
 # Budgets: default (unset -> 5000), 8000, 10000, 15000, 20000, 30000, 40000, 60000, 80000, 0
 # Tracepoints: gpu_scheduler:drm_sched_job_{queue,run,done} (read-only tracefs, clock=mono, buffer=65536 KB)
-MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
+T=/sys/kernel/tracing
+sudo sh -c "echo 0 > $T/tracing_on; echo > $T/trace; echo mono > $T/trace_clock; echo 65536 > $T/buffer_size_kb; echo > $T/set_event; \
+  for e in queue run done; do echo 1 > $T/events/gpu_scheduler/drm_sched_job_\$e/enable; done; echo 1 > $T/tracing_on"
+# Default arm: env -u MLX_OMARCHY_BATCH_WORK ...; swept arms: env MLX_OMARCHY_BATCH_WORK=<w> ...
+env MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-base]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_jobs.py \
-  [models]/<model> 64 [wheel-base] [checkout]
-python3 receipts/2026-11-22-m3-pro-g15s-batch-work/tools/parse_ftrace.py <label>.drv <label>.trace
+  [models]/<model> 64 [wheel-base] [checkout] > [out]/<label>.drv 2>&1
+sudo sh -c "echo 0 > $T/tracing_on; cat $T/trace" > [out]/<label>.trace
+sudo sh -c "echo 0 > $T/events/gpu_scheduler/enable; echo > $T/trace; echo local > $T/trace_clock"
+# Parse only the benchmark PID (from the .drv PID line); other jobs count as foreign_jobs_in_window (0 in every window)
+python3 -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/parse_ftrace.py [out]/<label>.drv [out]/<label>.trace > [out]/<label>.json
 
-# 3. Balanced-order decode sweep (base wheel +9d6f4b188, 3 balanced rounds: fwd/rev/fwd, timeout 300s per run)
+# 3. Balanced-order decode sweep (base wheel +9d6f4b188, 3 balanced rounds: fwd/rev/fwd, timeout 300s per run; default arm uses env -u MLX_OMARCHY_BATCH_WORK)
 # Qwen3.8-2B 4-bit (128 tokens) and Qwen3-4B-Instruct-2507 4-bit (96 tokens)
-MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
+env MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-base]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_sub.py \
   [models]/<model> [out]/<tag>.json <tag> <128|96> [wheel-base] [checkout]
 
 # 4. Balanced score_bench A/B (base wheel +9d6f4b188, default vs 15000, 2 balanced rounds, timeout 600s per run)
-MLX_OMARCHY_BATCH_WORK=<unset|15000> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
+env MLX_OMARCHY_BATCH_WORK=15000 (or env -u MLX_OMARCHY_BATCH_WORK for the default arm) MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-base]/bin/python receipts/2026-10-09-linux-vs-macos/score_bench.py \
   --model [models]/<model> --prompts receipts/2026-10-09-linux-vs-macos/prompts.jsonl \
   --label <tag> --out [out]/<tag>.json --warmup 2 --decode-new 64 --decode-limit 5 --decode-passes 2 --pf-tokens 512 --pf-reps 5

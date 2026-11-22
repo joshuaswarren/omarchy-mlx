@@ -53,3 +53,8 @@ device: Device(gpu, 0) version: 0.32.4.dev202611220202+9d6f4b188
   "expected_wheel": "[dist-head]/mlx_omarchy-0.32.4.dev202611220234+bb10aab9a-cp314-cp314-linux_aarch64.whl"
 }
 device: Device(gpu, 0) version: 0.32.4.dev202611220234+bb10aab9a
+
+=== two-build stamp assertion (AGENTS.md Test rules) ===
+base: stamp 0.32.4.dev202611220202+9d6f4b188 want +9d6f4b188 verified=match version_match=True
+head: stamp 0.32.4.dev202611220234+bb10aab9a want +bb10aab9a verified=match version_match=True
+stamp pair: base +9d6f4b188 != head +bb10aab9a: PASS

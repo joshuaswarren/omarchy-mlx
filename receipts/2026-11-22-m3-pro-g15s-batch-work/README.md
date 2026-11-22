@@ -28,19 +28,19 @@ Full SHA-256 sums are in `env/model-hashes.txt`:
 
 ## Verdict
 
-**15000.** Following `encoder.h` and the G16S (`receipts/2026-11-15-m4-pro-g16s-batch-work`) and G13G (`receipts/2026-11-21-g13g-batch-work-20000`) release-build DRM scheduler method, 15000 is the largest swept budget that:
+**15000.** Following the rule in `encoder.h` and the G16S (`receipts/2026-11-15-m4-pro-g16s-batch-work`) and G13G (`receipts/2026-11-21-g13g-batch-work-20000`) release-build DRM scheduler method, 15000 is the largest swept budget that:
 
 1. Keeps Qwen3-4B-Instruct-2507 decode submission p50 inside the 2-6 ms smooth band (**3.98 ms**, p99 **4.31 ms**, max **4.62 ms**; Qwen3.8-2B decode p50 **3.09 ms**, p99 **3.84 ms**, max **3.91 ms**).
-2. Keeps the all-submissions (prefill + decode) tail at the 5000 single-dispatch prefill floor on Qwen3-4B (**45.17 ms** p99 / **45.52 ms** max against 5000's **44.80 / 44.89 ms**) and strictly under 40 ms on Qwen3.8-2B (**38.42 ms** p99 / **38.51 ms** max, 0 submissions over 40 ms), with zero submissions near the ~78 ms stutter threshold of issue #19.
+2. Keeps the all-submissions (prefill + decode) tail at the 5000 single-dispatch prefill floor on Qwen3-4B, where one prefill dispatch that runs whole at any budget already puts the 5000 tail above ~40 ms (35 submissions over 40 ms at every budget, 5000 included), so the `encoder.h` floor rule for G16S and G15S applies (**45.17 ms** p99 / **45.52 ms** max against 5000's **44.80 / 44.89 ms**) and strictly under 40 ms on Qwen3.8-2B (**38.42 ms** p99 / **38.51 ms** max, 0 submissions over 40 ms), with zero submissions near the ~78 ms stutter threshold of issue #19.
 
-Higher budgets violate the tail or smoothness rules:
+The neighbouring budgets fail:
 - **20000** merges prefill dispatches and raises Qwen3-4B all-submissions p99/max by +20 ms to **65.14 / 65.22 ms**, and pushes Qwen3.8-2B past 40 ms (**43.85 / 44.46 ms**, 23 submissions over 40 ms) for +0.7% extra decode.
 - **30000** breaks both the 6 ms decode p50 band (**7.40 ms**) and the 78 ms stutter threshold (**80.08 ms** max).
 - **10000** merges a neighboring dispatch into prefill (**56.61 / 57.60 ms** on 4B, **41.72 / 41.85 ms** on 2B), worse on both throughput and tail than 15000 (the same split-boundary effect observed on G16S in PR #454).
 
 ## Release-build submission GPU time (DRM scheduler ftrace)
 
-Measured on the base Release wheel (`0.32.4.dev202611220202+9d6f4b188`, `verified=match`, `libmlx.so=sha256:a204d1b156bbd7f7`) using read-only kernel tracepoints `gpu_scheduler:drm_sched_job_{queue,run,done}` (`tools/decode_jobs.py` + `tools/parse_ftrace.py`, 8-token warmup, then ~540-token prefill + 64 greedy decode tokens per budget). `busy = done - max(run, prev_done)` in ms. Zero foreign GPU jobs appeared in any window (`all_jobs_in_window == python_jobs_in_window`). Raw ftrace files are excluded from the repository because tracefs records all host processes; parsed per-budget metrics are in `runs/submission-gpu-time.json`.
+Measured on the base Release wheel (`0.32.4.dev202611220202+9d6f4b188`, `verified=match`, `libmlx.so=sha256:a204d1b156bbd7f7`) using read-only kernel tracepoints `gpu_scheduler:drm_sched_job_{queue,run,done}` (`tools/decode_jobs.py` + `tools/parse_ftrace.py`, 8-token warmup, then ~540-token prefill + 64 greedy decode tokens per budget). `busy = done - max(run, prev_done)` in ms. The parser measures only jobs queued by the benchmark PID; zero foreign GPU jobs appeared in any window (`foreign_jobs_in_window` 0). Raw ftrace files are excluded from the repository because tracefs records all host processes; parsed per-budget metrics are in `runs/submission-gpu-time.json`.
 
 Provenance: `mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match harness=9d6f4b188 core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7`
 
@@ -105,6 +105,8 @@ Greedy token IDs are identical across all 30 runs of Qwen3.8-2B (`cdf6b6529b0aa3
 | Qwen3-4B-2507 4-bit | Base `+9d6f4b188` (default 5000, 2 rounds) | 44.23 / 44.24 (mean 44.23) | 0.0% | 195.38 / 195.44 | `67c191eeffa36bf9` |
 | Qwen3-4B-2507 4-bit | Base `+9d6f4b188` (`BATCH_WORK=15000`, 2 rounds) | 47.07 / 47.11 (mean 47.09) | +6.5% | 196.02 / 195.93 | `67c191eeffa36bf9` |
 | Qwen3-4B-2507 4-bit | Head `+bb10aab9a` (default unset -> 15000) | 47.08 (47.02-47.26) | +6.4% | 196.08 | `67c191eeffa36bf9` |
+
+Each record in `runs/score-bench-ab.json` carries its leg's `dist_version`, `verified` and wheel provenance line (base: `libmlx.so=sha256:a204d1b156bbd7f7`; head: `libmlx.so=sha256:1570d19a9b204e54`) and the `score_bench.py` sha256. Peak memory: 1.49 GB (Qwen3.8-2B) and 2.54 GB (Qwen3-4B-2507) in every arm.
 
 ## Two-build head-vs-base A/B (`MLX_OMARCHY_BATCH_WORK` unset)
 

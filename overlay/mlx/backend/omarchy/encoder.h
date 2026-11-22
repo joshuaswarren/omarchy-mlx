@@ -135,22 +135,25 @@ inline int batch_node_budget() {
 // G17P (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p) it must also
 // keep the p99 at or under ~40 ms (half the ~78 ms stutter threshold) with
 // no sampled submission reaching 78 ms, so the tail cannot hitch the
-// desktop and not only the median does; the other rows were picked before
-// that tail rule and carry their own tail data where the receipt has it:
+// desktop and not only the median does. Where one prefill dispatch
+// already holds the 5000 tail above ~40 ms (it runs whole at any budget),
+// the tail must stay at that 5000 floor instead (G16S Qwen3-8B, G15S
+// Qwen3-4B). The other rows were picked before that tail rule and carry
+// their own tail data where the receipt has it:
 // receipts/2026-10-02-submission-cap-19 (G14C),
 // receipts/2026-10-12-submission-cap-calibration (G13C),
 // receipts/2026-11-21-g13g-batch-work-20000 (G13G, tail rule),
 // receipts/2026-11-13-g18g-batch-work (G18G),
-// receipts/2026-11-15-m4-pro-g16s-batch-work (G16S),
-// receipts/2026-11-22-m3-pro-g15s-batch-work (G15S) and
+// receipts/2026-11-15-m4-pro-g16s-batch-work (G16S, 5000 floor),
+// receipts/2026-11-22-m3-pro-g15s-batch-work (G15S, 5000 floor) and
 // receipts/2026-11-13-g14c-batch-work (G14C 100000: GPU time per
 // submission p50 3.9 ms, p99 6.3 ms, max 8.6 ms, queue interval p50
 // 4.2 ms; 0 frames over 33.3 ms beside decode, not tested on a real
 // compositor). Board codes key the rows like the direct-matmul routes
 // above (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1
-// Pro, G14C M2 Max, G14G M2, G15S M3 Pro, G16S M4 Pro, G17P A18 Pro, G18G M6. A single
-// dispatch whose group count alone exceeds the budget still runs whole:
-// splitting happens between dispatches. Copies
+// Pro, G14C M2 Max, G14G M2, G15S M3 Pro, G16S M4 Pro, G17P A18 Pro,
+// G18G M6. A single dispatch whose group count alone exceeds the budget
+// still runs whole: splitting happens between dispatches. Copies
 // and fills are not counted; the node and byte budgets keep those
 // batches bounded. MLX_OMARCHY_BATCH_WORK=<groups> overrides the table;
 // =0 turns the work cap off (node and byte budgets still apply).
@@ -173,7 +176,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13G", 20000},  // 13-inch M1, Mesa 69bde15340, v0.7.49: decode +4.0% (Qwen3.8-2B, 16 -> 7 submissions per token) and +1.3% (Qwen3-4B) against 8000, greedy ids identical; Qwen3-4B submission p50 20.2 ms, p99 24.1 ms, max 24.5 ms (40000 reached p99 45.5 ms) (receipts/2026-11-21-g13g-batch-work-20000)
     {"G14C", 100000},  // M2 Max: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, first 64 ids identical, 0 frames over 33.3 ms beside decode; largest budget under 6 ms p50 on GPU time and queue interval with margin
     {"G14G", 8000},  // M2 (13-inch, 8 GB, 8 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 3.64 ms, p99 37.9 ms, max 47.8 ms; 10000 raised the p99 to 48.3 ms (max 56.3); decode +2.7% 2B and +2.7% 4B against 5000, tokens identical (same receipt, /tail)
-    {"G15S", 15000},  // M3 Pro (14-inch, 18 GB, 14 GPU cores), Borealis Mesa a196911147: decode +6.6% (Qwen3.8-2B, 12 -> 4 submits/token; score_bench +6.5%) and +5.3% (Qwen3-4B-2507, 20 -> 8 submits/token; score_bench +6.5%) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B decode p50 3.98 ms / p99 4.31 ms / max 4.62 ms, all submissions p99 45.17 ms / max 45.52 ms (5000 floor: 44.80 / 44.89 ms), Qwen3.8-2B all p99 38.42 ms / max 38.51 ms; 20000 raised 4B all-submissions p99 to 65.14 ms (2B to 43.85 ms) and 30000 reached 80.08 ms with 7.40 ms decode p50 (receipts/2026-11-22-m3-pro-g15s-batch-work)
+    {"G15S", 15000},  // M3 Pro (14-inch, 18 GB, 14 GPU cores), Borealis Mesa a196911147: decode +6.6% (Qwen3.8-2B, 12 -> 4 submissions per token; score_bench +6.5%) and +5.3% (Qwen3-4B-2507, 20 -> 8 submissions per token; score_bench +6.5%) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B decode p50 3.98 ms / p99 4.31 ms / max 4.62 ms, all submissions p99 45.17 ms / max 45.52 ms (5000 floor: 44.80 / 44.89 ms), Qwen3.8-2B all p99 38.42 ms / max 38.51 ms (under 40 ms); 20000 raised 4B all-submissions p99 to 65.14 ms (2B to 43.85 ms) and 30000 reached 80.08 ms with 7.40 ms decode p50 (receipts/2026-11-22-m3-pro-g15s-batch-work)
     {"G16S", 15000},  // M4 Pro, Borealis Mesa 05ddb00f5c, 2x4 decode Qmm geometry: decode +13.1% (Qwen3-4B), +7.7% (Qwen3-8B), +17.7% (granite-4.0-1b) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B p50 2.5 ms decode, p99 27.8 ms and max 28.5 ms over all submissions (5000: 27.2 / 28.0), Qwen3-8B max 54.7 ms (5000: 54.2); 30000 reached 94.6 ms (receipts/2026-11-15-m4-pro-g16s-batch-work)
     {"G17C", 100000},  // M5 Max, Borealis Mesa: initial value matching G14C (same Max class) pending calibration on M5
     {"G17P", 5000},  // A18 Pro (MacBook Neo, 8 GB, 5 GPU cores), Borealis Mesa c208afc352: equals the fallback. Qwen3-4B submission p50 4.35 ms, p99 24.8 ms, max 47.2 ms; 8000 would raise the p99 to 48.9 ms (same receipt)

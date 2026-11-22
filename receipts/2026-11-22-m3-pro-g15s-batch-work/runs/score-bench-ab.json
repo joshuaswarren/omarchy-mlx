@@ -137,7 +137,11 @@
       "load1_end": 0.1484375,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-2b-default-r2": {
     "label": "sb-2b-default-r2",
@@ -277,7 +281,11 @@
       "load1_end": 0.435546875,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-2b-15000-r1": {
     "label": "sb-2b-15000-r1",
@@ -417,7 +425,11 @@
       "load1_end": 0.31689453125,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-2b-15000-r2": {
     "label": "sb-2b-15000-r2",
@@ -557,7 +569,11 @@
       "load1_end": 0.4013671875,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "head-2b-default": {
     "label": "head-default-2b",
@@ -697,7 +713,11 @@
       "load1_end": 0.52685546875,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220234+bb10aab9a"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220234+bb10aab9a",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-4b-default-r1": {
     "label": "sb-4b-default-r1",
@@ -837,7 +857,11 @@
       "load1_end": 0.26708984375,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-4b-default-r2": {
     "label": "sb-4b-default-r2",
@@ -977,7 +1001,11 @@
       "load1_end": 0.298828125,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-4b-15000-r1": {
     "label": "sb-4b-15000-r1",
@@ -1117,7 +1145,11 @@
       "load1_end": 0.20556640625,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "base-4b-15000-r2": {
     "label": "sb-4b-15000-r2",
@@ -1257,7 +1289,11 @@
       "load1_end": 0.162109375,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220202+9d6f4b188",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220202+9d6f4b188 mx=0.32.4.dev202611220202+9d6f4b188 verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:a204d1b156bbd7f7",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   },
   "head-4b-default": {
     "label": "head-default-4b",
@@ -1397,6 +1433,10 @@
       "load1_end": 0.35498046875,
       "mlx_lm": "0.31.3",
       "mlx_dist": "mlx-omarchy 0.32.4.dev202611220234+bb10aab9a"
-    }
+    },
+    "dist_version": "0.32.4.dev202611220234+bb10aab9a",
+    "verified": "match",
+    "provenance": "mlx-omarchy 0.32.4.dev202611220234+bb10aab9a mx=0.32.4.dev202611220234+bb10aab9a verified=match core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:1570d19a9b204e54",
+    "harness_score_bench_sha256": "e019ba0175ac37fe2540e7e5568f37686fde7fd282d5b96b0e4037f12c46bf62"
   }
 }

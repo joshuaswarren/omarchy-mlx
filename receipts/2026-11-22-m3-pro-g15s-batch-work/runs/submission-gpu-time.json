@@ -6,6 +6,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 1513,
     "python_jobs_in_window": 1513,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -85,6 +86,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 1087,
     "python_jobs_in_window": 1087,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -164,6 +166,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 892,
     "python_jobs_in_window": 892,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -243,6 +246,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 662,
     "python_jobs_in_window": 662,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -322,6 +326,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 496,
     "python_jobs_in_window": 496,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -401,6 +406,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 332,
     "python_jobs_in_window": 332,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -480,6 +486,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 267,
     "python_jobs_in_window": 267,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -559,6 +566,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 168,
     "python_jobs_in_window": 168,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -638,6 +646,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 168,
     "python_jobs_in_window": 168,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -717,6 +726,7 @@
     "ids_sha256": "7df47e123edd716cbe3aa72ff1371c120c19aa48f1f98d13f9e991cf403f300a",
     "all_jobs_in_window": 79,
     "python_jobs_in_window": 79,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -796,6 +806,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 855,
     "python_jobs_in_window": 855,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -875,6 +886,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 585,
     "python_jobs_in_window": 585,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -954,6 +966,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 497,
     "python_jobs_in_window": 497,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1033,6 +1046,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 348,
     "python_jobs_in_window": 348,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1112,6 +1126,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 260,
     "python_jobs_in_window": 260,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1191,6 +1206,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 184,
     "python_jobs_in_window": 184,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1270,6 +1286,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 169,
     "python_jobs_in_window": 169,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1349,6 +1366,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 94,
     "python_jobs_in_window": 94,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1428,6 +1446,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 88,
     "python_jobs_in_window": 88,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {
@@ -1507,6 +1526,7 @@
     "ids_sha256": "3bd0eae30cd94543fec17a0da4642d9c5a603712068b223c1b690d00ba5d7955",
     "all_jobs_in_window": 72,
     "python_jobs_in_window": 72,
+    "foreign_jobs_in_window": 0,
     "phases": {
       "all": {
         "busy_ms": {

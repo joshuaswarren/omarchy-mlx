@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Parse DRM scheduler ftrace files (gpu_scheduler:drm_sched_job_{queue,run,done})
-for the target python PID only, computing both busy = done - max(run, prev_done)
+for the benchmark PID only (from the .drv PID line), computing both busy = done - max(run, prev_done)
 (PR #454 / G16S formula) and raw run->done duration (PR #575 / G13G formula),
-split into all / prefill / decode phases. Never emits other processes.
+split into all / prefill / decode phases. Jobs from any other process are
+counted as foreign_jobs_in_window and never measured.
 
 Usage: parse_ftrace.py <drv_file> <trace_file>
 """
@@ -51,16 +52,17 @@ with open(trace_path, "r", errors="replace") as f:
             if rm:
                 j["ring"] = rm.group(1)
 
-# Filter to jobs queued by our python process (or comm starting with python if pid absent)
-# Note: drm_sched_job_queue runs in the submitting thread, so its pid may be a worker thread
-# inside the python process; match comm starting with "python" (or thread comm inside python).
-# Check how comms look in the window first.
+# Keep only jobs queued by the benchmark process (its PID from the .drv file).
+# Every other job in the window, any process name, counts as foreign: a
+# window with foreign jobs shares the GPU and its tail is not this budget's.
 all_in_win = [
     j for j in jobs.values()
     if {"queue", "run", "done", "comm"} <= j.keys() and t0 <= j["queue"] <= t1
 ]
+if target_pid is None:
+    sys.exit("parse_ftrace: no PID line in %s" % drv_path)
 py = sorted(
-    [j for j in all_in_win if j["comm"].startswith("python") or j.get("pid") == target_pid],
+    [j for j in all_in_win if j.get("pid") == target_pid],
     key=lambda j: j["done"],
 )
 prev = 0.0
@@ -98,6 +100,7 @@ out = {
     "ids_sha256": ids_sha,
     "all_jobs_in_window": len(all_in_win),
     "python_jobs_in_window": len(py),
+    "foreign_jobs_in_window": len(all_in_win) - len(py),
     "phases": {
         "all": {
             "busy_ms": stats(py, "busy_ms"),
