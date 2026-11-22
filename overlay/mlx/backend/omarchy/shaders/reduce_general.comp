@@ -445,9 +445,9 @@ bool load_truthy(uint index) {
 // Per-lane axis_data reads inside the dim decode loops misread extents
 // for part of the workgroup on matrix_k != 0 dispatches.
 void stage_axis_metadata() {
-  // The host refuses collapsed ranks above 256, so all packed words fit.
   if (params.matrix_k != 0u && gl_LocalInvocationIndex == 0u) {
-    for (uint i = 0u; i < 2u * params.matrix_k; ++i) {
+    uint staged = min(2u * params.matrix_k, 512u);
+    for (uint i = 0u; i < staged; ++i) {
       sh_axis_meta[i] = axis_data.values[i];
     }
   }
@@ -455,7 +455,10 @@ void stage_axis_metadata() {
 }
 
 uint axis_meta(uint index) {
-  return sh_axis_meta[index];
+  if (index < min(2u * params.matrix_k, 512u)) {
+    return sh_axis_meta[index];
+  }
+  return axis_data.values[index];
 }
 
 uint axis_extent(uint index) {
