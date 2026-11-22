@@ -86,6 +86,7 @@ SERIES_PATCHES=(
   mlx-lm-kv-presize.patch
   mlx-lm-speculative-verify.patch
   mlx-lm-gdn-verify-seq.patch
+  mlx-lm-spec-split-rows.patch
   mlx-lm-kv-host-offset.patch
 )
 series_already_applied() {
@@ -344,6 +345,11 @@ apply mlx-lm-speculative-verify.patch
 # passes (MLX_OMARCHY_GDN_SEQ_ROWS, set by _omarchy_verify_pass) feed GDN layers one
 # token at a time through the S == 1 route. Both series.
 apply mlx-lm-gdn-verify-seq.patch
+# Attention rows in a verify pass: the default multi-row SDPA route drifts from plain
+# greedy ids as the context grows; the split-K rows route (MLX_OMARCHY_SDPA_SPLIT_ROWS,
+# q_len 2..16 only) is bit-equal to single-token decode. speculative_generate_step sets
+# it once per process when unset (never per pass, #452). Both series.
+apply mlx-lm-spec-split-rows.patch
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
