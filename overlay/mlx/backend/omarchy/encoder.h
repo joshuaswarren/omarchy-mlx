@@ -176,7 +176,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G17C", 100000},  // M5 Max, Borealis Mesa: initial value matching G14C (same Max class) pending calibration on M5
     {"G17P", 5000},  // A18 Pro (MacBook Neo, 8 GB, 5 GPU cores), Borealis Mesa c208afc352: equals the fallback. Qwen3-4B submission p50 4.35 ms, p99 24.8 ms, max 47.2 ms; 8000 would raise the p99 to 48.9 ms (same receipt)
     {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
-    {"RTX 5060 Ti", 40000},  // NVIDIA GeForce RTX 5060 Ti 16 GB on Thunderbolt, opt-in VRAM activations, no display attached: one command buffer per Qwen3-4B decode token; steady decode +7.7% against 5000 (104.91 vs 97.43 tok/s), ids identical (receipts/2026-11-21-rtx-5060ti-batch-work)
+    {"RTX 5060 Ti", 40000},  // NVIDIA RTX 5060 Ti 16 GB, driver 615.78.08, opt-in VRAM activations, no display attached: one command buffer per Qwen3-4B decode token, decode +5.8% at 256 tokens (+8.2% from token 6) against 5000, ids identical; decode buffer 9.68 ms p50, load/prefill p99 unchanged at 17.4 ms (receipts/2026-11-21-rtx-5060ti-batch-work)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
 
