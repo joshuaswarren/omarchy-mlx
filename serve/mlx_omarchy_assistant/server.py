@@ -43,6 +43,41 @@ def voice_ready(recognition, synthesis_state):
     return bool(recognition.get("ready")) and synthesis_state == "ready"
 
 
+class SpeechGate:
+    """Bounded turn queue over the single speech slot (issue: mid-dictation
+    HTTP 409, bc-voice-followup-1903). A turn arriving while another is active
+    waits up to `wait_s`; while it waits it barges in on an in-flight TTS by
+    setting the active cancel event once, so playback yields promptly. If the
+    slot never frees within the bound the caller still reports busy (same
+    message as before), never hangs."""
+
+    POLL_S = 0.02
+
+    def __init__(self, slot_lock, wait_s=10.0):
+        self.slot_lock = slot_lock
+        self.wait_s = wait_s
+        self._barge_mutex = threading.Lock()
+
+    def acquire(self, active_kind=None, active_cancel=None):
+        deadline = time.monotonic() + self.wait_s
+        barged = False
+        while True:
+            if self.slot_lock.acquire(blocking=False):
+                return True
+            if not barged:
+                with self._barge_mutex:
+                    if not barged and active_kind == "tts" and active_cancel is not None:
+                        active_cancel.set()  # barge-in: stop the active playback
+                        barged = True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(remaining, self.POLL_S))
+
+    def release(self):
+        self.slot_lock.release()
+
+
 class AssistantServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = True
@@ -70,6 +105,7 @@ class AssistantServer(ThreadingHTTPServer):
         self.audio_identity: tuple[str, str] | None = None
         self.audio_cancel = threading.Event()
         self.audio_lock = threading.Lock()
+        self.speech_turns = SpeechGate(self.audio_lock)
         self.wake = None
         super().__init__(address, Handler)
         self.origin = f"http://127.0.0.1:{self.server_port}"
@@ -632,7 +668,7 @@ class Handler(BaseHTTPRequestHandler):
         # Preview: synthesise one fixed sentence in the current voice and
         # hand the PCM16LE back to the client (single JSON envelope, not
         # SSE) so a one-shot playback does not need a conversation.
-        if not app.audio_lock.acquire(blocking=False):
+        if not app.speech_turns.acquire(app.audio_kind, app.audio_cancel):
             raise BusyError("Another speech operation is active")
         try:
             if not app.manager.status().get("voice", {}).get("requested"):
@@ -668,7 +704,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "encoding": "pcm16le",
                                     "data": encoded})
         finally:
-            app.audio_lock.release()
+            app.speech_turns.release()
 
     def _speech(self, parsed):
         """POST /api/transcribe (recognition) and /api/speak (read aloud
@@ -676,7 +712,7 @@ class Handler(BaseHTTPRequestHandler):
         app = self.server
         path = unquote(urlsplit(self.path).path)
         raw = self._body(binary=path == "/api/transcribe")
-        if not app.audio_lock.acquire(blocking=False):
+        if not app.speech_turns.acquire(app.audio_kind, app.audio_cancel):
             raise BusyError("Another speech operation is active")
         grant = None
         try:
@@ -701,7 +737,7 @@ class Handler(BaseHTTPRequestHandler):
                 grant.release()
             app.audio_identity = None
             app.audio_kind = None
-            app.audio_lock.release()
+            app.speech_turns.release()
 
     def _read_aloud(self, app, raw):
         """The /api/speak half of _speech: validate visible answer text,
