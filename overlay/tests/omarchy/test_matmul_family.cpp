@@ -6225,6 +6225,23 @@ TEST_CASE("gather_qmm fp subgroup decode defaults off on G18G") {
   CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
 }
 
+TEST_CASE("gather_qmm affine and q3 subgroup decodes default off on G18G") {
+  // mesa#737: every gather_qmm_sub.comp route runs a 256-lane workgroup
+  // whose subgroup-uniform SSBO reads return 0 from lanes 128-255 on
+  // G18G. The fp route's wrong output is measured (#655); the affine
+  // (use_sub) and 3-bit (use_sub_q3) gates share the kernel mechanism,
+  // so the same default applies.
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "1", 1);
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+}
+
 TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain") {
   if (!compute_available()) {
     return;
