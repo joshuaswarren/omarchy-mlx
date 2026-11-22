@@ -43,6 +43,7 @@ SCHEMA = 'omarchy-mlx-qualification-v4'
 WORKLOAD = {'model': MODEL, 'revision': REV, 'prompt': PROMPT,
             'tokens': TOKENS, 'warmup': 4, 'temp': 0, 'seed': 0}
 PACKAGED_VULKAN_DIR = '/usr/lib/omarchy-mlx/vulkan'
+# Copied from serve/mlx_omarchy_paths.py, not imported: the sealed kit runs without serve/.
 PACKAGED_ICD_NAMES = ('borealis_icd.aarch64.json', 'honeykrisp_icd.aarch64.json')
 
 
