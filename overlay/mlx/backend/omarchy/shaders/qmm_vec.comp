@@ -131,8 +131,15 @@ uint16_t bf16_store(float value) {
 // instead of reading the product; every other variant reads input_x.
 #if defined(QMM_VEC_OUTGATE)
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#elif defined(QMM_VEC_NORM)
+#define OUTGATE_XWORDS(x_base) norm_x[(x_base) / 8u]
 #else
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
+#endif
+#if defined(QMM_VEC_NORM) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI) || \
+     defined(QMM_VEC_OUTGATE) || defined(QMM_VEC_TOKENS) || ROWS_PER_SLOT < 2)
+#error "QMM_VEC_NORM builds on the bf16 subgroup single-token multi column"
 #endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
@@ -233,6 +240,86 @@ uvec4 outgate_quad(uint quad_index) {
   return m;
 }
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#endif
+#if defined(QMM_VEC_NORM)
+// RMSNorm prologue (flags bit 19): x = RMSNorm(norm_in, norm_w) for a
+// 2048-wide bf16 row, the exact arithmetic, reduction order and
+// rounding of fast_norm_apple.comp, whose dispatch the prologue
+// deletes. That kernel sums squares as 256 threads x 8 contiguous
+// values (precise, no FMA), subgroupAdd within each of its 8 subgroups,
+// then subgroupAdd over the 8 partials in subgroup 0. This workgroup
+// replays those 8 virtual subgroups in rounds over its own subgroups,
+// each lane loading the values its virtual thread loads, so every
+// subgroupAdd sees the same values in the same lanes and the result is
+// bit-identical; then x = bf16(v * (norm * w)) per element. Every
+// workgroup recomputes the same bits; workgroup 0 stores the normed row
+// so retained references to the deleted norm's output stay valid
+// (bindings 25-27, each starting at element 0; params.alpha is eps).
+layout(set = 0, binding = 25, std430) readonly buffer NormIn {
+  uvec4 values[];
+} norm_in;
+layout(set = 0, binding = 26, std430) readonly buffer NormWeight {
+  uvec4 values[];
+} norm_w;
+layout(set = 0, binding = 27, std430) writeonly buffer NormOut {
+  uvec4 values[];
+} norm_out;
+shared uvec4 norm_x[256];
+shared float norm_partial[8];
+shared float norm_total;
+float norm_lane(uint word, bool high) {
+  return uintBitsToFloat(high ? (word & 0xFFFF0000u) : (word << 16u));
+}
+uint norm_word(uint xw, uint ww, float norm) {
+  precise float wl = norm * norm_lane(ww, false);
+  precise float rl = norm_lane(xw, false) * wl;
+  precise float wh = norm * norm_lane(ww, true);
+  precise float rh = norm_lane(xw, true) * wh;
+  return uint(bf16_store(rl)) | (uint(bf16_store(rh)) << 16u);
+}
+void norm_prologue(float eps) {
+  uint sub = gl_LocalInvocationID.x / LANES;
+  uint lane = gl_LocalInvocationID.x % LANES;
+  for (uint v = sub; v < 8u; v += uint(SLOTS_PER_GROUP)) {
+    uvec4 q = norm_in.values[v * LANES + lane];
+    precise float sq = 0.0;
+    float e;
+    e = norm_lane(q.x, false); sq += e * e;
+    e = norm_lane(q.x, true);  sq += e * e;
+    e = norm_lane(q.y, false); sq += e * e;
+    e = norm_lane(q.y, true);  sq += e * e;
+    e = norm_lane(q.z, false); sq += e * e;
+    e = norm_lane(q.z, true);  sq += e * e;
+    e = norm_lane(q.w, false); sq += e * e;
+    e = norm_lane(q.w, true);  sq += e * e;
+    float part = subgroupAdd(sq);
+    if (lane == 0u) {
+      norm_partial[v] = part;
+    }
+  }
+  barrier();
+  if (sub == 0u) {
+    float p = (lane < 8u) ? norm_partial[lane] : 0.0;
+    float total = subgroupAdd(p);
+    if (lane == 0u) {
+      norm_total = total;
+    }
+  }
+  barrier();
+  float norm = inversesqrt(norm_total / 2048.0 + eps);
+  for (uint i = gl_LocalInvocationID.x; i < 256u;
+       i += uint(SLOTS_PER_GROUP) * LANES) {
+    uvec4 q = norm_in.values[i];
+    uvec4 w = norm_w.values[i];
+    uvec4 r = uvec4(norm_word(q.x, w.x, norm), norm_word(q.y, w.y, norm),
+                    norm_word(q.z, w.z, norm), norm_word(q.w, w.w, norm));
+    norm_x[i] = r;
+    if (gl_WorkGroupID.x == 0u) {
+      norm_out.values[i] = r;
+    }
+  }
+  barrier();
+}
 #endif
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
@@ -1048,6 +1135,9 @@ void main() {
   } \
 }
 void main() {
+#if defined(QMM_VEC_NORM)
+  norm_prologue(params.alpha);
+#endif
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;

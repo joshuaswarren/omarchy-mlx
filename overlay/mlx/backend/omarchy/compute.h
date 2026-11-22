@@ -1161,6 +1161,12 @@ enum class ComputeKernel : uint16_t {
   ElementwisePowerF32,
   ElementwisePowerF16,
   ElementwisePowerBF16,
+  // RMSNorm prologue multi-weight decode GEMV (qmm_vec.comp
+  // -DQMM_VEC_NORM): x = RMSNorm(input, weight) for a 2048-wide bf16 row is
+  // recomputed per workgroup with fast_norm_apple's reduction order and
+  // rounding, so the standalone norm dispatch is deleted. bf16 + subgroup,
+  // 2x4 geometry only. Append-only profile id.
+  QmmVecQ4MultiNormBF16,
   Count,
 };
 
