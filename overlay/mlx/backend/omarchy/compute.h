@@ -904,6 +904,8 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4WordSubgroupBatch4BF16,
   // Small-row bf16 decode (MLX_OMARCHY_QMM_ROWS, default on, R <= 8 per
   // pass). Appended after Batch4 so profile kernel ids stay stable.
+  // MLX_OMARCHY_QMM_MMA_ROWS (default off) diverts 4..16-row gate-passing
+  // calls to the QmmPrefillCoopmat route instead of this chain.
   QmmVecQ4WordSubgroupRows8BF16,
   // Wider batch-shared bf16 decode GEMV (B <= 8): one dispatch for a short
   // verify pass of 5 to 8 rows, so the weight stream is read once instead of

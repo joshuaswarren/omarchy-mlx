@@ -8628,11 +8628,35 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         1u);
     return;
   }
+  // Tensor/MMA row routing (MLX_OMARCHY_QMM_MMA_ROWS, default off, read
+  // live): the upstream affine qmv_mma dispatch (mlx PR #4890) sends
+  // multi-row quantized matvecs to the tensor-core kernel instead of the
+  // per-row chain once the tile's fixed dispatch cost is amortized. Our
+  // analog: with the flag set, a non-batched bf16 4-bit group-64
+  // transposed product with 4..16 activation rows passing the
+  // upstream-shaped gate (K >= 512 and K % 128 == 0, N >= 512 and
+  // N % 16 == 0, N*K >= 2^21) skips the short-pass GEMV and the small-row
+  // chain and falls straight into the tile path, where the
+  // cooperative-matrix route with its alignment and capsim checks applies
+  // exactly as it does for large M. The gate requires coopmat_reachable,
+  // so a device without the 8x8x8 route keeps today's routing. The tile's
+  // accumulation order differs from the row chain, so outputs are not
+  // bit-identical across the flag; the flag exists to arm that A/B.
+  const bool qmm_mma_rows =
+      decode_path_override("MLX_OMARCHY_QMM_MMA_ROWS") != 0 &&
+      use_q4_word && transpose_ && out.dtype() == bfloat16 &&
+      batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
+      biases.ndim() == 2 && coopmat_reachable &&
+      params.matrix_m >= 4u && params.matrix_m <= 16u &&
+      params.matrix_k >= 512u && (params.matrix_k % 128u) == 0u &&
+      params.matrix_n >= 512u && (params.matrix_n % 16u) == 0u &&
+      static_cast<uint64_t>(params.matrix_n) * params.matrix_k >=
+          (uint64_t{1} << 21);
   // Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T, default off): the rows of a
   // batch-1 [1, T, K] x sit at the same strides as a [T, 1, K] decode batch,
   // so the pass runs as one batch-shared GEMV of T <= 4 rows. Each row keeps
   // the single-row chain bit for bit (tests/omarchy/test_qmv_batch.cpp).
-  if (small_t_candidate && batch == 1u && transpose_ &&
+  if (!qmm_mma_rows && small_t_candidate && batch == 1u && transpose_ &&
       params.matrix_n <= omarchy::kMaxComputeGroupCountX * kGemvColumnsPerGroup) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
@@ -8693,7 +8717,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // boundary and K is a multiple of 8 (the single-row kernel shares the K
   // rule through words_per_row; the base rule is new because rows stride by
   // K here). Unaligned views fall through to the tile path.
-  if (decode_path_override("MLX_OMARCHY_QMM_ROWS") != 0 && use_q4_word &&
+  if (!qmm_mma_rows &&
+      decode_path_override("MLX_OMARCHY_QMM_ROWS") != 0 && use_q4_word &&
       out.dtype() == bfloat16 && transpose_ && batch == 1u &&
       w.ndim() == 2 && scales.ndim() == 2 && biases.ndim() == 2 &&
       params.matrix_m >= 2u && params.matrix_m <= 4u &&
