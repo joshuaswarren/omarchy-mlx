@@ -21,6 +21,7 @@
 
 #include "mlx/backend/common/slicing.h"
 #include "mlx/backend/gpu/copy.h"
+#include "mlx/fast.h"
 #include "mlx/fast_primitives.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/compute.h"
@@ -716,6 +717,28 @@ struct RopePair {
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
+// A planned RMSNorm -> RoPE fold: the norm's only consumer is a plain
+// two-input RoPE, reached directly or through one view op. Pending
+// until the rope evaluates, then done (one FastRopeNorm dispatch read
+// the pre-norm input and wrote the rope output) or failed (the norm and
+// rope both take their own paths).
+struct RopeNormFold {
+  array norm;
+  array rope;
+  // The view node between norm and rope (Transpose/Reshape); absent
+  // when the rope input is the norm output itself. Its layout is
+  // replayed over the norm's input buffer for the fused dispatch.
+  std::optional<array> view;
+  // Eval detaches tape nodes (clears inputs and primitive), so the
+  // fold keeps the pieces dispatch and the failure path need.
+  array x;
+  array w;
+  std::shared_ptr<Primitive> norm_prim;
+  std::shared_ptr<Primitive> view_prim;
+  float eps;
+  enum class State : uint8_t { pending, done, failed } state{State::pending};
+};
+
 // A planned decode GEMV group: pending until its first member
 // evaluates, then done (every member and epilogue is written by the
 // one dispatch) or failed (every node takes its own path).
@@ -775,6 +798,9 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, size_t> reshape_redirect_roles;
   std::unordered_map<std::uintptr_t, size_t> rope_pair_roles;
   std::vector<RopePair> rope_pairs;
+  std::unordered_map<std::uintptr_t, size_t> rope_norm_skip_roles;
+  std::unordered_map<std::uintptr_t, size_t> rope_norm_roles;
+  std::vector<RopeNormFold> rope_norms;
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
@@ -1872,6 +1898,129 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           joined_rope_neighbors(trace.rope_shapes).c_str());
     }
   }
+
+  // RMSNorm -> RoPE fold: a plain two-input fast::RoPE whose input is a
+  // single-use fast::RMSNorm output gets the norm computed inside the
+  // rope dispatch (the FastRopeNorm build; bf16 only). The claimed norm
+  // never schedules, so its dispatch and the normed tensor's round trip
+  // disappear. KV-direct windows stay armed: the fold runs the fused
+  // primitive on the tape rope node itself.
+  if (rope_norm_fold_enabled()) {
+    static int fold_trace = 0;
+    const bool trace = std::getenv("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr;
+    size_t cand = 0;
+    for (const array& node : tape) {
+      if (!is_op(&node, typeid(fast::RoPE)) || node.inputs().size() != 2 ||
+          node.dtype() != bfloat16 ||
+          static_cast<const fast::RoPE&>(node.primitive()).has_norm()) {
+        continue;
+      }
+      ++cand;
+      const array& in = node.inputs()[0];
+      // The rope input is the RMSNorm output itself or one view of it.
+      const array* norm_p = nullptr;
+      const array* view_p = nullptr;
+      if (is_op(&in, typeid(fast::RMSNorm))) {
+        norm_p = &in;
+      } else if (
+          is_op(&in, typeid(Transpose)) || is_op(&in, typeid(Reshape))) {
+        view_p = &in;
+        norm_p = in.inputs().size() == 1 ? lookup(in.inputs()[0]) : nullptr;
+      }
+      if (norm_p == nullptr || !is_op(norm_p, typeid(fast::RMSNorm)) ||
+          norm_p->inputs().size() != 2 || uses[norm_p->id()] != 1 ||
+          uses[in.id()] != 1 || claimed.count(norm_p->id()) ||
+          claimed.count(in.id()) || claimed.count(node.id()) ||
+          in.dtype() != bfloat16) {
+        if (trace && fold_trace < 4) {
+          ++fold_trace;
+          std::fprintf(
+              stderr,
+              "[rope-norm] rej: norm=%d ninputs=%zu uses_in=%zu "
+              "claim_in=%d claim_rope=%d indt=%d prim=%s\n",
+              norm_p != nullptr && is_op(norm_p, typeid(fast::RMSNorm)),
+              in.inputs().size(),
+              uses.count(in.id()) ? uses[in.id()] : 0,
+              static_cast<int>(claimed.count(in.id())),
+              static_cast<int>(claimed.count(node.id())),
+              static_cast<int>(in.dtype().val()),
+              in.has_primitive() ? in.primitive().name() : "<none>");
+        }
+        continue;
+      }
+      const array& n = *norm_p;
+      const array& x = n.inputs()[0];
+      const array& w = n.inputs()[1];
+      // A view between norm and rope reads a row-major norm output, so
+      // its layout replays bit-exact only over a row-major norm input.
+      // (x is lazy at plan time; data_size is not populated until eval.)
+      if (view_p != nullptr &&
+          (!x.flags().row_contiguous ||
+           in.offset() % in.itemsize() != 0 ||
+           in.shape(-1) != x.shape(-1))) {
+        if (trace && fold_trace < 8) {
+          ++fold_trace;
+          std::fprintf(
+              stderr,
+              "[rope-norm] rej-view: rowc=%d off=%lld in_d=%d x_d=%d\n",
+              static_cast<int>(x.flags().row_contiguous),
+              static_cast<long long>(in.offset()),
+              in.shape(-1),
+              x.shape(-1));
+        }
+        continue;
+      }
+      const auto& st =
+          static_cast<const fast::RoPE&>(node.primitive()).state();
+      const array& src = view_p != nullptr ? in : x;
+      const int d = x.ndim() > 0 ? x.shape(-1) : 0;
+      if (x.dtype() != bfloat16 || w.dtype() != bfloat16 ||
+          w.size() != static_cast<size_t>(d) || d <= 0 || d > 256 ||
+          (d % 2) != 0 || src.strides().back() != 1 || std::get<2>(st) ||
+          !std::get<5>(st) ||
+          fast::RoPE::use_fallback(node.primitive().stream())) {
+        if (trace && fold_trace < 4) {
+          ++fold_trace;
+          std::fprintf(
+              stderr,
+              "[rope-norm] rej2: xdt=%d wdt=%d wsize=%zu d=%d sback=%lld "
+              "trad=%d fwd=%d\n",
+              static_cast<int>(x.dtype().val()),
+              static_cast<int>(w.dtype().val()),
+              w.size(),
+              d,
+              static_cast<long long>(x.strides().back()),
+              static_cast<int>(std::get<2>(st)),
+              static_cast<int>(std::get<5>(st)));
+        }
+        continue;
+      }
+      const size_t index = state->rope_norms.size();
+      state->rope_norm_skip_roles.emplace(n.id(), index);
+      state->rope_norm_skip_roles.emplace(in.id(), index);
+      state->rope_norm_roles.emplace(node.id(), index);
+      state->rope_norms.push_back(RopeNormFold{
+          n,
+          node,
+          view_p != nullptr ? std::optional<array>(in) : std::nullopt,
+          x,
+          w,
+          n.primitive_ptr(),
+          view_p != nullptr ? view_p->primitive_ptr() : nullptr,
+          static_cast<const fast::RMSNorm&>(n.primitive()).state().second});
+      claimed.insert(n.id());
+      claimed.insert(in.id());
+      claimed.insert(node.id());
+    }
+    if (trace && fold_trace < 8) {
+      ++fold_trace;
+      std::fprintf(
+          stderr,
+          "[rope-norm] planned=%zu cand=%zu\n",
+          state->rope_norms.size(),
+          cand);
+    }
+  }
 }
 
 EagerFusionScope::~EagerFusionScope() {
@@ -1939,6 +2088,12 @@ bool kv_direct_enabled() {
   return fused_chain_enabled() &&
       (std::getenv("MLX_OMARCHY_KV_DIRECT") == nullptr ||
        env_flag("MLX_OMARCHY_KV_DIRECT"));
+}
+
+bool rope_norm_fold_enabled() {
+  return fused_chain_enabled() &&
+      (std::getenv("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
+       env_flag("MLX_OMARCHY_ROPE_NORM_FOLD"));
 }
 
 KvDirectWindow* find_rope_kv_redirect(const array& out) {
@@ -2014,9 +2169,183 @@ void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
   encoder.add_temporary(window.base);
 }
 
+// Runs the fused FastRopeNorm eval on the tape rope node itself, so a
+// claimed KV-direct window still binds inside eval_gpu. The norm's
+// inputs carry the pre-norm tensor and weight; the rope node supplies
+// the offset. Returns false when a runtime contract check fails; the
+// caller then runs the norm and rope on their ordinary paths.
+bool dispatch_rope_norm_fold(
+    array& rope_node,
+    const RopeNormFold& fold,
+    const Stream& stream) {
+  const auto& rp = static_cast<const fast::RoPE&>(rope_node.primitive());
+  const array& x = fold.x;
+  const array& w = fold.w;
+  const array& off = rope_node.inputs()[1];
+  const auto& view = fold.view;
+  // Lazy view descs carry contiguous strides; the real strides only appear
+  // at eval. Compose them the way the sum fold does: Transpose permutes the
+  // parent's strides, and a Reshape over a contiguous parent is the
+  // contiguous strides of the new shape.
+  auto contiguous_strides = [](const Shape& shape) {
+    Strides strides(shape.size(), 0);
+    strides.back() = 1;
+    for (int ax = static_cast<int>(shape.size()) - 2; ax >= 0; --ax) {
+      strides[ax] = strides[ax + 1] * shape[ax + 1];
+    }
+    return strides;
+  };
+  Strides src_strides;
+  if (view.has_value()) {
+    Strides parent = contiguous_strides(x.shape());
+    if (typeid(*fold.view_prim) == typeid(Transpose)) {
+      const auto& axes =
+          static_cast<const Transpose&>(*fold.view_prim).state();
+      if (axes.size() != static_cast<size_t>(view->ndim())) {
+        return false;
+      }
+      src_strides = Strides(axes.size(), 0);
+      for (size_t ax = 0; ax < axes.size(); ++ax) {
+        if (axes[ax] < 0 ||
+            static_cast<size_t>(axes[ax]) >= parent.size()) {
+          return false;
+        }
+        src_strides[ax] = parent[axes[ax]];
+      }
+    } else {
+      src_strides = contiguous_strides(view->shape());
+    }
+  } else {
+    src_strides = x.strides();
+  }
+  const int d = x.ndim() > 0 ? x.shape(-1) : 0;
+  if (x.data_shared_ptr() == nullptr || w.data_shared_ptr() == nullptr ||
+      off.data_shared_ptr() == nullptr || x.dtype() != bfloat16 ||
+      w.dtype() != bfloat16 || rope_node.dtype() != bfloat16 ||
+      w.size() != static_cast<size_t>(d) || d <= 0 || d > 256 ||
+      (d % 2) != 0 || src_strides.back() != 1 ||
+      (view.has_value() &&
+       (!x.flags().row_contiguous || x.size() != x.data_size() ||
+        view->offset() % view->itemsize() != 0 ||
+        view->shape(-1) != x.shape(-1)))) {
+    static int fold_run_trace = 0;
+    if (std::getenv("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr &&
+        fold_run_trace < 4) {
+      ++fold_run_trace;
+      std::fprintf(
+          stderr,
+          "[rope-norm] dispatch refuse: xset=%d wset=%d offset=%d xdt=%d "
+          "wdt=%d odt=%d d=%d sback=%lld\n",
+          static_cast<int>(x.data_shared_ptr() != nullptr),
+          static_cast<int>(w.data_shared_ptr() != nullptr),
+          static_cast<int>(off.data_shared_ptr() != nullptr),
+          static_cast<int>(x.dtype().val()),
+          static_cast<int>(w.dtype().val()),
+          static_cast<int>(rope_node.dtype().val()),
+          d,
+          static_cast<long long>(x.ndim() > 0 ? x.strides().back() : -1));
+    }
+    return false;
+  }
+  const auto& st = rp.state();
+  // The view's layout replays over the norm's contiguous input buffer:
+  // per-row RMSNorm and the view commute, so rope(view(norm(x))) ==
+  // rope_rms_norm(view-of-x).
+  const array* src = &x;
+  std::optional<array> view_of_x;
+  if (view.has_value()) {
+    view_of_x = array(view->shape(), x.dtype(), nullptr, {});
+    // The flags come from the same computation Transpose::eval runs over
+    // the real strides, with the contiguous norm output as the parent.
+    array::Flags vflags{};
+    vflags.contiguous = true;
+    vflags.row_contiguous = true;
+    vflags.col_contiguous = true;
+    int64_t f_stride = 1;
+    int64_t b_stride = 1;
+    for (int i = 0, ri = view->ndim() - 1; i < view->ndim(); ++i, --ri) {
+      vflags.col_contiguous &=
+          (src_strides[i] == f_stride || view->shape(i) == 1);
+      f_stride *= view->shape(i);
+      vflags.row_contiguous &=
+          (src_strides[ri] == b_stride || view->shape(ri) == 1);
+      b_stride *= view->shape(ri);
+    }
+    // The view node never evaluated, so its data_size stayed zero; the
+    // span over x's row-major buffer is x's own (dense, same elements).
+    view_of_x->copy_shared_buffer(
+        x, src_strides, vflags, x.data_size(),
+        view->offset() / view->itemsize());
+    // input_ready refuses an unscheduled input; the buffer is resident.
+    view_of_x->set_status(array::Status::available);
+    src = &*view_of_x;
+  }
+  array fused = fast::rope_rms_norm(
+      *src,
+      std::get<1>(st),
+      w,
+      fold.eps,
+      std::get<2>(st),
+      std::get<3>(st),
+      std::get<4>(st),
+      off,
+      stream);
+  std::vector<array> inputs{*src, off, w};
+  std::vector<array> outputs{rope_node};
+  // The eval loop pins the tape rope's inputs (the skipped view and
+  // offset); the fused dispatch actually reads x's buffer and the
+  // weight, so pin them to this submission.
+  auto& encoder = get_command_encoder(stream);
+  encoder.add_temporary(*src);
+  encoder.add_temporary(w);
+  fused.primitive().eval_gpu(inputs, outputs);
+  return true;
+}
+
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
+  }
+  if (auto skip = eager_state->rope_norm_skip_roles.find(node.id());
+      skip != eager_state->rope_norm_skip_roles.end()) {
+    // The rope-side fold owns this norm's dispatch; a failed fold runs
+    // it in place from the rope arm below, so skip only while the fold
+    // can still fire.
+    return eager_state->rope_norms[skip->second].state !=
+        RopeNormFold::State::failed;
+  }
+  if (auto fold_it = eager_state->rope_norm_roles.find(node.id());
+      fold_it != eager_state->rope_norm_roles.end()) {
+    auto& fold = eager_state->rope_norms[fold_it->second];
+    if (fold.state == RopeNormFold::State::done) {
+      return true;
+    }
+    if (fold.state == RopeNormFold::State::failed) {
+      return false;
+    }
+    fold.state = dispatch_rope_norm_fold(node, fold, stream)
+        ? RopeNormFold::State::done
+        : RopeNormFold::State::failed;
+    if (fold.state == RopeNormFold::State::failed) {
+      // The skip arm never ran the norm or the view; dispatch both now
+      // so the ordinary rope path below reads a settled input. Their
+      // tape nodes are already detached, so use the stashed primitives
+      // and inputs.
+      auto& encoder = get_command_encoder(stream);
+      encoder.add_temporary(fold.x);
+      encoder.add_temporary(fold.w);
+      std::vector<array> norm_in{fold.x, fold.w};
+      std::vector<array> norm_out{fold.norm};
+      fold.norm_prim->eval_gpu(norm_in, norm_out);
+      if (fold.view.has_value()) {
+        encoder.add_temporary(fold.norm);
+        std::vector<array> view_in{fold.norm};
+        std::vector<array> view_out{*fold.view};
+        fold.view_prim->eval_gpu(view_in, view_out);
+      }
+      return false;
+    }
+    return true;
   }
   if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
       rope_pair != eager_state->rope_pair_roles.end()) {
