@@ -34,6 +34,18 @@ class ScriptedSession:
         pass
 
 
+class SilenceFiresSession:
+    """Scripted session that scores silence high and speech low, so a wake
+    fires inside the joining silence rather than inside a clip."""
+
+    def predict(self, pcm):
+        rms = float(np.sqrt(np.mean(pcm.astype(np.float64) ** 2)))
+        return {"hey_jarvis_v0.1": 0.9 if rms <= 1000 else 0.1}
+
+    def reset(self):
+        pass
+
+
 def write_clip(path: Path, loud_seconds=0.8, silent_seconds=1.2):
     rate = wake_eval.SAMPLE_RATE
     loud = (np.sin(np.arange(int(loud_seconds * rate)) * 0.05) * 8000).astype("int16")
@@ -133,6 +145,48 @@ class WakeEvalTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         payload = json.loads(out.read_text())
         self.assertEqual(len(payload["curves"]), 3)
+
+
+    def test_corpus_row_counts_wake_events_per_hour(self):
+        row = wake_eval.corpus_row(
+            [self.dir / "pos-a.wav", self.dir / "neg-a.wav"], "unused",
+            threshold=0.5, floor=0.0, session=ScriptedSession())
+        self.assertEqual(row["wakes"], 1)  # one loud clip, one silent clip
+        self.assertEqual(row["files"], 2)
+        self.assertGreater(row["hours"], 0.0)
+        # both clips pad to MIN_SECONDS: 4 s of audio, 1 wake
+        self.assertEqual(row["wakes_per_hour"], 900.0)
+
+    def test_corpus_row_refractory_limits_one_wake_per_window(self):
+        row = wake_eval.corpus_row(
+            [self.dir / "pos-a.wav"], "unused", threshold=0.5, floor=0.0,
+            session=ScriptedSession())
+        self.assertEqual(row["wakes"], 1)  # one phrase, one wake
+
+    def test_corpus_row_counts_wakes_that_fire_in_the_joining_silence(self):
+        loud = self.dir / "loud-full.wav"
+        write_clip(loud, loud_seconds=2.5, silent_seconds=0.0)
+        row = wake_eval.corpus_row(
+            [loud], "unused", threshold=0.5, floor=0.0, gap_seconds=1.0,
+            session=SilenceFiresSession())
+        self.assertEqual(row["wakes"], 1)  # fires in the gap, not in the clip
+
+    def test_main_corpus_mode_counts_wakes(self):
+        out = self.dir / "results-corpus.json"
+        files = sorted(str(p) for p in self.dir.glob("*.wav"))
+        (self.dir / "corpus.txt").write_text("\n".join(files) + "\n")
+        rc = wake_eval.main([
+            "--mode", "corpus",
+            "--corpus-list", str(self.dir / "corpus.txt"),
+            "--model", "unused",
+            "--thresholds", "0.5",
+            "--floors", "0",
+            "--out", str(out),
+        ], session=ScriptedSession())
+        self.assertEqual(rc, 0)
+        payload = json.loads(out.read_text())
+        self.assertEqual(len(payload["rows"]), 1)
+        self.assertEqual(payload["rows"][0]["wakes"], 2)
 
 
 if __name__ == "__main__":

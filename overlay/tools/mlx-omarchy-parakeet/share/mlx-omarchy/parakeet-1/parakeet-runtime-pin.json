@@ -20,7 +20,7 @@
       }
     },
     "libane": {
-      "libane-strict.so": "d06222a86f3bff26aaf1cec1223ade32f27cad84b994dccb1af9cca965a7da8c"
+      "libane-strict.so": "afaf5c88ef9dea9fb1519d4e684d82f6586c6146d21f2aa7c4b78fd18629c77e"
     }
   },
   "e2e": {
@@ -362,7 +362,7 @@
   },
   "provenance": {
     "bundles": "mil-hwxc b61de468d1ca37b687d5fa371e489be16cd84ed1 recompiles; byte-identical to receipts/2026-09-14-encoder-split-plan/bundles",
-    "libane": "joshuaswarren/omarchy-ane df5c553f3f60509509257f8d4d3e6ca4057609f0 libane/ane.c built without LIBANE_CONFIG_STRICT_BIND (gcc -shared -fPIC -O2 -Wall; island bundles bind some surfaces positionally, so strict refusal must stay off; per-container tile-count unit via __ane_init_shift); byte-reproducible on jw16",
+    "libane": "joshuaswarren/omarchy-ane f286ab95 (main; >= 8a4379e ABI-2 backend, incl. #385 tiles[3] BO sizing, #422 /dev/cpu_dma_latency hold, M2 program digest dedup) libane/ane.c + ane_m2.c + ane_sha256.c built without LIBANE_CONFIG_STRICT_BIND (gcc -shared -fPIC -O2 -Wall -I. -I/usr/include/libdrm -I../ane/src/uapi/drm -lpthread; is_ane_device accepts DRM majors 1 and 2 since 27e996a/8a4379e; island bundles bind some surfaces positionally, so strict refusal must stay off; per-container tile-count unit via __ane_init_shift); byte-reproducible on the M1 family (same sha256 on the 13-inch M1 and 16-inch M1 Max): sha256 afaf5c88ef9dea9fb1519d4e684d82f6586c6146d21f2aa7c4b78fd18629c77e",
     "whole_encoder": "shipped whole-program Parakeet encoder bundle (manifest v4, name parakeet-encoder-whole, operation whole-encoder, 13701 TDs): program-0.anec sha256 13c744231524d440b0a774155343df9ade0bbcbc37edc4b1ccf9698e580d5453 from hwx graph 020428fca545648f... via tools/hwxv2-to-anec; installed as a wheel asset under bundles/parakeet-encoder-whole and auto-discovered from the installed share root (MLX_OMARCHY_WHOLE_ENCODER_BUNDLE override still wins; MLX_OMARCHY_WHOLE_ENCODER=0 forces the islands)",
     "note": "runtime refuses to start when any shipped asset hash does not match",
     "receipt": "receipts/2026-09-22-encoder-whole-program.md",

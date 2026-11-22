@@ -15,11 +15,22 @@ mkdir -p "$VDST"
 # asahi default guaranteed a driver-sha mismatch here. Aurora renames the
 # driver to Borealis (Ryan 2026-11-20), so the packaged file may carry
 # either name: publish it under whatever name the package installed.
-SRC_ICD="${SYSTEM_ICD:-/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json}"
-if [ ! -f "$SRC_ICD" ] && [ -f /usr/lib/omarchy-mlx/vulkan/borealis_icd.aarch64.json ]; then
-  SRC_ICD=/usr/lib/omarchy-mlx/vulkan/borealis_icd.aarch64.json
+# Borealis comes first, as in the runtime (packaged_icd_names() in
+# honeykrisp_identity.h, PACKAGED_ICD_NAMES in serve/mlx_omarchy_paths.py),
+# so the gate checks the file the runtime loads. SYSTEM_ICD wins when it
+# names a file; SYSTEM_ICD_DIR moves the search.
+: "${SYSTEM_ICD_DIR:=/usr/lib/omarchy-mlx/vulkan}"
+SRC_ICD="${SYSTEM_ICD:-$SYSTEM_ICD_DIR/honeykrisp_icd.aarch64.json}"
+if { [ -z "${SYSTEM_ICD:-}" ] || [ ! -f "$SRC_ICD" ]; } \
+    && [ -f "$SYSTEM_ICD_DIR/borealis_icd.aarch64.json" ]; then
+  SRC_ICD="$SYSTEM_ICD_DIR/borealis_icd.aarch64.json"
 fi
 cp "$SRC_ICD" "$VDST/$(basename "$SRC_ICD")"
+# A rerun with the same TAG reuses $DEST: after the copy, drop the other
+# name an earlier run published, so the runtime resolves this run's pick.
+for name in borealis_icd.aarch64.json honeykrisp_icd.aarch64.json; do
+  [ "$name" = "$(basename "$SRC_ICD")" ] || rm -f "$VDST/$name"
+done
 DRIVER_SHA=$(env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   "$GATE_HOME/.local/bin/mlx-omarchy-info" --json 2>/dev/null \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["driver_sha"])')

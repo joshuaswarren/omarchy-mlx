@@ -754,17 +754,113 @@ TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") 
       "fused hd128 f16 decode vs f32-score composition");
 
   // Past the one-pass crossover the native-shape two-pass pair answers:
-  // two dispatches, same composition agreement.
+  // two dispatches, same composition agreement. G15S without a cooperative
+  // matrix keeps the three-dispatch composition from 1024 keys up unless
+  // MLX_OMARCHY_SDPA_F16_NO_COOPMAT overrides it.
   HdCacheInputs long_in = make_hd_cache(float16, 1100, 1100, stream);
+  const auto& caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  const char* no_coopmat_env = std::getenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+  const bool no_coopmat_forced = no_coopmat_env != nullptr &&
+      no_coopmat_env[0] != '\0' && std::strcmp(no_coopmat_env, "0") != 0;
+  const bool g15s_one_pass_only = !caps.cooperative_matrix_f32_8 &&
+      caps.device_name.find("G15S") != std::string::npos &&
+      !no_coopmat_forced;
   if (fused_available) {
     CHECK_EQ(
-        dispatches_for([&] { return hd_sdpa(long_in, stream); }, stream), 2);
+        dispatches_for([&] { return hd_sdpa(long_in, stream); }, stream),
+        g15s_one_pass_only ? uint64_t{3} : uint64_t{2});
   }
   require_close(
       flat(hd_sdpa(long_in, stream), stream),
       flat(hd_composition(long_in, 1100, stream), stream),
       0.01,
       "fused hd128 f16 two-pass vs f32-score composition");
+}
+
+TEST_CASE("G15S f16 decode stays on one-pass below 1024 keys and avoids two-pass overflow") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  if (caps.device_name.find("G15S") == std::string::npos ||
+      caps.cooperative_matrix_f32_8) {
+    printf("Skipping: G15S f16 two-pass overflow check requires G15S without "
+           "cooperative matrix\n");
+    return;
+  }
+
+  struct EnvGuard {
+    const char* name;
+    bool had_value = false;
+    std::string value;
+    explicit EnvGuard(const char* n) : name(n) {
+      if (const char* current = std::getenv(name)) {
+        had_value = true;
+        value = current;
+      }
+    }
+    ~EnvGuard() {
+      if (had_value) {
+        setenv(name, value.c_str(), 1);
+      } else {
+        unsetenv(name);
+      }
+    }
+  } guard("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+  unsetenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+
+  constexpr float kFill = 8192.0f;
+  array q = zeros({1, kHdHeads, 1, kHd}, float16, stream);
+  q.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+
+  for (int keys : {1023, 1024, 4096, 8192}) {
+    CAPTURE(keys);
+    array k = zeros({1, kHdKvHeads, keys, kHd}, float16, stream);
+    array v = full({1, kHdKvHeads, keys, kHd}, kFill, float16, stream);
+    k.eval();
+    v.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+
+    auto run = [&] {
+      return fast::scaled_dot_product_attention(
+          q, k, v, kHdScale, "", {}, std::nullopt, false, stream);
+    };
+    const uint64_t expected_dispatches =
+        keys < 1024 ? uint64_t{1} : uint64_t{3};
+    CHECK_EQ(dispatches_for(run, stream), expected_dispatches);
+
+    const std::vector<float> got = flat(run(), stream);
+    REQUIRE_EQ(got.size(), static_cast<size_t>(kHdHeads * kHd));
+    size_t bad = 0;
+    size_t first_bad = 0;
+    for (size_t i = 0; i < got.size(); ++i) {
+      if (!std::isfinite(got[i]) || got[i] != kFill) {
+        if (bad == 0) {
+          first_bad = i;
+        }
+        ++bad;
+      }
+    }
+    CHECK_MESSAGE(
+        bad == 0,
+        "keys ",
+        keys,
+        ": ",
+        bad,
+        " of ",
+        got.size(),
+        " elements != ",
+        kFill,
+        " (first at ",
+        first_bad,
+        ": got ",
+        got[first_bad],
+        ")");
+  }
 }
 
 TEST_CASE("hd128 decode shapes without a compiled width keep the composition") {
