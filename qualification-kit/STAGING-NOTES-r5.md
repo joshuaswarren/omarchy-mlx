@@ -14,12 +14,15 @@ build row 6338d909).
    the build receipt; r4's `05a4802b…` retained in git history).
 3. `qualification-kit/README.md` — "Linux verifies the r4 wheel" → r5.
 
-Not carried, per the card's "if merged" clause: `#611` (card-row print) and
-`#608` (Borealis ICD manifest discovery) are both still OPEN on
-joshuaswarren/omarchy-mlx — they land in r6, not r5. The E1 scalar-load fix
-chain (`#561/#570/#574/#578/#580`) is already in main at the pin
-(`b9017ff660` is an ancestor of 79d99c90c1), so the r5 wheel carries it by
-construction.
+Not carried, per the card's "if merged" clause: `#608` (Borealis ICD
+manifest discovery) is still OPEN on joshuaswarren/omarchy-mlx. `#611`
+(card-row print + `--row`) was MERGED as `4223c1fb4d` between staging and
+the wheel build, so the branch rebased onto main `bb66022715` and r5
+carries it: the dry-run receipt now ends with #611's card row
+("Card row: None (None), … kit qualification-r6: incomplete
+(apple_chip_unidentified) …") — the print works on the refusal path. The
+E1 scalar-load fix chain (`#561/#570/#574/#578/#580`) is on main at the
+pin, so the r5 wheel carries it by construction.
 
 ## TAG vs WHEEL_TAG (so nobody reads the dry-run wrong)
 

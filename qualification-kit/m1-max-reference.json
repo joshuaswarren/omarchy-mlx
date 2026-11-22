@@ -94,7 +94,7 @@
     "test_vmap.py::TestVmap::test_vmap_view": "vulkan_refusal"
   },
   "icd_manifest_sha256": "c335b523edea89c8b71fe6e5e871f0ad8285b298319c4c29b6b512df1b49052b",
-  "release": "qualification-r4",
+  "release": "qualification-r5",
   "schema": "omarchy-mlx-m1-max-reference-v1",
   "seconds_per_file": {
     "test_array.py": 3.1,
