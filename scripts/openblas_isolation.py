@@ -33,7 +33,9 @@ Subcommands:
       Every non-glibc member in its transitive NEEDED chain must be in
       the same directory. GCC runtime licence texts (COPYING3,
       COPYING.RUNTIME, and COPYING.LIB where applicable) are copied from
-      MLX_OMARCHY_GCC_LICENSE_DIR or the installed toolchain licence directory.
+      the vendored scripts/gcc-licences directory, then from the installed
+      toolchain licence directory; setting MLX_OMARCHY_GCC_LICENSE_DIR
+      replaces that search with the given directory.
   check WHEEL [WHEEL ...]
       Exit nonzero if any wheel still carries the bare soname or an
       inconsistent vendored entry. Pure ELF parsing, no patchelf needed.
@@ -79,6 +81,10 @@ DT_SONAME = 14
 DT_RUNPATH = 29
 GCC_RUNTIME_PREFIXES = ("libgfortran.", "libgomp.", "libquadmath.", "libgcc_s.")
 LICENSE_DIR = "mlx/lib/licences"
+# Licence texts shipped with this repository, so a wheel can carry the GCC
+# runtime licence text on any host instead of depending on the toolchain's
+# system licence directory.
+VENDORED_GCC_LICENCE_DIR = Path(__file__).resolve().parent / "gcc-licences"
 
 
 def _cstr(buf, off):
@@ -175,7 +181,8 @@ def vendor_runtime_additions(openblas_src, blas_needed):
             raise SystemExit(f"runtime library is not ELF: {dep_path}")
         pending.extend(n for n in runtime_libraries(parsed[0]) if n not in seen)
 
-    license_dirs = (src_dir / "licences", Path("/usr/share/licenses/gcc-libs"),
+    license_dirs = (src_dir / "licences", VENDORED_GCC_LICENCE_DIR,
+                    Path("/usr/share/licenses/gcc-libs"),
                     Path("/usr/share/doc/gcc"))
     if licence_dir := os.environ.get("MLX_OMARCHY_GCC_LICENSE_DIR"):
         license_dirs = (Path(licence_dir),)

@@ -136,6 +136,15 @@ class ElfParseTests(unittest.TestCase):
         self.assertIsNone(runpath)
         self.assertIsNone(soname)
 
+    def test_vendored_gcc_licence_texts_present(self):
+        # A wheel must carry the GCC runtime licence text on any host, so
+        # the texts ship with the repository instead of being looked up in
+        # the toolchain's system licence directory.
+        for name in ("COPYING3", "COPYING.RUNTIME"):
+            path = MODULE["VENDORED_GCC_LICENCE_DIR"] / name
+            self.assertTrue(path.is_file(), f"{name} missing from the vendored licence dir")
+            self.assertGreater(path.stat().st_size, 1000, f"{name} looks truncated")
+
     def test_needed_runpath_and_soname(self):
         buf = elf64([BARE_SONAME, VENDORED], runpath="$ORIGIN", soname="libmlx.so")
         needed, runpath, soname = parse_elf_needed(buf)
