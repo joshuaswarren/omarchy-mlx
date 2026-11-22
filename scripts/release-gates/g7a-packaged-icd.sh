@@ -49,6 +49,7 @@ ok = d.get("icd_source") == "packaged" and d.get("expected_sha") == d.get("drive
 print("ICD_CONTRACT", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
 ' | tee -a "$LOG"
-RC=${PIPESTATUS[0]}
+# pipefail: non-zero when mlx-omarchy-info or the contract check fails.
+RC=$?
 gate_log "$LOG" "GATE7A_EXIT $RC"
 exit "$RC"
