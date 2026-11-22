@@ -55,6 +55,25 @@ attempt (05:0xZ) refused with "runtime pin declares parakeet-encoder-whole
 but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset"; the env is the fix, and the
 bundle's currency itself is G408's audit, not this staging's.
 
+## G415 companion tarball (Main's instruction, for the G403 prerelease)
+
+The #537 rerun ask ships one extra asset next to the r5 kit:
+`g415-j616s-macos-baseline-v2.tar.gz` — 754,214 bytes, sha256
+`75ffd0fc62aab3989a13e868286cd3907546048d7535e4303504581d950fe91f`,
+staged at `~/scratch/main/g415/` beside its `.sha256` sidecar. Contents
+(exact, nothing else): `j616s-macos-baseline.v2.sh`,
+`encoder_bench.swift`, `j616s-macos-baseline.v2.sha256`,
+`parakeet-inputs/{SHA256SUMS,feat_f32.bin,gold_f16.bin,mask_i32.bin}`.
+Verified: the six internal checksums pass after extraction
+(`sha256sum -c --strict`). Privacy: no private data — the only
+identifying strings are a public HF repo id
+(`mweinbach1/parakeet-tdt-0.6b-v3-coreml`), a public provenance sha, and
+Swift syntax; the `.bin` files are numeric fixtures (mel features f32,
+golden output f16, mask i32). Reason: Ryan's J616s cannot pull from our
+hosts and the harness commit is not on GitHub. The v1 script
+(`j616s-macos-baseline.sh`) is deliberately excluded — the .sha256 does
+not cover it.
+
 ## Deliverables
 
 - Staged diff: this branch (commit + sha when the wheel sha lands).
