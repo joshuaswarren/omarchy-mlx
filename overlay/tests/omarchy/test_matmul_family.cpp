@@ -7767,12 +7767,13 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
     skip("small-row route needs subgroup_size==32+ARITHMETIC.");
     return;
   }
-  if (!cpu::is_available()) {
-    skip("no CPU backend");
-    return;
-  }
   Stream stream = gpu_stream();
-  Stream cpu = default_stream(Device::cpu);
+  // The weights quantize mirrors the mlx pipeline's CPU stream when that
+  // backend exists; a no_cpu build has no cpu stream to take, and
+  // default_stream(Device::cpu) throws vector::_M_range_check there, so
+  // the compute stream stands in. Either way the per-row comparison below
+  // only contrasts the two GPU dispatch paths.
+  const Stream wq = cpu::is_available() ? default_stream(Device::cpu) : stream;
   std::mt19937 rng(892);
   std::uniform_real_distribution<float> frac(-1.0f, 1.0f);
   for (int m : {2, 3, 4}) {
@@ -7793,7 +7794,7 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
         array x = astype(
             array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
         array w_fp = array(matrix.begin(), Shape{n, k}, float32);
-        auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+        auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, wq);
         array scales = astype(parts[1], bfloat16, stream);
         array biases = astype(parts[2], bfloat16, stream);
         eval(x, parts[0], scales, biases);
@@ -7858,7 +7859,7 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
     array x = astype(
         array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
     array w_fp = array(matrix.begin(), Shape{n, k}, float32);
-    auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+    auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, wq);
     array scales = astype(parts[1], bfloat16, stream);
     array biases = astype(parts[2], bfloat16, stream);
     setenv("MLX_OMARCHY_QMM_ROWS", "1", 1);
