@@ -8,6 +8,13 @@ import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
+import pytest
+
+pytest.importorskip(
+    "markdown_it",
+    reason="markdown-it-py is not installed (pip install -r requirements-dev.txt)",
+)
+
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
