@@ -271,6 +271,7 @@ enum ElementwiseOperation : uint32_t {
   DivQuotientFloatOperation,
   FloorDivideFloatOperation,
 };
+static_assert(PowerFloatOperation == omarchy::kFloatPowerOperation);
 
 allocator::Buffer allocate_omarchy(size_t size) {
   return omarchy::allocator().malloc(size);
@@ -1228,6 +1229,14 @@ void dispatch_float_elementwise_to(
               : omarchy::ComputeKernel::ElementwiseF16,
       lite_op ? omarchy::ComputeKernel::ElementwiseLiteBF16
               : omarchy::ComputeKernel::ElementwiseBF16);
+  if (operation == PowerFloatOperation &&
+      encoder.device().float_power_needs_lowering()) {
+    kernel = select_float_kernel(
+        out.dtype(),
+        omarchy::ComputeKernel::ElementwisePowerF32,
+        omarchy::ComputeKernel::ElementwisePowerF16,
+        omarchy::ComputeKernel::ElementwisePowerBF16);
+  }
   encoder.dispatch_compute(
       kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
 }
