@@ -376,7 +376,7 @@ Names are fixed in `serve/mlx_omarchy_paths.py` and
 | Path | Contents |
 |---|---|
 | `/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json` (or `borealis_icd.aarch64.json` after Aurora's rename) | ICD JSON. `library_path` is an absolute path to the driver library installed in the same directory. |
-| `/usr/lib/omarchy-mlx/vulkan/mesa-git-sha` | One line: the hex string the driver reports after `git-` in `driverInfo`. |
+| `/usr/lib/omarchy-mlx/vulkan/mesa-git-sha` | One line: the hex string the driver reports after `git-` in `driverInfo`, then optionally the chip the package is for (`d4ad4a4dce G17C`). |
 
 `OMARCHY_MLX_SYSTEM_PREFIX`, when set and non-empty, replaces the
 `/usr/lib/omarchy-mlx` prefix. Tests and staged trees use that seam. The
@@ -453,7 +453,9 @@ Expected SHA (`resolve_expected_sha_policy`):
 - `MLX_OMARCHY_EXPECTED_HK_SHA`, when set and non-empty, is the expected
   value. `expected_sha_source` is `env`.
 - When that variable is unset and the packaged ICD was selected, the
-  expected value is the trimmed contents of `mesa-git-sha`.
+  expected value is the first field of `mesa-git-sha`. A second field
+  is a chip name, and startup refuses a device whose name does not
+  contain it as a whole word (`G17C` matches `(G17C B0)`, not `G17C0`).
   `expected_sha_source` is `packaged file`. A missing or unreadable file
   leaves the expectation empty.
 - The check runs when the device's Vulkan driver id is the Honeykrisp id

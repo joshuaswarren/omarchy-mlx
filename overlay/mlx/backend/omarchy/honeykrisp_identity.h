@@ -13,6 +13,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <vector>
 
 namespace mlx::core::omarchy {
@@ -371,10 +372,11 @@ inline std::string mesa_git_sha(const std::string& driver_info) {
   return length >= 7 ? driver_info.substr(marker + 4, length) : std::string{};
 }
 
-// Reads the packaged one-line Mesa git SHA (the string the driver reports
-// after "git-"). A missing or unreadable file yields an empty string: the
-// caller then records identity without enforcing an expectation.
-inline std::string packaged_mesa_git_sha(const std::string& prefix) {
+// Reads the packaged one-line Mesa git SHA file: "<sha>" or "<sha> <chip>".
+// Returns the whitespace-separated fields. A missing or unreadable file
+// yields no fields: the caller then records identity without enforcing.
+inline std::vector<std::string> packaged_mesa_git_sha_fields(
+    const std::string& prefix) {
   const std::filesystem::path path = std::filesystem::path(prefix) /
       "vulkan" / "mesa-git-sha";
   std::error_code error;
@@ -387,17 +389,54 @@ inline std::string packaged_mesa_git_sha(const std::string& prefix) {
   }
   std::string line;
   std::getline(input, line);
-  const auto is_pad = [](char c) {
-    return c == '\n' || c == '\r' || c == ' ' || c == '\t';
+  std::istringstream fields(line);
+  std::vector<std::string> out;
+  for (std::string field; fields >> field;) {
+    out.push_back(field);
+  }
+  return out;
+}
+
+// The string the driver reports after "git-".
+inline std::string packaged_mesa_git_sha(const std::string& prefix) {
+  const auto fields = packaged_mesa_git_sha_fields(prefix);
+  return fields.empty() ? std::string{} : fields[0];
+}
+
+// The chip a driver package is qualified for (for example "G17C"), or empty
+// when the package applies to every chip.
+inline std::string packaged_mesa_git_sha_chip(const std::string& prefix) {
+  const auto fields = packaged_mesa_git_sha_fields(prefix);
+  return fields.size() < 2 ? std::string{} : fields[1];
+}
+
+// True when |chip| is a whole token of |device_name|: no letter or digit
+// directly before or after it ("G17C" matches "(G17C B0)", not "G17C0").
+inline bool device_name_has_chip(
+    const std::string& device_name,
+    const std::string& chip) {
+  const auto is_word = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0;
   };
-  while (!line.empty() && is_pad(line.back())) {
-    line.pop_back();
+  for (size_t at = device_name.find(chip); at != std::string::npos;
+       at = device_name.find(chip, at + 1)) {
+    const size_t end = at + chip.size();
+    if ((at == 0 || !is_word(device_name[at - 1])) &&
+        (end == device_name.size() || !is_word(device_name[end]))) {
+      return true;
+    }
   }
-  size_t start = 0;
-  while (start < line.size() && is_pad(line[start])) {
-    ++start;
+  return false;
+}
+
+inline void require_packaged_driver_chip(
+    const std::string& chip,
+    const std::string& device_name) {
+  if (!chip.empty() && !device_name_has_chip(device_name, chip)) {
+    throw std::runtime_error(
+        "Honeykrisp driver package is qualified for " + chip +
+        " only, found device '" + device_name + "'");
   }
-  return line.substr(start);
 }
 
 inline void require_expected_honeykrisp_sha(

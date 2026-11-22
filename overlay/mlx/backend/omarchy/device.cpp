@@ -1006,6 +1006,11 @@ bool Runtime::init_impl() {
     info.caps.expected_sha_source = expected_sha_source;
     if (is_apple_driver_id(info.support.driver_id)) {
       require_expected_honeykrisp_sha(expected_sha, info.caps.driver_sha);
+      if (expected_sha_source == "packaged file") {
+        require_packaged_driver_chip(
+            packaged_mesa_git_sha_chip(omarchy_system_prefix()),
+            info.caps.device_name);
+      }
     }
     note_heap_above_kernel_limit(info.caps.total_memory);
     note_stock_driver_identity(
