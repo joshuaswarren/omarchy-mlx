@@ -1582,6 +1582,58 @@ TEST_CASE("eager q4 decode gemv group refuses an addend it has not computed") {
   expect_bit_exact(baseline[1], candidate[1], stream);
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
+// MLX_OMARCHY_QMM_VEC_Q4_WORD=0 is a documented switch. The out-gate prologue
+// fold used to be adopted at plan time without consulting it, while the group
+// dispatch refuses every group when the Q4 word path is off, so the first
+// decode step threw "out-gate prologue group refused after fold adoption".
+// With the switch off, the fold must not be adopted and the product must
+// evaluate on the per-node path, bit-exact with the unfused run.
+TEST_CASE("eager q4 out-gate prologue with the Q4 word path off keeps the per-node product") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(caps.storage_buffer_16bit_access && caps.shader_int16 &&
+        caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u)) {
+    skip("the out-gate prologue needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  setenv("MLX_OMARCHY_QMM_VEC_Q4_WORD", "0", 1);
+  setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
+  const int k = 2048;
+  auto o_proj = make_linear(2048, k, bfloat16, stream);
+  array gate = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array out = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  eval({gate, out});
+  sync_stream(stream);
+  auto forward = [&] {
+    return project(multiply(sigmoid(gate, stream), out, stream), o_proj, stream);
+  };
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  array baseline = forward();
+  baseline.eval();
+  sync_stream(stream);
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  array candidate = forward();
+  CHECK_NOTHROW(candidate.eval());
+  sync_stream(stream);
+  expect_bit_exact(baseline, candidate, stream);
+
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_OUTGATE_FOLD");
+  unsetenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
+}
+
 TEST_CASE("eager dense bf16 decode gemv groups qkv and gate up") {
   if (!compute_available()) {
     return;
