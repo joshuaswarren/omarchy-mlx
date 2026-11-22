@@ -180,6 +180,110 @@ int main() {
            "largest-pure-local-heap-wins");
   }
 
+  // Budget: the process's live weight bytes count against the heap, plus
+  // a 64 MiB headroom that must survive next to them. A 256 MiB pure-local
+  // heap already holding 250 MiB of weights must refuse 12 MiB more and
+  // let the weights stay in host memory; an empty budget still takes it.
+  {
+    Layout layout;
+    add_heap(layout, 256 * kMiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    add_heap(layout, 48 * kGiB, 0,
+             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const auto props = properties_of(layout);
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            12 * kMiB,
+            250 * kMiB) == UINT32_MAX,
+        "live-weight-bytes-exhaust-the-heap");
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            12 * kMiB,
+            0) != UINT32_MAX,
+        "empty-budget-still-takes-the-request");
+  }
+
+  // The bar-mapped arm checks the same budget as the pure-local arm: live
+  // weights plus the request plus headroom must fit the mapped heap, not
+  // just the request alone.
+  {
+    Layout layout;
+    add_heap(layout, 512 * kMiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    add_heap(layout, 48 * kGiB, 0,
+             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const auto props = properties_of(layout);
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            12 * kMiB,
+            450 * kMiB) == UINT32_MAX,
+        "bar-mapped-heap-refuses-an-exhausting-budget");
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            12 * kMiB,
+            400 * kMiB) != UINT32_MAX,
+        "bar-mapped-heap-takes-a-fitting-budget");
+    // Saturating: a budget whose sum would overflow size_t must refuse,
+    // never wrap into a bogus acceptance.
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            SIZE_MAX / 2 + 1,
+            SIZE_MAX / 2 + 1) == UINT32_MAX,
+        "budget-overflow-saturates-to-refusal");
+  }
+
+  // Fallback order on one card with two device-local heaps: a request that
+  // fits the small pure-local heap takes it; one that does not falls
+  // through to the larger bar-mapped heap.
+  {
+    Layout layout;
+    add_heap(layout, 256 * kMiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    add_heap(layout, 24 * kGiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    add_heap(layout, 32 * kGiB, 0,
+             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const auto props = properties_of(layout);
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            12 * kMiB,
+            0) == 0,
+        "multi-heap-small-request-takes-pure-local");
+    expect(
+        weight_memory_type_for_size(
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            props,
+            UINT32_MAX,
+            2 * kGiB,
+            0) == 1,
+        "multi-heap-large-request-falls-to-bar-mapped");
+  }
+
   if (failures) {
     std::printf("%d failure(s)\n", failures);
     return 1;
