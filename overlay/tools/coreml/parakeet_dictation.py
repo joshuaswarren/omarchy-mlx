@@ -454,19 +454,31 @@ class DictationTranscriber:
             samples = np.ascontiguousarray(waveform)
             duration_aware = not _is_pinned_samples(
                 samples, self._fixture_samples_sha)
-            for length in plan_chunks(int(samples.size)):
-                if self._cancelled(cancel):
-                    raise DictationCancelled("cancelled at a chunk boundary")
-                if time.monotonic() - started > deadline / 1000.0:
-                    raise DictationTimedOut(
-                        f"transcription exceeded its {deadline} ms deadline"
+            # The island opens one deadline-bounded batch scope on its
+            # first submit. Close it per request, so each request gets its
+            # own batch deadline instead of sharing one with every earlier
+            # request (issue 533). The shared resident session stays loaded.
+            try:
+                for length in plan_chunks(int(samples.size)):
+                    if self._cancelled(cancel):
+                        raise DictationCancelled("cancelled at a chunk boundary")
+                    if time.monotonic() - started > deadline / 1000.0:
+                        raise DictationTimedOut(
+                            f"transcription exceeded its {deadline} ms deadline"
+                        )
+                    chunk = samples[:length]
+                    samples = samples[length:]
+                    chunk_tokens, hidden, cell = self._transcribe_chunk(
+                        chunk, hidden, cell, cancel, duration_aware
                     )
-                chunk = samples[:length]
-                samples = samples[length:]
-                chunk_tokens, hidden, cell = self._transcribe_chunk(
-                    chunk, hidden, cell, cancel, duration_aware
-                )
-                tokens.extend(chunk_tokens)
+                    tokens.extend(chunk_tokens)
+            except BaseException:
+                try:
+                    self._island.close()
+                except Exception:
+                    pass
+                raise
+            self._island.close()
             return self._tokenizer.decode(tokens)
 
     def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel,

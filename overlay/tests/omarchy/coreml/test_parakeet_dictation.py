@@ -84,6 +84,51 @@ class CancelBeforeStartTest(unittest.TestCase):
             )
 
 
+class RequestScopedBatchTest(unittest.TestCase):
+    """Each transcription closes its own ANE batch scope (issue 533).
+
+    The island opens one deadline-bounded batch on its first submit. A
+    transcriber that kept that scope open across requests made every
+    later request share one absolute deadline, so a long digit set died
+    mid-set with "deadline ... exceeded while staging a resident submit"
+    after a 21 ms submit.
+    """
+
+    class _Island:
+        def __init__(self):
+            self.closes = 0
+
+        def close(self):
+            self.closes += 1
+
+    def _transcriber(self, chunk):
+        transcriber = pd.DictationTranscriber()
+        island = self._Island()
+        transcriber._started = True
+        transcriber._island = island
+        transcriber._mx = None
+        transcriber._np = np
+        transcriber._tokenizer = type("T", (), {"decode": staticmethod(lambda ids: "")})()
+        transcriber._transcribe_chunk = chunk
+        return transcriber, island
+
+    def test_every_request_ends_its_batch_scope(self):
+        transcriber, island = self._transcriber(
+            lambda wave, hidden, cell, cancel, aware: ([], hidden, cell))
+        for _ in range(3):
+            transcriber.transcribe_waveform(np.zeros(100, dtype=np.float32), 16_000)
+        self.assertEqual(island.closes, 3)
+
+    def test_a_failed_request_still_ends_its_batch_scope(self):
+        def boom(wave, hidden, cell, cancel, aware):
+            raise pd.DictationCancelled("cancelled during decode")
+
+        transcriber, island = self._transcriber(boom)
+        with self.assertRaises(pd.DictationCancelled):
+            transcriber.transcribe_waveform(np.zeros(100, dtype=np.float32), 16_000)
+        self.assertEqual(island.closes, 1)
+
+
 class ProbeTest(unittest.TestCase):
     def test_probe_reports_named_facts(self):
         probe = pd.probe_runtime()
