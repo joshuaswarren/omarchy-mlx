@@ -43,12 +43,19 @@ Measured on the 13-inch M1 ANE against the unfixed 0.7.35-1 on the same clips: t
 (35 reference words, 35 errors before, 6 after); 40 clips under 3 s went from 53.3 to 5.5 percent word error;
 12 clips of 6 to 10 s from 3.0 to 1.9; 8 clips of 15 to 25 s from 3.5 to 2.0.
 
-## Parakeet dictation still uses the pinned mel contract
+## Parakeet dictation used the pinned mel contract (fixed)
 
-Open. `overlay/tools/coreml/parakeet_dictation.py` calls `extract_chunk_features` without `duration_aware`, so
-dictation of a short utterance normalizes it over the padded window and decodes the padding, as `transcribe` did
-before the fix above. The fix needs the dictation decode to stop at the mask's valid frames, which its callbacks
-do not do today. Not measured: no dictation WER was taken.
+`overlay/tools/coreml/parakeet_dictation.py` called `extract_chunk_features` without `duration_aware` and
+decoded the full encoder window, so dictation of a short utterance normalized it over the padded window and
+decoded the padding, as `transcribe` did before the fix above.
+
+Status: **FIXED at `71c22174d` (PR #373), first released in v0.7.39.** Ordinary audio takes the duration-aware
+contract: `DictationTranscriber.transcribe_waveform` selects `duration_aware=True` for `extract_chunk_features`,
+and `_transcribe_chunk` decodes only the encoder mask's valid prefix (`valid_frames=min(mask_valid, window)`),
+refusing a mask with no valid frames or with holes. The pinned golden fixture, matched by the SHA-256 of its
+decoded float32 samples, keeps `duration_aware=False` and the full-window decode.
+`CliLocatorTest.test_pinned_sample_detection` in `overlay/tests/omarchy/coreml/test_parakeet_dictation.py`
+covers fixture detection.
 
 ## Vulkan timeline stall kills serving threads: mlx_lm.server (0.31.3 and 872ae88) and oMLX 0.6.4
 
