@@ -48,10 +48,11 @@ inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
   VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
       static_cast<VkDeviceSize>(value.data_size()) * value.itemsize();
-  // A strided view (concatenate's output window) can reach past
-  // data_size: bind through the last element its positive strides reach,
-  // or a device with robust buffer access drops those writes.
-  if (!value.flags().contiguous && value.size() > 0) {
+  // A strided window (concatenate and pad outputs) can reach past
+  // data_size, and pad marks its window contiguous: bind through the last
+  // element the positive strides reach, or a device with robust buffer
+  // access drops those writes.
+  if (value.size() > 0) {
     VkDeviceSize reach = 0;
     for (int axis = 0; axis < value.ndim(); ++axis) {
       if (value.strides()[axis] > 0) {
