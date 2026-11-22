@@ -39,3 +39,22 @@ systemd-analyze verify <staged>/usr/lib/systemd/user/omarchy-voice.service
 # clean on systemd 262 with ExecStart resolved against the staged
 # /usr/bin/omarchy-voice (verify checks that ExecStart exists)
 ```
+
+## Clean-install dry-run (VXP-4)
+
+`validate-clean-install.sh` replays the install inside a throwaway
+container (user+mount+pid+net namespaces, overlay `/usr`, no route out)
+before any real machine sees the artifact:
+
+```
+./validate-clean-install.sh                  # this skeleton
+./validate-clean-install.sh --artifact-usr <pkg>/usr   # extracted V19 package
+```
+
+Checks: payload files at final paths with package modes, wrapper syntax,
+`systemd-analyze verify` on the unit, the unit's `ExecStart` actually
+launching through the wrapper into the (stubbed) omarchy-mlx venv python,
+and the model prefetch paths (`~/.local/share/mlx-omarchy`,
+`~/.cache/huggingface`) writable — all with no network. Output is a
+fixed-order PASS list; two runs on the same artifact must be identical.
+Requires unprivileged user namespaces and overlayfs (any modern kernel).
