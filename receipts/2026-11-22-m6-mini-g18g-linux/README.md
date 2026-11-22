@@ -12,7 +12,7 @@ standard `prompts.jsonl`, 2 warmups, 10 greedy decodes of 64 tokens
   (0.7.47 series) in `/usr/lib/omarchy-mlx/venv`.
 - Driver: Vulkan ICD sha256 `ee5fbac9500bfbf71c09a0d20153e9cad66712a0a2337580b85de2bac4fb2b6d`
   (local build; mesa git sha for this ICD not recorded). Kernel module
-  asahi.ko sha256 `3f192f53ea1fc1b6784283d91fd07b78dc343464632d08d458783fbe8f9fbc46`.
+  kernel module sha256 `3f192f53ea1fc1b6784283d91fd07b78dc343464632d08d458783fbe8f9fbc46`.
 - Models: `SiddhJagani/Qwen3.8-2B-mlx-4Bit`,
   `mlx-community/Qwen3-4B-Instruct-2507-4bit` (both 4-bit, HF cache).
 - Queue: idle-guard m6 GPU ticket `3d8aec7c`, class perf, cap 25 min;
@@ -28,5 +28,5 @@ median of 5 runs of one 512-token prompt. Decode stdev 0.038 (2B) and
 0.031 (4B); prefill stdev 4.9 (2B) and 0.3 (4B).
 
 Files: the two result JSONs and `provenance.json` (wheel, kernel, boot id,
-governor, asahi.ko sha, ICD sha, model config shas). `SHA256SUMS` covers all
+governor, kernel module sha, ICD sha, model config shas). `SHA256SUMS` covers all
 four files.
