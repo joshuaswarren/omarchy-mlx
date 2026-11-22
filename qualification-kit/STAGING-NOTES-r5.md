@@ -14,15 +14,26 @@ build row 6338d909).
    the build receipt; r4's `05a4802b…` retained in git history).
 3. `qualification-kit/README.md` — "Linux verifies the r4 wheel" → r5.
 
-Not carried, per the card's "if merged" clause: `#608` (Borealis ICD
-manifest discovery) is still OPEN on joshuaswarren/omarchy-mlx. `#611`
-(card-row print + `--row`) was MERGED as `4223c1fb4d` between staging and
-the wheel build, so the branch rebased onto main `bb66022715` and r5
-carries it: the dry-run receipt now ends with #611's card row
-("Card row: None (None), … kit qualification-r6: incomplete
-(apple_chip_unidentified) …") — the print works on the refusal path. The
-E1 scalar-load fix chain (`#561/#570/#574/#578/#580`) is on main at the
+Not carried, per the card's "if merged" clause: none — `#608` (Borealis
+packaged Vulkan ICD manifest discovery, `f06d179190`) and `#611`
+(card-row print + `--row`, `4223c1fb4d`) both merged between staging and
+the wheel build, so the branch rebased onto the built pin `c15a0d4f24`
+("pipeline ANE island submits…", #613) and r5 carries both. The E1
+scalar-load fix chain (`#561/#570/#574/#578/#580`) is on main at the
 pin, so the r5 wheel carries it by construction.
+
+## The built wheel (G421/G402 close-out)
+
+`R5WHEEL DONE head=c15a0d4f24` at 2026-11-22T07:32Z on jw16 (guard job
+`mlx-wheel-build-r5`, class build/no-gpu, kernel 7.1.12-2-20261103.2-lab-ARCH,
+no foreign GPU usage per the receipt header; 120 patch hunks applied from the
+staged whole-encoder bundle; both staging env vars present — attempt 2 had
+refused without them). Artifact:
+`mlx_omarchy-0.32.4.dev202611220732+c15a0d4f2-cp314-cp314-linux_aarch64.whl`,
+423,645,975 bytes,
+sha256 `f78eff3dcd1062f8dc4e3113dafc9cdcaea2fd9ddf57c526896a4755cc4bc769`,
+pinned in `m1-max-reference.json`. The stale dist wheel from the aborted
+attempt 2 (stamp 8d92e094b) was removed before this build and never pinned.
 
 ## TAG vs WHEEL_TAG (so nobody reads the dry-run wrong)
 
