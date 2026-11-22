@@ -68,21 +68,21 @@ Everything on the plan's section-14 checklist, and nothing invented:
   while `compilable` stays `null`: static coverage is not a compile or
   execution qualification. The report source is declared, not authenticated.
 
-The pinned public encoder report is
-`2026-09-12-parakeet-h13-coverage.json`.
-Use it with the downloaded encoder:
+Pass a coverage report JSON for the exact package being inspected:
 
 ```bash
 python3 overlay/tools/coreml/inspect_mlpackage.py inspect /path/to/encoder.mlpackage \
-  --compiler-coverage receipts/2026-09-12-parakeet-h13-coverage.json --strict
+  --compiler-coverage /path/to/h13-coverage.json --strict
 ```
 
-Its 3,351 classified operations include 427 requiring normalization and
-689 missing semantics or supported shapes. The source CSV is linked by
-immutable commit in the JSON. The report format contains `model_sha256`,
-`weights` (package-relative path to hash), `compiler` (repository, full
-commit, H13 target), `source`, and `counts`. Counts must contain all six
-categories shown in that report and sum to the inventory operation count.
+The report requires top-level keys `model_sha256`, `weights`
+(package-relative path to SHA-256 for exactly the package's weight
+files), `compiler` (nonblank `repository`, full 40-character lowercase
+hex `commit`, `target` `H13`), `source` (nonblank string), and
+`counts`. `counts` must contain exactly the six categories `direct`,
+`direct-alias`, `direct-const`, `normalization-needed`,
+`missing-envelope`, and `missing` as nonnegative integers summing to
+the inventory's operation count, which must be nonzero.
 Different model or weight bytes reject the report with exit 1.
 
 
