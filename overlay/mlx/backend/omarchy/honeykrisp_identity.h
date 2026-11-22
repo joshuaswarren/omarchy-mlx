@@ -123,8 +123,9 @@ inline bool is_software_icd_json(const std::string& path) {
 }
 
 // Same file, spelled the same way: both raw strings absolute (a relative
-// path would silently bind to the process cwd), neither a symlink (an
-// alias could resolve anywhere), then plain lexical equality.
+// path would silently bind to the process cwd), with no symlink anywhere
+// on either path - final component or parent directory - so the string
+// names exactly the file it will read, then plain lexical equality.
 inline bool same_icd_path(const std::string& a, const std::string& b) {
   namespace fs = std::filesystem;
   const fs::path pa = fs::path(a).lexically_normal();
@@ -133,9 +134,13 @@ inline bool same_icd_path(const std::string& a, const std::string& b) {
     return false;
   }
   std::error_code ec;
-  const bool symlinked = fs::is_symlink(fs::path(a), ec) ||
-      fs::is_symlink(fs::path(b), ec);
-  return !symlinked && pa == pb;
+  const fs::path ca = fs::weakly_canonical(pa, ec);
+  if (ec || ca != pa) {
+    return false;
+  }
+  ec.clear();
+  const fs::path cb = fs::weakly_canonical(pb, ec);
+  return !ec && cb == pb && pa == pb;
 }
 
 struct HoneykrispIcdSelection {

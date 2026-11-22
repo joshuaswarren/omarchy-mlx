@@ -158,6 +158,22 @@ int main() {
                   intel.c_str(), "", alias.string().c_str());
   }
 
+  // 4d. a symlinked parent directory is refused too: is_symlink checks only
+  // the last component, so /linkdir/nvidia_icd.json passed while linkdir
+  // resolved elsewhere (wB1 third-round finding).
+  {
+    const auto real_dir = dir / "icd2";
+    std::filesystem::create_directories(real_dir);
+    const auto nvreal = real_dir / "nvidia_icd.json";
+    std::ofstream(nvreal) << "{\"ICD\":{\"library_path\":"
+        "\"/usr/lib/x86_64-linux-gnu/libvulkan_intel.so\"}}\n";
+    const auto linkdir = dir / "linkdir";
+    std::filesystem::create_directory_symlink(real_dir, linkdir);
+    expect_throws("hatch-refuses-dir-symlink-parent", "does not match", {},
+                  (linkdir / "nvidia_icd.json").string().c_str(), "",
+                  (linkdir / "nvidia_icd.json").string().c_str());
+  }
+
   // honeykrisp names stay accepted with and without the hatch.
   {
     const auto hk = write_json(dir, "honeykrisp_icd.aarch64.json",
