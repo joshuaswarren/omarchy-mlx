@@ -32,6 +32,7 @@ class MatrixParseTests(unittest.TestCase):
     def test_matrix_lists_linux_and_macos_chip_names(self):
         chips = chk.matrix_chips(DOCS)
         self.assertIn("apple,t6020", chips)
+        self.assertIn("apple,t6022", chips)
         self.assertIn("apple,t6031", chips)
         self.assertIn("Apple M5 Max", chips)
         self.assertIn("linux,dummy-virt", chips)
@@ -71,6 +72,7 @@ class MissingChipTests(unittest.TestCase):
     def test_all_dataset_chips_present_passes(self):
         fixture = write_jsonl([
             {"chip": "apple,t8103", "kind": "quick"},
+            {"chip": "apple,t6022", "kind": "deep"},
             {"chip": "apple,t6031", "kind": "deep"},
             {"chip": "apple,t6020", "kind": "omarchy-mac-e2e"},
             {"chip": "Apple M5 Max", "kind": "deep"},

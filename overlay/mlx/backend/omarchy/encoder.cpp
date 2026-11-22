@@ -1612,7 +1612,41 @@ void CommandEncoder::submit() {
             timeline::SubKind::VkQueueSubmit,
             encoder_id_,
             completion_value);
-        VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, submit_fence));
+        const VkResult submit_result =
+            dt.QueueSubmit(device_.queue(), 1, &si, submit_fence);
+        if (submit_result != VK_SUCCESS) {
+          // A synchronous QueueSubmit failure is a rejection of this
+          // submission, not a GPU hang: on Borealis the kernel's -EINVAL
+          // surfaces through vk_device_set_lost, so it reports as
+          // VK_ERROR_DEVICE_LOST even though the device is fine (issue
+          // #526). A genuinely lost device is discovered at a wait or
+          // poll, never inside the submit call. Name the failing
+          // parameters so the kernel's rejection log can be matched
+          // field-for-field.
+          std::string waits;
+          for (size_t i = 0; i < wait_sems.size(); ++i) {
+            waits += (i ? "," : "") + std::to_string(wait_values[i]);
+          }
+          std::string signals;
+          for (size_t i = 0; i < signal_sems.size(); ++i) {
+            signals += (i ? "," : "") + std::to_string(signal_values[i]);
+          }
+          throw std::runtime_error(
+              std::string("[omarchy] invalid submission: vkQueueSubmit "
+                          "rejected with ") +
+              vk::result_string(submit_result) +
+              " (ordinal=" + std::to_string(ordinal) +
+              " encoder=" + std::to_string(encoder_id_) +
+              " cv=" + std::to_string(completion_value) +
+              " nodes=" + std::to_string(node_count_) +
+              " work=" + std::to_string(batch_work_) +
+              " command_buffer=" + std::to_string(si.commandBufferCount) +
+              " wait_values=[" + waits + "]" +
+              " signal_values=[" + signals + "]" +
+              " fence=" + std::to_string(
+                  reinterpret_cast<uintptr_t>(submit_fence)) +
+              ")");
+        }
       }
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {
