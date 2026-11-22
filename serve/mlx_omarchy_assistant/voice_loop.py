@@ -10,6 +10,7 @@ default sink, never to a raw ALSA device, so the speaker safety daemon
 (speakerguardd) stays in the path.
 """
 
+import argparse
 import io
 import ipaddress
 import json
@@ -66,19 +67,35 @@ class Endpointer:
     # 1.0 s outlasts the pause between two sentences of one question (Kokoro:
     # up to 0.72 s measured; 0.7 s cut those turns in half).
     def __init__(self, detector, *, rms_floor: float, end_silence_s: float = 1.0,
-                 listen_timeout_s: float = 5.0, max_utterance_s: float = 30.0):
+                 listen_timeout_s: float = 5.0, max_utterance_s: float = 30.0,
+                 vad=None, prefilter_floor: float | None = None):
         self._detector = detector
         self._floor = rms_floor
         self._end = end_silence_s
         self._timeout = listen_timeout_s
         self._max = max_utterance_s
+        self._vad = vad
+        self._prefilter = prefilter_floor
         self._reset()
+
+    def _voiced(self, pcm: bytes) -> bool:
+        """Speech decision: the VAD when one is set, else the RMS gate.
+
+        The pre-filter only rejects early (a silent chunk never reaches the
+        model); it never overrides the VAD."""
+        if self._vad is None:
+            return _rms(pcm) >= self._floor
+        if self._prefilter is not None and _rms(pcm) < self._prefilter:
+            return False
+        return self._vad.voiced(pcm)
 
     def _reset(self):
         self._listening = False
         self.last_quiet_s = 0.0
         self._buf = []
         self._waited = self._quiet = self._spoken = 0.0
+        if self._vad is not None:
+            self._vad.reset()  # RNN state and buffered PCM must not leak across turns
 
     def feed(self, pcm: bytes) -> bytes | None:
         """Feed one chunk; returns the utterance PCM when a turn ends."""
@@ -86,7 +103,7 @@ class Endpointer:
         if not self._listening:
             self._listening = bool(self._detector.process(pcm))
             return None
-        voiced = _rms(pcm) >= self._floor
+        voiced = self._voiced(pcm)
         if not self._buf and not voiced:
             self._waited += seconds
             if self._waited >= self._timeout:
@@ -284,28 +301,68 @@ def microphone(popen=subprocess.Popen) -> Iterator[bytes]:
         proc.terminate()
 
 
+def build_arg_parser() -> argparse.ArgumentParser:
+    from .wake_word import WAKE_THRESHOLD_DEFAULT
+
+    parser = argparse.ArgumentParser(
+        prog="mlx-omarchy-voice-loop",
+        description="Offline wake -> STT -> local reply -> TTS loop")
+    parser.add_argument("--home", type=Path, required=True)
+    parser.add_argument("--reply-url", default="http://127.0.0.1:8080/v1/chat/completions")
+    parser.add_argument("--model", default="default")
+    parser.add_argument("--wake-model", default="hey_jarvis")
+    parser.add_argument("--wake-threshold", type=float, default=WAKE_THRESHOLD_DEFAULT)
+    parser.add_argument("--rms-floor", type=float, default=300.0)
+    parser.add_argument("--vad", choices=("energy", "silero"), default=None,
+                        help="speech decision: silero if prepared (default; the "
+                             "installer stages it), the RMS gate otherwise; "
+                             "--vad silero explicitly allows the model download")
+    parser.add_argument("--vad-threshold", type=float, default=0.5)
+    parser.add_argument("--vad-prefilter-floor", type=float, default=None,
+                        help="energy pre-filter: chunks under this RMS never "
+                             "reach the model (energy gate keeps this role)")
+    return parser
+
+
+def build_endpointer(args, home: Path, session=None, detector=None):
+    """Endpointer per args plus a one-line fallback notice when silero's
+    model is absent. Unset --vad means: silero if prepared, else the
+    energy gate; an explicit --vad silero allows the download."""
+    from . import vad as vad_mod
+
+    notice = None
+    if args.vad == "energy":
+        return Endpointer(detector, rms_floor=args.rms_floor), notice
+    if args.vad == "silero":
+        model_path = vad_mod.prepare(home)
+    else:
+        model_path = vad_mod.prepared(home)
+    if model_path is None:
+        notice = ("silero VAD model not prepared; using the energy gate "
+                  "(re-run install.sh, or pass --vad silero to download it)")
+        return Endpointer(detector, rms_floor=args.rms_floor), notice
+    model = vad_mod.SileroVad(model_path, threshold=args.vad_threshold, session=session)
+    return Endpointer(detector, rms_floor=args.rms_floor, vad=model,
+                      prefilter_floor=args.vad_prefilter_floor), notice
+
+
 def main(argv=None) -> int:
-    import argparse
+    import sys
 
     from . import wake_word
     from .recognition import Recognition
     from .synthesis import Synthesis
 
-    parser = argparse.ArgumentParser(prog="mlx-omarchy-voice-loop",
-                                     description="Offline wake -> STT -> local reply -> TTS loop")
-    parser.add_argument("--home", type=Path, required=True)
-    parser.add_argument("--reply-url", default="http://127.0.0.1:8080/v1/chat/completions")
-    parser.add_argument("--model", default="default")
-    parser.add_argument("--wake-model", default="hey_jarvis")
-    parser.add_argument("--wake-threshold", type=float, default=wake_word.WAKE_THRESHOLD_DEFAULT)
-    parser.add_argument("--rms-floor", type=float, default=300.0)
-    args = parser.parse_args(argv)
+    args = build_arg_parser().parse_args(argv)
     detector = wake_word.WakeWordDetector(
         wake_word.prepare(args.home, args.wake_model), threshold=args.wake_threshold)
+    endpointer, notice = build_endpointer(args, args.home, detector=detector)
+    if notice:
+        print(notice, file=sys.stderr)
     recognition, synthesis = Recognition(args.home), Synthesis(args.home)
     try:
         sink = PipeWireSink(24000)
-        loop = VoiceLoop(Endpointer(detector, rms_floor=args.rms_floor),
+        loop = VoiceLoop(endpointer,
                          recognition.transcribe, args.reply_url,
                          synthesis.synthesize_chunks, sink, model=args.model)
         try:

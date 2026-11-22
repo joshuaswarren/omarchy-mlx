@@ -713,10 +713,32 @@ fi
 say "Installing MLX Chat"
 ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
 mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
-for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_worker.py wake_word.py wake_eval.py voice_loop.py; do
+for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_worker.py wake_word.py wake_eval.py vad.py voice_loop.py; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
     -o "$ASSISTANT_PKG/$assistant_file"
 done
+
+# Silero VAD model: the voice loop's default speech decision. Pinned
+# commit + sha-256 — the pin's source of truth is
+# serve/mlx_omarchy_assistant/vad.py (a test asserts the two agree).
+# An existing file is re-verified too; a bad fetch or a corrupt file both
+# fall back to the energy gate, which says so once at startup.
+VAD_PIN_COMMIT="066409f3d9db45a30d21dfcbf9147826ffdd7052"
+VAD_PIN_SHA="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+VAD_MODEL="$PREFIX/vad/silero_vad.onnx"
+vad_model_ok() { [ -f "$1" ] && printf '%s  %s\n' "$VAD_PIN_SHA" "$1" | sha256sum -c - >/dev/null 2>&1; }
+if ! vad_model_ok "$VAD_MODEL"; then
+  mkdir -p "$PREFIX/vad"
+  if curl -fsSL "https://raw.githubusercontent.com/snakers4/silero-vad/$VAD_PIN_COMMIT/src/silero_vad/data/silero_vad.onnx" \
+       -o "$VAD_MODEL.part" \
+    && vad_model_ok "$VAD_MODEL.part"; then
+    mv "$VAD_MODEL.part" "$VAD_MODEL"
+    say "Silero VAD model staged (voice loop default; MIT)."
+  else
+    rm -f "$VAD_MODEL.part"
+    say "Silero VAD model download failed; the voice loop falls back to the energy gate."
+  fi
+fi
 for assistant_static in index.html css/app.css js/api.js js/app.js js/chat.js js/composer.js js/dom.js js/genui.js js/markdown.js js/setup.js js/theme.js js/transfer.js js/util.js js/voice.js js/worklet/capture-worklet.js; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/static/$assistant_static" \
     -o "$ASSISTANT_PKG/static/$assistant_static"
