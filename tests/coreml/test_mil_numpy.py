@@ -88,6 +88,39 @@ def _program(tmp_path, statements, signature=""):
     return Program(path, tmp_path)
 
 
+def test_softmax_zeroes_only_all_neg_inf_rows(tmp_path):
+    """Only a row that is entirely -inf collapses to a zero row.
+
+    Fully-masked attention rows must evaluate to exact zeros without a
+    RuntimeWarning; partially masked and all-finite rows stay normalized.
+    NaN and +inf inputs are not masked rows: they must propagate NaN
+    instead of silently zeroing.
+    """
+    program = _program(tmp_path, """
+tensor<fp32, [4, 4]> x = const()[val = tensor<fp32, [4, 4]>([-inf, -inf, -inf, -inf, -inf, 1.0, 2.0, -inf, -inf, -1e38, -inf, -inf, 0.5, -0.5, 1.5, -2.0])];
+int32 axis = const()[val = int32(1)];
+tensor<fp32, [4, 4]> y = softmax(x = x, axis = axis);
+""")
+    with np.errstate(all="raise"):
+        out = np.asarray(program.run({}, {"y"})["y"])
+    np.testing.assert_array_equal(out[0], np.zeros(4))
+    np.testing.assert_array_equal(out[1][[0, 3]], [0.0, 0.0])
+    assert np.isfinite(out[1]).all()
+    np.testing.assert_allclose(out[1].sum(), 1.0, rtol=1e-6)
+    np.testing.assert_array_equal(out[2], [0.0, 1.0, 0.0, 0.0])
+    assert np.isfinite(out[3]).all()
+    np.testing.assert_allclose(out[3].sum(), 1.0, rtol=1e-6)
+
+    program = _program(tmp_path, """
+tensor<fp32, [2, 4]> x = const()[val = tensor<fp32, [2, 4]>([nan, 1.0, 2.0, -inf, inf, -inf, 0.0, 1.0])];
+int32 axis = const()[val = int32(1)];
+tensor<fp32, [2, 4]> y = softmax(x = x, axis = axis);
+""")
+    with np.errstate(all="ignore"):
+        out = np.asarray(program.run({}, {"y"})["y"])
+    assert np.isnan(out).all()
+
+
 @pytest.mark.parametrize(("decl", "literal", "expected"), [
     ("bool", "bool(false)", False),
     ("bool", "bool(true)", True),

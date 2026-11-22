@@ -513,12 +513,23 @@ class Program:
             x = self._f32(arg("x"))
             axis = int(self.scalar(stmt, "axis"))
             m = np.max(x, axis=axis, keepdims=True)
+            # A row that is entirely -inf (a fully masked attention row) has
+            # no finite max, so upstream MIL's exp(x - m) / sum would emit
+            # 0/0 = NaN there. This evaluator emits an exact zero row
+            # instead: the model's downstream mask zero-fill discards those
+            # positions before any cross-position op can read them, so a
+            # zero row is the value the fill would have produced. The guard
+            # is isneginf, not isfinite: NaN and +inf rows are not masked
+            # rows, and must keep propagating NaN instead of zeroing out.
+            all_neg_inf = np.isneginf(m)
             shifted = np.subtract(
-                x, m, out=np.full_like(x, -np.inf), where=np.isfinite(m)
+                x, m, out=np.full_like(x, -np.inf), where=~all_neg_inf
             )
             exp = np.exp(shifted)
             total = np.sum(exp, axis=axis, keepdims=True)
-            return np.divide(exp, total, out=np.zeros_like(exp), where=total > 0)
+            return np.divide(
+                exp, total, out=np.zeros_like(exp), where=~all_neg_inf
+            )
         if op == "layer_norm":
             x = self._f32(arg("x"))
             axes = tuple(a % x.ndim for a in ints("axes"))
