@@ -145,8 +145,29 @@ class Offline(unittest.TestCase):
 
     def test_a_short_first_clause_waits_for_the_sentence(self):
         self.assertEqual(list(voice_loop.sentences(["Yes, it is.", " Done."])), ["Yes, it is.", "Done."])
-        self.assertEqual(list(voice_loop.sentences(["It costs 1,000 dollars today. Ok."])),
-                         ["It costs 1,000 dollars today.", "Ok."])
+
+    def test_numbers_times_and_decimals_never_cut_a_clause(self):
+        for text, first in (
+                ("The total cost was 1,000 dollars today. Ok.", "The total cost was 1,000 dollars today."),
+                ("We will all meet at 10:30 tomorrow morning. Bye.", "We will all meet at 10:30 tomorrow morning."),
+                ("The average test score was 3.5 points overall. Done.", "The average test score was 3.5 points overall.")):
+            self.assertEqual(list(voice_loop.sentences([text])), [first, text.rsplit(" ", 1)[1]])
+
+    def test_semicolon_and_colon_end_the_first_clause(self):
+        self.assertEqual(list(voice_loop.sentences(["Here is the plan for today: we rest. Then work."])),
+                         ["Here is the plan for today:", "we rest.", "Then work."])
+        self.assertEqual(list(voice_loop.sentences(["I like the idea a lot; it works. Ok."])),
+                         ["I like the idea a lot;", "it works.", "Ok."])
+
+    def test_abbreviations_never_end_a_piece(self):
+        self.assertEqual(list(voice_loop.sentences(["Pick small pets e.g., a cat or dog. Ok."])),
+                         ["Pick small pets e.g., a cat or dog.", "Ok."])
+        self.assertEqual(list(voice_loop.sentences(["Use one tool, i.e., a saw. Ok."])),
+                         ["Use one tool, i.e., a saw.", "Ok."])
+        self.assertEqual(
+            list(voice_loop.sentences(["Dr. Smith lives", " on Main St. in the U.S. today. Mr. Lee",
+                                       " starts at 9 a.m. tomorrow. Bye."])),
+            ["Dr. Smith lives on Main St. in the U.S. today.", "Mr. Lee starts at 9 a.m. tomorrow.", "Bye."])
 
     def test_a_pause_between_two_spoken_sentences_stays_one_turn(self):
         # Kokoro leaves up to 0.72 s between the sentences of one question

@@ -28,9 +28,11 @@ import numpy as np
 
 SAMPLE_RATE = 16000
 CHUNK = 1280  # 80 ms, the wake detector's streaming step
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _ANY_END = re.compile(r"(?<=[.!?,;:])\s+")
 FIRST_CLAUSE_WORDS = 4  # the first clause goes to TTS early once it has this many words
+# A period after one of these, or after dotted letters (U.S., a.m., e.g., J.), ends no piece.
+_ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "st", "jr", "sr", "prof", "vs", "etc", "no", "mt", "ave", "approx"}
+_DOTTED = re.compile(r"(?:[A-Za-z]\.)+")
 
 
 def chunks(pcm: bytes, size: int = CHUNK) -> Iterator[bytes]:
@@ -145,12 +147,22 @@ def stream_reply(url: str, messages: list, *, model: str,
                 yield delta
 
 
-def _first_cut(text: str, min_words: int):
-    """The first piece worth speaking: a whole sentence, or a clause ending in
-    , ; or : once it has min_words words."""
+def _abbreviation(token: str) -> bool:
+    word = token.rstrip(",;:")
+    return bool(_DOTTED.fullmatch(word)) or word.rstrip(".").lower() in _ABBREVIATIONS
+
+
+def _next_cut(text: str, clause_words: int | None):
+    """The first place to cut: after . ! or ? that does not follow an
+    abbreviation, or (when clause_words is set) after , ; or : once the piece
+    has that many words and the mark does not follow an abbreviation."""
     for m in _ANY_END.finditer(text):
         head = text[:m.start()]
-        if head.endswith((".", "!", "?")) or len(head.split()) >= min_words:
+        token = head.split()[-1] if head.split() else ""
+        if _abbreviation(token):
+            continue
+        if head.endswith((".", "!", "?")) or (
+                clause_words is not None and len(head.split()) >= clause_words):
             return head, text[m.end():]
     return None
 
@@ -161,18 +173,11 @@ def sentences(deltas, first_clause_words: int = FIRST_CLAUSE_WORDS) -> Iterator[
     pending, first = "", True
     for delta in deltas:
         pending += delta
-        if first:
-            cut = _first_cut(pending, first_clause_words)
-            if cut is None:
-                continue
+        while (cut := _next_cut(pending, first_clause_words if first else None)) is not None:
             head, pending = cut
             first = False
             if head.strip():
                 yield head.strip()
-        *done, pending = _SENTENCE_END.split(pending)
-        for sentence in done:
-            if sentence.strip():
-                yield sentence.strip()
     if pending.strip():
         yield pending.strip()
 
