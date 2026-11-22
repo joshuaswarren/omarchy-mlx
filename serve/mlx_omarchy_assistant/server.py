@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import array
 import base64
+import collections
 import contextlib
 import hmac
 import json
@@ -44,38 +45,60 @@ def voice_ready(recognition, synthesis_state):
 
 
 class SpeechGate:
-    """Bounded turn queue over the single speech slot (issue: mid-dictation
+    """Bounded FIFO turn queue over the single speech slot (issue: mid-dictation
     HTTP 409, bc-voice-followup-1903). A turn arriving while another is active
-    waits up to `wait_s`; while it waits it barges in on an in-flight TTS by
-    setting the active cancel event once, so playback yields promptly. If the
-    slot never frees within the bound the caller still reports busy (same
-    message as before), never hangs."""
+    waits up to `wait_s` and is served in arrival order (review CHANGES on 619:
+    waiters must not leapfrog queued dictation). While it waits, the head of
+    the queue barges in on an in-flight TTS by setting the cancel event of the
+    LIVE active turn — re-read on every poll, because the slot may change hands
+    after the waiter queued (a waiter that only saw the original STT occupant
+    never barged the TTS that took the slot later and died at its bound with
+    the old 409). If the slot never frees within the bound the caller still
+    reports busy (same message as before), never hangs."""
 
     POLL_S = 0.02
 
     def __init__(self, slot_lock, wait_s=10.0):
         self.slot_lock = slot_lock
         self.wait_s = wait_s
-        self._barge_mutex = threading.Lock()
+        self._cv = threading.Condition()
+        self._queue: collections.deque[object] = collections.deque()
 
-    def acquire(self, active_kind=None, active_cancel=None):
+    def acquire(self, app=None):
         deadline = time.monotonic() + self.wait_s
+        ticket = object()
         barged = False
-        while True:
-            if self.slot_lock.acquire(blocking=False):
-                return True
-            if not barged:
-                with self._barge_mutex:
-                    if not barged and active_kind == "tts" and active_cancel is not None:
-                        active_cancel.set()  # barge-in: stop the active playback
+        with self._cv:
+            self._queue.append(ticket)
+        try:
+            while True:
+                with self._cv:
+                    head = self._queue[0] is ticket
+                if head and self.slot_lock.acquire(blocking=False):
+                    return True
+                if head and not barged and app is not None:
+                    kind = app.audio_kind
+                    cancel = app.audio_cancel
+                    if kind == "tts" and cancel is not None:
+                        cancel.set()  # barge-in: stop the active playback
                         barged = True
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            time.sleep(min(remaining, self.POLL_S))
+                with self._cv:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._queue.remove(ticket)
+                        self._cv.notify_all()  # a leaver hands the head spot on
+                        return False
+                    self._cv.wait(timeout=min(remaining, self.POLL_S))
+        finally:
+            with self._cv:
+                if ticket in self._queue:
+                    self._queue.remove(ticket)
+                    self._cv.notify_all()
 
     def release(self):
         self.slot_lock.release()
+        with self._cv:
+            self._cv.notify_all()
 
 
 class AssistantServer(ThreadingHTTPServer):
@@ -668,7 +691,7 @@ class Handler(BaseHTTPRequestHandler):
         # Preview: synthesise one fixed sentence in the current voice and
         # hand the PCM16LE back to the client (single JSON envelope, not
         # SSE) so a one-shot playback does not need a conversation.
-        if not app.speech_turns.acquire(app.audio_kind, app.audio_cancel):
+        if not app.speech_turns.acquire(app):
             raise BusyError("Another speech operation is active")
         try:
             if not app.manager.status().get("voice", {}).get("requested"):
@@ -712,7 +735,7 @@ class Handler(BaseHTTPRequestHandler):
         app = self.server
         path = unquote(urlsplit(self.path).path)
         raw = self._body(binary=path == "/api/transcribe")
-        if not app.speech_turns.acquire(app.audio_kind, app.audio_cancel):
+        if not app.speech_turns.acquire(app):
             raise BusyError("Another speech operation is active")
         grant = None
         try:
