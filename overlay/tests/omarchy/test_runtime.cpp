@@ -893,6 +893,12 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // The G17C row (M5 Max) takes 100000 (initial value matching G14C pending calibration on M5).
   CHECK(omarchy::calibrated_batch_work("Apple M5 Max (G17C B1)") == 100000);
 
+  // The RTX 5060 Ti row (discrete NVIDIA card on Thunderbolt, opt-in VRAM
+  // activations) takes 40000: one command buffer per Qwen3-4B decode token.
+  // The receipt is receipts/2026-11-21-rtx-5060ti-batch-work.
+  CHECK(omarchy::calibrated_batch_work("NVIDIA GeForce RTX 5060 Ti") == 40000);
+  CHECK(omarchy::calibrated_batch_work("NVIDIA GeForce RTX 4090") == 0);
+
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
 
