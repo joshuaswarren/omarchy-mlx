@@ -328,6 +328,24 @@ int main() {
         "both staging transfers pending preserves all handles together");
   }
 
+  // Compute-to-compute dispatch barrier: on by default on discrete GPUs only;
+  // MLX_OMARCHY_COMPUTE_BARRIER=0/1 (setting 0/1, unset -1) overrides.
+  fails += check(
+      select_compute_barrier(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, -1),
+      "discrete GPU takes the compute barrier by default");
+  fails += check(
+      !select_compute_barrier(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, -1),
+      "integrated (Apple) GPUs keep the full barrier by default");
+  fails += check(
+      !select_compute_barrier(VK_PHYSICAL_DEVICE_TYPE_CPU, -1),
+      "software Vulkan keeps the full barrier by default");
+  fails += check(
+      !select_compute_barrier(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 0),
+      "MLX_OMARCHY_COMPUTE_BARRIER=0 forces the full barrier");
+  fails += check(
+      select_compute_barrier(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, 1),
+      "MLX_OMARCHY_COMPUTE_BARRIER=1 forces the compute barrier");
+
   if (fails != 0) {
     return 1;
   }

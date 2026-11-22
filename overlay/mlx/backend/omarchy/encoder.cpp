@@ -186,6 +186,46 @@ void CommandEncoder::record_dependency_barrier() {
       nullptr);
   tracker_.clear();
   head_synced_ = true;
+  transfer_since_barrier_ = false;
+}
+
+bool CommandEncoder::compute_barrier() {
+  // A dispatch whose hazard is only earlier dispatches gets a compute-to-
+  // compute barrier instead of the full one (select_compute_barrier: default
+  // on for discrete GPUs, MLX_OMARCHY_COMPUTE_BARRIER=0/1 overrides). The
+  // batch head, a copy, fill or inline update since the last full barrier,
+  // or wave scheduling keeps the full barrier.
+  static const bool on = []() {
+    const int setting = std::getenv("MLX_OMARCHY_COMPUTE_BARRIER") == nullptr
+        ? -1
+        : (env_flag("MLX_OMARCHY_COMPUTE_BARRIER") ? 1 : 0);
+    return select_compute_barrier(omarchy::device().physical_type(), setting);
+  }();
+  return on;
+}
+
+void CommandEncoder::record_dispatch_barrier() {
+  if (!compute_barrier() || !head_synced_ || transfer_since_barrier_ ||
+      wave_sched()) {
+    record_dependency_barrier();
+    return;
+  }
+  VkMemoryBarrier compute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+  compute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  compute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vk::device_table().CmdPipelineBarrier(
+      cmd_,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0,
+      1,
+      &compute,
+      0,
+      nullptr,
+      0,
+      nullptr);
+  tracker_.clear();
+  head_synced_ = true;
 }
 
 void CommandEncoder::reset_dependency_tracking() {
@@ -415,6 +455,7 @@ void CommandEncoder::upload_device_local_if_needed(
           tracker_.add_write(wr);
         }
         dt.CmdUpdateBuffer(cmd_, vb->buffer, 0, vb->size, vb->host_shadow);
+        transfer_since_barrier_ = true;
         if (!gated_barriers()) {
           record_dependency_barrier();
         }
@@ -502,6 +543,7 @@ void CommandEncoder::copy_buffer(
   region.dstOffset = dst_offset;
   region.size = size;
   vk::device_table().CmdCopyBuffer(cmd_, src, dst, 1, &region);
+  transfer_since_barrier_ = true;
   node_count_++;
   trace::counters().vk_buffer_copies++;
 }
@@ -547,6 +589,7 @@ void CommandEncoder::fill_buffer(
     tracker_.add_write(write);
   }
   vk::device_table().CmdFillBuffer(cmd_, dst, offset, size, value);
+  transfer_since_barrier_ = true;
   node_count_++;
   trace::counters().vk_buffer_fills++;
 }
@@ -970,7 +1013,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     }
     if (!head_synced_ ||
         tracker_.needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
-      record_dependency_barrier();
+      record_dispatch_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
       barrier_recorded = true;
