@@ -726,6 +726,9 @@ TEST_CASE("issue 544 elementwise probes match the CPU reference") {
   check_values(pow2({0.25f, 2.0f}, {1.0f, 1.0f}, float16), {0.25f, 2.0f}, stream);
 
   check_values(sign(array({0.25f, 4.0f, -1.5f}, float32), stream), {1.0f, 1.0f, -1.0f}, stream);
+  // A Sign that runs the Remainder arm would turn these into NaN (remainder(0, 0)).
+  check_values(
+      sign(array({0.0f, std::numeric_limits<float>::quiet_NaN()}, float32), stream), {0.0f, 0.0f}, stream);
   check_values(
       remainder(array({4.5f, 9.0f, -2.5f}, float32), array({2.0f, 2.0f, 2.0f}, float32), stream),
       {0.5f, 1.0f, 1.5f},

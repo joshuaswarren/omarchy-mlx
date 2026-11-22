@@ -627,6 +627,15 @@ void main() {
     float value = float_power(lhs, rhs);
 #else
     float value;
+#ifndef LITE
+    // Sign stays out of the switch: on the M6 (G18G) its case returned 0 for
+    // every input, matching remainder(x, x), the case two arms above it (issue 544).
+    // Upstream Sign compares against zero, so NaN falls through both
+    // comparisons and maps to 0.
+    if (params.operation == 38u) {
+      value = float(lhs > 0.0) - float(lhs < 0.0);
+    } else
+#endif
     switch (params.operation) {
       case 0:
         value = lhs + rhs;
@@ -772,12 +781,6 @@ void main() {
         break;
       case 37:
         value = float_power(lhs, rhs);
-        break;
-      case 38:
-        // Upstream Sign compares against zero, so NaN falls through
-        // both comparisons and maps to 0. Arithmetic, not a nested select:
-        // the G18G compiler returned 0 for every input from the select form (issue 544).
-        value = float(lhs > 0.0) - float(lhs < 0.0);
         break;
       case 39:
         // The abs builtin clears the sign bit, so -0.0 flips to +0.0
