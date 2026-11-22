@@ -7352,18 +7352,37 @@ void Load::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (inference_weight_ && out.nbytes() != 0) {
     auto& encoder = omarchy::get_command_encoder(stream());
     auto& dev = encoder.device();
-    if (omarchy::weight_memory_type(
-            dev.physical_type(), dev.memory_properties(), UINT32_MAX) != UINT32_MAX) {
+    if (omarchy::weight_memory_type_for_size(
+            dev.physical_type(),
+            dev.memory_properties(),
+            UINT32_MAX,
+            out.nbytes(),
+            omarchy::allocator().weight_memory_bytes()) != UINT32_MAX) {
       if (&dev != &omarchy::device()) {
         throw std::runtime_error(
             "[omarchy] inference weights require the selected Vulkan device");
       }
-      auto buffer = omarchy::allocator().malloc_weight(out.nbytes());
-      out.set_data(buffer);
-      out.data_shared_ptr()->donatable = false;
-      auto* weight = static_cast<omarchy::VulkanBuffer*>(buffer.ptr());
-      dev.upload_weights(encoder, weight->buffer, out.nbytes(), *reader_, offset_);
-      return;
+      // The gate uses all memory types, but this buffer's alignment can
+      // exclude the chosen type; a failed card allocation falls back to
+      // the mapped path instead of failing the whole load. Only the
+      // allocation is guarded: an upload or I/O error must propagate.
+      allocator::Buffer buffer(nullptr);
+      try {
+        buffer = omarchy::allocator().malloc_weight(out.nbytes());
+      } catch (const std::runtime_error&) {
+        if (omarchy::env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
+          std::fputs("[omarchy-weights] card placement unavailable;"
+                     " falling back to mapped\n",
+                     stderr);
+        }
+      }
+      if (buffer.ptr() != nullptr) {
+        out.set_data(buffer);
+        out.data_shared_ptr()->donatable = false;
+        auto* weight = static_cast<omarchy::VulkanBuffer*>(buffer.ptr());
+        dev.upload_weights(encoder, weight->buffer, out.nbytes(), *reader_, offset_);
+        return;
+      }
     }
     if (omarchy::env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
       static const int logged =

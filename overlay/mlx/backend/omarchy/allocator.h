@@ -14,6 +14,7 @@
 #include "mlx/allocator.h"
 #include "mlx/backend/common/buffer_cache.h"
 #include "mlx/backend/omarchy/device_local_activations.h"
+#include "mlx/backend/omarchy/memory_type.h"
 
 namespace mlx::core::omarchy {
 
@@ -111,6 +112,13 @@ class VulkanAllocator : public allocator::Allocator {
  public:
   Buffer malloc(size_t size) override;
   Buffer malloc_weight(size_t size);
+  // Bytes currently live in card-memory inference weights. The placement
+  // gate reads this per load, so it takes the mutex like the other
+  // accounting getters.
+  size_t weight_memory_bytes() const {
+    std::unique_lock lk(mutex_);
+    return weight_memory_;
+  }
   void free(Buffer buffer) override;
   size_t size(Buffer buffer) const override;
 
@@ -244,8 +252,10 @@ class VulkanAllocator : public allocator::Allocator {
   friend VulkanAllocator& allocator();
 
   void destroy_buffer(VulkanBuffer* buf);
-  // Resolve a memory type with the required flags, preferring types backed by
-  // a device-local heap (unified memory on Apple GPUs).
+  // Resolve a memory type with the required flags, per-heap capacity-aware:
+  // prefer a device-local heap (unified memory on Apple GPUs) only while it
+  // is at least as large as the best matching non-device-local heap, else
+  // the largest matching heap (see capacity_aware_memory_type).
   uint32_t find_memory_type(uint32_t type_bits, VkMemoryPropertyFlags required)
       const;
 

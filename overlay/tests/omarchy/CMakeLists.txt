@@ -11,6 +11,21 @@ target_include_directories(omarchy_vram_activations_tests PRIVATE
                            ${Vulkan_INCLUDE_DIRS})
 add_test(NAME omarchy_vram_activations_tests COMMAND omarchy_vram_activations_tests)
 
+# The pure selector suites live next to the headers they exercise and need
+# no mlx library: the same sources the standalone run-*-tests.sh scripts
+# compile, so the standing battery covers them too.
+add_executable(omarchy_weight_placement_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/tests/weight_placement_test.cpp)
+target_include_directories(omarchy_weight_placement_tests PRIVATE
+                           ${Vulkan_INCLUDE_DIRS})
+add_test(NAME omarchy_weight_placement_tests COMMAND omarchy_weight_placement_tests)
+
+add_executable(omarchy_memory_type_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/tests/memory_type_test.cpp)
+target_include_directories(omarchy_memory_type_tests PRIVATE
+                           ${Vulkan_INCLUDE_DIRS})
+add_test(NAME omarchy_memory_type_tests COMMAND omarchy_memory_type_tests)
+
 # PR 519: a small Vulkan op and then a clean exit(0). The crash lived in the
 # static Runtime destructor after main returned; a segfault at exit fails
 # the test, so the process itself is the assertion.

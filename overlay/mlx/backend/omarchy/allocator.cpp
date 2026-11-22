@@ -123,7 +123,11 @@ bool consume_test_staging_timeout() {
 
 namespace {
 
-VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
+VulkanBuffer make_weight_buffer(
+    Device& dev,
+    size_t size,
+    bool staging,
+    size_t live_weight_bytes) {
   auto& dt = vk::device_table();
   const auto handle = dev.handle();
   VulkanBuffer buf{};
@@ -142,7 +146,12 @@ VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
     const auto& memory = dev.memory_properties();
     const uint32_t type = staging
         ? staging_memory_type(memory, requirements.memoryTypeBits)
-        : weight_memory_type(dev.physical_type(), memory, requirements.memoryTypeBits);
+        : weight_memory_type_for_size(
+              dev.physical_type(),
+              memory,
+              requirements.memoryTypeBits,
+              requirements.size,
+              live_weight_bytes);
     if (type == UINT32_MAX) {
       throw std::runtime_error(staging
           ? "[omarchy] no compatible host memory for weight staging"
@@ -198,7 +207,7 @@ void Device::upload_weights(
     throw std::runtime_error("[omarchy] previous weight upload did not complete");
   }
   if (weight_staging_ == VK_NULL_HANDLE) {
-    const auto staging = make_weight_buffer(*this, kWeightStagingBytes, true);
+    const auto staging = make_weight_buffer(*this, kWeightStagingBytes, true, 0);
     weight_staging_ = staging.buffer;
     weight_staging_memory_ = staging.memory;
     weight_staging_data_ = staging.data;
@@ -579,26 +588,8 @@ bool device_local_activations_enabled() {
 uint32_t VulkanAllocator::find_memory_type(
     uint32_t type_bits,
     VkMemoryPropertyFlags required) const {
-  const auto& mem = device().memory_properties();
-  uint32_t fallback = UINT32_MAX;
-  for (uint32_t i = 0; i < mem.memoryTypeCount; ++i) {
-    const auto& type = mem.memoryTypes[i];
-    if (!(type_bits & (1u << i))) {
-      continue;
-    }
-    if ((type.propertyFlags & required) != required) {
-      continue;
-    }
-    bool device_local =
-        mem.memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    if (device_local) {
-      return i;
-    }
-    if (fallback == UINT32_MAX) {
-      fallback = i;
-    }
-  }
-  return fallback;
+  return capacity_aware_memory_type(
+      device().memory_properties(), type_bits, required);
 }
 
 VulkanAllocator::VulkanAllocator()
@@ -806,8 +797,14 @@ Buffer VulkanAllocator::malloc(size_t size) {
 
 Buffer VulkanAllocator::malloc_weight(size_t size) {
   auto buf = std::make_unique<VulkanBuffer>();
-  *buf = make_weight_buffer(device(), (size + 3) & ~size_t{3}, false);
+  // Snapshot the live total before building the buffer: reading it inside
+  // make_weight_buffer would race concurrent weight frees.
   std::unique_lock lk(mutex_);
+  const size_t live_weight_bytes = weight_memory_;
+  lk.unlock();
+  *buf = make_weight_buffer(
+      device(), (size + 3) & ~size_t{3}, false, live_weight_bytes);
+  lk.lock();
   try {
     live_by_handle_.emplace(buf->buffer, buf.get());
   } catch (...) {
