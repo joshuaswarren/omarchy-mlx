@@ -46,8 +46,25 @@ namespace mlx::core::omarchy {
 // the clamp below keeps that true regardless.
 inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
-  const VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
+  VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
       static_cast<VkDeviceSize>(value.data_size()) * value.itemsize();
+  // A strided window (concatenate and pad outputs) can reach past
+  // data_size, and pad marks its window contiguous: bind through the last
+  // element the positive strides reach, or a device with robust buffer
+  // access drops those writes.
+  if (value.size() > 0) {
+    VkDeviceSize reach = 0;
+    for (int axis = 0; axis < value.ndim(); ++axis) {
+      if (value.strides()[axis] > 0) {
+        reach += static_cast<VkDeviceSize>(value.shape(axis) - 1) *
+            static_cast<VkDeviceSize>(value.strides()[axis]);
+      }
+    }
+    end = std::max<VkDeviceSize>(
+        end,
+        static_cast<VkDeviceSize>(value.offset()) +
+            (reach + 1) * value.itemsize());
+  }
   const VkDeviceSize word_end = (end + 3) & ~static_cast<VkDeviceSize>(3);
   // A zero range is invalid Vulkan; an empty array keeps one byte.
   return {
