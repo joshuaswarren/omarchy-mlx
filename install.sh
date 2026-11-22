@@ -367,26 +367,31 @@ EOF
 }
 
 case "${1:-}" in
-  --ane) ANE=1 ;;
-  --voice) VOICE=1 ;;
   --system)
     install_system "${@:2}"
     exit 0
     ;;
   --patch-venv)
+    [[ ${2:-} != -* ]] || die "unknown option: $2 (usage: install.sh --patch-venv PATH)"
+    (($# <= 2)) || die "unknown option: $3 (usage: install.sh --patch-venv PATH)"
     apply_to_existing_venv "${2:-}"
     exit 0
     ;;
   --uninstall)
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl --user disable --now mlx-omarchy-chat.service >/dev/null 2>&1 || true
-    fi
     # The data home is also the install prefix, so chat history, the saved
     # pairs (assistant/history, assistant/pair-locks) and the converted decision
     # models a saved pair points at (models/) live inside it. Keep them unless
     # --purge is given, so a reinstall can resume the saved pair.
     purge=0
-    [[ "${2:-}" == "--purge" ]] && purge=1
+    for arg in "${@:2}"; do
+      case "$arg" in
+        --purge) purge=1 ;;
+        *) die "unknown option: $arg (usage: install.sh --uninstall [--purge])" ;;
+      esac
+    done
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl --user disable --now mlx-omarchy-chat.service >/dev/null 2>&1 || true
+    fi
     rm -rf "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info" \
       "$BIN/mlx-omarchy-parakeet" "$BIN/mlx-omarchy-serve" "$BIN/omarchy-mlx-serve" \
       "$APPS/mlx-omarchy-chat.desktop" "$APPS/mlx-omarchy-demo.desktop" \
@@ -422,9 +427,14 @@ case "${1:-}" in
     fi
     exit 0
     ;;
-  "") ;;
-  *) die "unknown option: $1 (supported: --ane, --voice, --system, --uninstall, --patch-venv PATH)" ;;
 esac
+for arg in "$@"; do
+  case "$arg" in
+    --ane) ANE=1 ;;
+    --voice) VOICE=1 ;;
+    *) die "unknown option: $arg (supported: --ane, --voice, --system, --uninstall, --patch-venv PATH)" ;;
+  esac
+done
 
 # 1. Hardware and interpreter checks. The release wheel is cp314 linux_aarch64
 #    and is supported on the M1 family (t8103, t6000, t6001, t6002 — same GPU
