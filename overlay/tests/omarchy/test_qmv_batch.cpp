@@ -327,3 +327,40 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
   unsetenv("MLX_OMARCHY_QMV_BATCH");
 }
+
+// mlx#4890 analog on G13C: upstream moved M1/M2 Ultra quantized matmul at 4-16
+// rows off the linear vector kernel onto affine qmv_mma. Our Vulkan backend has
+// no qmv_mma; its analog gap is whether the G13C default batched GEMV still
+// beats the tile at 4-8 rows. jw16-gpu queue ticket 5d2a6bcb measures
+// QMV_SMALL_T default vs forced-off on Qwen3-4B. This test pins the routing
+// that change requires: rows up to 3 keep the batched GEMV (upstream kept its
+// vector kernel through 3 rows), rows 4-8 do not dispatch it. RED on G13C
+// until the default cap drops; stays draft until the A/B data lands.
+TEST_CASE("G13C defaults rows 4-8 off the batched GEMV (mlx#4890 analog)") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  const auto& dev_caps = omarchy::device(s.device.index).capabilities();
+  if (dev_caps.device_name.find("G13C") == std::string::npos) {
+    std::cout << "Skipping: not a G13C device\n";
+    return;
+  }
+  random::seed(19);
+  Weight q = make_weight(2048, 2048, s);
+  auto x_pass = [&](int t) {
+    array x = astype(
+        random::normal(Shape{1, t, 2048}, float32, std::nullopt, s), bfloat16, s);
+    x.eval();
+    return x;
+  };
+  const auto batch4 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16;
+  const auto batch8 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16;
+  if (!ran(traced_kernels([&] { gemv(x_pass(1), q, false, s); }),
+           omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16)) {
+    std::cout << "Skipping: the bf16 subgroup GEMV route does not engage here\n";
+    return;
+  }
+  CHECK(ran(traced_kernels([&] { short_pass(x_pass(3), q, "", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x_pass(4), q, "", s); }), batch4));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x_pass(4), q, "", s); }), batch8));
+  CHECK_FALSE(ran(traced_kernels([&] { short_pass(x_pass(8), q, "", s); }), batch8));
+}
