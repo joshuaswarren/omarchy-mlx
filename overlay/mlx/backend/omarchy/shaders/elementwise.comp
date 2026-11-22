@@ -775,8 +775,9 @@ void main() {
         break;
       case 38:
         // Upstream Sign compares against zero, so NaN falls through
-        // both comparisons and maps to 0.
-        value = lhs > 0.0 ? 1.0 : (lhs < 0.0 ? -1.0 : 0.0);
+        // both comparisons and maps to 0. Arithmetic, not a nested select:
+        // the G18G compiler returned 0 for every input from the select form (issue 544).
+        value = float(lhs > 0.0) - float(lhs < 0.0);
         break;
       case 39:
         // The abs builtin clears the sign bit, so -0.0 flips to +0.0
