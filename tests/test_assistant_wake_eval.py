@@ -135,5 +135,39 @@ class WakeEvalTests(unittest.TestCase):
         self.assertEqual(len(payload["curves"]), 3)
 
 
+    def test_corpus_row_counts_wake_events_per_hour(self):
+        row = wake_eval.corpus_row(
+            [self.dir / "pos-a.wav", self.dir / "neg-a.wav"], "unused",
+            threshold=0.5, floor=0.0, session=ScriptedSession())
+        self.assertEqual(row["wakes"], 1)  # one loud clip, one silent clip
+        self.assertEqual(row["files"], 2)
+        self.assertGreater(row["hours"], 0.0)
+        # both clips pad to MIN_SECONDS: 4 s of audio, 1 wake
+        self.assertEqual(row["wakes_per_hour"], 900.0)
+
+    def test_corpus_row_refractory_limits_one_wake_per_window(self):
+        row = wake_eval.corpus_row(
+            [self.dir / "pos-a.wav"], "unused", threshold=0.5, floor=0.0,
+            session=ScriptedSession())
+        self.assertEqual(row["wakes"], 1)  # one phrase, one wake
+
+    def test_main_corpus_mode_counts_wakes(self):
+        out = self.dir / "results-corpus.json"
+        files = sorted(str(p) for p in self.dir.glob("*.wav"))
+        (self.dir / "corpus.txt").write_text("\n".join(files) + "\n")
+        rc = wake_eval.main([
+            "--mode", "corpus",
+            "--corpus-list", str(self.dir / "corpus.txt"),
+            "--model", "unused",
+            "--thresholds", "0.5",
+            "--floors", "0",
+            "--out", str(out),
+        ], session=ScriptedSession())
+        self.assertEqual(rc, 0)
+        payload = json.loads(out.read_text())
+        self.assertEqual(len(payload["rows"]), 1)
+        self.assertEqual(payload["rows"][0]["wakes"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
