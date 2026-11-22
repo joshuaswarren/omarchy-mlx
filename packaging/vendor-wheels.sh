@@ -7,8 +7,8 @@
 # (python$PYTHON_VERSION from paths.sh); it resolves requirements-lock.in
 # for that host's platform and writes DIR/requirements-lock.txt. A
 # PKGBUILD never runs this: it consumes DIR + the lock offline through
-# build-venv.sh. Voice extras are deliberately absent (system-package
-# scope decision: voice stays install.sh-only for v1).
+# build-venv.sh. Wheels only: a package with no wheel for this host fails
+# the download. requirements-nodeps.in is fetched without dependencies.
 set -euo pipefail
 
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,10 +33,18 @@ command -v "$py" >/dev/null 2>&1 ||
 
 mkdir -p "$out"
 echo "==> resolving requirements-lock.in for $(uname -m) $py"
-"$py" -m pip download -r "$self_dir/requirements-lock.in" -d "$out"
+"$py" -m pip download --only-binary=:all: -r "$self_dir/requirements-lock.in" -d "$out"
+"$py" -m pip download --only-binary=:all: --no-deps -r "$self_dir/requirements-nodeps.in" -d "$out"
 if [[ -n $wheel ]]; then
   cp "$wheel" "$out/"
 fi
 "$self_dir/gen-vendor-lock.sh" "$out" >"$out/requirements-lock.txt"
 "$self_dir/verify-vendor.sh" "$out" "$out/requirements-lock.txt"
+"$py" "$self_dir/check-nodeps-closure.py" --nodeps "$self_dir/requirements-nodeps.in" \
+  --wheels "$out" --lock "$out/requirements-lock.txt"
+if [[ -n $wheel ]]; then
+  "$self_dir/verify-voice-venv.sh" "$out"
+else
+  echo "==> no --wheel: offline voice import proof skipped (a release passes --wheel)"
+fi
 echo "==> vendored wheels + lock written under $out"

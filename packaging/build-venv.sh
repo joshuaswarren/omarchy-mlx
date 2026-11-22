@@ -64,6 +64,8 @@ if ! "$venv/bin/python" -m pip --version >/dev/null 2>&1; then
   echo "error: $py -m venv produced no pip (ensurepip missing); cannot install offline" >&2
   exit 1
 fi
+# The lock is the whole closure, so pip installs it without resolving
+# again: mlx-audio declares upstream mlx, which mlx-omarchy provides.
 "$venv/bin/python" -m pip install --no-index --find-links "$vendor" \
-  --require-hashes -r "$lock"
+  --require-hashes --no-deps -r "$lock"
 echo "==> venv ready at $venv"

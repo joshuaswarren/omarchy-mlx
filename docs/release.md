@@ -32,7 +32,11 @@ the gate enforces them.
    build hooks then agree. Check this with
    `python3 scripts/check-version-stability.py .work/mlx`. A stable release
    also carries the vendored wheel set for the system install.
-   `packaging/vendor-wheels.sh` runs once on an aarch64 `cp314` host. The
+   `packaging/vendor-wheels.sh --wheel <aarch64 wheel>` runs once on an
+   aarch64 `cp314` host. Before it writes the final lock it checks that the
+   `--no-deps` wheels' dependencies are vendored (`check-nodeps-closure.py`)
+   and builds the venv offline under `unshare -rn` to import the voice stack
+   (`verify-voice-venv.sh`); either failure stops the release. The
    result ships as `omarchy-mlx-vendor-wheels-v<TAG>-cp314-aarch64.tar`
    plus a `.sha256` sidecar. `SHA256SUMS` (flat filenames) must cover every
    uploaded asset.
