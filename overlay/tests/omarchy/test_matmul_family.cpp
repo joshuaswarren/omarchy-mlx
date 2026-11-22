@@ -7767,6 +7767,10 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
     skip("small-row route needs subgroup_size==32+ARITHMETIC.");
     return;
   }
+  if (!cpu::is_available()) {
+    skip("no CPU backend");
+    return;
+  }
   Stream stream = gpu_stream();
   Stream cpu = default_stream(Device::cpu);
   std::mt19937 rng(892);
