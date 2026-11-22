@@ -109,3 +109,15 @@ to the recorded fixtures, whose positives all clear 0.5 with a fresh
 model and whose one continuous-session miss is a state artifact, not a
 threshold artifact. A noisier corpus (TV, music, household noise) can
 still separate them; the tuner re-measures it in one command.
+
+## Fix follow-up (wAW CHANGES on #620): gap wakes now counted
+
+wAW flagged that `corpus_row` discarded the detector's return while
+streaming the inter-file joining silence, so a false wake firing in a
+0.5 s gap never reached this table. Fixed (counts gap fires like clip
+fires), red test first; the corpus row was re-measured end to end with
+the fix through the shipped detector (700 files, 1.4797 h, thresholds
+0.55/0.5/0.45/0.4, floor 0, gap wakes counted): still zero wake events
+at every threshold (`corpus-results.json`, re-run 2026-11-22). The
+conclusion and the **keep 0.5** verdict are unchanged. The wake-set
+tables are untouched by the fix (per-clip scoring never had the gap).
