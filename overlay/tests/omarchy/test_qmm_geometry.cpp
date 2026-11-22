@@ -3,7 +3,8 @@
 
 // MLX_OMARCHY_QMM_GEOM: the decode Qmm column geometry. Every geometry runs
 // the same per-lane chain per column, so the bytes must be identical to the
-// base 2x4 kernels; only the columns and threads per workgroup change. The
+// shipped 32-column (2x16) kernels; only the columns and threads per
+// workgroup change. The
 // geometry kernels need a 32-lane arithmetic subgroup, so on a device with
 // smaller subgroups every scenario takes the base kernels and the byte
 // checks pass trivially; on qualifying devices (the M1-class parts) they
@@ -225,12 +226,13 @@ int main(int argc, char** argv) {
       ++failures;
     }
   }
-  // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x16", "2x4"}) {
+  // Every accepted geometry produces the bytes of the shipped 32-column
+  // (2x16) control: the per-column chains are identical by construction.
+  for (const char* geometry : {"2x8", "2x4"}) {
     for (const char* name : {"single", "group", "swiglu"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";
-      setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x16", 1);
       int rc = run_child(name, base.c_str());
       setenv("MLX_OMARCHY_QMM_GEOM", geometry, 1);
       int rc2 = run_child(name, other.c_str());
@@ -243,7 +245,7 @@ int main(int argc, char** argv) {
       }
       if (fnv(base) != fnv(other)) {
         std::cout << "FAIL: " << geometry << " " << name
-                  << " bytes differ from 2x4\n";
+                  << " bytes differ from 2x16\n";
         ++failures;
       } else {
         std::cout << "ok: " << geometry << " " << name << " identical\n";
