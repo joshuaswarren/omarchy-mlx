@@ -166,11 +166,10 @@ class SpeechYieldScheduler:
             # Parked (or quiescent) in the worker: hand the lock to speak.
             self._gpu.release()
             waiter.granted.set()
-            if not waiter.taken.wait(SPEAK_TAKE_TIMEOUT_SECONDS):
-                # The speak request gave up before taking the lock (cancel or
-                # timeout race). Re-take; its side either never took the lock
-                # or releases it in SpeakGrant.release.
-                self._gpu.acquire(timeout=SPEAK_TAKE_TIMEOUT_SECONDS)
+            # Give the speak request first claim (Lock is not fair); if it gave
+            # up before taking the lock, the wait times out and the generation
+            # re-takes it; otherwise acquire waits for SpeakGrant.release.
+            waiter.taken.wait(SPEAK_TAKE_TIMEOUT_SECONDS)
             self._gpu.acquire()
             client.release(secret)
             if cancel.is_set():
