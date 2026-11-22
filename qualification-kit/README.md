@@ -16,7 +16,7 @@ On Aurora or a nonstandard Vulkan install, add `--icd /path/to/apple-icd.json` f
 python3.12 qualify.py --machine-id 0123456789abcdef --out macos.json
 ```
 
-Have network access and at least 6 GiB free on the result and Hugging Face cache filesystems. The runner creates a disposable virtual environment. Linux verifies the r4 wheel and reuses the hash-pinned v0.7.47 dependency archive. Use `--asset-dir` if you already have both files. The same GPU benchmark runs on both systems with MLX-LM 0.31.3 and the pinned Qwen3-4B-Instruct-2507 4-bit snapshot: the same prompt, seed, four warmup tokens, and 64 generated token IDs. The receipt saves the IDs and their digest. Decode timing starts after the first token; time to first token, including prefill, is reported separately.
+Have network access and at least 6 GiB free on the result and Hugging Face cache filesystems. The runner creates a disposable virtual environment. Linux verifies the r7 wheel and reuses the hash-pinned v0.7.47 dependency archive. Use `--asset-dir` if you already have both files. The same GPU benchmark runs on both systems with MLX-LM 0.31.3 and the pinned Qwen3-4B-Instruct-2507 4-bit snapshot: the same prompt, seed, four warmup tokens, and 64 generated token IDs. The receipt saves the IDs and their digest. Decode timing starts after the first token; time to first token, including prefill, is reported separately.
 
 The runner applies the vendored MLX-LM serve patch series to its virtual environment before it measures anything, so the Linux release numbers are the numbers the packaged install gives. The receipt records the patch state under `mlx_lm_patches`: `state` says `patched`, `stock` or `unreadable`, `series_present` says whether the completion record was found, `record_sha256` is the hash of that record and `eager_swiglu_markers` is the number of patched markers in the installed package. The macOS baseline arm does not apply the series, so its row says `stock` by design, and a caller that hands the kit a patched interpreter is refused. A tree that carries the record without a single marker, and a site the kit cannot read, are `unreadable`: a Linux run in that state is refused rather than measured, because a number without a known patch state cannot be compared with any other row.
 
@@ -26,7 +26,7 @@ The result lists six MLX correctness checks, all 34 Python test files, and the A
 
 A completed GPU check that fails keeps the run unqualified. The result uses `gpu_correctness_failed` and lists expected and actual values by check name under `mlx_checks.failures`. Decode and the test suite still run. An interrupted or unavailable correctness probe still stops the run.
 
-The per-file limit is 300 seconds. The slowest M1 Max r4 reference file took 15.4 seconds. An M4 Pro file took 47 seconds in r3. The limit leaves room for both.
+The per-file limit is 300 seconds. The slowest M1 Max r7 reference file took 18.4 seconds. An M4 Pro file took 47 seconds in r3. The limit leaves room for both.
 
 Linux compares exact failing test/subtest IDs and failure classes with `m1-max-reference.json`. The receipt keeps the raw failures and skips, plus the matched and new lists. `qualified` means the release wheel was verified, MLX and Linux ANE checks passed, decode finished, all suite IDs were captured, and there are zero new failures or skips. A matched reference failure is not a pass. The macOS receipt is a baseline and reports its own outcomes without the Linux allowlist.
 

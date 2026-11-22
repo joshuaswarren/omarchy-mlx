@@ -23,13 +23,13 @@ from scripts.bench_decode import ids_digest
 
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
-TAG = 'qualification-r6'
-WHEEL_TAG = 'qualification-r4'
+TAG = 'qualification-r7'
+WHEEL_TAG = 'qualification-r7'
 VENDOR_RELEASE = 'v0.7.47'
-SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
-WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
+SOURCE = '60ed49829b8e9c580843f692189736eda4c55e65'
+WHEEL = 'mlx_omarchy-0.32.4.dev202611221646+60ed498-cp314-cp314-linux_aarch64.whl'
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
-ASSETS = {WHEEL: '05a4802bc4c547aa77a6478612e103a7bfcedc3878f9049e502b37aba8eefb14',
+ASSETS = {WHEEL: '19ff8998be619efcb5b07776ccda121c141c5bbb4c0d8ed6acbf98ed90e70d23',
           VENDOR: '31a9ed2075865d41e84729b850c1bdf9f66530f9b12df7bfb50cd80c472555f4'}
 PATCH_SERIES = ROOT.parent / 'scripts' / 'apply-mlx-lm-patches.sh'
 PATCH_RECORD = '.omarchy-serve-patches'
