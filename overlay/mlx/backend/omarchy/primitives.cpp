@@ -8643,7 +8643,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // accumulation order differs from the row chain, so outputs are not
   // bit-identical across the flag; the flag exists to arm that A/B.
   const bool qmm_mma_rows =
-      decode_path_override("MLX_OMARCHY_QMM_MMA_ROWS") != 0 &&
+      decode_path_override("MLX_OMARCHY_QMM_MMA_ROWS") > 0 &&
       use_q4_word && transpose_ && out.dtype() == bfloat16 &&
       batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
       biases.ndim() == 2 && coopmat_reachable &&

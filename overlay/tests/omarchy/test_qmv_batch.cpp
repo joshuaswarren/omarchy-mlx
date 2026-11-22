@@ -410,6 +410,12 @@ TEST_CASE("the MMA rows flag routes R=4 to the coopmat tile and keeps the row ch
   auto on = mma_rows_kernels(x, q, "1", s);
   CHECK_FALSE(ran(on, rows8));
   CHECK(ran_either(on, m16_fulln, m16_pad));
+  // Explicit "0" keeps the row chain too (the gate must be > 0: unset reads
+  // as -1, so != 0 would make the route default-on - the bug w86 caught in
+  // review).
+  auto zero = mma_rows_kernels(x, q, "0", s);
+  REQUIRE(ran(zero, rows8));
+  CHECK_FALSE(ran_either(zero, m16_fulln, m16_pad));
   // Gate-failing shape with the flag on: K % 128 != 0 (576 % 128 == 64),
   // the other gate terms pass, and the row chain still wins.
   Weight q_k576 = make_weight(4096, 576, s);
