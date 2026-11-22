@@ -556,21 +556,33 @@ def _ensure_encoder_source(lock: ReferenceLock, pin: dict, cache_dir: Path) -> P
 
 
 def _decode_audio(path: Path):
-    """Return int16 mono 16 kHz PCM, sample rate, and the decoder used.
+    """Return int16 mono 16 kHz PCM, sample rate, the decoder used, and
+    per-call stage timings.
 
     The fast path is libsndfile (soundfile) when the file already is mono
     16 kHz. Anything else (stereo, other rates, other containers) goes
     through ffmpeg's deterministic `-ar 16000 -ac 1` downmix/resample so
     general audio is usable; a native 16 kHz mono file keeps the exact
-    legacy decode (no resampler is engaged for it).
+    legacy decode (no resampler is engaged for it). When a resample is
+    needed it runs as its own ffmpeg pass so the stage table can price
+    it: the s16le hand-off between the decode and resample passes adds a
+    <=0.5 LSB rounding a single fused pass would not have.
     """
+    timing = {
+        "probe_ms": None,
+        "decode_ms": None,
+        "resample_ms": None,
+        "resampled": False,
+    }
     try:
         import soundfile
     except ImportError:
         pass
     else:
         try:
+            started = time.monotonic()
             pcm, rate = soundfile.read(str(path), dtype="int16")
+            decode_ms = (time.monotonic() - started) * 1000
         except soundfile.LibsndfileError:
             # Container/codec libsndfile cannot decode (AAC/M4A/MP4, ...):
             # fall through to the ffmpeg path. Anything else (keyboard
@@ -580,26 +592,41 @@ def _decode_audio(path: Path):
             import numpy as np
 
             if int(rate) == 16000 and getattr(pcm, "ndim", 1) == 1:
-                return np.ascontiguousarray(pcm), int(rate), f"soundfile {soundfile.__version__}"
+                timing["decode_ms"] = decode_ms
+                return np.ascontiguousarray(pcm), int(rate), f"soundfile {soundfile.__version__}", timing
 
+    started = time.monotonic()
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
          "stream=sample_rate,channels", "-of", "json", str(path)],
         capture_output=True, text=True, check=True,
     )
+    timing["probe_ms"] = (time.monotonic() - started) * 1000
     stream = json.loads(probe.stdout)["streams"][0]
     rate, channels = int(stream["sample_rate"]), int(stream["channels"])
-    cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le",
-           "-acodec", "pcm_s16le"]
+    started = time.monotonic()
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le",
+         "-acodec", "pcm_s16le", "-"],
+        capture_output=True, check=True).stdout
+    timing["decode_ms"] = (time.monotonic() - started) * 1000
     if rate != 16000 or channels != 1:
-        cmd += ["-ar", "16000", "-ac", "1"]
-    raw = subprocess.run(cmd + ["-"], capture_output=True, check=True).stdout
+        started = time.monotonic()
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "s16le", "-ar", str(rate),
+             "-ac", str(channels), "-i", "-", "-f", "s16le",
+             "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-"],
+            input=raw, capture_output=True, check=True).stdout
+        timing["resample_ms"] = (time.monotonic() - started) * 1000
+        timing["resampled"] = True
+    started = time.monotonic()
     version = subprocess.run(
         ["ffmpeg", "-version"], capture_output=True, text=True, check=True
     ).stdout.splitlines()[0]
+    timing["decode_ms"] += (time.monotonic() - started) * 1000
     import numpy as np
 
-    return np.frombuffer(raw, dtype="<i2"), 16000, version
+    return np.frombuffer(raw, dtype="<i2"), 16000, version, timing
 
 
 def _transcribe(args) -> int:
@@ -702,16 +729,53 @@ def _stage_recorder() -> tuple:
     return stage, stages_records
 
 
+def _stage_buckets(stages_records: list) -> dict:
+    """Fold stage records into the five-card stage buckets.
+
+    The resample bucket is the audio_resample child row only: audio_load's
+    wall time already contains it, so bucket sums do not add to the
+    pipeline total. Everything else maps its parent stage onto exactly
+    one bucket.
+    """
+    buckets = {"load": 0.0, "resample": 0.0, "encoder": 0.0,
+               "decoder": 0.0, "post": 0.0}
+    for rec in stages_records:
+        name = rec["stage"]
+        if name == "audio_resample":
+            buckets["resample"] += rec["wall_ms"]
+        elif "child_of" in rec:
+            pass  # breakdown rows: the parent stage already counts them
+        elif name in ("audio_load", "island_open", "decoder_load",
+                      "startup_to_main"):
+            buckets["load"] += rec["wall_ms"]
+        elif name.startswith("mel_frontend") or name.startswith(
+                "encoder_ane"):
+            buckets["encoder"] += rec["wall_ms"]
+        elif name.startswith("tdt_decode"):
+            buckets["decoder"] += rec["wall_ms"]
+        elif name in ("detokenize", "outputs_write"):
+            buckets["post"] += rec["wall_ms"]
+    return {name: round(ms, 3) for name, ms in buckets.items()}
+
+
 def _emit_waterfall_stderr(report: dict, out, stages_records: list) -> None:
     """Print a one-line-per-stage summary on stderr (env-gated)."""
     parts = []
     for rec in stages_records:
         parts.append(f"{rec['stage']}={rec['wall_ms']:.1f}ms")
-    total = round(sum(r["wall_ns"] for r in stages_records) / 1e6, 3)
+    total = round(
+        sum(r["wall_ns"] for r in stages_records
+            if "child_of" not in r) / 1e6, 3)
     sys.stderr.write(
         "[pk-waterfall] out=" + str(out) + " total_staged=" +
         f"{total:.1f}ms | " + " ".join(parts) + "\n"
     )
+    buckets = _stage_buckets(stages_records)
+    ranked = " ".join(
+        f"{name}={buckets[name]:.1f}ms"
+        for name in sorted(buckets, key=buckets.get, reverse=True)
+    )
+    sys.stderr.write(f"[pk-stages] {ranked}\n")
 
 
 def _record_lifetime_stage(stages_records: list, name: str, snapshot) -> None:
@@ -735,7 +799,7 @@ def _load_audio(lock, fixture) -> tuple:
     import mlx.core as mx
 
     def stage_audio():
-        pcm, rate, decoder_name = _decode_audio(fixture)
+        pcm, rate, decoder_name, audio_timing = _decode_audio(fixture)
         if rate != lock.audio.sample_rate:
             raise TranscribeRefusal(
                 f"fixture sample rate {rate} != {lock.audio.sample_rate}"
@@ -743,7 +807,7 @@ def _load_audio(lock, fixture) -> tuple:
         with mx.stream(mx.gpu):
             waveform = mx.array(pcm).astype(mx.float32) / 32768.0
         mx.eval(waveform)
-        return waveform, pcm.size, decoder_name
+        return waveform, pcm.size, decoder_name, audio_timing
     return stage_audio()
 
 
@@ -1289,9 +1353,11 @@ def _golden_report(pin, passed, pinned, lock, fixture, audio_sha, sample_count,
         "stages": stages_records,
         "timing": {
             "total_pipeline_ms": round(
-                sum(r["wall_ns"] for r in stages_records) / 1e6, 3),
+                sum(r["wall_ns"] for r in stages_records
+                    if "child_of" not in r) / 1e6, 3),
             "decoder_total_ms": round(control.decoder_ns / 1e6, 3),
             "joint_total_ms": round(control.joint_ns / 1e6, 3),
+            "stage_buckets": _stage_buckets(stages_records),
         },
         "execution": {
             "ane_mode": True,
@@ -1388,8 +1454,23 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     # ------------------------------------------------------------- 1. audio
     if _pk_timing_extra_on():
         _record_lifetime_stage(stages_records, "startup_to_main", trace_snapshot)
-    waveform, sample_count, decoder_name = stage(
+    waveform, sample_count, decoder_name, audio_timing = stage(
         "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
+    # Child rows break audio_load down into the probe/decode/resample calls;
+    # they are excluded from total_pipeline_ms (the parent already counts
+    # them) and exist so the stage table can price resample on its own.
+    for child_name, child_ms in (
+            ("audio_probe", audio_timing.get("probe_ms")),
+            ("audio_decode", audio_timing.get("decode_ms")),
+            ("audio_resample", audio_timing.get("resample_ms"))):
+        if child_ms is not None:
+            stages_records.append({
+                "stage": child_name,
+                "child_of": "audio_load",
+                "wall_ns": int(child_ms * 1e6),
+                "wall_ms": round(child_ms, 3),
+                "gpu_counter_delta": {},
+            })
     warm = _GpuWarm(mx)
     warm.start()
 

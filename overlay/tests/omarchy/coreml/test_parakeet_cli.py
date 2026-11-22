@@ -279,6 +279,108 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertNotIn("missing runtime dependencies", run.stderr)
 
+    def _write_wav(self, path: Path, rate: int, channels: int,
+                   frames: int = 1600) -> None:
+        import struct
+        import wave
+
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(channels)
+            wav.setsampwidth(2)
+            wav.setframerate(rate)
+            wav.writeframes(
+                b"".join(struct.pack("<h", (i * 37) % 2000 - 1000)
+                         for i in range(frames * channels)))
+
+    def test_decode_audio_reports_resample_as_its_own_stage(self):
+        """A non-16 kHz input runs decode and resample as separate ffmpeg
+        passes, and the timing dict prices each one (V2 stage table)."""
+        import importlib.util
+        if not importlib.util.find_spec("numpy"):
+            self.skipTest("numpy not installed")
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "clip-8k.wav"
+            self._write_wav(clip, rate=8000, channels=1)
+            pcm, rate, decoder, timing = self.mod._decode_audio(clip)
+        self.assertEqual(rate, 16000)
+        self.assertTrue(timing["resampled"])
+        self.assertIsNotNone(timing["probe_ms"])
+        self.assertIsNotNone(timing["decode_ms"])
+        self.assertIsNotNone(timing["resample_ms"])
+        self.assertIn("ffmpeg", decoder)
+        # ~0.1 s at 8 kHz decodes to ~0.1 s at 16 kHz.
+        self.assertAlmostEqual(pcm.size, 3200, delta=64)
+
+    def test_decode_audio_16khz_mono_marks_no_resample(self):
+        """A native 16 kHz mono file never engages the resampler on
+        either decode path, and still reports a decode time."""
+        import importlib.util
+        if not importlib.util.find_spec("numpy"):
+            self.skipTest("numpy not installed")
+        if not importlib.util.find_spec("soundfile") and not (
+                shutil.which("ffmpeg") and shutil.which("ffprobe")):
+            self.skipTest("no decoder available")
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "clip-16k.wav"
+            self._write_wav(clip, rate=16000, channels=1)
+            pcm, rate, decoder, timing = self.mod._decode_audio(clip)
+        self.assertEqual(rate, 16000)
+        self.assertFalse(timing["resampled"])
+        self.assertIsNone(timing["resample_ms"])
+        self.assertIsNotNone(timing["decode_ms"])
+
+    def test_stage_buckets_fold_children_without_double_counting(self):
+        records = [
+            {"stage": "startup_to_main", "wall_ms": 100.0},
+            {"stage": "audio_load", "wall_ms": 50.0},
+            {"stage": "audio_decode", "wall_ms": 40.0,
+             "child_of": "audio_load"},
+            {"stage": "audio_resample", "wall_ms": 5.0,
+             "child_of": "audio_load"},
+            {"stage": "island_open", "wall_ms": 200.0},
+            {"stage": "decoder_load", "wall_ms": 30.0},
+            {"stage": "mel_frontend", "wall_ms": 10.0},
+            {"stage": "encoder_ane", "wall_ms": 20.0},
+            {"stage": "tdt_decode", "wall_ms": 80.0},
+            {"stage": "detokenize", "wall_ms": 4.0},
+            {"stage": "outputs_write", "wall_ms": 6.0},
+        ]
+        buckets = self.mod._stage_buckets(records)
+        self.assertEqual(buckets["load"], 380.0)
+        self.assertEqual(buckets["resample"], 5.0)
+        self.assertEqual(buckets["encoder"], 30.0)
+        self.assertEqual(buckets["decoder"], 80.0)
+        self.assertEqual(buckets["post"], 10.0)
+        # audio_probe/audio_decode children stay out of every bucket:
+        # the audio_load parent already counts them.
+        self.assertEqual(sum(buckets.values()), 505.0)
+
+    def test_waterfall_emit_prints_a_ranked_stage_table(self):
+        import contextlib
+        import io
+
+        report = {}
+        records = [
+            {"stage": "audio_load", "wall_ns": 50_000_000,
+             "wall_ms": 50.0},
+            {"stage": "audio_resample", "wall_ns": 5_000_000,
+             "wall_ms": 5.0, "child_of": "audio_load"},
+            {"stage": "tdt_decode", "wall_ns": 80_000_000,
+             "wall_ms": 80.0},
+        ]
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self.mod._emit_waterfall_stderr(report, "out", records)
+        lines = buf.getvalue().splitlines()
+        self.assertIn("total_staged=130.0ms", lines[0])
+        self.assertTrue(lines[1].startswith("[pk-stages]"))
+        # Ranked descending by bucket cost.
+        self.assertIn("decoder=80.0ms", lines[1])
+        self.assertLess(lines[1].index("decoder="),
+                        lines[1].index("load="))
+
     def test_transcribe_import_closure_is_declared(self):
         """Static import closure of the CLI plus the vendored coreml tree.
 
