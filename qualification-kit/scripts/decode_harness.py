@@ -11,6 +11,7 @@ Contract (fixed 2026-11-21, Main):
 
   decode_harness.py run --model PATH [--ctx 512] [--max-tokens 128] [--rounds 5] \
       [--prompt "..."] --out a4.json
+  decode_harness.py prefill [--ctx 512] --out prefill.json  # one timed ctx-512 prompt pass
   decode_harness.py preflight            # HF cache snapshot check, loud abort if absent
   decode_harness.py dry-run [--ctx 512] [--max-tokens 128] [--prompt "..."]  # no mlx needed
   decode_harness.py selftest             # assert-based check of the pure logic
@@ -52,6 +53,25 @@ def decode_rate(stamps):
     return (len(stamps) - 1) / (stamps[-1] - stamps[0])
 
 
+def token_digest(ids):
+    """sha256 of the generated ids as compact JSON. Refuses missing, empty or non-int ids."""
+    if not ids or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        raise ValueError(f"token ids missing or not integers: {ids!r}")
+    return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
+
+
+def round_record(index, stamps, ids):
+    return {"round": index, "decode_tps": decode_rate(stamps), "n_tokens": len(stamps),
+            "t_first": stamps[0], "t_last": stamps[-1],
+            "token_ids": ids, "token_digest": token_digest(ids)}
+
+
+def prefill_input(ids):
+    """The prompt as a (1, ctx) batch: mlx_lm models take (batch, seq)."""
+    import mlx.core as mx
+    return mx.array([ids])
+
+
 def snapshot_candidates():
     home = Path(os.path.expanduser("~"))
     return [
@@ -86,21 +106,21 @@ def _snapshot_dir():
 
 
 def run_round(model, ids, max_tokens):
-    """One decode round on a fresh prompt cache; returns per-token wall stamps."""
+    """One decode round on a fresh prompt cache; returns (per-token wall stamps, token ids)."""
     import mlx.core as mx
     from mlx_lm.models.cache import make_prompt_cache
 
     cache = make_prompt_cache(model)
-    stamps = []
+    stamps, out = [], []
     x = mx.array([ids])
     for _ in range(max_tokens):
-        t = time.perf_counter()
         logits = model(x, cache=cache)
         tok = mx.argmax(logits[:, -1, :], axis=-1)  # greedy: no sampling call
         mx.eval(tok)
         stamps.append(time.perf_counter())
-        x = tok
-    return stamps
+        out.append(int(tok.item()))
+        x = tok[:, None]  # (batch, 1) for the next step
+    return stamps, out
 
 
 def do_run(args):
@@ -111,12 +131,11 @@ def do_run(args):
     ids = prompt_ids(args.prompt, args.ctx)
     rounds = []
     for i in range(args.rounds):
-        stamps = run_round(model, ids, args.max_tokens)
-        rounds.append({"round": i + 1, "decode_tps": decode_rate(stamps),
-                       "n_tokens": len(stamps),
-                       "t_first": stamps[0], "t_last": stamps[-1]})
+        stamps, toks = run_round(model, ids, args.max_tokens)
+        rounds.append(round_record(i + 1, stamps, toks))
         print(f"round {i + 1}/{args.rounds}: {rounds[-1]['decode_tps']:.2f} tok/s")
     rates = [r["decode_tps"] for r in rounds]
+    digests = sorted({r["token_digest"] for r in rounds})
     out = {
         "schema_version": SCHEMA_VERSION,
         "hf_repo": HF_REPO.replace("models--", "").replace("--", "/"),
@@ -131,12 +150,34 @@ def do_run(args):
         "greedy": True,
         "rounds": rounds,
         "median_decode_tps": statistics.median(rates),
+        "token_digest": digests[0] if len(digests) == 1 else None,
+        "token_digests": digests,
         "rate_formula": f"{args.max_tokens - 1}/(t_last - t_first)",
         "argv": sys.argv,
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     Path(args.out).write_text(json.dumps(out, indent=2) + "\n")
-    print(f"A4 written: {args.out} median={out['median_decode_tps']:.2f} tok/s")
+    print(f"A4 written: {args.out} median={out['median_decode_tps']:.2f} tok/s "
+          f"token_digest={out['token_digest']}")
+    if len(digests) != 1:
+        raise SystemExit(f"FAIL: greedy rounds produced {len(digests)} different token digests")
+
+
+def do_prefill(args):
+    import mlx.core as mx
+    from mlx_lm import load
+
+    snap = preflight()
+    model, _ = load(str(snap))
+    x = prefill_input(prompt_ids(args.prompt, args.ctx))
+    mx.eval(model(x))  # warm-up
+    t0 = time.perf_counter()
+    mx.eval(model(x))
+    dt = time.perf_counter() - t0
+    out = {"ctx": args.ctx, "prompt": args.prompt, "seconds": dt, "prefill_tps": args.ctx / dt,
+           "argv": sys.argv, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    Path(args.out).write_text(json.dumps(out, indent=2) + "\n")
+    print(f"prefill written: {args.out} {out['prefill_tps']:.1f} tok/s")
 
 
 def do_dry_run(args):
@@ -163,23 +204,33 @@ def do_selftest():
     base = [1, 2, 3]
     ids = (base * (512 // len(base) + 1))[:512]
     assert len(ids) == 512 and ids[:3] == [1, 2, 3] and ids[-1] == 2
-    print("selftest OK: rate=127.0 tok/s on 128 stamps; median; ids repeat/truncate to 512")
+    assert token_digest([1, 2, 3]) == hashlib.sha256(b"[1,2,3]").hexdigest()
+    for bad in (None, []):
+        try:
+            token_digest(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"token_digest accepted {bad!r}")
+    print("selftest OK: rate=127.0 tok/s on 128 stamps; median; ids repeat/truncate to 512; token digest")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("run", "dry-run", "selftest", "preflight"):
+    for name in ("run", "prefill", "dry-run", "selftest", "preflight"):
         p = sub.add_parser(name)
-        if name in ("run", "dry-run"):
+        if name in ("run", "prefill", "dry-run"):
             p.add_argument("--ctx", type=int, default=DEFAULT_CTX)
             p.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
             p.add_argument("--prompt", default=DEFAULT_PROMPT)
         if name == "run":
             p.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS)
             p.add_argument("--out", default="a4.json")
+        if name == "prefill":
+            p.add_argument("--out", default="prefill.json")
     args = ap.parse_args()
-    {"run": do_run, "dry-run": do_dry_run, "selftest": lambda a: do_selftest(),
+    {"run": do_run, "prefill": do_prefill, "dry-run": do_dry_run, "selftest": lambda a: do_selftest(),
      "preflight": lambda a: preflight()}[args.cmd](args)
 
 
