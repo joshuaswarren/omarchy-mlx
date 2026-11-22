@@ -122,8 +122,9 @@ costs true positives and never removes a false wake: all six confusable
 clips peak inside speech (0.85-0.999), so no RMS gate can veto them, while
 the quiet frames it does veto are often the frame that carried the phrase.
 The gate stays in the code and its default stays 0 (off). What it does:
-the veto can drop a wake whose score peaks in a quiet frame at the tail of
-the phrase.
+the veto checks the RMS of the single crossing frame, and openWakeWord
+scores usually peak on the last chunks of a phrase, often in its decaying
+tail, so a non-zero floor can veto a real wake.
 
 **What this suite does not measure:** ambient noise. Every negative is
 speech. A lower threshold makes noise-triggered wakes more likely, and

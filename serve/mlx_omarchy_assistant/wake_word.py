@@ -93,7 +93,14 @@ def prepare(home, model: str = "hey_jarvis", fetch=None) -> Path:
 
 
 class WakeWordDetector:
-    """Scores 16 kHz mono little-endian int16 PCM and fires once per refractory window."""
+    """Scores 16 kHz mono little-endian int16 PCM and fires once per refractory window.
+
+    vad_rms_floor is a speech-validity gate on the crossing frame: a wake
+    counts only when that frame carries speech. openWakeWord scores
+    usually peak on the last chunks of a phrase, often in its decaying
+    tail, so a non-zero floor can veto a real wake. The default is 0
+    (off).
+    """
 
     def __init__(self, model_path, threshold: float = WAKE_THRESHOLD_DEFAULT,
                  refractory_seconds: float = 1.5, session=None,
