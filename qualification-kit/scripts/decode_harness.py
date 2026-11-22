@@ -9,7 +9,7 @@ Contract (fixed 2026-11-21, Main):
   decode tok/s, model snapshot 0867d98bfb174b042d88461c0e7c97b86b34b381 of HF repo
   models--SiddhJagani--Qwen3.8-2B-mlx-4Bit. Emits the A4 JSON schema (a4-schema.json).
 
-  decode_harness.py run --model PATH [--ctx 512] [--max-tokens 128] [--rounds 5] \
+  decode_harness.py run [--model PATH] [--ctx 512] [--max-tokens 128] [--rounds 5] \
       [--prompt "..."] --out a4.json
   decode_harness.py prefill [--ctx 512] --out prefill.json  # one timed ctx-512 prompt pass
   decode_harness.py preflight            # HF cache snapshot check, loud abort if absent
@@ -35,10 +35,10 @@ DEFAULT_ROUNDS = 5
 SCHEMA_VERSION = "A4"
 
 
-def prompt_ids(prompt, ctx):
+def prompt_ids(prompt, ctx, model_path=None):
     """Tokenize once, repeat, truncate to exactly ctx ids."""
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(_snapshot_dir())
+    tok = AutoTokenizer.from_pretrained(str(model_path or _snapshot_dir()))
     base = tok.encode(prompt)
     if not base:
         raise SystemExit("prompt tokenized to zero ids")
@@ -118,6 +118,13 @@ def _snapshot_dir():
     return str(hits[0])
 
 
+def model_dir(value):
+    path = Path(os.path.expanduser(value))
+    if not value.strip() or not path.is_dir():  # Path("") is "."
+        raise argparse.ArgumentTypeError(f"{value!r} is not a directory")
+    return path
+
+
 def run_round(model, ids, max_tokens):
     """One decode round on a fresh prompt cache; returns (per-token wall stamps, token ids)."""
     import mlx.core as mx
@@ -139,9 +146,9 @@ def run_round(model, ids, max_tokens):
 def do_run(args):
     from mlx_lm import load
 
-    snap = preflight()
+    snap = args.model or preflight()
     model, _ = load(str(snap))  # load once
-    ids = prompt_ids(args.prompt, args.ctx)
+    ids = prompt_ids(args.prompt, args.ctx, snap)
     rounds = []
     for i in range(args.rounds):
         stamps, toks = run_round(model, ids, args.max_tokens)
@@ -238,6 +245,12 @@ def main():
             p.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
             p.add_argument("--prompt", default=DEFAULT_PROMPT)
         if name == "run":
+            p.add_argument(
+                "--model",
+                type=model_dir,
+                default=None,
+                help="directory holding the pinned snapshot; default: find it in the HF cache",
+            )
             p.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS)
             p.add_argument("--out", default="a4.json")
         if name == "prefill":

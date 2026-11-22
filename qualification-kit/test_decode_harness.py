@@ -196,6 +196,58 @@ class SnapshotCandidatesTest(unittest.TestCase):
             self.assertIn("ABORT:", buf.getvalue())
 
 
+class RunModelFlagTest(unittest.TestCase):
+    """`run --model PATH` loads the model and the tokenizer from PATH."""
+
+    def setUp(self):
+        install_fake_mlx(self)
+        self.loaded = []  # paths given to mlx_lm.load, then AutoTokenizer.from_pretrained
+        sys.modules["mlx_lm"].load = lambda path: (self.loaded.append(path), (FakeModel(), None))[1]
+        tokenizer = types.SimpleNamespace(encode=lambda prompt: [1, 2, 3])
+        auto = types.SimpleNamespace(from_pretrained=lambda path: (self.loaded.append(path), tokenizer)[1])
+        patcher = mock.patch.dict(sys.modules, {"transformers": types.SimpleNamespace(AutoTokenizer=auto)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.h = load_harness()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.out = self.home / "a4.json"
+
+    def _run(self, *extra):
+        argv = ["decode_harness.py", "run", *extra, "--rounds", "1", "--max-tokens", "4", "--out", str(self.out)]
+        self.err = io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(self.err):
+            os.environ.pop("HF_HOME", None)
+            os.environ.pop("HF_HUB_CACHE", None)
+            self.h.main()
+
+    def test_model_flag_expands_tilde_and_skips_preflight(self):
+        (self.home / "pinned-model").mkdir()
+        expected = str(self.home / "pinned-model")
+        with mock.patch.object(self.h, "preflight", side_effect=AssertionError("preflight called")):
+            self._run("--model", "~/pinned-model")
+        self.assertEqual(self.loaded, [expected, expected])
+        self.assertEqual(json.loads(self.out.read_text())["snapshot_dir"], expected)
+
+    def test_missing_empty_or_file_model_exits_2(self):
+        (self.home / "file").write_text("")
+        for value in (str(self.home / "missing"), str(self.home / "file"), "", " "):
+            with self.subTest(value=value), self.assertRaises(SystemExit) as ctx:
+                self._run("--model", value)
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertIn("argument --model", self.err.getvalue())
+        self.assertEqual(self.loaded, [])
+
+    def test_without_model_flag_uses_cached_snapshot(self):
+        snap = self.home / ".cache/huggingface/hub" / self.h.HF_REPO / "snapshots" / self.h.SNAPSHOT
+        snap.mkdir(parents=True)
+        self._run()
+        self.assertEqual(self.loaded, [str(snap), str(snap)])
+        self.assertEqual(json.loads(self.out.read_text())["snapshot_dir"], str(snap))
+
+
 class SchemaTest(unittest.TestCase):
     def test_schema_requires_ids_and_digests(self):
         schema = json.loads((HERE / "a4-schema.json").read_text())
