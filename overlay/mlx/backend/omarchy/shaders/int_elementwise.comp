@@ -275,16 +275,18 @@ VALUE_TYPE integer_sign(VALUE_TYPE a) {
   return VALUE_TYPE(int(uint(IS_GT0(a))) - int(uint(IS_NEG(a))));
 }
 
-// Branchless abs for INT_ARITH_CASES (mesa#739). u64 abs is the identity:
-// the sign-magnitude trick needs an arithmetic shift, which does not exist
-// on unsigned, so USE_U64 keeps the value. Every other variant's VALUE_TYPE
-// is signed (int or int64_t), where a >> (bits-1) is -1 for negatives.
+// Branchless abs for INT_ARITH_CASES (mesa#739). Unsigned abs is the
+// identity: the sign-magnitude trick needs an arithmetic shift, which
+// does not exist on unsigned (u32's a >> 31 is logical, mask 0 or 1),
+// so USE_U32 and USE_U64 keep the value. Every signed variant's
+// VALUE_TYPE is int or int64_t, where a >> (bits-1) is -1 for negatives;
+// the 8/16-bit variants' VALUE_TYPE is widened int, so bit 31 stays clear.
 #if defined(USE_I64) || defined(USE_U64)
 #define INT_ABS_SHIFT 63
 #else
 #define INT_ABS_SHIFT 31
 #endif
-#ifdef USE_U64
+#if defined(USE_U64) || defined(USE_U32)
 #define INT_ABS(a) (a)
 #else
 #define INT_ABS(a) (((a) ^ ((a) >> INT_ABS_SHIFT)) - ((a) >> INT_ABS_SHIFT))
