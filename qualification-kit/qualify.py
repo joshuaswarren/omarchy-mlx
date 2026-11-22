@@ -42,6 +42,9 @@ BENCH = ROOT / 'scripts/bench_decode.py'
 SCHEMA = 'omarchy-mlx-qualification-v4'
 WORKLOAD = {'model': MODEL, 'revision': REV, 'prompt': PROMPT,
             'tokens': TOKENS, 'warmup': 4, 'temp': 0, 'seed': 0}
+PACKAGED_VULKAN_DIR = '/usr/lib/omarchy-mlx/vulkan'
+# Copied from serve/mlx_omarchy_paths.py, not imported: the sealed kit runs without serve/.
+PACKAGED_ICD_NAMES = ('borealis_icd.aarch64.json', 'honeykrisp_icd.aarch64.json')
 
 
 def sha(path):
@@ -545,6 +548,16 @@ def card_row(r):
     return '. '.join(parts) + '.'
 
 
+def packaged_icd(vulkan_dir=None):
+    """Return the first packaged Apple Vulkan ICD manifest file, Borealis first."""
+    directory = Path(PACKAGED_VULKAN_DIR if vulkan_dir is None else vulkan_dir)
+    for name in PACKAGED_ICD_NAMES:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--machine-id', help='same random 16–32 hex characters on both OSes')
@@ -581,8 +594,8 @@ def main():
         parser.error('Linux or macOS required')
     mac = kind == 'Darwin'
     if not mac and not args.icd:
-        packaged = Path('/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json')
-        if packaged.is_file():
+        packaged = packaged_icd()
+        if packaged is not None:
             args.icd = packaged
         else:
             parser.error('set --icd to the installed Apple Vulkan JSON manifest')
