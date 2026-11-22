@@ -257,6 +257,10 @@ bool fused_gemv_enabled(const Device& device);
 // chip-gated default plus the MLX_OMARCHY_QMM_GEOM override. For tests and
 // docs; defined in primitives.cpp beside the geometry selection.
 const char* qmm_geometry_name();
+// MLX_OMARCHY_QMM_VEC_Q4_WORD (unset or 1: on). dispatch_quantized_gemv_group refuses every
+// group when it is off, so the out-gate fold planner must consult it before adoption.
+// Defined in primitives.cpp.
+bool qmm_vec_q4_word_enabled();
 
 bool outgate_fold_enabled();
 

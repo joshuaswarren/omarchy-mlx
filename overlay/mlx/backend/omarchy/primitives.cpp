@@ -9444,6 +9444,10 @@ const char* qmm_geometry_name() {
   return qmm_geometry().name;
 }
 
+bool qmm_vec_q4_word_enabled() {
+  return q4_word_enabled();
+}
+
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
