@@ -28,14 +28,11 @@ inline uint32_t staging_memory_type(
   return fallback;
 }
 
-inline uint32_t weight_memory_type(
-    VkPhysicalDeviceType device_type,
+// The largest pure DEVICE_LOCAL memory type (true VRAM: device local and
+// not host visible). UINT32_MAX when the device has none.
+inline uint32_t local_device_memory_type(
     const VkPhysicalDeviceMemoryProperties& memory,
     uint32_t types) {
-  if (device_type != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
-      staging_memory_type(memory, UINT32_MAX) == UINT32_MAX) {
-    return UINT32_MAX;
-  }
   for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
     const auto& type = memory.memoryTypes[i];
     if ((types & (1u << i)) &&
@@ -46,6 +43,74 @@ inline uint32_t weight_memory_type(
     }
   }
   return UINT32_MAX;
+}
+
+// Where inference weights live on a discrete GPU.
+//
+// The card memory a driver exposes is not always the card memory a model
+// needs: a discrete card behind a link without a large bar aperture shows a
+// small device-local heap (a few hundred MiB) while its real memory stays
+// unreachable, and a bar-mapped card shows one large host-visible
+// device-local heap. Placing a model in the first device-local type that
+// matches then fills the small heap and fails the allocation.
+//
+// So the choice is size aware: the largest pure device-local heap when it
+// can hold the request, then the largest host-visible device-local heap when
+// that can hold it, and UINT32_MAX when neither can - the caller then keeps
+// the weights in host memory and the card still runs the compute.
+//
+// Integrated GPUs never take this path: they keep the mapped weights.
+inline uint32_t weight_memory_type_for_size(
+    VkPhysicalDeviceType device_type,
+    const VkPhysicalDeviceMemoryProperties& memory,
+    uint32_t types,
+    size_t bytes) {
+  if (device_type != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
+      staging_memory_type(memory, UINT32_MAX) == UINT32_MAX) {
+    return UINT32_MAX;
+  }
+  uint32_t best_local = UINT32_MAX;
+  uint32_t best_mapped = UINT32_MAX;
+  VkDeviceSize best_local_size = 0;
+  VkDeviceSize best_mapped_size = 0;
+  for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+    const auto& type = memory.memoryTypes[i];
+    if (!(types & (1u << i)) ||
+        !(type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+      continue;
+    }
+    const auto& heap = memory.memoryHeaps[type.heapIndex];
+    if (!(heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+      continue;
+    }
+    if (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+      if (heap.size > best_mapped_size) {
+        best_mapped_size = heap.size;
+        best_mapped = i;
+      }
+    } else if (heap.size > best_local_size) {
+      best_local_size = heap.size;
+      best_local = i;
+    }
+  }
+  if (best_local != UINT32_MAX && best_local_size >= bytes) {
+    return best_local;
+  }
+  if (best_mapped != UINT32_MAX && best_mapped_size >= bytes) {
+    return best_mapped;
+  }
+  return UINT32_MAX;
+}
+
+inline uint32_t weight_memory_type(
+    VkPhysicalDeviceType device_type,
+    const VkPhysicalDeviceMemoryProperties& memory,
+    uint32_t types) {
+  if (device_type != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
+      staging_memory_type(memory, UINT32_MAX) == UINT32_MAX) {
+    return UINT32_MAX;
+  }
+  return local_device_memory_type(memory, types);
 }
 
 inline constexpr size_t kWeightStagingBytes = 4 * 1024 * 1024;

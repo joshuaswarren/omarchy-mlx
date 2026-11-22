@@ -7352,8 +7352,11 @@ void Load::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (inference_weight_ && out.nbytes() != 0) {
     auto& encoder = omarchy::get_command_encoder(stream());
     auto& dev = encoder.device();
-    if (omarchy::weight_memory_type(
-            dev.physical_type(), dev.memory_properties(), UINT32_MAX) != UINT32_MAX) {
+    if (omarchy::weight_memory_type_for_size(
+            dev.physical_type(),
+            dev.memory_properties(),
+            UINT32_MAX,
+            out.nbytes()) != UINT32_MAX) {
       if (&dev != &omarchy::device()) {
         throw std::runtime_error(
             "[omarchy] inference weights require the selected Vulkan device");

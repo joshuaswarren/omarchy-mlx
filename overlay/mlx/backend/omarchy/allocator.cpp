@@ -142,7 +142,11 @@ VulkanBuffer make_weight_buffer(Device& dev, size_t size, bool staging) {
     const auto& memory = dev.memory_properties();
     const uint32_t type = staging
         ? staging_memory_type(memory, requirements.memoryTypeBits)
-        : weight_memory_type(dev.physical_type(), memory, requirements.memoryTypeBits);
+        : weight_memory_type_for_size(
+              dev.physical_type(),
+              memory,
+              requirements.memoryTypeBits,
+              requirements.size);
     if (type == UINT32_MAX) {
       throw std::runtime_error(staging
           ? "[omarchy] no compatible host memory for weight staging"
