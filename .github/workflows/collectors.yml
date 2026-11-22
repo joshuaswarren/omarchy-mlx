@@ -86,6 +86,6 @@ jobs:
           import xml.etree.ElementTree as ET
 
           cases = ET.parse(sys.argv[1]).findall(".//testcase")
-          if len(cases) != 36 or any(case.find("skipped") is not None for case in cases):
-              sys.exit("Expected one host-offset, two BitLinear, ten speculative-lookup, two transformers-advisory, one chat-torch-free and twenty kv-presize CPU regressions")
+          if len(cases) != 40 or any(case.find("skipped") is not None for case in cases):
+              sys.exit("Expected one host-offset, two BitLinear, fourteen speculative-lookup, two transformers-advisory, one chat-torch-free and twenty kv-presize CPU regressions")
           PY
