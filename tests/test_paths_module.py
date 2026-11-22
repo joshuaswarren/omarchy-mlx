@@ -161,5 +161,52 @@ class RecognitionDelegationTest(unittest.TestCase):
                     os.environ[paths.VENV_ENV] = previous
 
 
+class PackagedIcdTest(unittest.TestCase):
+    def _stage_manifest(self, prefix: Path, name: str) -> Path:
+        vulkan_dir = _makedirs(prefix / paths.VULKAN_DIR_NAME)
+        manifest = vulkan_dir / name
+        manifest.write_text("{}\n")
+        return manifest
+
+    def test_packaged_icd_names_order(self):
+        self.assertEqual(
+            paths.PACKAGED_ICD_NAMES,
+            ("borealis_icd.aarch64.json", "honeykrisp_icd.aarch64.json"),
+        )
+
+    def test_packaged_icd_resolves_legacy_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            legacy = self._stage_manifest(prefix, paths.HONEYKRISP_ICD_NAME)
+            resolved = paths.packaged_honeykrisp_icd(prefix)
+            self.assertEqual(resolved, legacy)
+            self.assertTrue(resolved.is_file())
+
+    def test_packaged_icd_resolves_borealis_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            borealis = self._stage_manifest(prefix, paths.BOREALIS_ICD_NAME)
+            resolved = paths.packaged_honeykrisp_icd(prefix)
+            self.assertEqual(resolved, borealis)
+            self.assertTrue(resolved.is_file())
+
+    def test_packaged_icd_prefers_borealis_when_both_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            self._stage_manifest(prefix, paths.HONEYKRISP_ICD_NAME)
+            borealis = self._stage_manifest(prefix, paths.BOREALIS_ICD_NAME)
+            resolved = paths.packaged_honeykrisp_icd(prefix)
+            self.assertEqual(resolved, borealis)
+            self.assertTrue(resolved.is_file())
+
+    def test_packaged_icd_falls_back_to_legacy_path_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            vulkan_dir = _makedirs(prefix / paths.VULKAN_DIR_NAME)
+            resolved = paths.packaged_honeykrisp_icd(prefix)
+            self.assertEqual(resolved, vulkan_dir / paths.HONEYKRISP_ICD_NAME)
+            self.assertFalse(resolved.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
