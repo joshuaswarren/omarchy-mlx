@@ -1533,6 +1533,31 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         plan.sigmoid_id, EagerRole{gi, EagerStep::skip});
     state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
   }
+  // RMSNorm prologue attach validation: every reader of the norm output
+  // is a member of this group, the norm shares the member stream, and the
+  // device takes the bf16 subgroup 2x4 kernel. The norm node then maps to
+  // the group as a skip role.
+  for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+    auto& group = state->gemv_groups[gi];
+    if (!group.norm) {
+      continue;
+    }
+    NormPlan& plan = *group.norm;
+    const Stream& member_stream = group.members[0].node.primitive().stream();
+    auto& encoder = get_command_encoder(member_stream);
+    const auto& caps = encoder.device().capabilities();
+    bool subgroup_ready = caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    if (plan.x.primitive().stream() != member_stream || !subgroup_ready ||
+        std::strcmp(qmm_geometry_name(), "2x4") != 0 ||
+        outgate_reader_count[plan.x.id()] != group.members.size() ||
+        encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3) {
+      group.norm.reset();
+      continue;
+    }
+    state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
+  }
   // SwiGLU store epilogue fold. When a planned group is exactly the
   // gate and up projections of a planned swiglu chain — two members,
   // no Add epilogues, equal lengths, f16/bf16 — the group's dispatch
@@ -2175,6 +2200,11 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.norm ? &*group.norm : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
+      if (group.state == GemvGroup::State::failed && group.norm) {
+        throw std::runtime_error(
+            "[mlx-omarchy] RMSNorm prologue group refused after fold "
+            "adoption");
+      }
       if (group.state == GemvGroup::State::failed && group.outgate) {
         // The deleted sigmoid and multiply never ran and cannot be
         // replayed here; a refusal after adoption is a planner bug,

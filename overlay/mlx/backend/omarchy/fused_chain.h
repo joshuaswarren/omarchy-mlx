@@ -271,6 +271,7 @@ bool fused_gemv_enabled(const Device& device);
 const char* qmm_geometry_name();
 
 bool outgate_fold_enabled();
+bool norm_fold_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off

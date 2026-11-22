@@ -2073,3 +2073,62 @@ TEST_CASE("fused planner leaves CPU-stream nodes to the CPU") {
     CHECK(d.item<float>() < tolerance[i]);
   }
 }
+
+TEST_CASE("eager q4 decode gemv group folds the 2048-wide bf16 rms_norm prologue") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 2048;
+  auto q = make_linear(256, k, bfloat16, stream);
+  auto kk = make_linear(128, k, bfloat16, stream);
+  auto v = make_linear(256, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array weight = astype(
+      random::normal(Shape{k}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  eval({x, weight});
+  sync_stream(stream);
+  auto forward = [&] {
+    array h = fast::rms_norm(x, weight, 1e-6f, stream);
+    return std::vector<array>{
+        h, project(h, q, stream), project(h, kk, stream),
+        project(h, v, stream)};
+  };
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+
+  unsetenv("MLX_OMARCHY_NORM_PROLOGUE");
+  auto baseline = forward();
+  uint64_t before = counters().vk_compute_dispatches.load();
+  eval({baseline[1], baseline[2], baseline[3]});
+  sync_stream(stream);
+  const uint64_t baseline_dispatches =
+      counters().vk_compute_dispatches.load() - before;
+
+  setenv("MLX_OMARCHY_NORM_PROLOGUE", "1", 1);
+  auto candidate = forward();
+  before = counters().vk_compute_dispatches.load();
+  eval({candidate[1], candidate[2], candidate[3]});
+  sync_stream(stream);
+  const uint64_t candidate_dispatches =
+      counters().vk_compute_dispatches.load() - before;
+  unsetenv("MLX_OMARCHY_NORM_PROLOGUE");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+
+  // The fold forms only on the bf16 subgroup-32 2x4 column; elsewhere the
+  // flag must leave the dispatch count and every bit unchanged.
+  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+  const bool fold_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+      std::strcmp(omarchy::qmm_geometry_name(), "2x4") == 0;
+  INFO("baseline dispatches ", baseline_dispatches);
+  CHECK_EQ(candidate_dispatches + (fold_ready ? 1u : 0u), baseline_dispatches);
+  for (size_t i = 0; i < baseline.size(); ++i) {
+    INFO("output ", i);
+    expect_bit_exact(baseline[i], candidate[i], stream);
+  }
+}
