@@ -22,7 +22,7 @@ from qualification_reference import comparison
 from scripts.bench_decode import ids_digest
 
 ROOT = Path(__file__).resolve().parent
-PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
+PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '900'))
 TAG = 'qualification-r6'
 WHEEL_TAG = 'qualification-r5'
 VENDOR_RELEASE = 'v0.7.47'

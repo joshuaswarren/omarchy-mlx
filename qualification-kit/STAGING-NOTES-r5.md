@@ -55,6 +55,24 @@ attempt (05:0xZ) refused with "runtime pin declares parakeet-encoder-whole
 but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset"; the env is the fix, and the
 bundle's currency itself is G408's audit, not this staging's.
 
+## G421: post-558 contents + the lab's timeout
+
+`qualification-kit/qualify.py` now defaults `PER_FILE_TIMEOUT` to **900 s**
+(was 300 s on main; the lab's own history went 35 → 900). Provenance: the
+r3/r4 lab rows stopped at `test_quantized.py` on the short limit (exit 124)
+and only completed all 34 files with 80/80 known failures and 81/81 known
+skips matching once the limit was 900 s (omarchy-mlx#537, M5 Max G17C r3
+row, 2026-11-20) — that was the lab's only ad hoc kit patch; no other
+deviation was needed to match every reference.
+
+The r5 wheel carries **#558** by construction: `dd58d2e33ab3c2833a32e9760f6
+f8e56222d5d69` ("publish scalar loads synchronously so the evaluator fence
+is truthful", merged 2026-11-21) is an ancestor of the staging pin
+`bb66022715`, together with the follow-up regression tests (#561/#570/
+#574/#580) — the exact fix the lab's `test_export_unique` failure was
+pointing at. `QUALIFY_PER_FILE_TIMEOUT` remains an override for slower
+hosts.
+
 ## G415 companion tarball (Main's instruction, for the G403 prerelease)
 
 The #537 rerun ask ships one extra asset next to the r5 kit:
