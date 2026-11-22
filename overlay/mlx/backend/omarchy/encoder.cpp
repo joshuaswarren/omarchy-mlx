@@ -190,13 +190,16 @@ void CommandEncoder::record_dependency_barrier() {
 }
 
 bool CommandEncoder::compute_barrier() {
-  // MLX_OMARCHY_COMPUTE_BARRIER=1 (default off): a dispatch whose hazard is
-  // only earlier dispatches gets a compute-to-compute barrier instead of the
-  // full one. The batch head, a copy, fill or inline update since the last
-  // full barrier, or wave scheduling keeps the full barrier.
+  // A dispatch whose hazard is only earlier dispatches gets a compute-to-
+  // compute barrier instead of the full one (select_compute_barrier: default
+  // on for discrete GPUs, MLX_OMARCHY_COMPUTE_BARRIER=0/1 overrides). The
+  // batch head, a copy, fill or inline update since the last full barrier,
+  // or wave scheduling keeps the full barrier.
   static const bool on = []() {
-    return std::getenv("MLX_OMARCHY_COMPUTE_BARRIER") != nullptr &&
-        env_flag("MLX_OMARCHY_COMPUTE_BARRIER");
+    const int setting = std::getenv("MLX_OMARCHY_COMPUTE_BARRIER") == nullptr
+        ? -1
+        : (env_flag("MLX_OMARCHY_COMPUTE_BARRIER") ? 1 : 0);
+    return select_compute_barrier(omarchy::device().physical_type(), setting);
   }();
   return on;
 }
