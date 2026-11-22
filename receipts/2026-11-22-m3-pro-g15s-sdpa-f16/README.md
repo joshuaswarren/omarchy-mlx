@@ -30,7 +30,7 @@ All wheels are Release builds. Every process printed the `scripts/mlx_provenance
 - Head (`95126c59f`): `mlx_omarchy-0.32.4.dev202611220609+95126c59f` (`libmlx.so` sha256 `89386d8380fcb6fc…`, wheel sha256 `e3be8d853a33…`).
 - CPU-disabled head (`95126c59f`): `mlx_omarchy-0.32.4.dev202611220614+nocpu.95126c59f` (`libmlx.so` sha256 `56643b8658f2133c…`, wheel sha256 `56f9b0d82cbd…`), built with `MLX_BUILD_CPU=OFF` (`docs/parity-contract.md` § 2.1; `nocpu/build.txt`).
 - Newest green `main` (`c15a0d4f2`, gate and tests checks passing): `mlx_omarchy-0.32.4.dev202611220700+c15a0d4f2` (`libmlx.so` sha256 `d56c4b6eb3ccd1d9…`, wheel sha256 `71f9ec2d7b02…`).
-- Local merge of `95126c59f` onto `c15a0d4f2` (unpushed merge commit `9530b604b`, tree `a77a5d6d656833b1520d8dd3d7f8af995c6f1aea`, equal to `git merge-tree c15a0d4f2 95126c59f`): `mlx_omarchy-0.32.4.dev202611220703+9530b604b` (`libmlx.so` sha256 `88ddb9471a58d1dc…`, wheel sha256 `62b26081338a…`). No file under `overlay/mlx/backend/omarchy` differs between `8d92e094b` and `c15a0d4f2`.
+- Local merge of `95126c59f` onto `c15a0d4f2` (unpushed merge commit `9530b604b`, tree `a77a5d6d656833b1520d8dd3d7f8af995c6f1aea`, equal to `git merge-tree c15a0d4f2 95126c59f`): `mlx_omarchy-0.32.4.dev202611220703+9530b604b` (`libmlx.so` sha256 `88ddb9471a58d1dc…`, wheel sha256 `62b26081338a…`).
 
 ## Procedure and thermals (`scripts/`, `legs.txt`)
 
@@ -142,7 +142,7 @@ Published scripts take four environment variables:
 - `BASE_BUILD`: folder holding the base wheel in `dist-base/` and its venv in `venv-base/`
 - `MODELS`: folder holding `qwen3-4b-2507-4bit/`
 
-Rebuild the prompt text from commit `79d99c90c` before running `scripts/run_r2.sh` and `scripts/run_mergedtree2.sh`:
+Create `"$LANE/logs"` and `"$LANE/evidence"`, build with `scripts/build_before_test.sh`, `scripts/build_head.sh`, `scripts/make_venv_head.sh`, `scripts/build_nocpu.sh` and `scripts/build_mergedtree2.sh` (each takes the commit to build as its first argument; `build_mergedtree2.sh` takes the main commit, the head commit and a directory suffix), then rebuild the prompt text from commit `79d99c90c` before running `scripts/run_r2.sh` and `scripts/run_mergedtree2.sh`:
 
 ```bash
 git -C "$REPO" show \

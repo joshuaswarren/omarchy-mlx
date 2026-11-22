@@ -1,4 +1,4 @@
-"""Astra R1 input: f16 decode SDPA, q and k zero, v filled with a constant, uniform attention -> exact answer = the constant.
+"""Constant-value probe: f16 decode SDPA, q and k zero, v filled with a constant, uniform attention -> exact answer = the constant.
 usage: overflow_probe.py EXPECT_WHEEL REPO_ROOT"""
 import sys
 from pathlib import Path

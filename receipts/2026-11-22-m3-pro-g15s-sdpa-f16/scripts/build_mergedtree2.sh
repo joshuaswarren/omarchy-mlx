@@ -24,6 +24,6 @@ for side in main merged; do
   rm -rf $L/venv-$side$SFX; python3 -m venv $L/venv-$side$SFX
   $L/venv-$side$SFX/bin/pip install -q -r $L/evidence/venv-base-freeze-nomlx.txt
   $L/venv-$side$SFX/bin/pip install -q --no-deps $(ls $L/dist-$side$SFX/*.whl) mlx-lm==0.31.3
-  bash $R/install.sh --patch-venv $L/venv-$side$SFX > $L/logs/patch-venv-$side$SFX$SFX.log 2>&1
+  bash $R/install.sh --patch-venv $L/venv-$side$SFX > $L/logs/patch-venv-$side$SFX.log 2>&1
 done
 echo MERGEDTREE_BUILT

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# venv-head: same packages as the base venv (g15s-wave-sched/venv-base), with the head wheel, then install.sh --patch-venv.
+# venv-head: same packages as the base venv (${BASE_BUILD}/venv-base), with the head wheel, then install.sh --patch-venv.
 set -euo pipefail
 L=${LANE}
 R=${REPO}

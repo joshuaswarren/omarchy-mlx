@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Head build of 4e3b83d2a: prepare-mlx, Release C++ test tree (standing battery,
+# Head build of the commit given as $1: prepare-mlx, Release C++ test tree (standing battery,
 # capability-sim, sdpa_decode_fused, info tool), then the Release wheel with the
 # repo's release CMake args (scripts/wheel-cmake-args.sh, ANE worker off as in
 # the base wheel). Fresh .work per build; 6 jobs, nice 10.
