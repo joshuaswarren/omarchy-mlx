@@ -36,6 +36,47 @@
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
+// Per-operation i64/u64 elementwise blobs for the G18G packer
+// fallback in dispatch_int_elementwise_to (aurora-silicon/mesa#739).
+#include "elementwise_i64_g18_op0.h"
+#include "elementwise_i64_g18_op1.h"
+#include "elementwise_i64_g18_op2.h"
+#include "elementwise_i64_g18_op3.h"
+#include "elementwise_i64_g18_op4.h"
+#include "elementwise_i64_g18_op5.h"
+#include "elementwise_i64_g18_op6.h"
+#include "elementwise_i64_g18_op7.h"
+#include "elementwise_i64_g18_op8.h"
+#include "elementwise_i64_g18_op9.h"
+#include "elementwise_i64_g18_op10.h"
+#include "elementwise_i64_g18_op11.h"
+#include "elementwise_i64_g18_op12.h"
+#include "elementwise_i64_g18_op13.h"
+#include "elementwise_i64_g18_op14.h"
+#include "elementwise_i64_g18_op15.h"
+#include "elementwise_i64_g18_op16.h"
+#include "elementwise_i64_g18_op17.h"
+#include "elementwise_i64_g18_op18.h"
+#include "elementwise_u64_g18_op0.h"
+#include "elementwise_u64_g18_op1.h"
+#include "elementwise_u64_g18_op2.h"
+#include "elementwise_u64_g18_op3.h"
+#include "elementwise_u64_g18_op4.h"
+#include "elementwise_u64_g18_op5.h"
+#include "elementwise_u64_g18_op6.h"
+#include "elementwise_u64_g18_op7.h"
+#include "elementwise_u64_g18_op8.h"
+#include "elementwise_u64_g18_op9.h"
+#include "elementwise_u64_g18_op10.h"
+#include "elementwise_u64_g18_op11.h"
+#include "elementwise_u64_g18_op12.h"
+#include "elementwise_u64_g18_op13.h"
+#include "elementwise_u64_g18_op14.h"
+#include "elementwise_u64_g18_op15.h"
+#include "elementwise_u64_g18_op16.h"
+#include "elementwise_u64_g18_op17.h"
+#include "elementwise_u64_g18_op18.h"
+
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
 #include "mlx/backend/omarchy/qmm_out_rows.h"
@@ -1687,6 +1728,146 @@ omarchy::ComputeKernel elementwise_kernel(Dtype dtype) {
   }
 }
 
+// G18G AGX3 packer fallback (aurora-silicon/mesa#739, omarchy-mlx#662):
+// the combined i64/u64 elementwise switch drives the register allocator
+// into emitting icmpsel on 16-bit register halves, which the packer
+// refuses, so vkCreateComputePipelines fails. The G18_OP_ONLY build
+// variants paste one operation's body into the switch so the packer sees
+// a single-case shader. Engaged lazily per dtype: the first combined-blob
+// creation that fails turns the fallback on for the process, so a driver
+// with the fix never pays for it.
+struct IntElementwiseG18OpBlobs {
+  std::array<std::pair<const unsigned char*, size_t>, 19> ops;
+};
+
+const IntElementwiseG18OpBlobs& int_elementwise_g18_blobs(Dtype dtype) {
+  static const IntElementwiseG18OpBlobs i64_ops{{{
+      {omarchy::shaders::elementwise_i64_g18_op0,
+       omarchy::shaders::elementwise_i64_g18_op0_size},
+      {omarchy::shaders::elementwise_i64_g18_op1,
+       omarchy::shaders::elementwise_i64_g18_op1_size},
+      {omarchy::shaders::elementwise_i64_g18_op2,
+       omarchy::shaders::elementwise_i64_g18_op2_size},
+      {omarchy::shaders::elementwise_i64_g18_op3,
+       omarchy::shaders::elementwise_i64_g18_op3_size},
+      {omarchy::shaders::elementwise_i64_g18_op4,
+       omarchy::shaders::elementwise_i64_g18_op4_size},
+      {omarchy::shaders::elementwise_i64_g18_op5,
+       omarchy::shaders::elementwise_i64_g18_op5_size},
+      {omarchy::shaders::elementwise_i64_g18_op6,
+       omarchy::shaders::elementwise_i64_g18_op6_size},
+      {omarchy::shaders::elementwise_i64_g18_op7,
+       omarchy::shaders::elementwise_i64_g18_op7_size},
+      {omarchy::shaders::elementwise_i64_g18_op8,
+       omarchy::shaders::elementwise_i64_g18_op8_size},
+      {omarchy::shaders::elementwise_i64_g18_op9,
+       omarchy::shaders::elementwise_i64_g18_op9_size},
+      {omarchy::shaders::elementwise_i64_g18_op10,
+       omarchy::shaders::elementwise_i64_g18_op10_size},
+      {omarchy::shaders::elementwise_i64_g18_op11,
+       omarchy::shaders::elementwise_i64_g18_op11_size},
+      {omarchy::shaders::elementwise_i64_g18_op12,
+       omarchy::shaders::elementwise_i64_g18_op12_size},
+      {omarchy::shaders::elementwise_i64_g18_op13,
+       omarchy::shaders::elementwise_i64_g18_op13_size},
+      {omarchy::shaders::elementwise_i64_g18_op14,
+       omarchy::shaders::elementwise_i64_g18_op14_size},
+      {omarchy::shaders::elementwise_i64_g18_op15,
+       omarchy::shaders::elementwise_i64_g18_op15_size},
+      {omarchy::shaders::elementwise_i64_g18_op16,
+       omarchy::shaders::elementwise_i64_g18_op16_size},
+      {omarchy::shaders::elementwise_i64_g18_op17,
+       omarchy::shaders::elementwise_i64_g18_op17_size},
+      {omarchy::shaders::elementwise_i64_g18_op18,
+       omarchy::shaders::elementwise_i64_g18_op18_size},
+  }}};
+  static const IntElementwiseG18OpBlobs u64_ops{{{
+      {omarchy::shaders::elementwise_u64_g18_op0,
+       omarchy::shaders::elementwise_u64_g18_op0_size},
+      {omarchy::shaders::elementwise_u64_g18_op1,
+       omarchy::shaders::elementwise_u64_g18_op1_size},
+      {omarchy::shaders::elementwise_u64_g18_op2,
+       omarchy::shaders::elementwise_u64_g18_op2_size},
+      {omarchy::shaders::elementwise_u64_g18_op3,
+       omarchy::shaders::elementwise_u64_g18_op3_size},
+      {omarchy::shaders::elementwise_u64_g18_op4,
+       omarchy::shaders::elementwise_u64_g18_op4_size},
+      {omarchy::shaders::elementwise_u64_g18_op5,
+       omarchy::shaders::elementwise_u64_g18_op5_size},
+      {omarchy::shaders::elementwise_u64_g18_op6,
+       omarchy::shaders::elementwise_u64_g18_op6_size},
+      {omarchy::shaders::elementwise_u64_g18_op7,
+       omarchy::shaders::elementwise_u64_g18_op7_size},
+      {omarchy::shaders::elementwise_u64_g18_op8,
+       omarchy::shaders::elementwise_u64_g18_op8_size},
+      {omarchy::shaders::elementwise_u64_g18_op9,
+       omarchy::shaders::elementwise_u64_g18_op9_size},
+      {omarchy::shaders::elementwise_u64_g18_op10,
+       omarchy::shaders::elementwise_u64_g18_op10_size},
+      {omarchy::shaders::elementwise_u64_g18_op11,
+       omarchy::shaders::elementwise_u64_g18_op11_size},
+      {omarchy::shaders::elementwise_u64_g18_op12,
+       omarchy::shaders::elementwise_u64_g18_op12_size},
+      {omarchy::shaders::elementwise_u64_g18_op13,
+       omarchy::shaders::elementwise_u64_g18_op13_size},
+      {omarchy::shaders::elementwise_u64_g18_op14,
+       omarchy::shaders::elementwise_u64_g18_op14_size},
+      {omarchy::shaders::elementwise_u64_g18_op15,
+       omarchy::shaders::elementwise_u64_g18_op15_size},
+      {omarchy::shaders::elementwise_u64_g18_op16,
+       omarchy::shaders::elementwise_u64_g18_op16_size},
+      {omarchy::shaders::elementwise_u64_g18_op17,
+       omarchy::shaders::elementwise_u64_g18_op17_size},
+      {omarchy::shaders::elementwise_u64_g18_op18,
+       omarchy::shaders::elementwise_u64_g18_op18_size},
+  }}};
+  return dtype == uint64 ? u64_ops : i64_ops;
+}
+
+void dispatch_int_elementwise64(
+    omarchy::CommandEncoder& encoder,
+    Dtype dtype,
+    const omarchy::ComputeParams& params,
+    std::span<const omarchy::ComputeBinding> bindings,
+    omarchy::ComputeKernel kernel,
+    uint32_t count) {
+  const uint32_t groups = omarchy::compute_dispatch_group_count(count);
+  if (groups == 0) {
+    return;
+  }
+  static std::atomic<bool> split_i64{false};
+  static std::atomic<bool> split_u64{false};
+  auto& split = dtype == uint64 ? split_u64 : split_i64;
+  bool use_split = split.load(std::memory_order_relaxed);
+  if (!use_split) {
+    // Probe only the pipeline creation inside the try: dispatch_compute
+    // mutates encoder state before later throw sites (descriptor sets,
+    // batch work, device loss), and catching those here would rerun the
+    // dispatch on faulted state and hide the real error.
+    try {
+      (void)encoder.device().compute().pipeline(kernel);
+    } catch (const std::runtime_error&) {
+      split.store(true, std::memory_order_relaxed);
+      use_split = true;
+    }
+  }
+  if (!use_split) {
+    encoder.dispatch_compute(kernel, bindings, params, groups);
+    return;
+  }
+  const auto& [bytes, size] = int_elementwise_g18_blobs(dtype).ops.at(
+      params.operation);
+  encoder.dispatch_compute(
+      "elementwise_" + std::string(dtype == uint64 ? "u64" : "i64") +
+          "_g18_op" + std::to_string(params.operation),
+      std::span<const uint32_t>{
+          reinterpret_cast<const uint32_t*>(bytes),
+          size / sizeof(uint32_t)},
+      bindings,
+      params,
+      groups);
+}
+
 // The params fill and dispatch behind dispatch_int_elementwise,
 // callable with a caller-allocated output so the two-output DivMod can
 // target quotient and remainder in turn.
@@ -1721,6 +1902,11 @@ void dispatch_int_elementwise_to(
   // The widened variants serve the 8/16/64-bit integer family with the
   // widened-word bitwise ops only.
   auto kernel = elementwise_kernel(out.dtype());
+  if (out.dtype() == int64 || out.dtype() == uint64) {
+    dispatch_int_elementwise64(encoder, out.dtype(), params, bindings,
+                             kernel, count);
+    return;
+  }
   encoder.dispatch_compute(
       kernel,
       bindings,
