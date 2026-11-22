@@ -150,6 +150,8 @@ if (( YES )); then
     say "Legacy install retired. User data kept under $PREFIX (chat history, pair homes, serve state)."
   fi
   say "Model weights stay in ~/.cache/huggingface; delete them yourself if you want the space back."
+elif (( PURGE_DATA )); then
+  say "Dry run: nothing was deleted. Pass --yes to apply (with --purge-data)."
 else
-  say "Dry run: nothing was deleted. Pass --yes to apply${PURGE_DATA:+ (with --purge-data)}."
+  say "Dry run: nothing was deleted. Pass --yes to apply."
 fi
