@@ -44,17 +44,18 @@ else:
 SO = SHARE / "libane/libane-strict.so"
 PIN = SHARE / "parakeet-runtime-pin.json"
 MODEL = SHARE / "bundles/island-pv/program-0.anec"
-# island-pv is an H13 anec; ABI-2 (T6021) opens only H14 programs, so on an
-# H14 host the pin's whole-encoder bundle is the model under test.
+ACCEL = Path("/dev/accel/accel0")
+
+# The wheel ships only H13-layout bundles (island-pv,
+# parakeet-encoder-whole); the ABI-2 M2 path (libane/ane_m2.c) refuses
+# H13 headers once the gate is open, so full-init green on a T6021 host
+# needs an H14 anec passed via LIBANE_PIN_MODEL.
 try:
     _compat = Path("/proc/device-tree/compatible").read_bytes().decode(
         "utf-8", "replace")
 except OSError:
     _compat = ""
-if any(f"t602{n}" in _compat for n in (0, 1, 2)) and \
-        (SHARE / "bundles/parakeet-encoder-whole/program-0.anec").is_file():
-    MODEL = SHARE / "bundles/parakeet-encoder-whole/program-0.anec"
-ACCEL = Path("/dev/accel/accel0")
+HOST_NEEDS_H14 = any(f"t602{n}" in _compat for n in (0, 1, 2))
 
 # e_machine values; the pinned libane is aarch64-only, so x86 CI skips
 ELF_MACHINES = {0xB7: "aarch64", 0x3E: "x86_64"}
@@ -77,15 +78,21 @@ print("handle=%d" % (lib.__ane_init(sys.argv[2].encode(), 0) or 0))
 def probe(model):
     """__ane_init(model, 0) the way the worker calls it.
 
-    Returns (handle, stderr)."""
+    Returns (handle, stderr). A child that crashes, refuses to load, or
+    never prints a handle line is a failure, not a silent 0."""
     env = {"PATH": "/usr/bin:/bin"}
-    child = subprocess.run(
-        [sys.executable, "-c", CHILD, str(SO), str(model)],
-        env=env, capture_output=True, text=True, timeout=120)
-    handle = 0
-    match = re.search(r"handle=(\d+)", child.stdout)
-    if match:
-        handle = int(match.group(1))
+    try:
+        child = subprocess.run(
+            [sys.executable, "-c", CHILD, str(SO), str(model)],
+            env=env, capture_output=True, text=True, timeout=120)
+    except OSError as err:
+        return 0, f"probe could not run: {err}"
+    if child.returncode != 0:
+        note = "probe child exited %d" % child.returncode
+        return 0, note + "\n" + child.stderr
+    if "handle=" not in child.stdout:
+        return 0, "probe child printed no handle line\n" + child.stderr
+    handle = int(re.search(r"handle=(\d+)", child.stdout).group(1))
     return handle, child.stderr
 
 
@@ -113,17 +120,14 @@ class TestLibanePinAbi2(unittest.TestCase):
         self.assertNotIn("failed to find device with dev_id 0", stderr,
                          "pinned libane rejects the local ANE driver "
                          "(ABI/name gate); the pin predates ABI 2")
-        if not override:
-            # The wheel ships only H13-layout bundles (island-pv,
-            # parakeet-encoder-whole) and omarchy-ane's M2 path
-            # (libane/ane_m2.c) refuses H13 headers once the gate is
-            # open, so full __ane_init green on T6021 needs an H14 anec.
-            # This test pins the dev_id-0 ABI gate; set LIBANE_PIN_MODEL
-            # to an H14 anec (w73's staged M2 h14 kit, or a fresh
-            # hwxv2-to-anec compile) for the end-to-end green.
+        if HOST_NEEDS_H14 and not override:
+            # H13 bundles cannot fully load on the ABI-2 path; the gate
+            # above is the pin on a T6021 host without an H14 anec.
+            # Set LIBANE_PIN_MODEL to an H14 anec (w73's staged M2 h14
+            # kit, or a fresh hwxv2-to-anec compile) for the e2e green.
             return
         self.assertNotEqual(handle, 0,
-                            "__ane_init(H14 model, 0) failed:\n" + stderr)
+                            "__ane_init(model, 0) failed:\n" + stderr)
 
 
 if __name__ == "__main__":
