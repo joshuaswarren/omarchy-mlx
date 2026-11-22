@@ -81,6 +81,10 @@ layout(set = 0, binding = 3, std430) writeonly buffer Output {
 layout(set = 0, binding = 4, std430) readonly buffer OutGlobalScale {
   uint values[];
 } out_global_scale_data;
+// Staged copy of the bound word: lane 0 loads it so the workgroup reads
+// a shared value instead of every invocation issuing the same buffer
+// word read, which G18G answers with 0.
+shared uint out_global_scale_word;
 #endif
 
 // lhs/rhs index reads: the packed staging buffer (every variant).
@@ -229,8 +233,12 @@ void main() {
   uint rhs_word_base = params.out_strides[0];
   uint total = index_count * matrix;
 #ifdef USE_OUT_GLOBAL_SCALE
-  float out_global_dec = uintBitsToFloat(
-      out_global_scale_data.values[params.aux_size]) / 2688.0;
+  if (gl_LocalInvocationIndex == 0u) {
+    out_global_scale_word =
+        out_global_scale_data.values[params.aux_size];
+  }
+  barrier();
+  float out_global_dec = uintBitsToFloat(out_global_scale_word) / 2688.0;
 #endif
   uint stride = gl_NumWorkGroups.x * 256u;
 

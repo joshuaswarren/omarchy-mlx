@@ -65,6 +65,10 @@ layout(set = 0, binding = 1, std430) readonly buffer Scales {
 layout(set = 0, binding = 2, std430) readonly buffer GlobalScale {
   uint values[];
 } global_scale_data;
+// Staged copy of the bound word: lane 0 loads it so the workgroup reads
+// a shared value instead of every invocation issuing the same buffer
+// word read, which G18G answers with 0.
+shared uint global_scale_word;
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
 } output_data;
@@ -153,8 +157,11 @@ void main() {
   bool has_global_scale = (params.flags & 2u) != 0u;
   float global_dec = 1.0;
   if (has_global_scale) {
-    global_dec =
-        uintBitsToFloat(global_scale_data.values[params.rhs_size]) / 2688.0;
+    if (gl_LocalInvocationIndex == 0u) {
+      global_scale_word = global_scale_data.values[params.rhs_size];
+    }
+    barrier();
+    global_dec = uintBitsToFloat(global_scale_word) / 2688.0;
   }
   for (uint unit = gl_GlobalInvocationID.x; unit < params.count;
        unit += stride) {
