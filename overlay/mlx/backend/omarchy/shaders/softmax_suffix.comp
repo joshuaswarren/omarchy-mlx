@@ -76,6 +76,8 @@ layout(push_constant) uniform Params {
 } params;
 
 shared float block_values[256];
+// Per-row sink broadcast under the G18G thread-0 guard (see main()).
+shared float sink_bcast;
 
 void main() {
   uint thread = gl_LocalInvocationID.x;
@@ -95,12 +97,16 @@ void main() {
           int(params.aux_offset) + int(row % params.aux_size) + 1;
       valid = uint(clamp(admissible, 0, int(row_length)));
     }
-    float sink_value = 0.0;
-    if (has_sink) {
+    // The per-row sink is a workgroup-uniform scalar load - the same
+    // class of read issue #655 measured wrong on G18G (Apple M6), where
+    // the every-lane form returns garbage. Thread 0 performs it into a
+    // shared scalar and the barrier below publishes the broadcast to
+    // every lane, matching the cross-entropy vjp guard shape.
+    if (has_sink && thread == 0u) {
       uint head = params.matrix_m == 0u
           ? 0u
           : (row / params.matrix_m) % params.matrix_n;
-      sink_value = LOAD_VALUE(
+      sink_bcast = LOAD_VALUE(
           sink_data.values[params.rhs_offset + head]);
     }
 
@@ -113,6 +119,7 @@ void main() {
     }
     block_values[thread] = local_max;
     barrier();
+    float sink_value = has_sink ? sink_bcast : 0.0;
     for (uint stride = 128u; stride > 0u; stride >>= 1u) {
       if (thread < stride) {
         block_values[thread] =

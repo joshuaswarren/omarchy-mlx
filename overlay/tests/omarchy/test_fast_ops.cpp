@@ -1585,6 +1585,46 @@ TEST_CASE("scaled_dot_product_attention folds sinks into the denominator") {
   }
 }
 
+TEST_CASE("scaled_dot_product_attention sinks normalize across row-loop iterations") {
+  // G18G guard: softmax_suffix's per-row sink load runs under a thread-0
+  // shared-memory broadcast. With output_size > 65535 workgroups iterate
+  // more than one row, so the broadcast must reload per row; a stale or
+  // per-lane load would fold the wrong sink into the denominator.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int B = 2, H = 8, KV = 8, qL = 8193, kL = 8, D = 8;
+  const float scale = 1.0f / std::sqrt(float(D));
+  auto q_data = pattern(B * H * qL * D, 163);
+  auto k_data = pattern(B * KV * kL * D, 167);
+  auto v_data = pattern(B * KV * kL * D, 173);
+  auto sink_data = pattern(H, 179);
+  array q = array(q_data.begin(), Shape{B, H, qL, D}, float32);
+  array k = array(k_data.begin(), Shape{B, KV, kL, D}, float32);
+  array v = array(v_data.begin(), Shape{B, KV, kL, D}, float32);
+  array sinks = array(sink_data.begin(), Shape{H}, float32);
+  auto out = fast::scaled_dot_product_attention(
+      q, k, v, scale, "", {}, sinks, false, stream);
+  require_close(
+      flat(out, stream),
+      host_sdpa(
+          q_data,
+          k_data,
+          v_data,
+          B,
+          H,
+          KV,
+          qL,
+          kL,
+          D,
+          scale,
+          false,
+          sink_data),
+      1e-5,
+      "sdpa sinks >65535-row softmax broadcast");
+}
+
 // gpt-oss-20b (mlx-lm) feeds bf16 q/k/v and bf16 sinks: H = 64 query heads,
 // 8 kv heads, head_dim 64, an 11-token prefill failed with "attention sinks
 // dtype ... not implemented" because the f32-score composition only took f32
