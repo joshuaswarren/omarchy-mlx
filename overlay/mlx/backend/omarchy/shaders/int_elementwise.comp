@@ -186,17 +186,46 @@ uint rhs_index_for(uint index) {
 #define VALUE_TYPE STORAGE_TYPE
 #endif
 
+// Zero, sign and low-bit tests. On the 64-bit variants a VALUE_TYPE
+// comparison lowers through selects on 16-bit register halves, which
+// the G18G AGX3 packer refuses (aurora-silicon/mesa#739, omarchy-mlx#662).
+// Testing the two 32-bit words instead keeps every comparison and select
+// 32-bit. The narrow variants' VALUE_TYPE is already a 32-bit int, so
+// their tests stay direct.
+#if defined(USE_I64) || defined(USE_U64)
+#ifdef USE_U64
+#define WS(a) unpackUint2x32(a)
+#define IS_NEG(a) false
+#define IS_GT0(a) IS_NZ(a)
+#else
+#define WS(a) unpackInt2x32(a)
+#define IS_NEG(a) (WS(a).y < 0)
+#define IS_GT0(a) (WS(a).y > 0 || (WS(a).y == 0 && WS(a).x != 0))
+#endif
+#define IS_NZ(a) ((WS(a).x | WS(a).y) != 0)
+#define IS_LOBIT(a) ((WS(a).x & 1) != 0)
+#else
+#define IS_NZ(a) ((a) != VALUE_TYPE(0))
+#define IS_NEG(a) ((a) < VALUE_TYPE(0))
+#define IS_GT0(a) ((a) > VALUE_TYPE(0))
+#define IS_LOBIT(a) (((a) & VALUE_TYPE(1)) != VALUE_TYPE(0))
+#endif
+
 // Python-style floor division. The C++ quotient adjusted so the
 // remainder takes the divisor's sign (upstream DivMod integral_op).
 // Uses only SDiv (truncating, sign-of-dividend) plus signs of a and b:
 // r = a - q*b is exact in modular arithmetic and carries the same
 // sign information as a % b regardless of how the driver maps SRem.
+// The fixup is arithmetic, not an if, and the bool materializes as a
+// 32-bit select: a VALUE_TYPE(bool) cast would emit OpSelect on the
+// compute word, and on the 64-bit variants the backend lowers that into
+// selects on 16-bit register halves, which the G18G AGX3 packer refuses
+// (aurora-silicon/mesa#739, omarchy-mlx#662). uint(bool) selects in 32
+// bits, and VALUE_TYPE(uint) widens with a convert, never a select.
 VALUE_TYPE floor_quotient(VALUE_TYPE a, VALUE_TYPE b) {
   VALUE_TYPE q = a / b;
   VALUE_TYPE r = a - q * b;
-  if (r != VALUE_TYPE(0) && (a < VALUE_TYPE(0)) != (b < VALUE_TYPE(0))) {
-    q -= VALUE_TYPE(1);
-  }
+  q -= VALUE_TYPE(uint(IS_NZ(r) && IS_NEG(a) != IS_NEG(b)));
   return q;
 }
 
@@ -204,19 +233,20 @@ VALUE_TYPE floor_quotient(VALUE_TYPE a, VALUE_TYPE b) {
 // divisor result. The divisor is swapped for 1 before the division so
 // no SDiv/UDiv by zero executes (Vulkan leaves it undefined; the
 // composed Divide path returned a stale register value for int32 / 0).
+// b | (b == 0) is b or 1 without a wide select; q & -(b != 0) zeroes
+// the quotient the same way.
 VALUE_TYPE floor_divide_int(VALUE_TYPE a, VALUE_TYPE b) {
-  VALUE_TYPE q = floor_quotient(a, b == VALUE_TYPE(0) ? VALUE_TYPE(1) : b);
-  return b == VALUE_TYPE(0) ? VALUE_TYPE(0) : q;
+  VALUE_TYPE q = floor_quotient(a, b | VALUE_TYPE(uint(!IS_NZ(b))));
+  return q & -VALUE_TYPE(uint(IS_NZ(b)));
 }
 
 // Python-style modulo: truncating remainder adjusted by one divisor
 // when the signs of remainder and divisor differ. Unsigned stays the
 // raw remainder, which is already the upstream unsigned result.
+// Same 32-bit-select form as floor_quotient (mesa#739).
 VALUE_TYPE python_modulo(VALUE_TYPE a, VALUE_TYPE b) {
   VALUE_TYPE r = a % b;
-  if (r != VALUE_TYPE(0) && (r < VALUE_TYPE(0)) != (b < VALUE_TYPE(0))) {
-    r += b;
-  }
+  r += b & -VALUE_TYPE(uint(IS_NZ(r) && IS_NEG(r) != IS_NEG(b)));
   return r;
 }
 // Exponentiation by squaring with wraparound, mirroring the upstream
@@ -224,11 +254,11 @@ VALUE_TYPE python_modulo(VALUE_TYPE a, VALUE_TYPE b) {
 // guard is constant-false.
 VALUE_TYPE integer_power(VALUE_TYPE base, VALUE_TYPE exp) {
   VALUE_TYPE res = VALUE_TYPE(1);
-  if (exp < VALUE_TYPE(0)) {
+  if (IS_NEG(exp)) {
     return VALUE_TYPE(0);
   }
-  while (exp != VALUE_TYPE(0)) {
-    if ((exp & VALUE_TYPE(1)) != VALUE_TYPE(0)) {
+  while (IS_NZ(exp)) {
+    if (IS_LOBIT(exp)) {
       res *= base;
     }
     exp >>= 1;
@@ -239,15 +269,54 @@ VALUE_TYPE integer_power(VALUE_TYPE base, VALUE_TYPE exp) {
 
 // Upstream Sign: -1, 0, or 1 by comparison with zero; unsigned is
 // 0 or 1 (comparison with a negative constant is constant-false).
+// Arithmetic form, no wide selects (mesa#739): the comparisons
+// materialize in 32-bit ints and only the difference widens.
 VALUE_TYPE integer_sign(VALUE_TYPE a) {
-  if (a > VALUE_TYPE(0)) {
-    return VALUE_TYPE(1);
-  }
-  if (a < VALUE_TYPE(0)) {
-    return VALUE_TYPE(-1);
-  }
-  return VALUE_TYPE(0);
+  return VALUE_TYPE(int(uint(IS_GT0(a))) - int(uint(IS_NEG(a))));
 }
+
+// Branchless abs for INT_ARITH_CASES (mesa#739). u64 abs is the identity:
+// the sign-magnitude trick needs an arithmetic shift, which does not exist
+// on unsigned, so USE_U64 keeps the value. Every other variant's VALUE_TYPE
+// is signed (int or int64_t), where a >> (bits-1) is -1 for negatives.
+#if defined(USE_I64) || defined(USE_U64)
+#define INT_ABS_SHIFT 63
+#else
+#define INT_ABS_SHIFT 31
+#endif
+#ifdef USE_U64
+#define INT_ABS(a) (a)
+#else
+#define INT_ABS(a) (((a) ^ ((a) >> INT_ABS_SHIFT)) - ((a) >> INT_ABS_SHIFT))
+#endif
+
+// Single-op bodies for the G18G fallback pipelines (mesa#739): the
+// combined i64/u64 switch pushes the AGX3 packer into icmpsel on
+// 16-bit register halves, which it refuses, so the fallback dispatch
+// compiles one pipeline per operation with -DG18_OP_ONLY=<op> and
+// pastes the matching body in place of the runtime switch. Bodies
+// mirror the widened-variant cases exactly (same VALUE_TYPE code).
+#define ELEMENTWISE_CAT_(a, b) a##b
+#define ELEMENTWISE_CAT(a, b) ELEMENTWISE_CAT_(a, b)
+#define ELEMENTWISE_OP_0 value = a - b;
+#define ELEMENTWISE_OP_1 value = a & b;
+#define ELEMENTWISE_OP_2 value = a | b;
+#define ELEMENTWISE_OP_3 value = a ^ b;
+#define ELEMENTWISE_OP_4 value = VALUE_TYPE(a << b);
+#define ELEMENTWISE_OP_5 value = VALUE_TYPE(a >> b);
+#define ELEMENTWISE_OP_6 value = ~a;
+#define ELEMENTWISE_OP_7 value = floor_quotient(a, b);
+#define ELEMENTWISE_OP_8 value = python_modulo(a, b);
+#define ELEMENTWISE_OP_9 value = integer_power(a, b);
+#define ELEMENTWISE_OP_10 value = integer_sign(a);
+#define ELEMENTWISE_OP_11 value = INT_ABS(a);
+#define ELEMENTWISE_OP_12 value = a + b;
+#define ELEMENTWISE_OP_13 value = a * b;
+#define ELEMENTWISE_OP_14 value = a * a;
+#define ELEMENTWISE_OP_15 value = min(a, b);
+#define ELEMENTWISE_OP_16 value = max(a, b);
+#define ELEMENTWISE_OP_17 value = floor_divide_int(a, b);
+#define ELEMENTWISE_OP_18 value = -a;
 
 // The arithmetic family on top of the bitwise cases, shared by every
 // variant: the cases run on the enclosing scope's VALUE_TYPE a/b and
@@ -275,7 +344,11 @@ VALUE_TYPE integer_sign(VALUE_TYPE a) {
     value = integer_sign(a);                                                  \
     break;                                                                    \
   case 11:                                                                    \
-    value = a < VALUE_TYPE(0) ? -a : a;                                       \
+    /* Branchless abs, no select (mesa#739): (a ^ s) - s with s = a >>     \
+       (bits-1) gives -a on negatives, a otherwise; INT_MIN wraps to       \
+       itself like upstream. Unsigned u64 keeps a: a >> 63 is a logical    \
+       shift and the trick would negate values >= 2^63. */                  \
+    value = INT_ABS(a);                                                       \
     break;                                                                    \
   case 12:                                                                    \
     value = a + b;                                                            \
@@ -287,10 +360,10 @@ VALUE_TYPE integer_sign(VALUE_TYPE a) {
     value = a * a;                                                            \
     break;                                                                    \
   case 15:                                                                    \
-    value = a < b ? a : b;                                                    \
+    value = min(a, b);                                                        \
     break;                                                                    \
   case 16:                                                                    \
-    value = a > b ? a : b;                                                    \
+    value = max(a, b);                                                        \
     break;                                                                    \
   case 17:                                                                    \
     value = floor_divide_int(a, b);                                           \
@@ -414,6 +487,17 @@ void main() {
         int(input_b.values[2u * baddr + 1u])));
 #endif
     VALUE_TYPE value;
+#ifdef G18_OP_ONLY
+    // Single-op fallback pipeline: only the selected case survives so
+    // the AGX3 packer sees a one-case shader (mesa#739).
+    switch (params.operation) {
+      case G18_OP_ONLY:
+        ELEMENTWISE_CAT(ELEMENTWISE_OP_, G18_OP_ONLY)
+        break;
+      default:
+        return;
+    }
+#else
     switch (params.operation) {
       case 1:
         value = a & b;
@@ -437,6 +521,7 @@ void main() {
       default:
         return;
     }
+#endif
     uint daddr = params.output_offset + index;
 #ifdef USE_U64
     uvec2 halves = unpackUint2x32(value);

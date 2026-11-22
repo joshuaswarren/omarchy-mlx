@@ -316,6 +316,17 @@ omarchy_shader(elementwise_i16 shaders/int_elementwise.comp -DUSE_I16=1)
 omarchy_shader(elementwise_u16 shaders/int_elementwise.comp -DUSE_U16=1)
 omarchy_shader(elementwise_i64 shaders/int_elementwise.comp -DUSE_I64=1)
 omarchy_shader(elementwise_u64 shaders/int_elementwise.comp -DUSE_U64=1)
+# G18G fallback pipelines (aurora-silicon/mesa#739, omarchy-mlx#662): the
+# AGX3 packer refuses the combined i64/u64 switch because it emits icmpsel
+# on 16-bit register halves under register pressure. One single-op variant
+# per operation keeps the packer under its limit; primitives.cpp engages
+# them only after the combined pipeline's vkCreateComputePipelines fails.
+foreach(op RANGE 0 18)
+  omarchy_shader(elementwise_i64_g18_op${op} shaders/int_elementwise.comp
+                 -DUSE_I64=1 -DG18_OP_ONLY=${op})
+  omarchy_shader(elementwise_u64_g18_op${op} shaders/int_elementwise.comp
+                 -DUSE_U64=1 -DG18_OP_ONLY=${op})
+endforeach()
 omarchy_shader(scan_f32 shaders/scan_suffix.comp)
 omarchy_shader(scan_f16 shaders/scan_suffix.comp -DUSE_FP16=1)
 omarchy_shader(scan_bf16 shaders/scan_suffix.comp -DUSE_BF16=1)
