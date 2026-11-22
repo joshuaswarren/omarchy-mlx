@@ -39,3 +39,9 @@ python3 qualify.py --compare linux.json macos.json
 ```
 
 The comparison requires the same machine ID, pinned workload, prompt token count and generated-token digest. Missing or unequal digests fail the check. A token match does not qualify MLX correctness or ANE support.
+
+Every run ends with a `Card row:` line: one paragraph with the chip, OS, wheel, verdict, MLX checks, test counts, new failures against the M1 Max reference, decode and prefill rates, and the Neural Engine result. Paste that line as the machine's row. To print it again from a saved receipt:
+
+```sh
+python3 qualify.py --row linux.json
+```
