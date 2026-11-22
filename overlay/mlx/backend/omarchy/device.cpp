@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/device_exts.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/step_timeline.h"
@@ -512,6 +513,8 @@ CapabilityReport collect_capabilities(
     const VkPhysicalDeviceShaderAtomicFloatFeaturesEXT& fa,
     const VkPhysicalDeviceCooperativeMatrixFeaturesKHR& cm,
     const VkPhysicalDevice16BitStorageFeatures& f16,
+    const VkPhysicalDeviceMemoryPriorityFeaturesEXT& mp,
+    const VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT& pl,
     const VkPhysicalDeviceMaintenance3Properties& m3,
     const VkPhysicalDeviceMaintenance4Properties& m4,
     const VkPhysicalDeviceSubgroupProperties& subgroup) {
@@ -644,6 +647,23 @@ CapabilityReport collect_capabilities(
         } else if (
             std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
           caps.queue_global_priority = true;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_memory_priority") == 0) {
+          caps.memory_priority = mp.memoryPriority == VK_TRUE;
+        } else if (
+            std::strcmp(
+                e.extensionName,
+                "VK_EXT_pageable_device_local_memory") == 0) {
+          caps.pageable_device_local_memory =
+              pl.pageableDeviceLocalMemory == VK_TRUE;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_external_memory_host") ==
+            0) {
+          caps.external_memory_host = true;
+        } else if (
+            std::strcmp(
+                e.extensionName, "VK_EXT_calibrated_timestamps") == 0) {
+          caps.calibrated_timestamps = true;
 #ifdef OMARCHY_BF16_CMAT
         } else if (
             std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
@@ -937,12 +957,18 @@ bool Runtime::init_impl() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    VkPhysicalDeviceMemoryPriorityFeaturesEXT mp{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+    VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pl{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
     VkPhysicalDeviceFeatures2 feats2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     f16.pNext = &f12;
     f12.pNext = &f13;
     f13.pNext = &fa;
     fa.pNext = &cm;
+    cm.pNext = &mp;
+    mp.pNext = &pl;
     feats2.pNext = &f16;
     it.GetPhysicalDeviceFeatures2(pd, &feats2);
 
@@ -989,6 +1015,8 @@ bool Runtime::init_impl() {
         fa,
         cm,
         f16,
+        mp,
+        pl,
         m3,
         m4,
         subgroup);
@@ -1480,7 +1508,33 @@ Device::Device(uint32_t physical_device_index) {
     enabled_cm.pNext = &enabled_bf16;
   }
 #endif
+  VkPhysicalDeviceMemoryPriorityFeaturesEXT enabled_mp{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+  enabled_mp.memoryPriority =
+      hw.memory_priority && hw.pageable_device_local_memory ? VK_TRUE
+                                                            : VK_FALSE;
+  VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT enabled_pl{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
+  enabled_pl.pageableDeviceLocalMemory = enabled_mp.memoryPriority;
   enabled2.pNext = &enabled16;
+  // pNext tail walk: the structs above link only when their capability
+  // enabled them (cooperative matrix behind float-atomic, bf16 behind
+  // cooperative matrix). The memory-priority pair chains after whatever
+  // tail exists when both bits are set, matching the extension pair in
+  // device_extension_names.
+  void** tail = &enabled_fa.pNext;
+  if (hw.cooperative_matrix_f32_8) {
+    tail = &enabled_cm.pNext;
+#ifdef OMARCHY_BF16_CMAT
+    if (hw.cooperative_matrix_bf16_8) {
+      tail = &enabled_bf16.pNext;
+    }
+#endif
+  }
+  if (enabled_mp.memoryPriority == VK_TRUE) {
+    *tail = &enabled_mp;
+    enabled_mp.pNext = &enabled_pl;
+  }
 
   // M1 receipt: Mesa Honeykrisp exposes one compute queue (family 0,
   // queueCount 1). Request exactly that; never invent additional queues.
@@ -1538,36 +1592,31 @@ Device::Device(uint32_t physical_device_index) {
       }
     }
   }
-  std::vector<const char*> priority_exts;
-  if (qci.pNext != nullptr) {
-    priority_exts.push_back("VK_EXT_global_priority");
-  }
-
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   dci.pNext = &enabled2;
   dci.queueCreateInfoCount = 1;
   dci.pQueueCreateInfos = &qci;
   // Extensions enabled only from hardware truth: a simulated
   // cooperative-matrix or float-atomic claim can never enable an
-  // extension the driver does not actually provide.
-  auto feature_exts = [&hw] {
-    std::vector<const char*> exts;
-    if (hw.shader_atomic_float_add) {
-      exts.push_back("VK_EXT_shader_atomic_float");
-    }
-    if (hw.cooperative_matrix_f32_8) {
-      exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-    }
+  // extension the driver does not actually provide. Selection lives in
+  // device_extension_names (unit-tested pure function); the low-queue
+  // name is requested only when the priority chain above linked, and
+  // the calibrated-timestamps extension only under trace.
+  DeviceExtInput ext_in;
+  ext_in.shader_atomic_float_add = hw.shader_atomic_float_add;
+  ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
 #ifdef OMARCHY_BF16_CMAT
-    if (hw.cooperative_matrix_bf16_8) {
-      exts.push_back(VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME);
-    }
+  ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
 #endif
-    return exts;
-  };
-  std::vector<const char*> device_exts = feature_exts();
-  device_exts.insert(
-      device_exts.end(), priority_exts.begin(), priority_exts.end());
+  ext_in.memory_priority = hw.memory_priority;
+  ext_in.pageable_device_local_memory = hw.pageable_device_local_memory;
+  ext_in.external_memory_host = hw.external_memory_host;
+  ext_in.calibrated_timestamps = hw.calibrated_timestamps;
+  ext_in.queue_global_priority = hw.queue_global_priority;
+  std::vector<const char*> device_exts = device_extension_names(
+      ext_in,
+      qci.pNext != nullptr,
+      std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr);
   if (!device_exts.empty()) {
     dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
     dci.ppEnabledExtensionNames = device_exts.data();
@@ -1582,7 +1631,10 @@ Device::Device(uint32_t physical_device_index) {
   // unsupported priority value is a separate, transient refusal.
   if (create_res != VK_SUCCESS && qci.pNext != nullptr) {
     qci.pNext = nullptr;
-    device_exts = feature_exts();
+    device_exts = device_extension_names(
+        ext_in,
+        false,
+        std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr);
     if (!device_exts.empty()) {
       dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
       dci.ppEnabledExtensionNames = device_exts.data();
