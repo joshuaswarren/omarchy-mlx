@@ -85,6 +85,64 @@ def test_verify_pass_sets_and_restores_the_routes(site, monkeypatch):
         assert os.environ["MLX_OMARCHY_QMV_SMALL_T"] == "0"
 
 
+def test_verify_pass_sets_and_restores_the_gdn_sequential_route(site, monkeypatch):
+    # Qwen3.5 GDN layers in a verify pass take the S == 1 route one token at a time
+    # (the S > 1 route changed a hybrid model's greedy ids). Same contract as the
+    # short-pass GEMV variable: set only for rows > 1, capped at 8, restored after,
+    # and a value already in the environment is left as it is.
+    (verify,) = helpers(site, "_omarchy_verify_pass")
+    import contextlib
+
+    verify = contextlib.contextmanager(verify)
+    monkeypatch.delenv("MLX_OMARCHY_GDN_SEQ_ROWS", raising=False)
+    with verify(4):
+        assert os.environ["MLX_OMARCHY_GDN_SEQ_ROWS"] == "4"
+    assert "MLX_OMARCHY_GDN_SEQ_ROWS" not in os.environ
+    with verify(12):
+        assert os.environ["MLX_OMARCHY_GDN_SEQ_ROWS"] == "8"
+    with verify(1):
+        assert "MLX_OMARCHY_GDN_SEQ_ROWS" not in os.environ
+    monkeypatch.setenv("MLX_OMARCHY_GDN_SEQ_ROWS", "0")
+    with verify(4):
+        assert os.environ["MLX_OMARCHY_GDN_SEQ_ROWS"] == "0"
+
+
+GDN_ROWS_PROBE = r"""
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import mlx.core as mx
+from mlx_lm.models import qwen3_5
+
+class Layer:
+    sharding_group = None
+    def __init__(self):
+        self.seen = []
+    def __call__(self, inputs, mask=None, cache=None):
+        if inputs.shape[1] > 1:
+            return qwen3_5.GatedDeltaNet.__call__(self, inputs, mask=mask, cache=cache)
+        self.seen.append(inputs.shape[1])
+        return inputs * 2
+
+layer = Layer()
+x = mx.arange(12, dtype=mx.float32).reshape(1, 3, 4)
+os.environ["MLX_OMARCHY_GDN_SEQ_ROWS"] = "4"
+out = layer(x, mask=None, cache=object())
+assert layer.seen == [1, 1, 1], layer.seen
+assert mx.array_equal(out, x * 2).item()
+print("GDN-SEQ-OK")
+"""
+
+
+def test_gdn_layer_feeds_verify_rows_one_at_a_time(site):
+    # Inside a verify pass (MLX_OMARCHY_GDN_SEQ_ROWS set) a 3-token GDN call is three
+    # S == 1 calls, concatenated in order. Without the patch the layer takes the S > 1
+    # route (here: an AttributeError on the stub, which has no projections).
+    pytest.importorskip("mlx.core")
+    r = subprocess.run([sys.executable, "-c", GDN_ROWS_PROBE, str(site.parent)],
+                       capture_output=True, text=True, timeout=120)
+    assert "GDN-SEQ-OK" in r.stdout, r.stdout[-400:] + r.stderr[-800:]
+
+
 def test_snapshot_detaches_tuple_state_from_the_live_cache(site):
     # 0.32 ArraysCache.state is a tuple holding the live cache list, and
     # CacheList.state nests sub-cache states; a verify pass writes into those
