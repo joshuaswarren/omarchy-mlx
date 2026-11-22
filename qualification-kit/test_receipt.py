@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import re
@@ -271,3 +273,123 @@ class QualificationRunTest(unittest.TestCase):
     def test_interrupted_probe_still_aborts(self):
         with self.assertRaisesRegex(RuntimeError, 'gpu_correctness_failed'):
             self.run_qualification([[0.0, 0.0], [0.0, 0.0]], probe_exit=124)
+
+
+class PackagedIcdTest(unittest.TestCase):
+    """Default Linux --icd discovery prefers Borealis and falls back to Honeykrisp."""
+
+    def _run_main(self, argv, *, system, vulkan_dir, dt_dir=None, run_status='qualified'):
+        real_path = Path
+        packaged_root = real_path('/usr/lib/omarchy-mlx/vulkan')
+        dt_root = real_path('/proc/device-tree')
+        captured = {}
+
+        def fake_path(value, *parts):
+            path = real_path(value, *parts)
+            if path.is_relative_to(packaged_root):
+                return vulkan_dir / path.relative_to(packaged_root)
+            if dt_dir is not None and path == dt_root:
+                return dt_dir
+            return path
+
+        def fake_run(args, work, mac, env, receipt):
+            captured.update(icd=args.icd, mac=mac)
+            return run_status
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (patch.object(sys, 'argv', ['qualify.py', *argv]),
+              patch.object(qualify.platform, 'system', return_value=system),
+              patch.object(qualify, 'Path', fake_path),
+              patch.object(qualify, 'text', return_value='Apple M1'),
+              patch.object(qualify, 'run', side_effect=fake_run) as run_mock,
+              contextlib.redirect_stdout(stdout),
+              contextlib.redirect_stderr(stderr)):
+            try:
+                rc = qualify.main()
+            except SystemExit as exc:
+                return exc.code, stderr.getvalue(), captured, run_mock
+        return rc, stderr.getvalue(), captured, run_mock
+
+    def _make_vulkan(self, root, entries):
+        vulkan_dir = root / 'vulkan'
+        if entries is not None:
+            vulkan_dir.mkdir()
+            for name, kind in entries.items():
+                entry = vulkan_dir / name
+                if kind == 'dir':
+                    entry.mkdir()
+                else:
+                    entry.write_text('{}\n')
+        dt_dir = root / 'device-tree'
+        dt_dir.mkdir()
+        (dt_dir / 'compatible').write_bytes(b'apple,j293\0apple,t8103\0')
+        return vulkan_dir, dt_dir
+
+    def test_linux_default_icd_discovery(self):
+        borealis, honeykrisp = 'borealis_icd.aarch64.json', 'honeykrisp_icd.aarch64.json'
+        cases = (
+            ('borealis_only', {borealis: 'file'}, borealis),
+            ('honeykrisp_only', {honeykrisp: 'file'}, honeykrisp),
+            ('both_present', {borealis: 'file', honeykrisp: 'file'}, borealis),
+            ('borealis_dir_honeykrisp_file', {borealis: 'dir', honeykrisp: 'file'}, honeykrisp),
+            ('borealis_dir_only', {borealis: 'dir'}, None),
+            ('empty_dir', {}, None),
+            ('missing_dir', None, None),
+        )
+        for case, entries, expected in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                vulkan_dir, dt_dir = self._make_vulkan(root, entries)
+                out = root / 'receipt.json'
+                rc, stderr, captured, run_mock = self._run_main(
+                    ['--machine-id', '0123456789abcdef', '--out', str(out)],
+                    system='Linux', vulkan_dir=vulkan_dir, dt_dir=dt_dir)
+                if expected is None:
+                    self.assertEqual(rc, 2)
+                    self.assertIn('set --icd to the installed Apple Vulkan JSON manifest', stderr)
+                    self.assertFalse(out.exists())
+                    run_mock.assert_not_called()
+                else:
+                    self.assertEqual(rc, 0, stderr)
+                    run_mock.assert_called_once()
+                    self.assertEqual(captured['icd'], (vulkan_dir / expected).resolve())
+                    self.assertIs(captured['mac'], False)
+
+    def test_linux_explicit_icd_overrides_packaged_manifests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vulkan_dir, dt_dir = self._make_vulkan(
+                root, {'borealis_icd.aarch64.json': 'file', 'honeykrisp_icd.aarch64.json': 'file'})
+            custom = root / 'custom_icd.json'
+            custom.write_text('{}\n')
+            rc, stderr, captured, run_mock = self._run_main(
+                ['--machine-id', '0123456789abcdef', '--out', str(root / 'explicit.json'),
+                 '--icd', str(custom)],
+                system='Linux', vulkan_dir=vulkan_dir, dt_dir=dt_dir)
+            self.assertEqual(rc, 0, stderr)
+            run_mock.assert_called_once()
+            self.assertEqual(captured['icd'], custom.resolve())
+            self.assertIs(captured['mac'], False)
+
+    def test_macos_ignores_packaged_manifests_and_rejects_icd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vulkan_dir, _ = self._make_vulkan(
+                root, {'borealis_icd.aarch64.json': 'file', 'honeykrisp_icd.aarch64.json': 'file'})
+            rc, stderr, captured, run_mock = self._run_main(
+                ['--machine-id', '0123456789abcdef', '--out', str(root / 'macos.json')],
+                system='Darwin', vulkan_dir=vulkan_dir, run_status='macos_baseline')
+            self.assertEqual(rc, 0, stderr)
+            run_mock.assert_called_once()
+            self.assertIsNone(captured['icd'])
+            self.assertIs(captured['mac'], True)
+
+            out_rejected = root / 'macos-icd.json'
+            rc, stderr, _, run_mock = self._run_main(
+                ['--machine-id', '0123456789abcdef', '--out', str(out_rejected),
+                 '--icd', str(vulkan_dir / 'borealis_icd.aarch64.json')],
+                system='Darwin', vulkan_dir=vulkan_dir, run_status='macos_baseline')
+            self.assertEqual(rc, 2)
+            self.assertIn('--icd is Linux only', stderr)
+            self.assertFalse(out_rejected.exists())
+            run_mock.assert_not_called()
