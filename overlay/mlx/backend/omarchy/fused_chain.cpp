@@ -2297,6 +2297,7 @@ bool dispatch_rope_norm_fold(
   // weight, so pin them to this submission.
   auto& encoder = get_command_encoder(stream);
   encoder.add_temporary(*src);
+  encoder.add_temporary(off);
   encoder.add_temporary(w);
   fused.primitive().eval_gpu(inputs, outputs);
   return true;
