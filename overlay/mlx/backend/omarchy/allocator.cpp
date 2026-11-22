@@ -583,26 +583,8 @@ bool device_local_activations_enabled() {
 uint32_t VulkanAllocator::find_memory_type(
     uint32_t type_bits,
     VkMemoryPropertyFlags required) const {
-  const auto& mem = device().memory_properties();
-  uint32_t fallback = UINT32_MAX;
-  for (uint32_t i = 0; i < mem.memoryTypeCount; ++i) {
-    const auto& type = mem.memoryTypes[i];
-    if (!(type_bits & (1u << i))) {
-      continue;
-    }
-    if ((type.propertyFlags & required) != required) {
-      continue;
-    }
-    bool device_local =
-        mem.memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    if (device_local) {
-      return i;
-    }
-    if (fallback == UINT32_MAX) {
-      fallback = i;
-    }
-  }
-  return fallback;
+  return capacity_aware_memory_type(
+      device().memory_properties(), type_bits, required);
 }
 
 VulkanAllocator::VulkanAllocator()
