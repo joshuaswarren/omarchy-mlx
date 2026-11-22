@@ -533,8 +533,23 @@ class ResidentAneWorker:
         in_bytes = 0
         ordered = list(inputs.items())
         for _, payload in ordered:
-            in_bytes += len(payload)
+            in_bytes += memoryview(payload).nbytes
 
+        request = self._submit_request(bundle, ordered, outputs)
+        started = time.monotonic_ns()
+        self._write_bytes(bytes(request))
+        write_ns = time.monotonic_ns() - started
+        return self._collect_submit(
+            tag, bundle, outputs, started, write_ns, in_bytes
+        )
+
+    def _submit_request(
+        self,
+        bundle: str,
+        ordered: list,
+        outputs: Sequence[str],
+    ) -> bytearray:
+        """The wire bytes for one submit in the mode this channel speaks."""
         if self.relay_bypass:
             # Resident's wire protocol directly. The pump splices
             # these bytes between the runner and the resident with no
@@ -549,23 +564,39 @@ class ResidentAneWorker:
             request = bytearray()
             request += f"submit {bundle}\n".encode()
             for name, payload in ordered:
-                request += f"in {name} {len(payload)}\n".encode()
-                request += payload
+                request += (
+                    f"in {name} {memoryview(payload).nbytes}\n".encode()
+                )
+                request += memoryview(payload).cast("B")
             request += b"run\n"
-        else:
-            job = ["submit", bundle]
-            for name, payload in ordered:
-                job += ["--inline", f"{name}={len(payload)}"]
-            for name in outputs:
-                job += ["--emit", name]
+            return request
+        job = ["submit", bundle]
+        for name, payload in ordered:
+            job += ["--inline", f"{name}={memoryview(payload).nbytes}"]
+        for name in outputs:
+            job += ["--emit", name]
+        request = bytearray(" ".join(job).encode() + b"\n")
+        for _, payload in ordered:
+            request += memoryview(payload).cast("B")
+        return request
 
-            request = bytearray(" ".join(job).encode() + b"\n")
-            for _, payload in ordered:
-                request += payload
+    def _collect_submit(
+        self,
+        tag: str,
+        bundle: str,
+        outputs: Sequence[str],
+        started: int,
+        write_ns: int,
+        in_bytes: int,
+        pipelined: int = 1,
+    ) -> dict[str, bytes]:
+        """Read one submit's response frames until its report line.
 
-        started = time.monotonic_ns()
-        self._write_bytes(bytes(request))
-        write_ns = time.monotonic_ns() - started
+        ``started`` marks the write that carried the request (the one
+        shared write for a pipelined batch) and ``write_ns`` how long
+        it took, so a pipelined job's elapsed_ns is its own response
+        window rather than a re-measured round trip.
+        """
         results: dict[str, bytes] = {}
         out_bytes = 0
         report_line = ""
@@ -615,6 +646,8 @@ class ResidentAneWorker:
             "output_bytes": out_bytes,
             **report_fields,
         }
+        if pipelined > 1:
+            record["pipelined"] = pipelined
         self.log.append(record)
 
         if self.relay_bypass:
@@ -635,6 +668,69 @@ class ResidentAneWorker:
                 f"{missing}"
             )
         self.output_bytes += out_bytes
+        return results
+
+    def submit_many(
+        self,
+        jobs: Sequence[tuple[str, str, Mapping[str, bytes], Sequence[str]]],
+    ) -> list[dict[str, bytes]]:
+        """Pipeline several submits on the open channel.
+
+        Every request is written back-to-back in one write, then the
+        responses are read in job order. The resident drains its
+        channel serially, so job k+1's input bytes and exec overlap
+        job k's output transfer -- one write-then-wait turnaround
+        instead of one per job. Only legal for jobs with no data
+        dependency between them: the caller orders the list, the
+        worker executes it as sent.
+
+        Payloads may be any buffer-protocol object (bytes, memoryview,
+        numpy arrays); the byte count comes from the buffer's nbytes,
+        not len(). The failure contract is submit()'s: a refused,
+        dead or stalled round is named by its tag and ends the
+        session -- queued requests die with it, nothing is retried.
+        """
+        jobs = [
+            (bundle, tag, list(inputs.items()), list(outputs))
+            for bundle, tag, inputs, outputs in jobs
+        ]
+        if not jobs:
+            return []
+        if len(jobs) == 1:
+            bundle, tag, inputs, outputs = jobs[0]
+            return [self.submit(bundle, tag, dict(inputs), outputs)]
+        if self._process is None and self._socket is None:
+            raise ResidentWorkerError("no resident session is open")
+        for bundle, tag, _, _ in jobs:
+            if bundle not in self.bundles:
+                raise ResidentWorkerError(f"unknown resident bundle {bundle!r}")
+
+        request = bytearray()
+        job_bytes = []
+        for bundle, tag, ordered, outputs in jobs:
+            in_bytes = sum(
+                memoryview(payload).nbytes for _, payload in ordered
+            )
+            request += self._submit_request(bundle, ordered, outputs)
+            job_bytes.append(in_bytes)
+
+        write_started = time.monotonic_ns()
+        self._write_bytes(bytes(request))
+        write_ns = time.monotonic_ns() - write_started
+
+        results = []
+        for (bundle, tag, _, outputs), in_bytes in zip(jobs, job_bytes):
+            collect_started = time.monotonic_ns()
+            results.append(
+                self._collect_submit(
+                    tag, bundle, outputs, collect_started, 0, in_bytes,
+                    pipelined=len(jobs),
+                )
+            )
+        # The batched write is a property of the batch, not one job;
+        # it lands on the first record so summing write_ns across the
+        # log still counts it once.
+        self.log[-len(jobs)]["write_ns"] = write_ns
         return results
 
     def begin_batch(self, deadline_ms: int) -> None:

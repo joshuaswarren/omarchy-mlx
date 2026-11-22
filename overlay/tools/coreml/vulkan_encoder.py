@@ -663,47 +663,35 @@ class AneIsland:
         self._session = session
         return session
 
-    def _submit_resident(self, bundle: str, tag: str, inputs: dict, outputs: dict) -> dict:
-        """One round inside the open batch: same bytes, no files, one session."""
-        session = self._ensure_session()
+    def _marshal_inputs(self, inputs: dict) -> tuple[dict, int, int]:
+        """Turn input tensors into wire buffers.
+
+        mx arrays are readied with ONE batch eval (measured: the marshal
+        segment is ~97% mx.eval readiness wait; batching removes up to
+        144 redundant syncs per pass) then read out. Host buffers
+        (np.ndarray / bytes / memoryview) need no device round trip at
+        all -- const weights marshalled from their blob bytes and the
+        once-broadcast mask never touch the device.
+        """
+        marshal_started = time.monotonic_ns()
+        tensors = [
+            value for value in inputs.values() if isinstance(value, mx.array)
+        ]
+        if tensors:
+            mx.eval(*tensors)
         payload = {}
         in_bytes = 0
-        marshal_started = time.monotonic_ns()
-        ordered_inputs = list(inputs.items())
-        # batch-eval: ONE graph walk + sync for all inputs instead of one
-        # per tensor (measured: marshal segment is ~97% mx.eval readiness
-        # wait; batching removes up to 144 redundant syncs per pass).
-        mx.eval(*[value for _, value in ordered_inputs])
-        for name, value in ordered_inputs:
-            raw = np.ascontiguousarray(np.asarray(value)).tobytes()
-            payload[name] = raw
-            in_bytes += len(raw)
-        round_marshal_ns = time.monotonic_ns() - marshal_started
-        self.marshal_ns += round_marshal_ns
-        out_names = list(outputs)
-        started = time.monotonic_ns()
-        try:
-            results = session.submit(bundle, tag, payload, out_names)
-        except Exception as error:
-            # A failed round ends the session; drop the reference so
-            # the next submit rebuilds instead of reusing the corpse.
-            self._session = None
-            if self._session_shared:
-                _shared_session_drop(session)
-            raise EncoderRunError(
-                f"ANE batch round {tag} ({bundle}) failed: {error}"
-            ) from error
-        elapsed = time.monotonic_ns() - started
-        back_started = time.monotonic_ns()
-        self.rounds += 1
-        self.exec_ns += elapsed
-        self.input_bytes += in_bytes
-        record = {"tag": tag, "bundle": bundle, "elapsed_ns": elapsed, "round": True}
-        child = getattr(session, "log", [None])[-1] if session.log else None
-        if child:
-            for key in ("write_ns", "read_ns", "stage_ms", "save_ms", "elapsed_ms"):
-                if key in child:
-                    record[key] = child[key]
+        for name, value in inputs.items():
+            if isinstance(value, mx.array):
+                value = np.ascontiguousarray(np.asarray(value))
+            elif isinstance(value, np.ndarray) and not value.flags["C_CONTIGUOUS"]:
+                value = np.ascontiguousarray(value)
+            payload[name] = value
+            in_bytes += memoryview(value).nbytes
+        return payload, in_bytes, time.monotonic_ns() - marshal_started
+
+    def _pack_results(self, results: dict, outputs: dict, tag: str) -> tuple[dict, int]:
+        """Wire bytes back into mx tensors, with the byte-count check."""
         out_bytes = 0
         packed = {}
         for name, (shape, dtype_name) in outputs.items():
@@ -719,21 +707,127 @@ class AneIsland:
             out_bytes += len(raw)
             host = np.frombuffer(raw, dtype=NP_DTYPES[dtype_name], count=count)
             packed[name] = mx.array(host).reshape(shape)
-        round_back_ns = time.monotonic_ns() - back_started
-        self.back_ns += round_back_ns
-        record["back_ns"] = round_back_ns
-        record["marshal_ns"] = round_marshal_ns
+        return packed, out_bytes
+
+    def _record_round(self, tag: str, bundle: str, elapsed: int, session,
+                      marshal_ns: int, back_ns: int, in_bytes: int,
+                      out_bytes: int, batched: int = 1) -> None:
+        self.rounds += 1
+        self.exec_ns += elapsed
+        self.input_bytes += in_bytes
+        record = {"tag": tag, "bundle": bundle, "elapsed_ns": elapsed, "round": True}
+        child = getattr(session, "log", [None])[-1] if session.log else None
+        if child:
+            for key in ("write_ns", "read_ns", "stage_ms", "save_ms", "elapsed_ms"):
+                if key in child:
+                    record[key] = child[key]
+        if batched > 1:
+            record["batched"] = batched
+        record["back_ns"] = back_ns
+        record["marshal_ns"] = marshal_ns
         record["input_bytes"] = in_bytes
         record["output_bytes"] = out_bytes
         self.output_bytes += out_bytes
         self.log.append(record)
+
+    def _submit_resident(self, bundle: str, tag: str, inputs: dict, outputs: dict) -> dict:
+        """One round inside the open batch: same bytes, no files, one session."""
+        session = self._ensure_session()
+        payload, in_bytes, marshal_ns = self._marshal_inputs(inputs)
+        self.marshal_ns += marshal_ns
+        out_names = list(outputs)
+        started = time.monotonic_ns()
+        try:
+            results = session.submit(bundle, tag, payload, out_names)
+        except Exception as error:
+            # A failed round ends the session; drop the reference so
+            # the next submit rebuilds instead of reusing the corpse.
+            self._session = None
+            if self._session_shared:
+                _shared_session_drop(session)
+            raise EncoderRunError(
+                f"ANE batch round {tag} ({bundle}) failed: {error}"
+            ) from error
+        elapsed = time.monotonic_ns() - started
+        back_started = time.monotonic_ns()
+        packed, out_bytes = self._pack_results(results, outputs, tag)
+        back_ns = time.monotonic_ns() - back_started
+        self.back_ns += back_ns
+        self._record_round(
+            tag, bundle, elapsed, session, marshal_ns, back_ns,
+            in_bytes, out_bytes
+        )
         return packed
 
+    def _submit_resident_many(self, jobs: list) -> list:
+        """Pipelined rounds: one write carries every job's request.
+
+        jobs: [(bundle, tag, inputs, outputs)] -- the caller orders the
+        list and guarantees no data dependency between jobs, so the
+        resident can drain them serially while earlier outputs still
+        cross the wire.
+        """
+        session = self._ensure_session()
+        marshalled = []
+        for bundle, tag, inputs, outputs in jobs:
+            payload, in_bytes, marshal_ns = self._marshal_inputs(inputs)
+            self.marshal_ns += marshal_ns
+            marshalled.append(
+                (bundle, tag, payload, list(outputs), marshal_ns, in_bytes)
+            )
+        started = time.monotonic_ns()
+        try:
+            results_many = session.submit_many(
+                [
+                    (bundle, tag, payload, out_names)
+                    for bundle, tag, payload, out_names, _, _ in marshalled
+                ]
+            )
+        except Exception as error:
+            # A failed batched round ends the session too; drop the
+            # reference so the next submit rebuilds.
+            self._session = None
+            if self._session_shared:
+                _shared_session_drop(session)
+            tags = ", ".join(tag for _, tag, *_ in jobs)
+            raise EncoderRunError(
+                f"ANE batched rounds {tags} failed: {error}"
+            ) from error
+        elapsed = time.monotonic_ns() - started
+        packed_many = []
+        for (bundle, tag, _, outputs, marshal_ns, in_bytes), results in zip(
+            marshalled, results_many
+        ):
+            back_started = time.monotonic_ns()
+            packed, out_bytes = self._pack_results(results, outputs, tag)
+            back_ns = time.monotonic_ns() - back_started
+            self.back_ns += back_ns
+            self._record_round(
+                tag, bundle, elapsed, session, marshal_ns, back_ns,
+                in_bytes, out_bytes, batched=len(jobs),
+            )
+            packed_many.append(packed)
+        return packed_many
+
     def submit(self, bundle: str, tag: str, inputs: dict, outputs: dict) -> dict:
-        """inputs: name -> mx array. outputs: name -> (shape, dtype name)."""
+        """inputs: name -> mx array or host buffer. outputs: name -> (shape, dtype name)."""
         if self._mode == "resident-batch":
             return self._submit_resident(bundle, tag, inputs, outputs)
         return self._submit_launch(self.bundles / bundle, tag, inputs, outputs)
+
+    def submit_many(self, jobs: list) -> list:
+        """Pipelined submits: [(bundle, tag, inputs, outputs)] -> packed results.
+
+        Resident mode writes every request before reading any response;
+        launch mode has no session to pipeline under and runs the jobs
+        serially on the same code path as submit().
+        """
+        if self._mode == "resident-batch":
+            return self._submit_resident_many(jobs)
+        return [
+            self._submit_launch(self.bundles / bundle, tag, inputs, outputs)
+            for bundle, tag, inputs, outputs in jobs
+        ]
 
     def submit_whole(self, tag: str, inputs: dict, outputs: dict) -> dict:
         """One whole-program submit.
@@ -760,11 +854,16 @@ class AneIsland:
         in_bytes = 0
         marshal_started = time.monotonic_ns()
         for name, value in inputs.items():
-            mx.eval(value)
-            raw = np.ascontiguousarray(np.asarray(value))
+            if isinstance(value, mx.array):
+                mx.eval(value)
+                payload = np.ascontiguousarray(np.asarray(value)).tobytes()
+            elif isinstance(value, np.ndarray):
+                payload = np.ascontiguousarray(value).tobytes()
+            else:
+                payload = bytes(memoryview(value))
             path = run_dir / f"in_{name}.bin"
-            path.write_bytes(raw.tobytes())
-            in_bytes += raw.nbytes
+            path.write_bytes(payload)
+            in_bytes += len(payload)
             argv += ["--input", f"{name}={path}"]
         round_marshal_ns = time.monotonic_ns() - marshal_started
         self.marshal_ns += round_marshal_ns
@@ -869,6 +968,14 @@ class EncoderRunner:
         self.op_wall_ns: dict[str, int] = {}
         self.cpu_tensor_events = 0
         self.cond_census: dict | None = None
+        # Host marshal provenance for const inputs to ANE islands: the
+        # blob slice a const statement loaded, so island marshal can
+        # build wire bytes from the source bytes instead of draining
+        # the device copy every submit.
+        self.const_src: dict[str, tuple] = {}
+        # Wire buffers built once on the host and shared by every
+        # layer (the mask cond is one tensor for all 24 selects).
+        self._host_wires: dict[str, np.ndarray] = {}
         # MLX_OMARCHY_PIPE: issue-only async_eval per GPU statement so the
         # Vulkan queue stays saturated between island-boundary drains.
         # Scheduling only - same graph, same values, no host sync.
@@ -960,6 +1067,10 @@ class EncoderRunner:
         self.island_a = {s.index: (i, s, c) for i, (s, c) in enumerate(zip(scores, content))}
         self.island_a_partner = {c.index: s.index for s, c in zip(scores, content)}
         self.island_b = {s.index: (i, s) for i, s in enumerate(mask_select)}
+        # The mask select for layer i depends only on constants and the
+        # shared cond -- never on island A's output -- so island A can
+        # carry it in the same pipelined write.
+        self.island_b_layer = {i: s for i, s in enumerate(mask_select)}
         self.island_c = {o.index: (i, o) for i, o in enumerate(attn_out)}
 
         oproj_w = re.compile(
@@ -1179,7 +1290,17 @@ class EncoderRunner:
         )
         host = np.frombuffer(raw, dtype=np_dtype, count=count)
         self.values[name] = mx.array(host).reshape(shape) if shape else mx.array(host[0])
-        if not shape:
+        if shape:
+            # Keep where these bytes came from: island marshal rebuilds
+            # the same wire payload from the blob instead of draining
+            # the device copy back to the host on every submit.
+            self.const_src[name] = (
+                blob.group("path"),
+                int(blob.group("offset")),
+                tuple(shape),
+                dtype_name,
+            )
+        else:
             # Scalar weights are also pad values / multipliers read as metadata.
             self.meta[name] = float(host[0]) if np_dtype != np.int32 else int(host[0])
 
@@ -1287,6 +1408,104 @@ class EncoderRunner:
 
     # ----------------------------------------------------------- ANE islands
 
+    def _wire_input(self, name: str, transpose_last: bool = False):
+        """Marshal an island input from its source.
+
+        A const that came straight from a blob slice is marshalled from
+        those source bytes -- same layout, no device round trip per
+        submit; a host transpose of the last two axes produces the same
+        bytes the contiguous device transpose drained. Anything computed
+        stays an mx array for the batch eval to ready.
+        """
+        self.ensure(name)
+        src = self.const_src.get(name)
+        if src is None:
+            value = self.tensor(name)
+            return mx.swapaxes(value, -1, -2) if transpose_last else value
+        path, offset, shape, dtype_name = src
+        np_dtype = NP_DTYPES[dtype_name]
+        count = 1
+        for dim in shape:
+            count *= dim
+        raw = self.blobs.read_bytes(
+            path, offset, count * np.dtype(np_dtype).itemsize
+        )
+        host = np.frombuffer(raw, dtype=np_dtype, count=count).reshape(shape)
+        if transpose_last:
+            host = np.swapaxes(host, -1, -2)
+        return np.ascontiguousarray(host)
+
+    def _island_b_inputs(self, sel_stmt: Statement, layer: int) -> dict:
+        """The mask select's wire inputs, built on the host.
+
+        The MIL writes ``a`` as an fp16 scalar and ``cond`` as
+        [1, 1, 375, 375], relying on broadcast. The compiled bundle
+        binds all three operands at the full [1, 8, 375, 375]. That
+        expansion is marshalling, not arithmetic, and both expanded
+        operands are constant for the whole pass -- building them on
+        the device and draining them back on every layer pays 24
+        broadcast + drain pairs for bytes that never change. They are
+        built once here and reused; matrix_bd keeps whatever its
+        producer says (blob bytes for a const, the device tensor for a
+        computed bias).
+        """
+        fill_name = sel_stmt.kwargs["a"]
+        cond_name = sel_stmt.kwargs["cond"]
+        fill = self.tensor(fill_name)
+        cond = self.tensor(cond_name)
+        matrix_name = sel_stmt.kwargs["b"]
+        matrix_bd = self.tensor(matrix_name)
+        if fill.shape != ():
+            raise EncoderRunError(f"layer {layer} select fill is {fill.shape}, want scalar")
+        if tuple(cond.shape) != (1, 1, 375, 375):
+            raise EncoderRunError(f"layer {layer} select cond is {tuple(cond.shape)}")
+        if tuple(matrix_bd.shape) != ISLAND_B_SHAPE:
+            raise EncoderRunError(f"layer {layer} select b is {tuple(matrix_bd.shape)}")
+        if cond.dtype != mx.bool_:
+            raise EncoderRunError(f"layer {layer} select cond dtype {cond.dtype}")
+        cond_wire = self._host_wires.get(cond_name)
+        if cond_wire is None:
+            host_cond = np.asarray(cond)
+            cond_wire = np.ascontiguousarray(
+                np.broadcast_to(host_cond, ISLAND_B_SHAPE)
+            )
+            self._host_wires[cond_name] = cond_wire
+            if self.cond_census is None:
+                # Measured once, not inherited: whether any lane
+                # actually selects the -inf fill decides what this run
+                # can claim about the select. var_373 is one tensor
+                # shared by all 24 layers, so the first select is the
+                # whole story, and this reads the host copy rather
+                # than adding a device reduction that would perturb
+                # the GPU counters.
+                self.cond_census = {
+                    "cond_tensor": cond_name,
+                    "shape": list(host_cond.shape),
+                    "elements": int(host_cond.size),
+                    "true_lanes": int(host_cond.sum()),
+                    "broadcast_elements": int(host_cond.size) * ISLAND_B_SHAPE[1],
+                    "broadcast_true_lanes": int(host_cond.sum()) * ISLAND_B_SHAPE[1],
+                    # repr, not float: -inf is not valid JSON.
+                    "fill_value": repr(np.asarray(fill).astype(np.float16).item()),
+                    "fill_bits": "0x%04X" % int(
+                        np.asarray(fill).astype(np.float16).view(np.uint16)
+                    ),
+                    "shared_across_layers": True,
+                }
+        fill_wire = self._host_wires.get(fill_name)
+        if fill_wire is None:
+            fill_wire = np.full(
+                ISLAND_B_SHAPE,
+                np.asarray(fill).astype(np.float16),
+                dtype=np.float16,
+            )
+            self._host_wires[fill_name] = fill_wire
+        return {
+            "ninf_rt": fill_wire,
+            "matrix_bd_5": self._wire_input(matrix_name),
+            "cond": cond_wire,
+        }
+
     def _run_island_a(self, stmt: Statement) -> None:
         layer, scores_stmt, content_stmt = self.island_a[stmt.index]
         if self.bools(scores_stmt.kwargs["transpose_x"])[0] or self.bools(
@@ -1299,74 +1518,66 @@ class EncoderRunner:
             raise EncoderRunError(
                 f"layer {layer} content matmul transpose flags are not (x=false, y=true)"
             )
-        q_v = self.tensor(scores_stmt.kwargs["x"])
-        pos_kT = self.tensor(scores_stmt.kwargs["y"])
-        q_scaled = self.tensor(content_stmt.kwargs["x"])
-        # The bundle binds the already-transposed key tensor.
-        k_headsT = mx.swapaxes(self.tensor(content_stmt.kwargs["y"]), -1, -2)
-        results = self.island.submit(
-            "island-attn-a-kt", f"L{layer:02d}-A",
-            {"q_v": q_v, "pos_kT": pos_kT, "q_scaled": q_scaled, "k_headsT": k_headsT},
-            {
-                "attention_scores_1": (scores_stmt.shape, "fp16"),
-                "matmul_0": (content_stmt.shape, "fp16"),
-            },
+        jobs = [
+            (
+                "island-attn-a-kt", f"L{layer:02d}-A",
+                {
+                    "q_v": self.tensor(scores_stmt.kwargs["x"]),
+                    "pos_kT": self._wire_input(scores_stmt.kwargs["y"]),
+                    "q_scaled": self.tensor(content_stmt.kwargs["x"]),
+                    # The bundle binds the already-transposed key tensor.
+                    "k_headsT": self._wire_input(
+                        content_stmt.kwargs["y"], transpose_last=True
+                    ),
+                },
+                {
+                    "attention_scores_1": (scores_stmt.shape, "fp16"),
+                    "matmul_0": (content_stmt.shape, "fp16"),
+                },
+            )
+        ]
+        sel_stmt = self.island_b_layer.get(layer)
+        b_pending = (
+            sel_stmt is not None
+            and "B" in self.placed
+            and not sel_stmt.done
+            and sel_stmt.names[0] not in self.values
         )
-        self.values[scores_stmt.names[0]] = results["attention_scores_1"]
-        self.values[content_stmt.names[0]] = results["matmul_0"]
+        if b_pending:
+            # The mask select reads only constants and the shared cond
+            # -- never island A's output -- so it rides the same
+            # pipelined write and its exec overlaps A's readback.
+            jobs.append(
+                (
+                    "island-select-8head", f"L{layer:02d}-B",
+                    self._island_b_inputs(sel_stmt, layer),
+                    {"attention_mask_9": (sel_stmt.shape, "fp16")},
+                )
+            )
+        results = self.island.submit_many(jobs)
+        self.values[scores_stmt.names[0]] = results[0]["attention_scores_1"]
+        self.values[content_stmt.names[0]] = results[0]["matmul_0"]
         content_stmt.done = True
         self.executed += 2
         self.ane_ops += 2
+        if b_pending:
+            self.values[sel_stmt.names[0]] = results[1]["attention_mask_9"]
+            sel_stmt.done = True
+            self.executed += 1
+            self.ane_ops += 1
 
     def _run_island_b(self, stmt: Statement) -> None:
         """The -inf attention-mask select, one submit per layer.
 
-        The MIL writes ``a`` as an fp16 scalar and ``cond`` as [1, 1, 375, 375],
-        relying on broadcast. The compiled bundle binds all three operands at
-        the full [1, 8, 375, 375], so both are expanded here. That expansion is
-        marshalling, not arithmetic: it replicates bytes the run already holds,
-        the same way island A hands the bundle an already-transposed key.
+        Only reached when the select's consumer ensured it before its
+        layer's island A ran -- when A ran first, A already carried
+        the select in its pipelined write and marked the statement
+        done, so this path never re-submits.
         """
         layer, sel_stmt = self.island_b[stmt.index]
-        fill = self.tensor(sel_stmt.kwargs["a"])
-        cond = self.tensor(sel_stmt.kwargs["cond"])
-        matrix_bd = self.tensor(sel_stmt.kwargs["b"])
-        if fill.shape != ():
-            raise EncoderRunError(f"layer {layer} select fill is {fill.shape}, want scalar")
-        if tuple(cond.shape) != (1, 1, 375, 375):
-            raise EncoderRunError(f"layer {layer} select cond is {tuple(cond.shape)}")
-        if tuple(matrix_bd.shape) != ISLAND_B_SHAPE:
-            raise EncoderRunError(f"layer {layer} select b is {tuple(matrix_bd.shape)}")
-        if cond.dtype != mx.bool_:
-            raise EncoderRunError(f"layer {layer} select cond dtype {cond.dtype}")
-        if self.cond_census is None:
-            # Measured once, not inherited: whether any lane actually selects
-            # the -inf fill decides what this run can claim about the select.
-            # var_373 is one tensor shared by all 24 layers, so layer 0 is the
-            # whole story, and this reads the host copy rather than adding a
-            # device reduction that would perturb the GPU counters.
-            host_cond = np.asarray(cond)
-            self.cond_census = {
-                "cond_tensor": sel_stmt.kwargs["cond"],
-                "shape": list(host_cond.shape),
-                "elements": int(host_cond.size),
-                "true_lanes": int(host_cond.sum()),
-                "broadcast_elements": int(host_cond.size) * ISLAND_B_SHAPE[1],
-                "broadcast_true_lanes": int(host_cond.sum()) * ISLAND_B_SHAPE[1],
-                # repr, not float: -inf is not valid JSON.
-                "fill_value": repr(np.asarray(fill).astype(np.float16).item()),
-                "fill_bits": "0x%04X" % int(
-                    np.asarray(fill).astype(np.float16).view(np.uint16)
-                ),
-                "shared_across_layers": True,
-            }
         results = self.island.submit(
             "island-select-8head", f"L{layer:02d}-B",
-            {
-                "ninf_rt": mx.contiguous(mx.broadcast_to(fill, ISLAND_B_SHAPE)),
-                "matrix_bd_5": matrix_bd,
-                "cond": mx.contiguous(mx.broadcast_to(cond, ISLAND_B_SHAPE)),
-            },
+            self._island_b_inputs(sel_stmt, layer),
             {"attention_mask_9": (sel_stmt.shape, "fp16")},
         )
         self.values[sel_stmt.names[0]] = results["attention_mask_9"]
@@ -1383,7 +1594,7 @@ class EncoderRunner:
             "island-pv", f"L{layer:02d}-C",
             {
                 "probs": self.tensor(out_stmt.kwargs["x"]),
-                "v_heads": self.tensor(out_stmt.kwargs["y"]),
+                "v_heads": self._wire_input(out_stmt.kwargs["y"]),
             },
             {"attn_output_1": (out_stmt.shape, "fp16")},
         )

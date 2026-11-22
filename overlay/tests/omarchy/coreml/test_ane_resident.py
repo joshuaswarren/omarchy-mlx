@@ -67,8 +67,11 @@ _FAKE_WORKER = textwrap.dedent(
             index += 2
         elif flag == "--serve":
             index += 1
+        elif flag == "--relay-bypass":
+            index += 1
         else:
             index += 2
+    bypass = "--relay-bypass" in arguments
     with ledger.open("a") as log:
         log.write("start\\n")
     for position, (name, directory) in enumerate(bundles.items()):
@@ -82,12 +85,19 @@ _FAKE_WORKER = textwrap.dedent(
     if mode == "refuse-open":
         sys.stderr.write("fake device refused to load\\n")
         sys.exit(1)
-    print(
-        "resident loaded pid=%d deadline_ms=%d iterations=1 detail="
-        "resident worker loaded %d program(s) from %d bundle(s)"
-        % (os.getpid(), deadline_ms, len(bundles), len(bundles)),
-        flush=True,
-    )
+    if bypass:
+        print(
+            "relay-bypass ready pid=%d deadline_ms=%d bundles=%d"
+            % (os.getpid(), deadline_ms, len(bundles)),
+            flush=True,
+        )
+    else:
+        print(
+            "resident loaded pid=%d deadline_ms=%d iterations=1 detail="
+            "resident worker loaded %d program(s) from %d bundle(s)"
+            % (os.getpid(), deadline_ms, len(bundles), len(bundles)),
+            flush=True,
+        )
 
     submits = 0
     batch_open = False
@@ -141,9 +151,37 @@ _FAKE_WORKER = textwrap.dedent(
                 log.write("batch close\\n")
             print("batch closed rounds=%d" % submits, flush=True)
             continue
+        if bypass and line == "close":
+            print("released", flush=True)
+            sys.exit(0)
         tokens = line.split()
         assert tokens[0] == "submit", line
         bundle = tokens[1]
+        if bypass:
+            # The resident's raw protocol: in-name-len headers plus
+            # raw bytes per input, a "run" line to execute, then
+            # "iter", out-name-len plus bytes per output, and "done"
+            # to answer. Requests queue on stdin, so a pipelined
+            # client may write several submits before reading the
+            # first response.
+            payload = b""
+            while True:
+                header = read_line()
+                if header is None:
+                    raise SystemExit("stdin ended inside a submit")
+                if header == "run":
+                    break
+                _, name, length = header.split(" ", 2)
+                payload += read_exact(int(length))
+            submits += 1
+            with ledger.open("a") as log:
+                log.write("submit %s\\n" % bundle)
+            print("iter", flush=True)
+            stdout.write(("out %s %d\\n" % ("out", len(payload))).encode())
+            stdout.write(payload)
+            stdout.flush()
+            print("done", flush=True)
+            continue
         inline = []
         emits = []
         position = 2
@@ -535,6 +573,81 @@ class ResidentAneWorkerTest(unittest.TestCase):
         session._process.kill()
         session._process.wait()
         self.assertFalse(session.alive)
+    def test_submit_many_writes_all_requests_before_any_response(self):
+        """One write carries every request; responses come back in order.
+
+        Pipelined submits remove one write-then-wait turnaround per
+        additional island: the resident drains its stdin serially, so
+        job k+1's bytes are already on the channel while job k's
+        outputs come back.
+        """
+        session = self._session()
+        with session:
+            with mock.patch.object(
+                session, "_write_bytes", wraps=session._write_bytes
+            ) as writes:
+                results = session.submit_many(
+                    [
+                        ("A", "L00-A", {"q": b"a" * 8}, ("y",)),
+                        ("C", "L00-C", {"q": b"c" * 8}, ("y",)),
+                    ]
+                )
+        self.assertEqual(writes.call_count, 1)
+        self.assertEqual(results[0]["y"], b"a" * 8)
+        self.assertEqual(results[1]["y"], b"c" * 8)
+        self.assertEqual(self._ledger().count("submit"), 2)
+        self.assertEqual(session.counters()["submissions"], 2)
+
+    def test_submit_many_marshals_numpy_buffers_by_nbytes(self):
+        """Buffer-protocol payloads count bytes, not len().
+
+        len() on an ndarray is its first dimension; the wire frame
+        needs the byte count, or the worker reads a truncated payload
+        and the stream desyncs.
+        """
+        import numpy as np
+
+        session = self._session()
+        tensor = np.arange(16, dtype=np.float32)
+        with session:
+            results = session.submit_many(
+                [
+                    ("A", "L00-A", {"q": tensor, "k": tensor}, ("y",)),
+                    ("C", "L00-C", {"q": tensor}, ("y",)),
+                ]
+            )
+        self.assertEqual(results[0]["y"], tensor.tobytes() * 2)
+        self.assertEqual(results[1]["y"], tensor.tobytes())
+        self.assertEqual(
+            session.counters()["input_bytes"], tensor.nbytes * 3
+        )
+
+    def test_submit_many_pipelines_on_the_bypass_protocol(self):
+        """The same batching works on the resident's raw protocol."""
+        os.environ["MLX_FAKE_MODE"] = "ok"
+        os.environ["MLX_FAKE_LEDGER"] = str(self.ledger)
+        session = ResidentAneWorker(
+            worker=self.worker,
+            libane=self.root / "libane.so",
+            bundles=self.bundles,
+            scratch=self.root / "scratch",
+            deadline_ms=2000,
+            relay_bypass=True,
+        )
+        with session:
+            with mock.patch.object(
+                session, "_write_bytes", wraps=session._write_bytes
+            ) as writes:
+                results = session.submit_many(
+                    [
+                        ("A", "L00-A", {"q_v": b"a" * 8}, ("out",)),
+                        ("C", "L00-B", {"ninf_rt": b"b" * 4}, ("out",)),
+                    ]
+                )
+        self.assertEqual(writes.call_count, 1)
+        self.assertEqual(results[0]["out"], b"a" * 8)
+        self.assertEqual(results[1]["out"], b"b" * 4)
+        self.assertEqual(self._ledger().count("submit"), 2)
 
     def test_batch_scope_refusals_are_named(self):
         session = self._session()
