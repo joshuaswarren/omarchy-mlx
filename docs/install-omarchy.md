@@ -361,10 +361,8 @@ The Vulkan package builds the Honeykrisp Vulkan driver alone. The driver
 library and the ICD JSON live under `/usr/lib/omarchy-mlx/vulkan/`. That is
 outside the loader's default ICD directories. GL, window-system, and
 Gallium drivers stay with the system Mesa package. The package conflicts
-with `mesa-honeykrisp-omarchy`.
-
-`packaging/mesa-honeykrisp-omarchy/` is not a supported install. Do not
-build or install it. That recipe replaces the system Mesa package.
+with the retired `mesa-honeykrisp-omarchy`, which replaced the system Mesa
+package.
 
 ### Package layout
 
