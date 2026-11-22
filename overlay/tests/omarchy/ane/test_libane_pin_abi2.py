@@ -42,6 +42,16 @@ else:
 SO = SHARE / "libane/libane-strict.so"
 PIN = SHARE / "parakeet-runtime-pin.json"
 MODEL = SHARE / "bundles/island-pv/program-0.anec"
+# island-pv is an H13 anec; ABI-2 (T6021) opens only H14 programs, so on an
+# H14 host the pin's whole-encoder bundle is the model under test.
+try:
+    _compat = Path("/proc/device-tree/compatible").read_bytes().decode(
+        "utf-8", "replace")
+except OSError:
+    _compat = ""
+if any(f"t602{n}" in _compat for n in (0, 1, 2)) and \
+        (SHARE / "bundles/parakeet-encoder-whole/program-0.anec").is_file():
+    MODEL = SHARE / "bundles/parakeet-encoder-whole/program-0.anec"
 ACCEL = Path("/dev/accel/accel0")
 
 # e_machine values; the pinned libane is aarch64-only, so x86 CI skips
