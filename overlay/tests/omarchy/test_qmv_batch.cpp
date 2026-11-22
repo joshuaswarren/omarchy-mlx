@@ -327,3 +327,102 @@ TEST_CASE("the short-pass GEMV engages only when MLX_OMARCHY_QMV_SMALL_T covers 
   CHECK_FALSE(ran(traced_kernels([&] { short_pass(x4, q, "4", s); }), batch4));
   unsetenv("MLX_OMARCHY_QMV_BATCH");
 }
+
+namespace {
+
+// One quantized_matmul of x against q with MLX_OMARCHY_QMM_MMA_ROWS set to
+// `mma` ("" unsets it), returning the kernels dispatched. The short-pass
+// GEMV is pinned off so the R=4 row chain owns the flag-off leg on every
+// part (G16S/G13C would otherwise take rows 2..8 there).
+std::vector<int> mma_rows_kernels(
+    const array& x,
+    const Weight& q,
+    const char* mma,
+    Stream s) {
+  if (*mma) {
+    setenv("MLX_OMARCHY_QMM_MMA_ROWS", mma, 1);
+  } else {
+    unsetenv("MLX_OMARCHY_QMM_MMA_ROWS");
+  }
+  setenv("MLX_OMARCHY_QMV_SMALL_T", "0", 1);
+  auto kernels = traced_kernels([&] {
+    array out = quantized_matmul(
+        x, q.w, q.scales, q.biases, true, 64, 4, "affine", s);
+    out.eval();
+    omarchy::get_command_encoder(s).synchronize();
+  });
+  unsetenv("MLX_OMARCHY_QMM_MMA_ROWS");
+  unsetenv("MLX_OMARCHY_QMV_SMALL_T");
+  return kernels;
+}
+
+bool ran_either(
+    const std::vector<int>& kernels,
+    omarchy::ComputeKernel a,
+    omarchy::ComputeKernel b) {
+  return ran(kernels, a) || ran(kernels, b);
+}
+
+} // namespace
+
+// Upstream affine qmv_mma row routing (mlx PR #4890 ported as
+// MLX_OMARCHY_QMM_MMA_ROWS, default off): with the flag set, a
+// gate-passing non-batched bf16 q4/g64 transposed call with 4..16 rows
+// dispatches the cooperative-matrix tile (the route large M already
+// takes) instead of the small-row chain; a gate-failing shape keeps the
+// row chain. Digests between flag off and on are NOT expected
+// bit-identical: the coopmat tile contracts k in 64-wide fp32 matrix
+// blocks while the row chain accumulates per column, so the accumulation
+// order differs. The A/B on hardware names the mismatch; tile-route
+// correctness against the dense reference is pinned by the existing
+// coopmat prefill doctests, so this case pins routing only.
+TEST_CASE("the MMA rows flag routes R=4 to the coopmat tile and keeps the row chain off-gate") {
+  if (!have_gpu()) return;
+  const auto& caps = omarchy::device(0).capabilities();
+  bool sg32 = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u;
+  if (!(sg32 && caps.cooperative_matrix_f32_8)) {
+    std::cout
+        << "Skipping: the MMA rows pin needs the coopmat route "
+           "(subgroup_size==32+ARITHMETIC and cooperative_matrix_f32_8)\n";
+    return;
+  }
+  Stream s = gpu_stream();
+  random::seed(23);
+  // N*K == 2^21 exactly: the size floor passes on the boundary. K % 128
+  // == 0 and N % 16 == 0.
+  constexpr int kN = 1024;
+  constexpr int kK = 2048;
+  Weight q = make_weight(kN, kK, s);
+  array x = astype(
+      random::normal(Shape{4, kK}, float32, std::nullopt, s), bfloat16, s);
+  x.eval();
+  const auto rows8 = omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8BF16;
+  const auto m16_fulln = omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN;
+  const auto m16_pad = omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNLdsPad;
+  // Flag off: today's routing, the small-row chain takes R=4 ...
+  auto off = mma_rows_kernels(x, q, "", s);
+  REQUIRE(ran(off, rows8));
+  CHECK_FALSE(ran_either(off, m16_fulln, m16_pad));
+  // ... and the flag routes the same shape to the coopmat M16 tile
+  // (LdsPad build on G14C, plain build elsewhere; R=4 is one 16-row tile
+  // so the FullN shape keeps the shipped mapping).
+  auto on = mma_rows_kernels(x, q, "1", s);
+  CHECK_FALSE(ran(on, rows8));
+  CHECK(ran_either(on, m16_fulln, m16_pad));
+  // Explicit "0" keeps the row chain too (the gate must be > 0: unset reads
+  // as -1, so != 0 would make the route default-on - the bug w86 caught in
+  // review).
+  auto zero = mma_rows_kernels(x, q, "0", s);
+  REQUIRE(ran(zero, rows8));
+  CHECK_FALSE(ran_either(zero, m16_fulln, m16_pad));
+  // Gate-failing shape with the flag on: K % 128 != 0 (576 % 128 == 64),
+  // the other gate terms pass, and the row chain still wins.
+  Weight q_k576 = make_weight(4096, 576, s);
+  array x_k576 = astype(
+      random::normal(Shape{4, 576}, float32, std::nullopt, s), bfloat16, s);
+  x_k576.eval();
+  auto on_fail = mma_rows_kernels(x_k576, q_k576, "1", s);
+  CHECK(ran(on_fail, rows8));
+  CHECK_FALSE(ran_either(on_fail, m16_fulln, m16_pad));
+}
