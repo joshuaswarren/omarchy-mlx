@@ -655,6 +655,47 @@ class ReadApiSummaryShape(unittest.TestCase):
         self.assertIn("honeykrisp", blob)
         self.assertIn("apple m1", blob)
 
+    def _matches_chip(self, record, chip):
+        filters = query.build_parser().parse_args(["--chip", chip, "list"])
+        return query.record_matches(record, filters)
+
+    def test_chip_filter_matches_flat_mesa_device(self):
+        mesa_only = {k: v for k, v in self.RECORD.items() if k != "model"}
+        for rec in (self.RECORD, mesa_only):
+            self.assertTrue(self._matches_chip(rec, "M1"))
+            self.assertFalse(self._matches_chip(rec, "M2"))
+            self.assertFalse(self._matches_chip(rec, "M3"))
+
+    def test_chip_filter_matches_flat_model_without_mesa_device(self):
+        base = {
+            "content_sha256": "86bc1808" + "8" * 56,
+            "schema_version": 1,
+            "kind": "quick",
+            "arch": "aarch64",
+            "chip": "apple,t6001",
+            "model": "Apple MacBook Pro (16-inch, M1 Max, 2021)",
+        }
+        for rec in (base, dict(base, mesa_device=None),
+                    dict(base, mesa_device="")):
+            self.assertTrue(self._matches_chip(rec, "M1"))
+            self.assertTrue(self._matches_chip(rec, "M1 Max"))
+            self.assertTrue(self._matches_chip(rec, "Apple M1"))
+            self.assertFalse(self._matches_chip(rec, "M2"))
+            self.assertFalse(self._matches_chip(rec, "M3"))
+
+    def test_chip_filter_ignores_the_machine_name_in_model(self):
+        base_m1 = {k: v for k, v in self.RECORD.items()
+                   if k != "mesa_device"}
+        self.assertTrue(self._matches_chip(base_m1, "M1"))
+        self.assertFalse(self._matches_chip(base_m1, "Pro"))
+        self.assertFalse(self._matches_chip(base_m1, "MacBook"))
+
+    def test_chip_filter_reads_model_chip_only_on_apple_machines(self):
+        board = {"content_sha256": "c3d4" + "2" * 60, "kind": "quick",
+                 "chip": "rockchip,rk3399", "model": "FriendlyElec NanoPi M4"}
+        self.assertTrue(self._matches_chip(board, "rk3399"))
+        self.assertFalse(self._matches_chip(board, "M4"))
+
     def test_nested_payload_still_works(self):
         nested = {
             "content_sha256": "b7e34c02" + "a" * 56,

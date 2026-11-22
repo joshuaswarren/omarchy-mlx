@@ -50,6 +50,7 @@ SNAPSHOT_RELPATH = Path("community-data") / "snapshot"
 METRIC_UNITS = {"tflops": "TFLOP/s", "median_ms": "ms", "min_ms": "ms",
                 "max_ms": "ms"}
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+MODEL_CHIP_RE = re.compile(r"\bM\d+(?: Pro| Max| Ultra)?\b")
 
 
 class DatasetError(RuntimeError):
@@ -182,6 +183,24 @@ def record_mesa_blob(record):
     if package:
         parts.append(package)
     return " ".join(parts).lower()
+
+
+def record_chip_blob(record):
+    """Lowercased searchable text for --chip: chip, GPU device, and model chip.
+
+    Linux rows name the SoC as apple,t8103; the marketing name rides in
+    mesa_device or inside an Apple model. Take only the chip from model,
+    so that --chip Pro does not match every MacBook Pro.
+    """
+    model = _first(record, [("model",)])
+    apple = isinstance(model, str) and model.startswith("Apple ")
+    match = MODEL_CHIP_RE.search(model) if apple else None
+    parts = (
+        record_chip(record),
+        _first(record, [("mesa_device",), ("mesa", "gpu", "deviceName")]),
+        f"Apple {match.group(0)}" if match else None,
+    )
+    return " ".join(str(x) for x in parts if x).lower()
 
 
 def record_mlx_version(record):
@@ -459,13 +478,9 @@ def _tri(value):
 
 
 def record_matches(record, filters):
-    chip_blob = " ".join(
-        x for x in (record_chip(record),
-                    str(_dig(_payload(record), "mesa", "gpu", "deviceName")
-                        or "")) if x).lower()
     checks = (
         ("kind", record_kind(record)),
-        ("chip", chip_blob),
+        ("chip", record_chip_blob(record)),
         ("kernel", (record_kernel(record) or "").lower()),
         ("mesa", record_mesa_blob(record)),
         ("mlx_version", (record_mlx_version(record) or "").lower()),
