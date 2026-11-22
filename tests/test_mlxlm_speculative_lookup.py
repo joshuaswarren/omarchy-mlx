@@ -107,6 +107,20 @@ def test_verify_pass_sets_and_restores_the_gdn_sequential_route(site, monkeypatc
         assert os.environ["MLX_OMARCHY_GDN_SEQ_ROWS"] == "0"
 
 
+def test_speculation_engages_split_rows_once_per_process(site):
+    # Verify-pass attention rows match single-token decode only on the split-K rows
+    # route; speculative_generate_step sets MLX_OMARCHY_SDPA_SPLIT_ROWS=1 when unset,
+    # before its loop, and never per verify pass (the verify-pass test above pins that).
+    src = (site / "generate.py").read_text()
+    fn = next(n for n in ast.parse(src).body
+              if isinstance(n, ast.FunctionDef) and n.name == "speculative_generate_step")
+    body = ast.get_source_segment(src, fn)
+    guard = 'if os.environ.get("MLX_OMARCHY_SDPA_SPLIT_ROWS") is None:'
+    assert guard in body
+    assert 'os.environ["MLX_OMARCHY_SDPA_SPLIT_ROWS"] = "1"' in body
+    assert body.index(guard) < body.index("while True:")
+
+
 GDN_ROWS_PROBE = r"""
 import os, sys
 sys.path.insert(0, sys.argv[1])
