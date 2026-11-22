@@ -730,12 +730,6 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
       device_name.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
 }
 
-// The fused f16 decode SDPA kernel (sdpa_decode_native*.comp) uses no cooperative matrix, but its gate has always required one,
-// and the M1/M2 parts keep that gate until their own numbers exist. On G16S (Apple M4 Pro, Borealis, no cooperative matrix) the
-// gate is 32-wide subgroups with basic, arithmetic and shuffle operations, a 1024-lane workgroup and the shared stream; there the
-// fused kernel measured 586 -> 177 microseconds per call at 1100 keys and 1872 -> 308 at 4096 keys against the three-dispatch
-// composition (16 query / 8 kv heads, width 128). G15S (Apple M3 Pro, Borealis, no cooperative matrix) meets the same gate: 545 -> 93
-// at 1100 keys and 2016 -> 253 at 4096 keys, outputs within 4.9e-4 of the composition (receipts/2026-11-22-m3-pro-g15s-sdpa-f16). Pure.
 // Wave scheduling (MLX_OMARCHY_WAVE_SCHED unset): the parts where the
 // encoder records each batch in earliest-wave order by default. G16S (Apple
 // M4 Pro): with aurora-silicon/mesa#353 and #343, Qwen3-8B decode +1.4%
@@ -755,13 +749,34 @@ inline bool wave_sched_default_part(const std::string& device_name) {
       device_name.find("G14C") != std::string::npos;
 }
 
-inline bool sdpa_decode_f16_without_coopmat_part(const std::string& device_name) {
+// Two-pass block count for the fused f16 decode SDPA kernel (0 = one pass).
+// Matches native Metal's split: 64 blocks at 1024 keys, 128 above 1024.
+inline uint32_t sdpa_decode_f16_two_pass_blocks(uint32_t keys) {
+  return keys > 1024u ? 128u : (keys == 1024u ? 64u : 0u);
+}
+
+// The fused f16 decode SDPA kernel (sdpa_decode_native*.comp) uses no cooperative matrix, but its gate has always required one,
+// and the M1/M2 parts keep that gate until their own numbers exist. On G16S (Apple M4 Pro, Borealis, no cooperative matrix) the
+// gate is 32-wide subgroups with basic, arithmetic and shuffle operations, a 1024-lane workgroup and the shared stream; there the
+// fused kernel measured 586 -> 177 microseconds per call at 1100 keys and 1872 -> 308 at 4096 keys against the three-dispatch
+// composition (16 query / 8 kv heads, width 128). G15S (Apple M3 Pro, Borealis, no cooperative matrix) takes the fused kernel only
+// in its one-pass range (below 1024 keys) and stays on the composition from 1024 keys up because two-pass pass 1 packs each block's
+// unnormalized weighted value sum in f16 and can overflow to inf on finite inputs.
+inline bool sdpa_decode_f16_without_coopmat_part(
+    const std::string& device_name,
+    uint32_t keys) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // G16S and G15S default on; G14C and initial G17C (Max class) keep off pending calibration on M5.
-  return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G15S") != std::string::npos;
+  // G16S defaults on at every length; G15S defaults on in the one-pass range;
+  // G14C and initial G17C (Max class) keep off pending calibration on M5.
+  if (device_name.find("G16S") != std::string::npos) {
+    return true;
+  }
+  if (device_name.find("G15S") != std::string::npos) {
+    return sdpa_decode_f16_two_pass_blocks(keys) == 0u;
+  }
+  return false;
 }
 
 // Two-pass bf16 4-bit/group-64 prefill (MLX_OMARCHY_QMM_BF16W unset): the parts where a transposed quantized_matmul with enough

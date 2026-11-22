@@ -1741,28 +1741,62 @@ TEST_CASE("wave scheduling is a G16S default only") {
   CHECK_FALSE(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
 }
 
-// The fused f16 decode SDPA arm drops its cooperative-matrix clause on G16S and
-// G15S only; MLX_OMARCHY_SDPA_F16_NO_COOPMAT overrides either way.
-TEST_CASE("f16 decode sdpa without the cooperative matrix is a G16S and G15S default") {
-  const char* saved = std::getenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
-  const std::string restore = saved != nullptr ? saved : "";
+// The fused f16 decode SDPA arm drops its cooperative-matrix clause on G16S at
+// every length and on G15S in the one-pass range; MLX_OMARCHY_SDPA_F16_NO_COOPMAT
+// overrides either way.
+TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on G16S and G15S one-pass") {
+  struct EnvGuard {
+    const char* name;
+    bool had_value = false;
+    std::string value;
+    explicit EnvGuard(const char* n) : name(n) {
+      if (const char* current = std::getenv(name)) {
+        had_value = true;
+        value = current;
+      }
+    }
+    ~EnvGuard() {
+      if (had_value) {
+        setenv(name, value.c_str(), 1);
+      } else {
+        unsetenv(name);
+      }
+    }
+  } guard("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+
   unsetenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
-  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)"));
-  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)"));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)"));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
-  setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "0", 1);
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)"));
+  CHECK_EQ(omarchy::sdpa_decode_f16_two_pass_blocks(1u), 0u);
+  CHECK_EQ(omarchy::sdpa_decode_f16_two_pass_blocks(1023u), 0u);
+  CHECK_EQ(omarchy::sdpa_decode_f16_two_pass_blocks(1024u), 64u);
+  CHECK_EQ(omarchy::sdpa_decode_f16_two_pass_blocks(1025u), 128u);
+  CHECK_EQ(omarchy::sdpa_decode_f16_two_pass_blocks(4096u), 128u);
+  CHECK_EQ(omarchy::sdpa_decode_f16_two_pass_blocks(8192u), 128u);
+
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 1u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 1023u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 1024u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 1025u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 4096u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 8192u));
+
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 1023u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 1024u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 8192u));
+
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)", 64u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)", 64u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 64u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 64u));
+
   setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "1", 1);
-  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)"));
-  if (saved != nullptr) {
-    setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", restore.c_str(), 1);
-  } else {
-    unsetenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
-  }
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 8192u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
+
+  setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 64u));
+  setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "", 1);
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 64u));
 }
 
 TEST_CASE("wave levels schedule hazards into strictly ordered waves") {

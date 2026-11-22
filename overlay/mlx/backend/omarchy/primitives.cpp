@@ -16341,10 +16341,12 @@ void ScaledDotProductAttention::eval_gpu(
   // operations, a 1024-lane workgroup and the shared stream above. The
   // kernel does not use the cooperative matrix, but the gate keeps
   // requiring one except on the parts sdpa_decode_f16_without_coopmat_part
-  // names (G16S and G15S, where it was measured), so no other part changes route.
+  // names (G16S at every length, G15S in the one-pass range), so no other
+  // part changes route.
   auto decode_subgroup_gate = [&](const omarchy::CapabilityReport& c) {
     return (c.cooperative_matrix_f32_8 ||
-            omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&
+            omarchy::sdpa_decode_f16_without_coopmat_part(
+                c.device_name, static_cast<uint32_t>(k_len))) &&
         c.subgroup_size == 32u &&
         c.max_compute_work_group_invocations >= 1024u &&
         c.max_compute_work_group_size[0] >= 1024u &&
@@ -16656,12 +16658,12 @@ void ScaledDotProductAttention::eval_gpu(
     params.matrix_n = checked_u32(kv_heads, tag, out);
     params.matrix_k = checked_u32(k_len, tag, out);
     params.alpha = scale_;
-    // Native M1 Max switches to 64 two-pass blocks at 1024 keys and 128
-    // above it; zero selects the one-pass 32-SIMD decode kernel. bf16
-    // always runs one-pass (see above).
+    // Two-pass block count from sdpa_decode_f16_two_pass_blocks (0 selects
+    // the one-pass 32-SIMD decode kernel). bf16 always runs one-pass (see
+    // above).
     params.flags = decode_bf16
         ? 0u
-        : (k_len > 1024 ? 128u : (k_len == 1024 ? 64u : 0u));
+        : omarchy::sdpa_decode_f16_two_pass_blocks(params.matrix_k);
     params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
     params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
     params.aux_offset = checked_item_offset(v, v.size(), tag, out);
