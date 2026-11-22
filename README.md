@@ -70,6 +70,14 @@ mlx-lm, oMLX, mlx-serve, TensorFold, sushi, llama.cpp (Vulkan) and MCDMA have be
   `python -m mlx_omarchy_assistant.wake_eval --manifest clips.json
   --clips-dir clips --model <wake model> --out results.json`
   ([receipt](receipts/2026-11-21-wake-eval-v10/README.md)).
+- A hands-free voice loop with no network calls.
+  `python -m mlx_omarchy_assistant.voice_loop --home <data home>
+  --reply-url http://127.0.0.1:8080/v1/chat/completions` waits for the
+  wake word, ends your turn after a short silence, transcribes it with
+  the resident Parakeet model, streams the reply from a local
+  `mlx_lm.server` or oMLX, and speaks each sentence with Kokoro as soon
+  as it is written. Audio plays through PipeWire's default sink. The
+  reply URL must be a loopback address.
 
 Chat models download from Hugging Face the first time you use them. You
 approve each download first. The default pairs: Everyday is Qwen3.5-9B
