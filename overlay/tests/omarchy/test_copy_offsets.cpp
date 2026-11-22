@@ -1545,3 +1545,48 @@ TEST_CASE("bool source cast writes every element past the dispatch clamp") {
     CHECK_EQ(got[i], expected);
   }
 }
+
+// concatenate copies each input into a strided window of the output whose
+// data_size is the input's element count, while its strides reach to the
+// end of the output row block. The binding must cover the strided reach:
+// a device with robust buffer access drops every write past the bound
+// range (discrete GPUs lost heads 4-7 of an 8-head KV-cache grow).
+TEST_CASE("a strided output window binds every byte its strides reach") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  Stream s = gpu_stream();
+  array out = zeros({2, 6}, int32, s);
+  out.eval();
+  auto flags = out.flags();
+  flags.row_contiguous = false;
+  flags.col_contiguous = false;
+  flags.contiguous = false;
+  array window(Shape{2, 3}, int32, nullptr, {});
+  window.copy_shared_buffer(out, out.strides(), flags, window.size(), 0);
+  // The last element the window reaches is row 1, column 2: item 8.
+  CHECK(omarchy::binding(window).range >= 9 * sizeof(int32_t));
+}
+
+TEST_CASE("concatenate along an inner axis writes every element") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  Stream s = gpu_stream();
+  array a = reshape(arange(0, 8 * 32 * 16, int32, s), {8, 32, 16}, s);
+  array b = zeros({8, 32, 16}, int32, s);
+  array c = concatenate({a, b}, 1, s);
+  c.eval();
+  omarchy::get_command_encoder(s).synchronize();
+  std::vector<int32_t> expected(8 * 64 * 16, 0);
+  for (int h = 0; h < 8; ++h) {
+    for (int r = 0; r < 32; ++r) {
+      for (int d = 0; d < 16; ++d) {
+        expected[(h * 64 + r) * 16 + d] = (h * 32 + r) * 16 + d;
+      }
+    }
+  }
+  CHECK(values_equal(c, expected));
+}
