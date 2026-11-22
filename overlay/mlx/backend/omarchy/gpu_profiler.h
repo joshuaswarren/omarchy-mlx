@@ -42,6 +42,21 @@
 //                     "barriers_skipped"; transfer/fill decisions included);
 //                     buffer mode adds "dispatches_total" (per-dispatch
 //                     mode accounts dispatches through the k=d records)
+//   {"k":"cal",...}   once, after meta: the calibrated submission floor —
+//                     median host cost of an empty command buffer submitted
+//                     alone and waited ("floor_ns"), its sample count, and,
+//                     when the queue writes timestamps, "gpu_epoch" = a
+//                     [tick, host_ns] pair anchoring GPU ticks to the host
+//                     clock for analysis-side alignment
+//
+// The k=cal record adopts aurora-lily's timestamp+calibration model
+// (src/vulkan.rs ProfileStamps + calibrate_profile): lily measures the
+// ~150 us fixed cost of one lone submit+wait and subtracts it from every
+// host-timed kernel sample. Our per-dispatch GPU ticks already bracket
+// the dispatch inside the command buffer, so job cost is not in k=d
+// spans; floor_ns exists so analysis can subtract the same fixed cost
+// from the host-side submit/join spans (k=s, k=q, k=j) and so the
+// figure itself is on record per driver.
 //
 // GPU ticks convert to nanoseconds with meta.period_ns; tick wraparound
 // wraps at 2^valid_bits. Kernel enum values map to names by their
@@ -80,6 +95,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string_view>
 #include <memory>
 #include <span>
@@ -595,6 +611,120 @@ class GpuProfiler {
           stderr,
           "[prof] queue reports no timestamp support; host costs only\n");
     }
+    calibrate(device);
+  }
+
+  // aurora-lily's calibrate_profile (src/vulkan.rs): measure the fixed
+  // cost of one lone submit+wait of an empty command buffer and record
+  // it as the profiling floor. The last sample carries a timestamp
+  // query so GPU ticks can be anchored to the host clock (gpu_epoch),
+  // the cheap cousin of lily's VK_KHR_calibrated_timestamps offset.
+  void calibrate(const Device& device) {
+    if (calibrated_) {
+      return;
+    }
+    calibrated_ = true;
+    auto& dt = vk::device_table();
+    if (!dt.CreateCommandPool || !dt.AllocateCommandBuffers ||
+        !dt.BeginCommandBuffer || !dt.EndCommandBuffer ||
+        !dt.ResetCommandBuffer || !dt.QueueSubmit || !dt.QueueWaitIdle ||
+        !dt.FreeCommandBuffers || !dt.DestroyCommandPool) {
+      return;
+    }
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+        VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pci.queueFamilyIndex = device.queue_family();
+    VkCommandPool pool = VK_NULL_HANDLE;
+    if (dt.CreateCommandPool(device.handle(), &pci, nullptr, &pool) !=
+        VK_SUCCESS) {
+      return;
+    }
+    VkCommandBufferAllocateInfo ai{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.commandPool = pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (dt.AllocateCommandBuffers(device.handle(), &ai, &cmd) != VK_SUCCESS) {
+      dt.DestroyCommandPool(device.handle(), pool, nullptr);
+      return;
+    }
+    VkQueryPool stamps = VK_NULL_HANDLE;
+    if (valid_bits_ != 0 && dt.CreateQueryPool && dt.DestroyQueryPool &&
+        dt.CmdResetQueryPool && dt.CmdWriteTimestamp &&
+        dt.GetQueryPoolResults) {
+      VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+      qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+      qi.queryCount = 1;
+      if (dt.CreateQueryPool(device.handle(), &qi, nullptr, &stamps) !=
+          VK_SUCCESS) {
+        stamps = VK_NULL_HANDLE;
+      }
+    }
+    constexpr int kSamples = 32;
+    std::vector<uint64_t> spans;
+    spans.reserve(kSamples);
+    uint64_t gpu_tick = 0;
+    uint64_t gpu_host = 0;
+    {
+      // No MLX work exists at attach time, so calibration submits are the
+      // only traffic; take the queue mutex anyway to match every other
+      // submission site.
+      std::lock_guard<std::mutex> queue_lock(
+          const_cast<Device&>(device).queue_mutex());
+      for (int i = 0; i < kSamples; ++i) {
+        VkCommandBufferBeginInfo bi{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        dt.ResetCommandBuffer(cmd, 0);
+        dt.BeginCommandBuffer(cmd, &bi);
+        if (stamps != VK_NULL_HANDLE && i == kSamples - 1) {
+          dt.CmdResetQueryPool(cmd, stamps, 0, 1);
+          dt.CmdWriteTimestamp(
+              cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, stamps, 0);
+        }
+        dt.EndCommandBuffer(cmd);
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        uint64_t t0 = host_ns();
+        dt.QueueSubmit(device.queue(), 1, &si, VK_NULL_HANDLE);
+        dt.QueueWaitIdle(device.queue());
+        uint64_t t1 = host_ns();
+        spans.push_back(t1 - t0);
+        if (stamps != VK_NULL_HANDLE && i == kSamples - 1 &&
+            dt.GetQueryPoolResults(
+                device.handle(),
+                stamps,
+                0,
+                1,
+                sizeof(gpu_tick),
+                &gpu_tick,
+                sizeof(gpu_tick),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) ==
+                VK_SUCCESS) {
+          gpu_host = t1;
+        }
+      }
+    }
+    if (stamps != VK_NULL_HANDLE) {
+      dt.DestroyQueryPool(device.handle(), stamps, nullptr);
+    }
+    dt.FreeCommandBuffers(device.handle(), pool, 1, &cmd);
+    dt.DestroyCommandPool(device.handle(), pool, nullptr);
+    if (spans.empty()) {
+      return;
+    }
+    std::sort(spans.begin(), spans.end());
+    floor_ns_ = spans[spans.size() / 2];
+    emitf("{\"k\":\"cal\",\"floor_ns\":%" PRIu64 ",\"samples\":%zu",
+          floor_ns_,
+          spans.size());
+    if (gpu_host != 0) {
+      emitf(",\"gpu_epoch\":[%" PRIu64 ",%" PRIu64 "]", gpu_tick, gpu_host);
+    }
+    emitf("}\n");
   }
 
   Ctx* find(const void* owner) {
@@ -620,6 +750,8 @@ class GpuProfiler {
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
   bool dispatch_enabled_{true};
+  uint64_t floor_ns_{0};
+  bool calibrated_{false};
   uint64_t dispatches_{0};
   uint64_t dispatches_total_{0};
   uint64_t submissions_{0};
