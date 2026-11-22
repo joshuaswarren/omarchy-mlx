@@ -409,9 +409,7 @@ void CommandEncoder::upload_device_local_if_needed(
         // program order plus the barrier tracker/wave scheduler orders the
         // inline vkCmdUpdateBuffer after it without flushing. Only flush if
         // another encoder holds the uncommitted use of vb.
-        const bool on_this_encoder =
-            std::find(batch_buffers_.begin(), batch_buffers_.end(), vb) !=
-            batch_buffers_.end();
+        const bool on_this_encoder = batch_buffers_.count(vb) != 0;
         if (!on_this_encoder) {
           synchronize_pending_encoders();
           comp = omarchy::allocator().buffer_completion(vb);
@@ -425,7 +423,7 @@ void CommandEncoder::upload_device_local_if_needed(
         add_semaphore_wait(device_.completions().semaphore(), comp, nullptr);
       }
       if (auto* noted = omarchy::allocator().note_buffer_handle(vb->buffer)) {
-        batch_buffers_.push_back(noted);
+        batch_buffers_.insert(noted);
       }
       if (wave_sched()) {
         PendingNode& node = pending_.emplace_back();
@@ -498,10 +496,10 @@ void CommandEncoder::copy_buffer(
     commit_device_local_write(dst_vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
-    batch_buffers_.push_back(vb);
+    batch_buffers_.insert(vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
-    batch_buffers_.push_back(vb);
+    batch_buffers_.insert(vb);
   }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
@@ -557,7 +555,7 @@ void CommandEncoder::fill_buffer(
   upload_device_local_if_needed(dst_vb, false, true, offset, size, true);
   commit_device_local_write(dst_vb);
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
-    batch_buffers_.push_back(vb);
+    batch_buffers_.insert(vb);
   }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
@@ -1541,8 +1539,6 @@ void CommandEncoder::submit() {
     timeline.pSignalSemaphoreValues = signal_values.data();
     si.signalSemaphoreCount = static_cast<uint32_t>(signal_sems.size());
     si.pSignalSemaphores = signal_sems.data();
-    // Declared outside the try so the catch can detach it.
-    VkFence submit_fence = VK_NULL_HANDLE;
     try {
       queue_t0 = prof::get().profiling() ? prof::host_ns() : 0;
       // Deterministic swallow simulation for the recovery ladder, in the
@@ -1587,13 +1583,6 @@ void CommandEncoder::submit() {
       bool simulate_drop = env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SUBMIT");
       bool simulate_strip =
           !simulate_drop && env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SIGNAL");
-      submit_fence = device_.completions().acquire_execution_fence();
-      // Attach BEFORE the submit: a concurrent free() on another stream
-      // must never see an empty fence deque for this value and recycle a
-      // buffer the queue is about to write. A failed submit detaches in
-      // the catch below.
-      device_.completions().attach_execution_fence(
-          completion_value, submit_fence);
       if (simulate_strip) {
         si.signalSemaphoreCount = 0;
         si.pSignalSemaphores = nullptr;
@@ -1612,8 +1601,12 @@ void CommandEncoder::submit() {
             timeline::SubKind::VkQueueSubmit,
             encoder_id_,
             completion_value);
+        // No submission fence: recycle safety comes from the completion
+        // timeline's one-generation rule (observing a later drain proves
+        // the driver's submit-final cleanup), so a submit carries no
+        // fence and the host issues no per-submit syncobj poll.
         const VkResult submit_result =
-            dt.QueueSubmit(device_.queue(), 1, &si, submit_fence);
+            dt.QueueSubmit(device_.queue(), 1, &si, VK_NULL_HANDLE);
         if (submit_result != VK_SUCCESS) {
           // A synchronous QueueSubmit failure is a rejection of this
           // submission, not a GPU hang: on Borealis the kernel's -EINVAL
@@ -1643,15 +1636,11 @@ void CommandEncoder::submit() {
               " command_buffer=" + std::to_string(si.commandBufferCount) +
               " wait_values=[" + waits + "]" +
               " signal_values=[" + signals + "]" +
-              " fence=" + std::to_string(
-                  reinterpret_cast<uintptr_t>(submit_fence)) +
               ")");
         }
       }
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {
-      device_.completions().detach_execution_fence(
-          completion_value, submit_fence);
       // The submission never reached the driver: the ended command buffer
       // and the pending semaphore lists are dead (their keepalives have
       // already moved into the local payload and die with this frame).

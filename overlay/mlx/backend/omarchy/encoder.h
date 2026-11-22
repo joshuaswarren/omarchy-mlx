@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "mlx/array.h"
@@ -337,7 +338,7 @@ class MLX_API CommandEncoder {
       return;
     }
     allocator().note_batch_buffer(buf);
-    batch_buffers_.push_back(buf);
+    batch_buffers_.insert(buf);
   }
 
   // Record one dispatch binding's owning buffer exactly like
@@ -352,7 +353,7 @@ class MLX_API CommandEncoder {
       return;
     }
     allocator().note_batch_buffer(buf);
-    batch_buffers_.push_back(buf);
+    batch_buffers_.insert(buf);
   }
 
   // Handlers run on the device completion thread when this submission's
@@ -508,6 +509,13 @@ class MLX_API CommandEncoder {
 
   uint64_t last_submitted_completion() const {
     return last_completion_;
+  }
+
+  // Distinct buffers bound to the open batch. A persistent buffer bound
+  // by many dispatches counts once (pre-binding), so this stays small on
+  // weight/KV-heavy graphs.
+  size_t open_batch_buffer_count() const {
+    return batch_buffers_.size();
   }
 
  private:
@@ -666,10 +674,14 @@ class MLX_API CommandEncoder {
   uint32_t desc_pool_remaining_{0};
   std::vector<PendingSemaphore> wait_semaphores_;
   std::vector<PendingSemaphore> signal_semaphores_;
-  // Raw buffers referenced by the open batch. Owned by their arrays or,
-  // after free(), by the allocator quarantine; this list only carries
-  // the completion stamp at submit time.
-  std::vector<VulkanBuffer*> batch_buffers_;
+  // Raw buffers referenced by the open batch, pre-bound once each: a
+  // persistent buffer (weights, KV) touched by many dispatches inserts
+  // on its first binding and dedups on every later one, so submit() and
+  // the allocator scan it once per batch rather than once per dispatch
+  // binding. Owned by their arrays or, after free(), by the allocator
+  // quarantine; the set only carries the completion stamp at submit
+  // time.
+  std::unordered_set<VulkanBuffer*> batch_buffers_;
   // Descriptor pools retired during recording. They ride the dispatcher
   // payload (one-generation retire) so a set allocated from them cannot
   // outlive its pool.

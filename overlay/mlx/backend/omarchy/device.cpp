@@ -2530,10 +2530,9 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
   // Completion boundary: buffers freed while their submission was in
   // flight wait in the quarantine; this pass recycles the ones from
   // generation ready_value - 1 (observing generation N proves cleanup
-  // for N-1 ran) whose execution fence has already signalled. A fence
-  // that signals later is picked up by the dispatcher's idle tick, which
-  // keeps running release passes while fences are outstanding or blocks
-  // are parked.
+  // for N-1 ran). The dispatcher's idle tick keeps running release
+  // passes while blocks are parked so a buffer freed after the last
+  // drain still recycles.
   omarchy::allocator().release_quarantine(ready_value - 1);
   // Semaphore-keepalive payloads retire one completion generation late:
   // Mesa signals a submission's semaphores (including the completion
@@ -2565,94 +2564,6 @@ uint64_t CompletionDispatcher::drained_value() {
   return drained_value_;
 }
 
-VkFence CompletionDispatcher::acquire_execution_fence() {
-  timeline::ScopedEvent tl_fence(
-      timeline::Kind::FenceOp, timeline::SubKind::FenceAcquire);
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  if (!execution_fence_pool_.empty()) {
-    VkFence fence = execution_fence_pool_.back();
-    execution_fence_pool_.pop_back();
-    VKX_CHECK(vk::device_table().ResetFences(device_, 1, &fence));
-    return fence;
-  }
-  tl_fence.set_detail(1);
-  VkFence fence = VK_NULL_HANDLE;
-  VkFenceCreateInfo ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  VKX_CHECK(vk::device_table().CreateFence(device_, &ci, nullptr, &fence));
-  return fence;
-}
-
-void CompletionDispatcher::attach_execution_fence(uint64_t value, VkFence fence) {
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  execution_fences_.push_back({value, fence});
-}
-
-void CompletionDispatcher::detach_execution_fence(
-    uint64_t value,
-    VkFence fence) {
-  if (fence == VK_NULL_HANDLE) {
-    return;
-  }
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  for (auto it = execution_fences_.begin(); it != execution_fences_.end();
-       ++it) {
-    if (it->fence == fence) {
-      execution_fences_.erase(it);
-      break;
-    }
-  }
-  execution_fence_pool_.push_back(fence);
-}
-
-bool CompletionDispatcher::tick_execution_fences() {
-  timeline::ScopedEvent tl_poll(
-      timeline::Kind::FenceOp, timeline::SubKind::FencePoll);
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  bool due = !execution_fences_.empty();
-  if (!due) {
-    tl_poll.cancel();
-    return false;
-  }
-  uint64_t retired_through = 0;
-  while (!execution_fences_.empty() &&
-         vk::device_table().GetFenceStatus(
-             device_, execution_fences_.front().fence) == VK_SUCCESS) {
-    retired_through = execution_fences_.front().value;
-    execution_fence_pool_.push_back(execution_fences_.front().fence);
-    execution_fences_.pop_front();
-  }
-  if (retired_through != 0) {
-    execution_done_through_ =
-        std::max(execution_done_through_, retired_through);
-    due = true;
-  }
-  tl_poll.set_detail(retired_through);
-  return due;
-}
-
-bool CompletionDispatcher::execution_complete(uint64_t value) {
-  timeline::ScopedEvent tl_poll(
-      timeline::Kind::FenceOp, timeline::SubKind::FencePoll, 0, value);
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  if (value <= execution_done_through_) {
-    tl_poll.cancel();
-    return true;
-  }
-  while (!execution_fences_.empty() &&
-         execution_fences_.front().value <= value) {
-    auto& front = execution_fences_.front();
-    if (vk::device_table().GetFenceStatus(device_, front.fence) ==
-        VK_SUCCESS) {
-      execution_fence_pool_.push_back(front.fence);
-      execution_fences_.pop_front();
-      continue;
-    }
-    return false;
-  }
-  execution_done_through_ = std::max(execution_done_through_, value);
-  return true;
-}
-
 void CompletionDispatcher::run() {
   // Polling, not vkWaitSemaphores: a host wait issued from this thread
   // while the queue executes the signal stalls some drivers (observed on
@@ -2667,19 +2578,22 @@ void CompletionDispatcher::run() {
           return;
         }
         // A quarantined buffer recycles one generation after its own
-        // completion once its execution fence signals - which on
-        // Honeykrisp can be after the last completion drained (the fence
-        // lags the timeline observation). Keep ticking release passes so
-        // mid-generation frees never wait for the next submission. The
-        // newest drained generation itself recycles only once the drain
-        // has settled for one poll interval: while submissions drain
-        // steadily (decode) the tick stays strictly behind the newest
-        // generation - matching free()'s direct path and the drain
-        // passes - and once the queue goes quiet the final generation
-        // still recycles inside the release contract. All state is read
-        // under |mutex_|; the probes and the pass run unlocked (they
-        // take allocator/execution locks, and free() on another thread
-        // may hold an allocator lock while reading dispatcher state).
+        // completion: observing generation N's drain proves the driver
+        // finished submit-final cleanup for N-1 (the same one-generation
+        // rule the drain pass and free()'s direct path use; the fence
+        // per submission that used to prove the newest generation's
+        // cleanup directly was the per-submit SyncobjQuery2 poll -
+        // removed, submission-pipelining lever). Keep ticking release
+        // passes so mid-generation frees never wait for the next
+        // submission. The newest drained generation itself recycles
+        // only once the drain has settled for one poll interval: while
+        // submissions drain steadily (decode) the tick stays strictly
+        // behind the newest generation, and once the queue goes quiet
+        // the final generation still recycles inside the release
+        // contract. All state is read under |mutex_|; the probes and the
+        // pass run unlocked (they take allocator locks, and free() on
+        // another thread may hold an allocator lock while reading
+        // dispatcher state).
         cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
           return stop_ || !pending_.empty();
         });
@@ -2693,8 +2607,7 @@ void CompletionDispatcher::run() {
             settled ? drained_value_
                     : (drained_value_ > 0 ? drained_value_ - 1 : 0);
         lk.unlock();
-        if (tick_execution_fences() ||
-            omarchy::allocator().has_quarantined()) {
+        if (omarchy::allocator().has_quarantined()) {
           omarchy::allocator().release_quarantine(through);
         }
         continue;

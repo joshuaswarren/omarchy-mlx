@@ -304,26 +304,7 @@ class CompletionDispatcher {
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
 
-  // Attach the submission fence for |value| BEFORE the value's
-  // QueueSubmit: execution_complete() must see the fence from the moment
-  // the batch is on the queue, or a concurrent free() would read an
-  // empty fence deque as "completed" and recycle a live buffer.
-  void attach_execution_fence(uint64_t value, VkFence fence);
-  // The submit never reached the driver (QueueSubmit failed): forget the
-  // fence and return it to the pool.
-  void detach_execution_fence(uint64_t value, VkFence fence);
-  // Non-stalling: true when every submission <= |value| provably finished
-  // executing (all attached fences signalled). The only sound safe-to-
-  // recycle test; the timeline observation is not.
-  bool execution_complete(uint64_t value);
-  VkFence acquire_execution_fence();
-  // Retire front execution fences whose fence has signalled, advancing
-  // the done-through watermark; true when a release_quarantine pass is
-  // due (fences still outstanding or just retired). Drives the
-  // dispatcher's idle tick so a fence that signals after the last
-  // completion drained still recycles its quarantined buffers.
-  bool tick_execution_fences();
-  // Blocks until generation |value| can release under the fence
+  // Blocks until generation |value| can release under the one-generation
   // contract: the drain covers |value| and either a later generation
   // has also drained (submits drain in value order, so observing
   // |value + 1| proves cleanup for |value|) or the queue is idle and
@@ -346,16 +327,6 @@ class CompletionDispatcher {
   // Completion value -> the batch that carries it, retained until the
   // completion drains so a dropped submission can be resubmitted.
   std::map<uint64_t, ResubmitBatch> resubmitable_;
-  // Submission execution fences, in value order: recycle decisions use
-  // these, not the pre-cleanup timeline observation.
-  struct ExecutionFence {
-    uint64_t value;
-    VkFence fence;
-  };
-  std::deque<ExecutionFence> execution_fences_;
-  std::vector<VkFence> execution_fence_pool_;
-  uint64_t execution_done_through_{0};
-  std::mutex execution_mutex_;
   // Payloads of already-drained completions, released one completion
   // later. Mesa signals a submission's semaphores before its submit-final
   // cleanup releases timeline points, so a completion value on this
