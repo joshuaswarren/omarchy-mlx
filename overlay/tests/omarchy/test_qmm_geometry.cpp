@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
     }
   }
   // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x16", "2x4"}) {
+  for (const char* geometry : {"2x16", "2x4", "4x32"}) {
     for (const char* name : {"single", "group", "swiglu"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";

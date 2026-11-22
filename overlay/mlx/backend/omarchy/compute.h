@@ -1102,6 +1102,10 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable.
   QmmVecQ4WordSubgroupBF16R2S16,
   QmmVecQ4MultiSubgroupBF16R2S16,
+  // Wider decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=4x32, 128
+  // columns per workgroup); appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R4S32,
+  QmmVecQ4MultiSubgroupBF16R4S32,
   // Fused GDN decode conv + gated-delta step (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED, plain and
   // -DGDN_PF_WIDE): default order, equal head counts. Appended to keep profile kernel ids stable.
   GatedDeltaDecodeConvBF16Pf,

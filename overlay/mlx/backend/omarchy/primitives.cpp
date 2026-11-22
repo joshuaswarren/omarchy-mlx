@@ -165,7 +165,8 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
 // every other chip until its paired A/B lands (G14C: 2x16 is 1.16 percent
 // slower on the 2B decode, five of five pairs, tokens identical, so 2x4
-// stays). The accepted overrides are 2x4 and 2x16.
+// stays). The accepted overrides are 2x4, 2x16 and the experimental 4x32
+// (env-only: it never becomes a chip default).
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -208,8 +209,13 @@ const QmmGeometry& qmm_geometry() {
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
     }
+    if (v == "4x32") {
+      return QmmGeometry{
+          128u, K::QmmVecQ4WordSubgroupBF16R4S32,
+          K::QmmVecQ4MultiSubgroupBF16R4S32, "4x32"};
+    }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16 4x32");
   }();
   return geometry;
 }
