@@ -3,7 +3,8 @@
 mlx-omarchy is MIT. Every external dependency this project consumes at
 build time, run time, or reference time is listed here with its license
 and how it reaches the product. Nothing under a copyleft license is
-linked or vendored.
+linked or vendored, with one exception listed below: the GCC runtime
+libraries in the Linux wheel, which travel with their licence texts.
 
 ## Build-time and runtime dependencies
 
@@ -14,6 +15,7 @@ linked or vendored.
 | doctest | MIT | FetchContent at configure time | tests only |
 | nlohmann/json | MIT | FetchContent at configure time | tests and Python tools |
 | Vulkan SDK (headers + loader) | Apache-2.0 | system package | dlopened at runtime; headers only at compile time |
+| GCC runtime libraries (`libgomp`, `libgfortran`, `libgcc_s`) | GPL-3.0-only with GCC Runtime Library Exception 3.1 | vendored into the Linux wheel by `scripts/openblas_isolation.py` | the wheel must carry them so the private OpenBLAS keeps its RUNPATH; the licence texts ship in `scripts/gcc-licences/` and land in the wheel as `mlx/lib/licences/` |
 | GNUstep (libobjc2, gnustep-base, gnustep-make) | MIT-family | built by the pinned compiler's `scripts/bootstrap-linux-toolchain.sh` | used only to build mil-hwx-compiler; never shipped inside mlx-omarchy |
 | protobuf | BSD-3-Clause | system package | the vendored Core ML schema bindings are generated from Apple's proto sources |
 | Python (tooling) | PSF-2.0 | system | host-only front-end tools |

@@ -5,6 +5,7 @@ on:
       - '.github/workflows/openblas-e2e.yml'
       - 'scripts/build-wheel.sh'
       - 'scripts/openblas_isolation.py'
+      - 'scripts/gcc-licences/**'
       - 'scripts/test-openblas-e2e.sh'
       - 'tests/test_openblas*.py'
   pull_request:
