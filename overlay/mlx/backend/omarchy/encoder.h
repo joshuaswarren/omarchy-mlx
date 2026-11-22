@@ -619,9 +619,15 @@ class MLX_API CommandEncoder {
   uint32_t dep_have_prev_{0};
   uint64_t dep_seq_{0};
   void record_dependency_barrier();
+  // Compute-to-compute barrier for a dispatch when MLX_OMARCHY_COMPUTE_BARRIER
+  // is on and no transfer ran since the last full barrier; else the full one.
+  void record_dispatch_barrier();
+  static bool compute_barrier();
   void reset_dependency_tracking();
   DependencyTracker tracker_;
   bool head_synced_{false};
+  // A copy, fill or inline update was recorded since the last full barrier.
+  bool transfer_since_barrier_{false};
 
   Device& device_;
   uint16_t encoder_id_{0};
