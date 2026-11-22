@@ -563,10 +563,9 @@ def _decode_audio(path: Path):
     16 kHz. Anything else (stereo, other rates, other containers) goes
     through ffmpeg's deterministic `-ar 16000 -ac 1` downmix/resample so
     general audio is usable; a native 16 kHz mono file keeps the exact
-    legacy decode (no resampler is engaged for it). When a resample is
-    needed it runs as its own ffmpeg pass so the stage table can price
-    it: the s16le hand-off between the decode and resample passes adds a
-    <=0.5 LSB rounding a single fused pass would not have.
+    legacy decode (no resampler is engaged for it). Only under the
+    waterfall gate does a needed resample run as its own ffmpeg pass, so
+    the stage table can price it; production keeps the fused pass.
     """
     timing = {
         "probe_ms": None,
@@ -605,12 +604,17 @@ def _decode_audio(path: Path):
     stream = json.loads(probe.stdout)["streams"][0]
     rate, channels = int(stream["sample_rate"]), int(stream["channels"])
     started = time.monotonic()
-    raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le",
-         "-acodec", "pcm_s16le", "-"],
-        capture_output=True, check=True).stdout
-    timing["decode_ms"] = (time.monotonic() - started) * 1000
-    if rate != 16000 or channels != 1:
+    if _pk_waterfall_on() and (rate != 16000 or channels != 1):
+        # Waterfall wants the resample priced on its own row: decode to
+        # s16le first, resample in a second pass. The s16le hand-off can
+        # add a <=0.5 LSB rounding a fused pass would not have, so only
+        # the instrumentation path pays it; production keeps the fused
+        # command below.
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le",
+             "-acodec", "pcm_s16le", "-"],
+            capture_output=True, check=True).stdout
+        timing["decode_ms"] = (time.monotonic() - started) * 1000
         started = time.monotonic()
         raw = subprocess.run(
             ["ffmpeg", "-v", "error", "-f", "s16le", "-ar", str(rate),
@@ -619,11 +623,17 @@ def _decode_audio(path: Path):
             input=raw, capture_output=True, check=True).stdout
         timing["resample_ms"] = (time.monotonic() - started) * 1000
         timing["resampled"] = True
-    started = time.monotonic()
+    else:
+        cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le",
+               "-acodec", "pcm_s16le"]
+        if rate != 16000 or channels != 1:
+            cmd += ["-ar", "16000", "-ac", "1"]
+        raw = subprocess.run(cmd + ["-"], capture_output=True, check=True).stdout
+        timing["decode_ms"] = (time.monotonic() - started) * 1000
+        timing["resampled"] = rate != 16000 or channels != 1
     version = subprocess.run(
         ["ffmpeg", "-version"], capture_output=True, text=True, check=True
     ).stdout.splitlines()[0]
-    timing["decode_ms"] += (time.monotonic() - started) * 1000
     import numpy as np
 
     return np.frombuffer(raw, dtype="<i2"), 16000, version, timing

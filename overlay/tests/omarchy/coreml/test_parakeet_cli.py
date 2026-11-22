@@ -293,8 +293,9 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
                          for i in range(frames * channels)))
 
     def test_decode_audio_reports_resample_as_its_own_stage(self):
-        """A non-16 kHz input runs decode and resample as separate ffmpeg
-        passes, and the timing dict prices each one (V2 stage table)."""
+        """Under the waterfall gate a non-16 kHz input runs decode and
+        resample as separate ffmpeg passes, and the timing dict prices
+        each one (V2 stage table)."""
         import importlib.util
         if not importlib.util.find_spec("numpy"):
             self.skipTest("numpy not installed")
@@ -303,7 +304,9 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             clip = Path(tmp) / "clip-8k.wav"
             self._write_wav(clip, rate=8000, channels=1)
-            pcm, rate, decoder, timing = self.mod._decode_audio(clip)
+            with unittest.mock.patch.dict(
+                    os.environ, {"MLX_OMARCHY_PK_WATERFALL": "1"}):
+                pcm, rate, decoder, timing = self.mod._decode_audio(clip)
         self.assertEqual(rate, 16000)
         self.assertTrue(timing["resampled"])
         self.assertIsNotNone(timing["probe_ms"])
@@ -311,6 +314,30 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
         self.assertIsNotNone(timing["resample_ms"])
         self.assertIn("ffmpeg", decoder)
         # ~0.1 s at 8 kHz decodes to ~0.1 s at 16 kHz.
+        self.assertAlmostEqual(pcm.size, 3200, delta=64)
+
+    def test_decode_audio_fused_resample_outside_the_gate(self):
+        """Without the waterfall gate a non-16 kHz input keeps the single
+        fused ffmpeg pass: resampled flag set, no separate resample_ms,
+        and the pass is priced once as decode (the version probe is not
+        billed to it)."""
+        import importlib.util
+        if not importlib.util.find_spec("numpy"):
+            self.skipTest("numpy not installed")
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "clip-8k.wav"
+            self._write_wav(clip, rate=8000, channels=1)
+            with unittest.mock.patch.dict(
+                    os.environ, {"MLX_OMARCHY_PK_WATERFALL": ""}):
+                pcm, rate, decoder, timing = self.mod._decode_audio(clip)
+        self.assertEqual(rate, 16000)
+        self.assertTrue(timing["resampled"])
+        self.assertIsNotNone(timing["probe_ms"])
+        self.assertIsNotNone(timing["decode_ms"])
+        self.assertIsNone(timing["resample_ms"])
+        self.assertIn("ffmpeg", decoder)
         self.assertAlmostEqual(pcm.size, 3200, delta=64)
 
     def test_decode_audio_16khz_mono_marks_no_resample(self):
