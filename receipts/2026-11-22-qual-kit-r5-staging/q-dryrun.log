@@ -1,0 +1,5 @@
+usage: qualify.py [-h] [--machine-id MACHINE_ID] [--out OUT]
+                  [--compare LINUX MACOS] [--benchmark-only]
+                  [--asset-dir ASSET_DIR] [--icd ICD] [--model-dir MODEL_DIR]
+                  [--reuse-runtime] [--diagnostics DIAGNOSTICS]
+qualify.py: error: set --icd to the installed Apple Vulkan JSON manifest

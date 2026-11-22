@@ -24,7 +24,7 @@ from scripts.bench_decode import ids_digest
 ROOT = Path(__file__).resolve().parent
 PER_FILE_TIMEOUT = int(os.environ.get('QUALIFY_PER_FILE_TIMEOUT', '300'))
 TAG = 'qualification-r6'
-WHEEL_TAG = 'qualification-r4'
+WHEEL_TAG = 'qualification-r5'
 VENDOR_RELEASE = 'v0.7.47'
 SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
 WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
