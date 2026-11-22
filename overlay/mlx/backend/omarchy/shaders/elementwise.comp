@@ -627,6 +627,15 @@ void main() {
     float value = float_power(lhs, rhs);
 #else
     float value;
+#ifndef LITE
+    // Sign stays out of the switch: on the M6 (G18G) its case returned 0 for
+    // every input, matching remainder(x, x), the case two arms above it (issue 544).
+    // Upstream Sign compares against zero, so NaN falls through both
+    // comparisons and maps to 0.
+    if (params.operation == 38u) {
+      value = float(lhs > 0.0) - float(lhs < 0.0);
+    } else
+#endif
     switch (params.operation) {
       case 0:
         value = lhs + rhs;
@@ -773,11 +782,6 @@ void main() {
       case 37:
         value = float_power(lhs, rhs);
         break;
-      case 38:
-        // Upstream Sign compares against zero, so NaN falls through
-        // both comparisons and maps to 0.
-        value = lhs > 0.0 ? 1.0 : (lhs < 0.0 ? -1.0 : 0.0);
-        break;
       case 39:
         // The abs builtin clears the sign bit, so -0.0 flips to +0.0
         // the way the upstream std::abs reference does.
@@ -795,7 +799,9 @@ void main() {
         break;
 #endif  // LITE
       default:
-        return;
+        // An operation this variant does not handle stores NaN, never a stale value (issue 544).
+        value = uintBitsToFloat(0x7fc00000u);
+        break;
     }
 #endif
     output_data.values[params.output_offset + index] = STORE_VALUE(value);

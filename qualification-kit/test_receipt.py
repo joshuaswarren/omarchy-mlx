@@ -39,6 +39,49 @@ class ReceiptTest(unittest.TestCase):
         self.assertIsNone(benchmark_result(dict(r, device='llvmpipe')))
 
 
+
+class CardRowTest(unittest.TestCase):
+    LINUX = {
+        'arm': 'linux-release-wheel', 'status': 'new_suite_failures', 'release': 'qualification-r6',
+        'machine': {'model': 'apple,j616s', 'chip': 'apple,t6040'},
+        'versions': {'os': '7.1.12-aurora', 'mlx': '0.32.4', 'mlx_lm': '0.28.4', 'python': '3.14.0'},
+        'mlx_checks': {'passed': 6, 'total': 6, 'failed_ops': []},
+        'suite': {'expected_files': 34, 'files': {f'test_{i}.py': {} for i in range(34)},
+                  'passed': 13211, 'failed': 81, 'skipped': 81,
+                  'new_failures': ['test_export.py::TestExport::test_export_unique'], 'new_skips': []},
+        'benchmark': {'decode_tps': 75.712, 'prefill_tps': 160.04, 'generated': 64,
+                      'prompt_tokens': 25, 'ids_sha256_16': '0123456789abcdef'},
+        'ane': {'status': 'unavailable', 'exit': 127},
+    }
+
+    def test_full_linux_receipt_prints_every_field(self):
+        self.assertEqual(
+            qualify.card_row(self.LINUX),
+            'apple,t6040 (apple,j616s), Linux 7.1.12-aurora, mlx-omarchy 0.32.4, kit qualification-r6: '
+            'new_suite_failures. MLX checks 6/6. Tests 13211 passed, 81 failed, 81 skipped, 34/34 files; '
+            'new against the M1 Max reference: 1 failure (test_export.py::TestExport::test_export_unique), '
+            '0 skips. Decode 75.71 tok/s, prefill 160.04 tok/s, 64 tokens, ids 0123456789abcdef. '
+            'Neural Engine: unavailable.')
+
+    def test_incomplete_receipt_names_what_did_not_run(self):
+        r = {'arm': 'linux-release-wheel', 'status': 'incomplete', 'release': 'qualification-r6',
+             'machine': {'model': 'apple,j615', 'chip': 'apple,t8122'}, 'versions': {'os': '7.2.11'},
+             'mlx_checks': None, 'suite': None, 'benchmark': None, 'ane': None,
+             'error': 'gpu_or_wheel_verification_exit_1'}
+        self.assertEqual(
+            qualify.card_row(r),
+            'apple,t8122 (apple,j615), Linux 7.2.11, kit qualification-r6: incomplete '
+            '(gpu_or_wheel_verification_exit_1). MLX checks not run. Tests not run. Decode not run. '
+            'Neural Engine: not run.')
+
+    def test_row_flag_prints_the_row_of_a_saved_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'linux.json'
+            path.write_text(json.dumps(self.LINUX))
+            out = subprocess.run([sys.executable, str(Path(qualify.__file__)), '--row', str(path)],
+                                 capture_output=True, text=True, check=True).stdout
+        self.assertEqual(out.strip(), qualify.card_row(self.LINUX))
+
 class PatchStateTest(unittest.TestCase):
     """The kit must know whether the mlx-lm it benchmarks carries the series."""
 

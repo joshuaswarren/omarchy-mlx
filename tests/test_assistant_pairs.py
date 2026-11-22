@@ -176,11 +176,19 @@ def selection_catalog():
 
 # --------------------------------------------------------------------------- stubs
 
+STUB_WORKER_MEM_AVAILABLE_ENV = "MLX_OMARCHY_TEST_STUB_MEM_AVAILABLE_BYTES"
+PAIR_MANAGER_MEM_AVAILABLE_BYTES = 64 * GiB
+
 STUB_WORKER = """
 import json, os, signal, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, {serve!r})
 from mlx_omarchy_serve import budget
+
+_stub_mem = os.environ.get({mem_env!r})
+if _stub_mem:
+    _stub_mem_bytes = int(_stub_mem)
+    budget.mem_available = lambda: _stub_mem_bytes
 
 role, port, context = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 claim = budget.claim_from_env()
@@ -214,7 +222,7 @@ threading.Thread(
 ).start()
 
 ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
-""".format(serve=SERVE_ROOT)
+""".format(serve=SERVE_ROOT, mem_env=STUB_WORKER_MEM_AVAILABLE_ENV)
 
 
 def stub_argv_builder(role):
@@ -1112,6 +1120,20 @@ class ContextSizingTests(unittest.TestCase):
 class PairManagerTests(BasePairTest):
     def setUp(self):
         super().setUp()
+        # Pin host memory in both parent and spawned stub workers so
+        # setup/start/ensure_context/status tests do not depend on the
+        # machine's live /proc/meminfo; explicit available_bytes arguments and
+        # _available_bytes_override still take precedence.
+        mem_patcher = mock.patch.object(
+            budget, "mem_available", return_value=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+        mem_patcher.start()
+        self.addCleanup(mem_patcher.stop)
+        env_patcher = mock.patch.dict(
+            os.environ,
+            {STUB_WORKER_MEM_AVAILABLE_ENV: str(PAIR_MANAGER_MEM_AVAILABLE_BYTES)},
+        )
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
         self.manager = pairs.PairManager(self.home)
         self._old_builders = (pairs._chat_worker_argv, pairs._decision_worker_argv)
         pairs._chat_worker_argv = stub_argv_builder("chat")
@@ -1803,6 +1825,47 @@ class PairManagerTests(BasePairTest):
             self.assertFalse(worker.is_alive())
             self.assertIn("result", outcome)
             self.assertEqual(outcome["result"]["state"], "prepared")
+
+    def test_fixture_isolates_pair_manager_from_host_meminfo(self):
+        child_trap = (
+            f"import sys; sys.path.insert(0, {SERVE_ROOT!r})\n"
+            "from mlx_omarchy_serve import budget\n"
+            "def _fail_meminfo(*_a, **_kw):\n"
+            "    raise AssertionError('child read host /proc/meminfo')\n"
+            "budget.parse_meminfo = _fail_meminfo\n"
+        )
+
+        def trap_child_meminfo(builder):
+            def build(spec):
+                argv = list(builder(spec))
+                argv[2] = child_trap + argv[2]
+                return argv
+            return build
+
+        with mock.patch.object(
+                budget, "parse_meminfo",
+                side_effect=AssertionError("read host /proc/meminfo")), \
+                mock.patch.object(
+                    pairs, "_chat_worker_argv",
+                    trap_child_meminfo(pairs._chat_worker_argv)), \
+                mock.patch.object(
+                    pairs, "_decision_worker_argv",
+                    trap_child_meminfo(pairs._decision_worker_argv)):
+            plan = self.manager.setup("everyday", approve_download=False)
+            status = pairs.PairManager(self.home).status()
+            self.make_chat_snapshot(CHAT_SMALL_ID)
+            self.make_converted_laya()
+            self.manager.setup("everyday", approve_download=True)
+            started = self.manager.start()
+            self.addCleanup(self.manager.stop)
+            held = budget.load_reservations(self.home)
+            stopped = self.manager.stop()
+        self.assertEqual(plan["state"], "planned")
+        self.assertEqual(status["recommendation"]["pair_id"], "quality")
+        self.assertEqual(started["state"], "ready")
+        self.assertIsNotNone(held[CHAT_SMALL_ID]["claimed"])
+        self.assertIsNotNone(held[DECISION_ID]["claimed"])
+        self.assertTrue(stopped["stopped"])
 
 
 if __name__ == "__main__":

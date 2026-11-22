@@ -494,6 +494,13 @@ class AneIsland:
         self._batch_deadline_ms = int(
             os.environ.get("ANE_ISLAND_BATCH_DEADLINE_MS", "120000")
         )
+        # First-submit window: a fresh session pays the bundle's
+        # first-time device staging (~458 MB on parakeet), which
+        # outlasts the steady-state job deadline and can outlast a
+        # batch scope opened for steady-state rounds.
+        self._staging_deadline_ms = int(
+            os.environ.get("ANE_ISLAND_STAGING_DEADLINE_MS", "300000")
+        )
         self.resident_bundles = set(RESIDENT_BUNDLES)
         self._session = None
         # Session singleton bookkeeping: worker_starts counts actual spawns
@@ -589,7 +596,20 @@ class AneIsland:
 
     def _ensure_session(self):
         if self._session is not None:
-            return self._session
+            session = self._session
+            if session.alive:
+                return session
+            # The worker died under an earlier submit; drop the corpse
+            # so the next submit rebuilds the session instead of
+            # reusing a dead channel.
+            self._session = None
+            if self._session_shared:
+                _shared_session_drop(session)
+            else:
+                try:
+                    session._terminate()
+                except Exception:
+                    pass
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ane_resident import ResidentAneWorker
         started = time.monotonic_ns()
@@ -600,6 +620,7 @@ class AneIsland:
             tuple(sorted((name, str(path)) for name, path in bundles.items())),
             self.deadline_ms,
             self._batch_deadline_ms,
+            self._staging_deadline_ms,
             self._seal_kwargs(bundles),
         )
         session = None
@@ -617,13 +638,21 @@ class AneIsland:
                 bundles=bundles,
                 scratch=Path(self.scratch),
                 deadline_ms=self.deadline_ms,
+                staging_deadline_ms=self._staging_deadline_ms,
                 **self._seal_kwargs(bundles),
             )
             session.start()
             if self.share_session:
                 _shared_session_hold(identity, session)
                 self._session_shared = True
-        session.begin_batch(self._batch_deadline_ms)
+            # A fresh session still owes first-time staging on its first
+            # submit; its batch window must cover that, not just the
+            # steady-state pass bound.
+            session.begin_batch(
+                max(self._batch_deadline_ms, self._staging_deadline_ms)
+            )
+        else:
+            session.begin_batch(self._batch_deadline_ms)
         self.batch_open_ns = time.monotonic_ns() - started
         self.session_transport = session.transport
         if not self.session_reused:
@@ -656,6 +685,9 @@ class AneIsland:
         try:
             results = session.submit(bundle, tag, payload, out_names)
         except Exception as error:
+            # A failed round ends the session; drop the reference so
+            # the next submit rebuilds instead of reusing the corpse.
+            self._session = None
             if self._session_shared:
                 _shared_session_drop(session)
             raise EncoderRunError(

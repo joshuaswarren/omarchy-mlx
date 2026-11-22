@@ -186,6 +186,46 @@ void CommandEncoder::record_dependency_barrier() {
       nullptr);
   tracker_.clear();
   head_synced_ = true;
+  transfer_since_barrier_ = false;
+}
+
+bool CommandEncoder::compute_barrier() {
+  // A dispatch whose hazard is only earlier dispatches gets a compute-to-
+  // compute barrier instead of the full one (select_compute_barrier: default
+  // on for discrete GPUs, MLX_OMARCHY_COMPUTE_BARRIER=0/1 overrides). The
+  // batch head, a copy, fill or inline update since the last full barrier,
+  // or wave scheduling keeps the full barrier.
+  static const bool on = []() {
+    const int setting = std::getenv("MLX_OMARCHY_COMPUTE_BARRIER") == nullptr
+        ? -1
+        : (env_flag("MLX_OMARCHY_COMPUTE_BARRIER") ? 1 : 0);
+    return select_compute_barrier(omarchy::device().physical_type(), setting);
+  }();
+  return on;
+}
+
+void CommandEncoder::record_dispatch_barrier() {
+  if (!compute_barrier() || !head_synced_ || transfer_since_barrier_ ||
+      wave_sched()) {
+    record_dependency_barrier();
+    return;
+  }
+  VkMemoryBarrier compute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+  compute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  compute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vk::device_table().CmdPipelineBarrier(
+      cmd_,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0,
+      1,
+      &compute,
+      0,
+      nullptr,
+      0,
+      nullptr);
+  tracker_.clear();
+  head_synced_ = true;
 }
 
 void CommandEncoder::reset_dependency_tracking() {
@@ -415,6 +455,7 @@ void CommandEncoder::upload_device_local_if_needed(
           tracker_.add_write(wr);
         }
         dt.CmdUpdateBuffer(cmd_, vb->buffer, 0, vb->size, vb->host_shadow);
+        transfer_since_barrier_ = true;
         if (!gated_barriers()) {
           record_dependency_barrier();
         }
@@ -502,6 +543,7 @@ void CommandEncoder::copy_buffer(
   region.dstOffset = dst_offset;
   region.size = size;
   vk::device_table().CmdCopyBuffer(cmd_, src, dst, 1, &region);
+  transfer_since_barrier_ = true;
   node_count_++;
   trace::counters().vk_buffer_copies++;
 }
@@ -547,6 +589,7 @@ void CommandEncoder::fill_buffer(
     tracker_.add_write(write);
   }
   vk::device_table().CmdFillBuffer(cmd_, dst, offset, size, value);
+  transfer_since_barrier_ = true;
   node_count_++;
   trace::counters().vk_buffer_fills++;
 }
@@ -970,7 +1013,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     }
     if (!head_synced_ ||
         tracker_.needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
-      record_dependency_barrier();
+      record_dispatch_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
       barrier_recorded = true;
@@ -1569,7 +1612,41 @@ void CommandEncoder::submit() {
             timeline::SubKind::VkQueueSubmit,
             encoder_id_,
             completion_value);
-        VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, submit_fence));
+        const VkResult submit_result =
+            dt.QueueSubmit(device_.queue(), 1, &si, submit_fence);
+        if (submit_result != VK_SUCCESS) {
+          // A synchronous QueueSubmit failure is a rejection of this
+          // submission, not a GPU hang: on Borealis the kernel's -EINVAL
+          // surfaces through vk_device_set_lost, so it reports as
+          // VK_ERROR_DEVICE_LOST even though the device is fine (issue
+          // #526). A genuinely lost device is discovered at a wait or
+          // poll, never inside the submit call. Name the failing
+          // parameters so the kernel's rejection log can be matched
+          // field-for-field.
+          std::string waits;
+          for (size_t i = 0; i < wait_sems.size(); ++i) {
+            waits += (i ? "," : "") + std::to_string(wait_values[i]);
+          }
+          std::string signals;
+          for (size_t i = 0; i < signal_sems.size(); ++i) {
+            signals += (i ? "," : "") + std::to_string(signal_values[i]);
+          }
+          throw std::runtime_error(
+              std::string("[omarchy] invalid submission: vkQueueSubmit "
+                          "rejected with ") +
+              vk::result_string(submit_result) +
+              " (ordinal=" + std::to_string(ordinal) +
+              " encoder=" + std::to_string(encoder_id_) +
+              " cv=" + std::to_string(completion_value) +
+              " nodes=" + std::to_string(node_count_) +
+              " work=" + std::to_string(batch_work_) +
+              " command_buffer=" + std::to_string(si.commandBufferCount) +
+              " wait_values=[" + waits + "]" +
+              " signal_values=[" + signals + "]" +
+              " fence=" + std::to_string(
+                  reinterpret_cast<uintptr_t>(submit_fence)) +
+              ")");
+        }
       }
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {

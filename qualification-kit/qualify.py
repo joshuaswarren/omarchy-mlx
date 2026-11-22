@@ -503,6 +503,51 @@ def suite_verdict(r, results, mac):
     return 'qualified' if r['ane']['status'] == expected_ane else 'ane_not_qualified'
 
 
+def card_row(r):
+    """One paragraph for the hardware card, built only from the receipt."""
+    machine = r.get('machine') or {}
+    versions = r.get('versions') or {}
+    os_name = 'macOS' if r.get('arm') == 'macos-baseline' else 'Linux'
+    head = f"{machine.get('chip')} ({machine.get('model')}), {os_name} {versions.get('os')}"
+    if versions.get('mlx'):
+        package = 'mlx' if os_name == 'macOS' else 'mlx-omarchy'
+        head += f", {package} {versions['mlx']}"
+    head += f", kit {r.get('release')}: {r.get('status')}"
+    if r.get('error'):
+        head += f" ({r['error']})"
+    parts = [head]
+    checks = r.get('mlx_checks')
+    if checks:
+        line = f"MLX checks {checks['passed']}/{checks['total']}"
+        if checks.get('failed_ops'):
+            line += f" (failed: {', '.join(checks['failed_ops'])})"
+        parts.append(line)
+    else:
+        parts.append('MLX checks not run')
+    results = r.get('suite')
+    if results:
+        line = (f"Tests {results['passed']} passed, {results['failed']} failed, {results['skipped']} skipped, "
+                f"{len(results['files'])}/{results['expected_files']} files")
+        if 'new_failures' in results:
+            new = results['new_failures']
+            line += f"; new against the M1 Max reference: {len(new)} failure{'' if len(new) == 1 else 's'}"
+            if new:
+                line += f" ({', '.join(sorted(new))})"
+            line += f", {len(results.get('new_skips', []))} skips"
+        parts.append(line)
+    else:
+        parts.append('Tests not run')
+    bench = r.get('benchmark')
+    if bench:
+        parts.append(f"Decode {bench['decode_tps']:.2f} tok/s, prefill {bench['prefill_tps']:.2f} tok/s, "
+                     f"{bench['generated']} tokens, ids {bench['ids_sha256_16']}")
+    else:
+        parts.append('Decode not run')
+    ane = r.get('ane')
+    parts.append(f"Neural Engine: {ane['status'] if ane else 'not run'}")
+    return '. '.join(parts) + '.'
+
+
 def packaged_icd(vulkan_dir=None):
     """Return the first packaged Apple Vulkan ICD manifest file, Borealis first."""
     directory = Path(PACKAGED_VULKAN_DIR if vulkan_dir is None else vulkan_dir)
@@ -527,7 +572,13 @@ def main():
     parser.add_argument('--reuse-runtime', action='store_true',
                         help='macOS only: use the calling interpreter with exact pinned packages, no install')
     parser.add_argument('--diagnostics', type=Path, help='optional private failure log; do not share')
+    parser.add_argument('--row', type=Path, metavar='RECEIPT', help='print the card row of a saved receipt')
     args = parser.parse_args()
+    if args.row:
+        if any(value for key, value in vars(args).items() if key != 'row'):
+            parser.error('--row cannot be combined with run options')
+        print(card_row(json.loads(args.row.read_text())))
+        return 0
     if args.compare:
         if any(value for key, value in vars(args).items() if key != 'compare'):
             parser.error('--compare cannot be combined with run options')
@@ -597,6 +648,7 @@ def main():
         json.dump(r, f, indent=2, sort_keys=True, allow_nan=False)
         f.write('\n')
     print(f"{r['arm']}: {r['status']} — {args.out}")
+    print(f"Card row: {card_row(r)}")
     return 0 if r['status'] in ('qualified', 'macos_baseline', 'benchmark_complete') else 1
 
 

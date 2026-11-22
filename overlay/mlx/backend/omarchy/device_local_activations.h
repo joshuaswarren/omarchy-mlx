@@ -136,6 +136,18 @@ inline bool select_qmm_wide_2x16(
   return false;
 }
 
+// Dispatch-only hazards take a COMPUTE_SHADER to COMPUTE_SHADER barrier
+// instead of the full ALL_COMMANDS one (encoder.cpp record_dispatch_barrier).
+// Default on for discrete GPUs: on the RTX 5060 Ti Qwen3-4B decode went from
+// 98.76 to 124.22 tok/s with identical ids. Apple chips keep the full barrier
+// until their own A/B. setting: MLX_OMARCHY_COMPUTE_BARRIER 0/1, or -1 unset.
+inline bool select_compute_barrier(VkPhysicalDeviceType physical_type, int setting) {
+  if (setting >= 0) {
+    return setting == 1;
+  }
+  return physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+}
+
 // Pure host/device coherence state machine for one device-local buffer.
 // Models the exact transitions enforced by Buffer::raw_ptr() and
 // CommandEncoder::{dispatch_compute_pipeline, copy_buffer, fill_buffer}.
