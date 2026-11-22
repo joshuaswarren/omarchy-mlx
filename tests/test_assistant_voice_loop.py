@@ -121,6 +121,7 @@ class LoopbackRoundTrip(unittest.TestCase):
         self.assertGreaterEqual(heard["seconds"], 1.0)
         self.assertLessEqual(heard["seconds"], 1.0 + 0.5 + 0.2)
         self.assertEqual(seen["body"]["stream"], True)
+        self.assertEqual(seen["body"]["seed"], 0)  # mlx_lm.server serves a seeded request on its single-request path
         self.assertEqual(seen["body"]["messages"][-1], {"role": "user", "content": "what time is it"})
         self.assertEqual(spoken, ["It is noon.", "The sun is up!"])
         self.assertTrue(seen["tts_before_rest"], "the first sentence was not spoken while the reply was still streaming")
