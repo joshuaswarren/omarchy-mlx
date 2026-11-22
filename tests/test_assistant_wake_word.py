@@ -11,6 +11,7 @@ below runs only where the pinned files already exist.
 """
 
 import hashlib
+import importlib.util
 import os
 import sys
 import tempfile
@@ -324,21 +325,37 @@ class DeviceSelectionTests(unittest.TestCase):
         self.assertTrue(any("set-default-source" in str(args[0]) for args, _ in calls))
 
 
+def _staged_wake_dir():
+    import mlx_omarchy_paths
+    staged = wake_word.model_dir(mlx_omarchy_paths.default_data_home())
+    alt = Path(os.environ.get("MLX_OMARCHY_WAKE_MODELS_DIR", ""))
+    if not all((staged / name).exists() for name in wake_word.MODEL_FILES) \
+            and alt.exists():
+        staged = alt
+    return staged
+
+
+def real_model_skip_reason(models_dir=None):
+    """Why the real openWakeWord run cannot execute here, or None."""
+    staged = models_dir if models_dir is not None else _staged_wake_dir()
+    if not all((staged / name).exists() for name in wake_word.MODEL_FILES):
+        return "pinned wake models not staged on this machine"
+    for package in ("openwakeword", "onnxruntime", "numpy"):
+        if importlib.util.find_spec(package) is None:
+            return f"{package} is not installed in this interpreter"
+    return None
+
+
 class RealModelTests(unittest.TestCase):
     """Runs only where the pinned models are already staged (jwm1 receipt runs)."""
 
     def setUp(self):
-        import mlx_omarchy_paths
-        self.dir = wake_word.model_dir(mlx_omarchy_paths.default_data_home())
-        alt = Path(os.environ.get("MLX_OMARCHY_WAKE_MODELS_DIR", ""))
-        if not all((self.dir / name).exists() for name in wake_word.MODEL_FILES) \
-                and alt.exists():
-            self.dir = alt
-        self.have = all((self.dir / name).exists() for name in wake_word.MODEL_FILES)
+        self.dir = _staged_wake_dir()
+        self.reason = real_model_skip_reason(self.dir)
 
     def test_silence_stays_below_threshold(self):
-        if not self.have:
-            self.skipTest("pinned wake models not staged on this machine")
+        if self.reason:
+            self.skipTest(self.reason)
         detector = wake_word.WakeWordDetector(self.dir / "hey_jarvis_v0.1.onnx")
         import array
         chunk = array.array("h", [0] * wake_word.CHUNK)
@@ -346,6 +363,68 @@ class RealModelTests(unittest.TestCase):
         for _ in range(50):  # 4 s of digital silence
             fired = detector.process(chunk.tobytes()) or fired
         self.assertFalse(fired)
+
+
+class RealModelGateTests(unittest.TestCase):
+    """A machine that cannot run the detector gets a stated skip, not an error."""
+
+    def test_missing_models_reports_models(self):
+        empty = Path(tempfile.mkdtemp())
+        self.assertEqual(real_model_skip_reason(empty),
+                         "pinned wake models not staged on this machine")
+
+    def test_missing_openwakeword_names_the_package(self):
+        staged = _staged_wake_dir()
+        if not all((staged / name).exists() for name in wake_word.MODEL_FILES):
+            self.skipTest("pinned wake models not staged on this machine")
+        real_find = importlib.util.find_spec
+        try:
+            importlib.util.find_spec = (
+                lambda name, *a, **k: None if name == "openwakeword"
+                else real_find(name, *a, **k))
+            reason = real_model_skip_reason()
+        finally:
+            importlib.util.find_spec = real_find
+        self.assertIsNotNone(reason)
+        self.assertIn("openwakeword", reason)
+
+    def test_missing_onnxruntime_names_the_package(self):
+        staged = _staged_wake_dir()
+        if not all((staged / name).exists() for name in wake_word.MODEL_FILES):
+            self.skipTest("pinned wake models not staged on this machine")
+        if importlib.util.find_spec("openwakeword") is None:
+            self.skipTest("openwakeword is absent here, so its gate fires first")
+        real_find = importlib.util.find_spec
+        try:
+            importlib.util.find_spec = (
+                lambda name, *a, **k: None if name == "onnxruntime"
+                else real_find(name, *a, **k))
+            reason = real_model_skip_reason()
+        finally:
+            importlib.util.find_spec = real_find
+        self.assertIsNotNone(reason)
+        self.assertIn("onnxruntime", reason)
+
+    def test_real_model_test_skips_instead_of_erroring(self):
+        staged = _staged_wake_dir()
+        if not all((staged / name).exists() for name in wake_word.MODEL_FILES):
+            self.skipTest("pinned wake models not staged on this machine")
+        real_find = importlib.util.find_spec
+        caught = None
+        try:
+            importlib.util.find_spec = (
+                lambda name, *a, **k: None if name == "openwakeword"
+                else real_find(name, *a, **k))
+            case = RealModelTests("test_silence_stays_below_threshold")
+            try:
+                case.setUp()
+                case.test_silence_stays_below_threshold()
+            except unittest.SkipTest as skip:
+                caught = str(skip)
+        finally:
+            importlib.util.find_spec = real_find
+        self.assertIsNotNone(caught)
+        self.assertIn("openwakeword", caught)
 
 
 class ServerStatusTests(unittest.TestCase):
