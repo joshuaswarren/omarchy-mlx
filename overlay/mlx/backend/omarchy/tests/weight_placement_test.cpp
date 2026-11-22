@@ -144,7 +144,7 @@ int main() {
     const auto props = properties_of(layout);
     expect(
         weight_memory_type_for_size(
-            VK_PHYSICAL_DEVICE_TYPE_OTHER,
+            VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
             props,
             UINT32_MAX,
             2 * kGiB) == UINT32_MAX,
@@ -165,6 +165,19 @@ int main() {
             UINT32_MAX,
             2 * kGiB) == UINT32_MAX,
         "no-device-local-heap-refuses-card-weights");
+  }
+
+  // The largest pure device-local heap wins, not the first one: the
+  // comment promises the largest and the selector must deliver it.
+  {
+    Layout layout;
+    add_heap(layout, 256 * kMiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    add_heap(layout, 24 * kGiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    const auto props = properties_of(layout);
+    expect(mlx::core::omarchy::local_device_memory_type(props, UINT32_MAX) == 1,
+           "largest-pure-local-heap-wins");
   }
 
   if (failures) {

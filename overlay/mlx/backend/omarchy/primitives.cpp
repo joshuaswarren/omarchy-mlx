@@ -7361,12 +7361,23 @@ void Load::eval_gpu(const std::vector<array>& inputs, array& out) {
         throw std::runtime_error(
             "[omarchy] inference weights require the selected Vulkan device");
       }
-      auto buffer = omarchy::allocator().malloc_weight(out.nbytes());
-      out.set_data(buffer);
-      out.data_shared_ptr()->donatable = false;
-      auto* weight = static_cast<omarchy::VulkanBuffer*>(buffer.ptr());
-      dev.upload_weights(encoder, weight->buffer, out.nbytes(), *reader_, offset_);
-      return;
+      // The gate uses all memory types, but this buffer's alignment can
+      // exclude the chosen type; fall back to the mapped path instead of
+      // failing the whole load.
+      try {
+        auto buffer = omarchy::allocator().malloc_weight(out.nbytes());
+        out.set_data(buffer);
+        out.data_shared_ptr()->donatable = false;
+        auto* weight = static_cast<omarchy::VulkanBuffer*>(buffer.ptr());
+        dev.upload_weights(encoder, weight->buffer, out.nbytes(), *reader_, offset_);
+        return;
+      } catch (const std::runtime_error&) {
+        if (omarchy::env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
+          std::fputs("[omarchy-weights] card placement unavailable;"
+                     " falling back to mapped\n",
+                     stderr);
+        }
+      }
     }
     if (omarchy::env_flag("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
       static const int logged =

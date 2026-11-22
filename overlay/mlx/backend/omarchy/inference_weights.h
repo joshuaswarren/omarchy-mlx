@@ -29,20 +29,28 @@ inline uint32_t staging_memory_type(
 }
 
 // The largest pure DEVICE_LOCAL memory type (true VRAM: device local and
-// not host visible). UINT32_MAX when the device has none.
+// not host visible). UINT32_MAX when the device has none. Ties keep the
+// first match.
 inline uint32_t local_device_memory_type(
     const VkPhysicalDeviceMemoryProperties& memory,
     uint32_t types) {
+  uint32_t best = UINT32_MAX;
+  VkDeviceSize best_size = 0;
   for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
     const auto& type = memory.memoryTypes[i];
-    if ((types & (1u << i)) &&
-        (type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
-        !(type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
-        (memory.memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
-      return i;
+    if (!(types & (1u << i)) ||
+        !(type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+        (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ||
+        !(memory.memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+      continue;
+    }
+    const auto& heap = memory.memoryHeaps[type.heapIndex];
+    if (best == UINT32_MAX || heap.size > best_size) {
+      best = i;
+      best_size = heap.size;
     }
   }
-  return UINT32_MAX;
+  return best;
 }
 
 // Where inference weights live on a discrete GPU.
