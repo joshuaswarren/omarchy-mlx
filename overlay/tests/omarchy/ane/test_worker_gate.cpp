@@ -433,23 +433,76 @@ TEST_CASE("is_honeykrisp_icd matches only the file name and ignores parent direc
 
 TEST_CASE("the packaged ICD resolves under either file name") {
   using namespace mlx::core::omarchy;
+  CHECK(packaged_icd_names() ==
+        std::vector<std::string>{
+            "borealis_icd.aarch64.json", "honeykrisp_icd.aarch64.json"});
+
   const auto prefix = std::filesystem::temp_directory_path() /
       ("runtimegate-packaged-borealis-" + std::to_string(::getpid()));
   std::filesystem::remove_all(prefix);
+  const auto vulkan_dir = prefix / "vulkan";
   const auto legacy = packaged_honeykrisp_icd_path(prefix.string());
-  std::filesystem::create_directories(legacy);
-  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) == legacy);
+  const auto renamed = vulkan_dir / "borealis_icd.aarch64.json";
+  const std::vector<std::string> system_candidates{
+      "/usr/share/vulkan/icd.d/lvp_icd.json",
+      "/usr/share/vulkan/icd.d/asahi_icd.json"};
+  auto stage_manifest = [&](const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::create_directories(vulkan_dir, ec);
+    REQUIRE_FALSE(ec);
+    const int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    REQUIRE(fd >= 0);
+    REQUIRE(::close(fd) == 0);
+  };
+
+  // Legacy manifest alone: resolved as a found packaged ICD, beating system
+  // search rather than matching only via the missing-file fallback.
+  stage_manifest(legacy);
+  const auto legacy_resolved =
+      packaged_honeykrisp_icd_path_or_renamed(prefix.string());
+  CHECK(legacy_resolved == legacy);
+  const auto legacy_selection = resolve_honeykrisp_icd_detail(
+      system_candidates, nullptr, legacy_resolved);
+  CHECK(legacy_selection.path == legacy);
+  CHECK(legacy_selection.packaged);
+  CHECK_FALSE(legacy_selection.user_override);
   std::filesystem::remove_all(prefix);
-  const auto renamed =
-      prefix / "vulkan" / "borealis_icd.aarch64.json";
-  std::filesystem::create_directories(renamed);
-  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) ==
-        renamed.string());
+
+  // Renamed Borealis manifest alone: resolved as a found packaged ICD.
+  stage_manifest(renamed);
+  const auto renamed_resolved =
+      packaged_honeykrisp_icd_path_or_renamed(prefix.string());
+  CHECK(renamed_resolved == renamed.string());
+  const auto renamed_selection = resolve_honeykrisp_icd_detail(
+      system_candidates, nullptr, renamed_resolved);
+  CHECK(renamed_selection.path == renamed.string());
+  CHECK(renamed_selection.packaged);
+  CHECK_FALSE(renamed_selection.user_override);
+
+  // Both manifests present: Borealis wins ahead of the legacy name.
+  stage_manifest(legacy);
+  const auto both_resolved =
+      packaged_honeykrisp_icd_path_or_renamed(prefix.string());
+  CHECK(both_resolved == renamed.string());
+  const auto both_selection = resolve_honeykrisp_icd_detail(
+      system_candidates, nullptr, both_resolved);
+  CHECK(both_selection.path == renamed.string());
+  CHECK(both_selection.packaged);
+  CHECK_FALSE(both_selection.user_override);
   std::filesystem::remove_all(prefix);
+
   // Neither name present: the classic path is returned so the packaged-ICD
-  // error message stays the known one.
-  CHECK(packaged_honeykrisp_icd_path_or_renamed(prefix.string()) ==
-        packaged_honeykrisp_icd_path(prefix.string()));
+  // error message stays the known one, and selection falls through to the
+  // system search instead of claiming a packaged ICD.
+  const auto missing_resolved =
+      packaged_honeykrisp_icd_path_or_renamed(prefix.string());
+  CHECK(missing_resolved == legacy);
+  CHECK_FALSE(std::filesystem::exists(missing_resolved));
+  const auto missing_selection = resolve_honeykrisp_icd_detail(
+      system_candidates, nullptr, missing_resolved);
+  CHECK(missing_selection.path == system_candidates[1]);
+  CHECK_FALSE(missing_selection.packaged);
+  CHECK_FALSE(missing_selection.user_override);
   std::filesystem::remove_all(prefix);
 }
 
