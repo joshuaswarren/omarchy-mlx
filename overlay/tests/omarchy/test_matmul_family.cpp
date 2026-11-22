@@ -738,6 +738,26 @@ TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
         32u);
 }
 
+TEST_CASE("the small-M qmm prefill arm on G16S: today's pick, pinned") {
+  using mlx::core::omarchy::coopmat_tile_rows;
+  const std::string g16s = "Apple M4 Pro (G16S B1)";
+  // G16S has no core count in apple_gpu_cores (returns 0), so the
+  // occupancy step-down never applies: M in 17..127 lands on the 32-row
+  // tile however small the grid is. This is the behavior the G401 audit
+  // names as the small-M gap (the kit workload is M=23, 9 of 32 tile
+  // rows dead); when the G412 A/B picks a different small-M default,
+  // this is the test that flips.
+  CHECK(coopmat_tile_rows(16u, 64u, g16s, false) == 16u);
+  for (uint32_t m : {17u, 23u, 31u, 127u}) {
+    CHECK(coopmat_tile_rows(m, 64u, g16s, false) == 32u);
+    // A tiny grid does not step down either: no core count, no compare.
+    CHECK(coopmat_tile_rows(m, 2u, g16s, false) == 32u);
+  }
+  // A part with a known core count still steps a small grid down.
+  const std::string m1max = "Apple M1 Max (G13C C0)";
+  CHECK(coopmat_tile_rows(23u, 2u, m1max, false) == 16u);
+}
+
 TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
   if (!compute_available()) {
     return;
