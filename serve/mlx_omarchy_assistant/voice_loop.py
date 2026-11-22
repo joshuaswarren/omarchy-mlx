@@ -17,6 +17,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import wave
@@ -97,7 +98,10 @@ class Endpointer:
 
 
 def _require_loopback(url: str) -> None:
-    host = urllib.parse.urlsplit(url).hostname or ""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"reply server URL must be http or https, got {url!r}")
+    host = parts.hostname or ""
     try:
         ok = ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -106,13 +110,22 @@ def _require_loopback(url: str) -> None:
         raise ValueError(f"reply server must be loopback, got {host!r}")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"reply server redirected ({code}) to {newurl}; not followed", headers, fp)
+
+
+# No environment proxies and no redirects: the request stays on the loopback host.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+
 def stream_reply(url: str, messages: list, *, model: str,
                  timeout: float = 120.0) -> Iterator[str]:
     """Yield content deltas from a loopback OpenAI-compatible chat server."""
     _require_loopback(url)
     body = json.dumps({"model": model, "messages": messages, "stream": True}).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _OPENER.open(req, timeout=timeout) as resp:
         for raw in resp:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):
@@ -120,7 +133,10 @@ def stream_reply(url: str, messages: list, *, model: str,
             data = line[5:].strip()
             if data == "[DONE]":
                 return
-            delta = json.loads(data)["choices"][0].get("delta", {}).get("content")
+            choices = json.loads(data).get("choices") or []
+            if not choices:
+                raise RuntimeError(f"reply server sent an event with no choices: {data[:200]}")
+            delta = choices[0].get("delta", {}).get("content")
             if delta:
                 yield delta
 
@@ -160,11 +176,12 @@ class PipeWireSink:
 
     def __init__(self, rate: int, popen=subprocess.Popen):
         self.rate = rate
-        self._proc = popen(["pw-play", "--rate", str(rate), "--channels", "1",
-                            "--format", "s16", "-"], stdin=subprocess.PIPE)
+        self._proc = popen(["pw-play", "--raw", f"--rate={rate}", "--channels=1",
+                            "--format=s16", "-"], stdin=subprocess.PIPE)
 
     def write(self, pcm: bytes) -> None:
         self._proc.stdin.write(pcm)
+        self._proc.stdin.flush()
 
     def close(self) -> None:
         self._proc.stdin.close()
@@ -230,8 +247,8 @@ class VoiceLoop:
 
 def microphone(popen=subprocess.Popen) -> Iterator[bytes]:
     """16 kHz mono int16 chunks from PipeWire's default source."""
-    proc = popen(["pw-record", "--rate", str(SAMPLE_RATE), "--channels", "1",
-                  "--format", "s16", "-"], stdout=subprocess.PIPE)
+    proc = popen(["pw-record", "--raw", f"--rate={SAMPLE_RATE}", "--channels=1",
+                  "--format=s16", "-"], stdout=subprocess.PIPE)
     try:
         while chunk := proc.stdout.read(CHUNK * 2):
             yield chunk
@@ -257,17 +274,21 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     detector = wake_word.WakeWordDetector(
         wake_word.prepare(args.home, args.wake_model), threshold=args.wake_threshold)
-    synthesis = Synthesis(args.home)
-    sink = PipeWireSink(24000)
-    loop = VoiceLoop(Endpointer(detector, rms_floor=args.rms_floor),
-                     Recognition(args.home).transcribe, args.reply_url,
-                     synthesis.synthesize_chunks, sink, model=args.model)
+    recognition, synthesis = Recognition(args.home), Synthesis(args.home)
     try:
-        loop.run(microphone())
-    except KeyboardInterrupt:
-        loop.cancel.set()
+        sink = PipeWireSink(24000)
+        loop = VoiceLoop(Endpointer(detector, rms_floor=args.rms_floor),
+                         recognition.transcribe, args.reply_url,
+                         synthesis.synthesize_chunks, sink, model=args.model)
+        try:
+            loop.run(microphone())
+        except KeyboardInterrupt:
+            loop.cancel.set()
+        finally:
+            sink.close()
     finally:
-        sink.close()
+        recognition.close()
+        synthesis.close()
     return 0
 
 

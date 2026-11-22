@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -97,12 +98,16 @@ class LoopbackRoundTrip(unittest.TestCase):
 
         def synthesize(text, cancel):
             spoken.append(text)
-            gate.set()
             yield PcmChunk(24000, bytes(480 * len(spoken)))
+
+        class GateSink(voice_loop.WavSink):
+            def write(self, pcm):
+                super().write(pcm)
+                gate.set()
 
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "reply.wav"
-            sink = voice_loop.WavSink(out, 24000)
+            sink = GateSink(out, 24000)
             loop = voice_loop.VoiceLoop(
                 voice_loop.Endpointer(PhraseEndDetector(), rms_floor=500, end_silence_s=0.5),
                 transcribe, "http://127.0.0.1:%d/v1/chat/completions" % server.server_port,
@@ -138,24 +143,134 @@ class Offline(unittest.TestCase):
         self.assertEqual(list(voice_loop.sentences(["Hi", " there. How", " are you? Fine"])),
                          ["Hi there.", "How are you?", "Fine"])
 
-    def test_pipewire_sink_plays_through_the_default_sink(self):
-        calls = {}
+    def test_pipewire_sink_plays_raw_pcm_and_flushes_each_chunk(self):
+        calls = {"flushes": 0}
+
+        class Stdin(io.BytesIO):
+            def flush(self):
+                calls["flushes"] += 1
+
+            def close(self):
+                pass
 
         class FakeProc:
             def __init__(self, argv, stdin):
-                calls["argv"], self.stdin = argv, io.BytesIO()
-                self.stdin.close = lambda: None
+                calls["argv"], self.stdin = argv, Stdin()
 
             def wait(self, timeout=None):
                 return 0
 
         sink = voice_loop.PipeWireSink(24000, popen=FakeProc)
         sink.write(b"\x01\x02")
+        sink.write(b"\x03\x04")
         sink.close()
-        self.assertEqual(calls["argv"][0], "pw-play")
-        self.assertIn("24000", calls["argv"])
-        self.assertFalse(any(a.startswith(("hw:", "plughw:")) for a in calls["argv"]))
+        argv = calls["argv"]
+        self.assertEqual(argv[0], "pw-play")
+        for flag in ("--raw", "--rate=24000", "--channels=1", "--format=s16"):
+            self.assertIn(flag, argv)
+        self.assertEqual(calls["flushes"], 2)
+        self.assertFalse(any(a.startswith(("hw:", "plughw:")) for a in argv))
 
+    def test_microphone_records_raw_pcm(self):
+        calls = {}
+
+        class FakeProc:
+            def __init__(self, argv, stdout):
+                calls["argv"], self.stdout = argv, io.BytesIO(bytes(2560 * 2))
+
+            def terminate(self):
+                calls["terminated"] = True
+
+        got = list(voice_loop.microphone(popen=FakeProc))
+        self.assertEqual(len(got), 2)
+        self.assertEqual(calls["argv"][0], "pw-record")
+        for flag in ("--raw", "--rate=16000", "--channels=1", "--format=s16"):
+            self.assertIn(flag, calls["argv"])
+        self.assertTrue(calls["terminated"])
+
+
+class ReplyTransport(unittest.TestCase):
+    def serve(self, handler_body):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                handler_body(self)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        return "http://127.0.0.1:%d/v1/chat/completions" % server.server_port
+
+    def test_reply_url_must_be_http_or_https(self):
+        for url in ("ftp://127.0.0.1/x", "file:///etc/passwd", "127.0.0.1:8080/v1/chat/completions"):
+            with self.assertRaises(ValueError):
+                list(voice_loop.stream_reply(url, [], model="m"))
+
+    def test_a_redirect_is_not_followed(self):
+        def redirect(h):
+            h.send_response(302)
+            h.send_header("Location", "http://example.com/v1/chat/completions")
+            h.end_headers()
+
+        with self.assertRaises(Exception) as caught:
+            list(voice_loop.stream_reply(self.serve(redirect), [], model="m"))
+        self.assertIn("302", str(caught.exception))
+
+    def test_environment_proxies_are_ignored(self):
+        def ok(h):
+            h.send_response(200)
+            h.end_headers()
+            h.wfile.write(b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\ndata: [DONE]\n\n')
+
+        url = self.serve(ok)
+        with unittest.mock.patch.dict("os.environ", {"http_proxy": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9", "no_proxy": "", "NO_PROXY": ""}), \
+                unittest.mock.patch("urllib.request._opener", None):  # urllib caches its default opener
+            self.assertEqual(list(voice_loop.stream_reply(url, [], model="m")), ["hi"])
+
+    def test_an_empty_choices_list_fails_clearly(self):
+        def empty(h):
+            h.send_response(200)
+            h.end_headers()
+            h.wfile.write(b'data: {"choices": []}\n\n')
+
+        with self.assertRaisesRegex(RuntimeError, "no choices"):
+            list(voice_loop.stream_reply(self.serve(empty), [], model="m"))
+
+
+class MainClosesWorkers(unittest.TestCase):
+    def test_recognition_and_synthesis_are_closed_when_the_loop_ends(self):
+        closed = []
+
+        class Closer:
+            def __init__(self, name):
+                self.name = name
+
+            def close(self):
+                closed.append(self.name)
+
+            def transcribe(self, *a):
+                return ""
+
+            def synthesize_chunks(self, *a):
+                return iter(())
+
+        from unittest import mock
+        with mock.patch("mlx_omarchy_assistant.recognition.Recognition", lambda home: Closer("recognition")), \
+                mock.patch("mlx_omarchy_assistant.synthesis.Synthesis", lambda home: Closer("synthesis")), \
+                mock.patch("mlx_omarchy_assistant.wake_word.prepare", lambda home, model: "model.onnx"), \
+                mock.patch("mlx_omarchy_assistant.wake_word.WakeWordDetector", lambda path, threshold: LoudNever()), \
+                mock.patch.object(voice_loop, "PipeWireSink", lambda rate: mock.Mock(rate=rate)), \
+                mock.patch.object(voice_loop, "microphone", lambda: iter([bytes(2560)])):
+            self.assertEqual(voice_loop.main(["--home", "/nonexistent"]), 0)
+        self.assertEqual(sorted(closed), ["recognition", "synthesis"])
+
+
+class LoudNever:
+    def process(self, pcm):
+        return False
 
 if __name__ == "__main__":
     unittest.main()
