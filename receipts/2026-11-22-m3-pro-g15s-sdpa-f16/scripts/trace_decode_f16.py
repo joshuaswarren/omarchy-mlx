@@ -9,7 +9,9 @@ deltas (MlxOmarchyTraceSnapshot via the wheel's libmlx) around the run, the
 default device and a sha256 of the token ids. Run it under count_cpu.gdb.py to
 count CPU-stream primitive dispatches in the same process.
 
-usage: trace_decode.py MODEL_DIR N_TOKENS [--cpu-control]
+usage: trace_decode_f16.py MODEL_DIR N_TOKENS EXPECT_WHEEL REPO_ROOT [--cpu-control]
+Prints the scripts/mlx_provenance.py line and refuses (exit 3) unless the
+installed wheel matches EXPECT_WHEEL.
 """
 import ctypes, hashlib, importlib.metadata, json, sys
 
@@ -42,6 +44,13 @@ def reader():
 
 def main():
     model_dir, n = sys.argv[1], int(sys.argv[2])
+    from pathlib import Path
+    sys.path.insert(0, str(Path(sys.argv[4]) / "scripts"))
+    import mlx_provenance as mp
+    prov = mp.installed_provenance(expect_wheel=Path(sys.argv[3]))
+    print(mp.provenance_line(prov), flush=True)
+    if prov["verified"] != "match" or prov["version_match"] is not True:
+        sys.exit(3)
     import mlx.core as mx
     read = reader()
     if "--cpu-control" in sys.argv:

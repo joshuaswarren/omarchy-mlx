@@ -4,7 +4,6 @@ backend/no_cpu/compiled.cpp.o
 backend/no_cpu/device_info.cpp.o
 backend/no_cpu/primitives.cpp.o
 cpu objects:
-cpu objects:
 backend/cpu/encoder.cpp.o
 backend/cpu/eval.cpp.o
-mlx_omarchy-0.32.4.dev202611220507+nocpu.4e3b83d2a-cp314-cp314-linux_aarch64.whl
+mlx_omarchy-0.32.4.dev202611220614+nocpu.95126c59f-cp314-cp314-linux_aarch64.whl

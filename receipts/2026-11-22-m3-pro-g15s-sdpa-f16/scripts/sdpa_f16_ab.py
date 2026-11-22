@@ -9,7 +9,8 @@ scale D^-0.5, fixed seed, so both arms see the same inputs.
 
 Per shape it records
   - Vulkan compute dispatches of one call (trace snapshot ABI): 3 for the
-    composition, 1 (L <= 1024) or 2 (L > 1024) for the fused kernel;
+    composition, 1 (one pass, L < 1024) or 2 (two passes, L >= 1024) for
+    the fused kernel;
   - the output bits (npz) and max |out - float64 reference|;
   - independent: host wall per call of 200 calls of SDPA plus the query
     scaling in one eval (the method of receipts/2026-11-01-m4-sdpa-decode-
@@ -63,6 +64,10 @@ def dispatches():
 SHAPES = [(16, 8, 128, L) for L in (37, 263, 1100, 4096)]       # the G16S rows
 SHAPES += [(32, 8, 128, L) for L in (64, 263, 1024, 1100, 2048, 4096)]  # Qwen3-4B
 SHAPES += [(32, 8, 64, L) for L in (263, 1100, 4096)]           # width 64
+if os.environ.get("SDPA_AB_SHAPES") == "r2":  # round 2: both sides of the one-pass bound
+    SHAPES = [(16, 8, 128, L) for L in (37, 263, 512, 1023, 1024, 1100, 4096)]
+    SHAPES += [(32, 8, 128, L) for L in (64, 263, 512, 1023, 1024, 2048)]
+    SHAPES += [(32, 8, 64, L) for L in (263, 1023, 1024)]
 REPS = 7
 N_IND = 200
 N_CHAIN = 36

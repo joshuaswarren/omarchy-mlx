@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # venv-head: same packages as the base venv (g15s-wave-sched/venv-base), with the head wheel, then install.sh --patch-venv.
 set -euo pipefail
-L=<lane>
-R=<repo>
-PB=<base-build>/venv-base/bin/python
+L=${LANE}
+R=${REPO}
+PB=${BASE_BUILD}/venv-base/bin/python
 WH=$(ls $L/dist-head/*.whl)
 rm -rf $L/venv-head
 python3 -m venv $L/venv-head

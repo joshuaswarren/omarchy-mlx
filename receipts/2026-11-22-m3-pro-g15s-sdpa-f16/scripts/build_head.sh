@@ -4,9 +4,9 @@
 # repo's release CMake args (scripts/wheel-cmake-args.sh, ANE worker off as in
 # the base wheel). Fresh .work per build; 6 jobs, nice 10.
 set -euo pipefail
-L=<lane>
-R=<repo>
-VB=<base-build>/venv-build/bin/python
+L=${LANE}
+R=${REPO}
+VB=${BASE_BUILD}/venv-build/bin/python
 cd "$R"
 test "$(git rev-parse --short=9 HEAD)" = "$1"
 test -z "$(git status --porcelain --untracked-files=no)"

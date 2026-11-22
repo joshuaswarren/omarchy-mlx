@@ -750,7 +750,7 @@ inline bool wave_sched_default_part(const std::string& device_name) {
 }
 
 // Two-pass block count for the fused f16 decode SDPA kernel (0 = one pass).
-// Matches native Metal's split: 64 blocks at 1024 keys, 128 above 1024.
+// The schedule native Metal uses on the M1 Max: 64 blocks at 1024 keys, 128 above.
 inline uint32_t sdpa_decode_f16_two_pass_blocks(uint32_t keys) {
   return keys > 1024u ? 128u : (keys == 1024u ? 64u : 0u);
 }

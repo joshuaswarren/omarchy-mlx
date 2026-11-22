@@ -16,9 +16,9 @@ Jinja2==3.1.6
 markdown-it-py==4.3.0
 MarkupSafe==3.0.4
 mdurl==0.1.2
-mlx==0.32.4.dev202611220450+4e3b83d2a
+mlx==0.32.4.dev202611220609+95126c59f
 mlx-lm==0.31.3
-mlx-omarchy @ file://<lane>/dist-head/mlx_omarchy-0.32.4.dev202611220450%2B4e3b83d2a-cp314-cp314-linux_aarch64.whl#sha256=660bfcb8a9d1b206774e32c3860cd2199c16efee209c2d1d51375405a66129a9
+mlx-omarchy @ file://<lane>/dist-head/mlx_omarchy-0.32.4.dev202611220609%2B95126c59f-cp314-cp314-linux_aarch64.whl#sha256=e3be8d853a330f0ca53811cd1765c430e4d77d1e449c85217b5088a68da5853f
 numpy==2.5.5
 packaging==26.3
 protobuf==7.36.2

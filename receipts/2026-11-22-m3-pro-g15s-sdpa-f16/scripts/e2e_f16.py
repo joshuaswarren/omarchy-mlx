@@ -6,7 +6,8 @@ The model's floating parameters are cast to float16 (model.set_dtype), so
 activations, the KV cache and every single-query attention call are f16.
 The arm is chosen by the caller (MLX_OMARCHY_SDPA_F16_NO_COOPMAT).
 
-For each context (prompt) length in CTX, tokens taken from TEXT_FILE:
+For each context (prompt) length in CTX (environment E2E_CTX, comma-separated;
+default 64,1100,3000), tokens taken from TEXT_FILE:
   - speed: one warmup and RUNS timed greedy generations of GEN tokens
     (mlx_lm.stream_generate, generation_tps), token-id sha per run (must
     not change within the process);
@@ -62,7 +63,7 @@ def snap():
     return s
 
 
-CTX = (64, 1100, 3000)
+CTX = tuple(int(x) for x in os.environ.get("E2E_CTX", "64,1100,3000").split(","))
 GEN = 128
 RUNS = 3
 FORCE = 48

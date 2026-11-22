@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # docs/parity-contract.md 2.1: CPU-disabled Release wheel of code commit $1 (run under /tmp/m1-gpu.lock).
 set -euo pipefail
-L=<lane>
-R=<repo>
-VB=<base-build>/venv-build/bin/python
+L=${LANE}
+R=${REPO}
+VB=${BASE_BUILD}/venv-build/bin/python
 cd "$R"
 test "$(git rev-parse --short=9 HEAD)" = "$1"
 git diff --quiet "$1" -- overlay patches mlx.lock scripts/prepare-mlx.sh

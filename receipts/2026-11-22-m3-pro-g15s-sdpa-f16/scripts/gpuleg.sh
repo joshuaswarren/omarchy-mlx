@@ -2,7 +2,7 @@
 # gpuleg.sh NAME TIMEOUT_S CMD... — one bounded GPU leg under /tmp/m1-gpu.lock.
 # Writes logs/NAME.log (command output) and evidence/NAME.state (before/after device state).
 set -uo pipefail
-LANE=<lane>
+LANE=${LANE}
 name=$1; to=$2; shift 2
 log=$LANE/logs/$name.log; st=$LANE/evidence/$name.state
 unset MLX_OMARCHY_ALLOW_NON_APPLE MLX_OMARCHY_CAPS_SIM VK_DRIVER_FILES VK_ICD_FILENAMES
