@@ -16341,7 +16341,7 @@ void ScaledDotProductAttention::eval_gpu(
   // operations, a 1024-lane workgroup and the shared stream above. The
   // kernel does not use the cooperative matrix, but the gate keeps
   // requiring one except on the parts sdpa_decode_f16_without_coopmat_part
-  // names (G16S, where it was measured), so no other part changes route.
+  // names (G16S and G15S, where it was measured), so no other part changes route.
   auto decode_subgroup_gate = [&](const omarchy::CapabilityReport& c) {
     return (c.cooperative_matrix_f32_8 ||
             omarchy::sdpa_decode_f16_without_coopmat_part(c.device_name)) &&

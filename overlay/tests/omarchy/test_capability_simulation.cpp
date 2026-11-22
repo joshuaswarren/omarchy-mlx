@@ -97,7 +97,7 @@ struct GateExpectations {
   bool coopmat_claim;
   bool subgroup32_arithmetic; // qmm vec subgroup gate
   bool bf16_gemv_gate;        // subgroup32 + SHUFFLE_RELATIVE
-  bool sdpa_native_gate;      // (coopmat or G16S)+32+wg>=1024+smem+ops
+  bool sdpa_native_gate;      // (coopmat or G16S/G15S)+32+wg>=1024+smem+ops
 };
 
 GateExpectations expectations() {
@@ -273,7 +273,7 @@ bool coopmat_backed() {
 }
 
 // True when the runtime hardware itself meets the fused decode SDPA gate
-// (cooperative matrix or a G16S part, subgroup32, 1024-lane workgroup,
+// (cooperative matrix or a G16S or G15S part, subgroup32, 1024-lane workgroup,
 // shared stream, basic+arithmetic+shuffle).
 bool sdpa_native_backed() {
   constexpr VkSubgroupFeatureFlags kDecodeOps =

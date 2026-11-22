@@ -1741,6 +1741,30 @@ TEST_CASE("wave scheduling is a G16S default only") {
   CHECK_FALSE(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
 }
 
+// The fused f16 decode SDPA arm drops its cooperative-matrix clause on G16S and
+// G15S only; MLX_OMARCHY_SDPA_F16_NO_COOPMAT overrides either way.
+TEST_CASE("f16 decode sdpa without the cooperative matrix is a G16S and G15S default") {
+  const char* saved = std::getenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+  const std::string restore = saved != nullptr ? saved : "";
+  unsetenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)"));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)"));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)"));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
+  setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)"));
+  setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "1", 1);
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)"));
+  if (saved != nullptr) {
+    setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", restore.c_str(), 1);
+  } else {
+    unsetenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT");
+  }
+}
+
 TEST_CASE("wave levels schedule hazards into strictly ordered waves") {
   using omarchy::TrackedRange;
   using omarchy::WaveNode;
