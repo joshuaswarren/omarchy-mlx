@@ -512,8 +512,13 @@ class Program:
         if op == "softmax":
             x = self._f32(arg("x"))
             axis = int(self.scalar(stmt, "axis"))
-            exp = np.exp(x - np.max(x, axis=axis, keepdims=True))
-            return exp / np.sum(exp, axis=axis, keepdims=True)
+            m = np.max(x, axis=axis, keepdims=True)
+            shifted = np.subtract(
+                x, m, out=np.full_like(x, -np.inf), where=np.isfinite(m)
+            )
+            exp = np.exp(shifted)
+            total = np.sum(exp, axis=axis, keepdims=True)
+            return np.divide(exp, total, out=np.zeros_like(exp), where=total > 0)
         if op == "layer_norm":
             x = self._f32(arg("x"))
             axes = tuple(a % x.ndim for a in ints("axes"))

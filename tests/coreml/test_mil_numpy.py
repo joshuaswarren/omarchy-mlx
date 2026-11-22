@@ -51,6 +51,37 @@ def test_encoder_matches_golden_capture(tmp_path):
     assert report["within_frozen_contract"], report["measured"]
 
 
+def test_duration_aware_input_keeps_the_evaluator_finite(tmp_path):
+    """A prefix-masked input must not NaN the reference evaluator.
+
+    Duration-aware runs mark only the audio frames valid, which leaves whole
+    query rows at -inf in the attention score map. The MIL guards those rows
+    before the temporal convolution and the hardware keeps them finite; an
+    evaluator that produces NaN there cannot serve as the host reference for
+    short-clip parity analysis.
+    """
+    if not PACKAGE.is_dir():
+        pytest.skip("pinned encoder.mlpackage is not installed")
+    source = emit_mlpackage(PACKAGE, tmp_path / "source", LOCK_PATH)
+    program = Program(Path(source.mil_path), Path(source.model_root))
+
+    rng = np.random.default_rng(3)
+    features = rng.standard_normal((1, 3000, 128)).astype(np.float16)
+    valid = 36
+    mask = np.zeros((1, 3000), dtype=np.float16)
+    mask[:, :valid] = 1.0
+
+    out = program.run(
+        inputs={"input_features": features, "attention_mask": mask},
+        wanted={"encoder_hidden", "encoder_mask"},
+        stop_after="encoder_mask",
+    )
+    encoder_mask = np.asarray(out["encoder_mask"]).reshape(-1)
+    assert (encoder_mask[:5] == 1).all() and (encoder_mask[5:] == 0).all()
+    hidden = np.asarray(out["encoder_hidden"], dtype=np.float32)
+    assert np.isfinite(hidden).all()
+
+
 def _program(tmp_path, statements, signature=""):
     path = tmp_path / "model.mil"
     path.write_text(f"program(1.3) {{\nfunc main<ios18>({signature}) {{\n{statements}\n}} -> (y);\n}}")
