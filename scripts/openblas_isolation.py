@@ -33,8 +33,9 @@ Subcommands:
       Every non-glibc member in its transitive NEEDED chain must be in
       the same directory. GCC runtime licence texts (COPYING3,
       COPYING.RUNTIME, and COPYING.LIB where applicable) are copied from
-      the vendored scripts/gcc-licences directory, then from the installed
-      toolchain licence directory; setting MLX_OMARCHY_GCC_LICENSE_DIR
+      a licences directory next to the OpenBLAS library, then from the
+      vendored scripts/gcc-licences directory, then from the toolchain's
+      system licence directories; setting MLX_OMARCHY_GCC_LICENSE_DIR
       replaces that search with the given directory.
   check WHEEL [WHEEL ...]
       Exit nonzero if any wheel still carries the bare soname or an
@@ -82,8 +83,9 @@ DT_RUNPATH = 29
 GCC_RUNTIME_PREFIXES = ("libgfortran.", "libgomp.", "libquadmath.", "libgcc_s.")
 LICENSE_DIR = "mlx/lib/licences"
 # Licence texts shipped with this repository, so a wheel can carry the GCC
-# runtime licence text on any host instead of depending on the toolchain's
-# system licence directory.
+# runtime licence text without depending on the build host's toolchain
+# licence directory. The x86_64 runtime closure also needs COPYING.LIB,
+# whose text is toolchain specific and is not vendored here.
 VENDORED_GCC_LICENCE_DIR = Path(__file__).resolve().parent / "gcc-licences"
 
 

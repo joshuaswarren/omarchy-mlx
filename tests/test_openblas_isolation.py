@@ -28,6 +28,7 @@ MODULE = runpy.run_path(
 parse_elf_needed = MODULE["parse_elf_needed"]
 check = MODULE["check"]
 vendor = MODULE["vendor"]
+vendor_runtime_additions = MODULE["vendor_runtime_additions"]
 _rewrite_wheel = MODULE["_rewrite_wheel"]
 _record_name = MODULE["_record_name"]
 
@@ -144,6 +145,44 @@ class ElfParseTests(unittest.TestCase):
             path = MODULE["VENDORED_GCC_LICENCE_DIR"] / name
             self.assertTrue(path.is_file(), f"{name} missing from the vendored licence dir")
             self.assertGreater(path.stat().st_size, 1000, f"{name} looks truncated")
+
+    def test_gcc_licence_texts_come_from_the_vendored_dir(self):
+        # The texts must be READ from the vendored directory, not only
+        # exist: a source tree without a licences directory and no system
+        # licence directory must still produce both texts.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "libopenblas.so.0").write_bytes(elf64(["libgomp.so.1"]))
+            (src / "libgomp.so.1").write_bytes(elf64([]))
+            additions = vendor_runtime_additions(
+                str(src / "libopenblas.so.0"), ["libopenblas.so.0"]
+            )
+            for name in ("COPYING3", "COPYING.RUNTIME"):
+                key = f"mlx/lib/licences/{name}"
+                self.assertIn(key, additions)
+                self.assertEqual(
+                    additions[key],
+                    (MODULE["VENDORED_GCC_LICENCE_DIR"] / name).read_bytes(),
+                )
+
+    def test_license_env_var_replaces_the_search(self):
+        # MLX_OMARCHY_GCC_LICENSE_DIR replaces the whole search, so an
+        # operator can name the exact toolchain licence directory.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "libopenblas.so.0").write_bytes(elf64(["libgomp.so.1"]))
+            (src / "libgomp.so.1").write_bytes(elf64([]))
+            empty = Path(tmp) / "empty-licences"
+            empty.mkdir()
+            os.environ["MLX_OMARCHY_GCC_LICENSE_DIR"] = str(empty)
+            try:
+                with self.assertRaises(SystemExit) as raised:
+                    vendor_runtime_additions(
+                        str(src / "libopenblas.so.0"), ["libopenblas.so.0"]
+                    )
+            finally:
+                del os.environ["MLX_OMARCHY_GCC_LICENSE_DIR"]
+            self.assertIn("COPYING.RUNTIME", str(raised.exception))
 
     def test_needed_runpath_and_soname(self):
         buf = elf64([BARE_SONAME, VENDORED], runpath="$ORIGIN", soname="libmlx.so")
