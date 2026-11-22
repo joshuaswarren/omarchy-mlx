@@ -27,9 +27,9 @@ TAG = 'qualification-r6'
 WHEEL_TAG = 'qualification-r5'
 VENDOR_RELEASE = 'v0.7.47'
 SOURCE = '3b9d20b503a8ceca57f7e11d0877d06e2032442d'
-WHEEL = 'mlx_omarchy-0.32.4.dev202611210237+3b9d20b50-cp314-cp314-linux_aarch64.whl'
+WHEEL = 'mlx_omarchy-0.32.4.dev202611220732+c15a0d4f2-cp314-cp314-linux_aarch64.whl'
 VENDOR = 'omarchy-mlx-vendor-wheels-v0.7.47-cp314-aarch64.tar'
-ASSETS = {WHEEL: '05a4802bc4c547aa77a6478612e103a7bfcedc3878f9049e502b37aba8eefb14',
+ASSETS = {WHEEL: 'f78eff3dcd1062f8dc4e3113dafc9cdcaea2fd9ddf57c526896a4755cc4bc769',
           VENDOR: '31a9ed2075865d41e84729b850c1bdf9f66530f9b12df7bfb50cd80c472555f4'}
 PATCH_SERIES = ROOT.parent / 'scripts' / 'apply-mlx-lm-patches.sh'
 PATCH_RECORD = '.omarchy-serve-patches'

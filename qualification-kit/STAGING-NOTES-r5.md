@@ -6,7 +6,13 @@ build row 6338d909).
 
 ## The diff
 
-1. `qualification-kit/qualify.py` — `WHEEL_TAG = 'qualification-r5'`
+1. `qualification-kit/qualify.py` — `WHEEL_TAG = 'qualification-r5'`; the
+   Linux arm's release-asset pin moves to the r5 wheel: `WHEEL` names the
+   built artifact (`…dev202611220732+c15a0d4f2…`) and `ASSETS[WHEEL]` is its
+   sha256 `f78eff3d…cc4bc769`. The vendor-wheel pin (`omarchy-mlx-vendor-
+   wheels-v0.7.47-cp314-aarch64.tar`, `31a9ed20…`) is unchanged. This is
+   what the first refresh attempt exposed: without it the kit still
+   verified the r4 asset and curled a nonexistent r5 release URL.
    (was `qualification-r4`).
 2. `qualification-kit/m1-max-reference.json` — `"release": "qualification-r5"`
    (the runner's consistency check `baseline.get('release') != WHEEL_TAG`

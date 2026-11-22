@@ -1,0 +1,30 @@
+{
+  "ane": null,
+  "arm": "linux-release-wheel",
+  "benchmark": null,
+  "error": "apple_chip_unidentified",
+  "machine": {
+    "chip": null,
+    "model": null
+  },
+  "machine_id": "0123456789abcdef",
+  "mlx_checks": null,
+  "release": "qualification-r6",
+  "schema": "omarchy-mlx-qualification-v4",
+  "status": "incomplete",
+  "suite": null,
+  "suite_source": "3b9d20b503a8ceca57f7e11d0877d06e2032442d",
+  "utc": "2026-11-22T08:59:27.240659+00:00",
+  "versions": {
+    "os": "7.0.14-28-pve"
+  },
+  "workload": {
+    "model": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+    "prompt": "Explain how a transistor can function as a switch in a simple circuit.",
+    "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+    "seed": 0,
+    "temp": 0,
+    "tokens": 64,
+    "warmup": 4
+  }
+}
