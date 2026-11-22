@@ -13,6 +13,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <vector>
 
 namespace mlx::core::omarchy {
@@ -371,10 +372,11 @@ inline std::string mesa_git_sha(const std::string& driver_info) {
   return length >= 7 ? driver_info.substr(marker + 4, length) : std::string{};
 }
 
-// Reads the packaged one-line Mesa git SHA (the string the driver reports
-// after "git-"). A missing or unreadable file yields an empty string: the
-// caller then records identity without enforcing an expectation.
-inline std::string packaged_mesa_git_sha(const std::string& prefix) {
+// Reads the packaged one-line Mesa git SHA file: "<sha>" or "<sha> <chip>".
+// Returns the whitespace-separated fields. A missing or unreadable file
+// yields no fields: the caller then records identity without enforcing.
+inline std::vector<std::string> packaged_mesa_git_sha_fields(
+    const std::string& prefix) {
   const std::filesystem::path path = std::filesystem::path(prefix) /
       "vulkan" / "mesa-git-sha";
   std::error_code error;
@@ -387,17 +389,35 @@ inline std::string packaged_mesa_git_sha(const std::string& prefix) {
   }
   std::string line;
   std::getline(input, line);
-  const auto is_pad = [](char c) {
-    return c == '\n' || c == '\r' || c == ' ' || c == '\t';
-  };
-  while (!line.empty() && is_pad(line.back())) {
-    line.pop_back();
+  std::istringstream fields(line);
+  std::vector<std::string> out;
+  for (std::string field; fields >> field;) {
+    out.push_back(field);
   }
-  size_t start = 0;
-  while (start < line.size() && is_pad(line[start])) {
-    ++start;
+  return out;
+}
+
+// The string the driver reports after "git-".
+inline std::string packaged_mesa_git_sha(const std::string& prefix) {
+  const auto fields = packaged_mesa_git_sha_fields(prefix);
+  return fields.empty() ? std::string{} : fields[0];
+}
+
+// The chip a driver package is qualified for (for example "G17C"), or empty
+// when the package applies to every chip.
+inline std::string packaged_mesa_git_sha_chip(const std::string& prefix) {
+  const auto fields = packaged_mesa_git_sha_fields(prefix);
+  return fields.size() < 2 ? std::string{} : fields[1];
+}
+
+inline void require_packaged_driver_chip(
+    const std::string& chip,
+    const std::string& device_name) {
+  if (!chip.empty() && device_name.find(chip) == std::string::npos) {
+    throw std::runtime_error(
+        "Honeykrisp driver package is qualified for " + chip +
+        " only, found device '" + device_name + "'");
   }
-  return line.substr(start);
 }
 
 inline void require_expected_honeykrisp_sha(

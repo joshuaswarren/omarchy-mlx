@@ -23,7 +23,9 @@ inside its own process. With no `VK_DRIVER_FILES` or
 file exists and points the loader at it for this process. Otherwise it
 searches the standard ICD directories. When the packaged ICD is
 selected and `mesa-git-sha` is non-empty, startup refuses a
-Honeykrisp driver whose reported SHA differs from that file. The desktop keeps its
+Honeykrisp driver whose reported SHA differs from that file. A second
+field names the only chip the driver package is for (`d4ad4a4dce G17C`);
+startup refuses that driver on any other GPU. The desktop keeps its
 system Mesa driver. The ANE runs as a
 separate worker process. It only executes hash-pinned program
 bundles, so unverified ANE programs never run.

@@ -808,6 +808,41 @@ TEST_CASE("the packaged mesa-git-sha file supplies the expected SHA") {
   std::filesystem::remove_all(prefix);
 }
 
+TEST_CASE("a chip-scoped mesa-git-sha file binds the driver to that chip") {
+  using namespace mlx::core::omarchy;
+  const auto prefix = std::filesystem::temp_directory_path() /
+      ("runtimegate-chip-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(prefix);
+  std::filesystem::create_directories(
+      std::filesystem::path(packaged_mesa_git_sha_path(prefix.string()))
+          .parent_path());
+  const auto write = [&](const char* text) {
+    std::ofstream output(packaged_mesa_git_sha_path(prefix.string()),
+                         std::ios::binary | std::ios::trunc);
+    REQUIRE(output.good());
+    output << text;
+  };
+  // An unscoped file applies to every chip.
+  write("439dc032d7\n");
+  CHECK(packaged_mesa_git_sha(prefix.string()) == "439dc032d7");
+  CHECK(packaged_mesa_git_sha_chip(prefix.string()).empty());
+  CHECK_NOTHROW(require_packaged_driver_chip("", "Apple M1 (G13G B1)"));
+  // The M5 driver package scopes its SHA to G17C.
+  write("d4ad4a4dce G17C\n");
+  CHECK(packaged_mesa_git_sha(prefix.string()) == "d4ad4a4dce");
+  CHECK(packaged_mesa_git_sha_chip(prefix.string()) == "G17C");
+  CHECK_NOTHROW(require_packaged_driver_chip("G17C", "Apple M5 Max (G17C B0)"));
+  try {
+    require_packaged_driver_chip("G17C", "Apple M1 (G13G B1)");
+    FAIL("expected a chip-scope refusal");
+  } catch (const std::runtime_error& error) {
+    CHECK(std::string(error.what()) ==
+          "Honeykrisp driver package is qualified for G17C only, found"
+          " device 'Apple M1 (G13G B1)'");
+  }
+  std::filesystem::remove_all(prefix);
+}
+
 TEST_CASE("ANE lock files are created and repaired to world access") {
   using mlx::core::omarchy::ane::detail::RuntimeOwnership;
   const auto directory = std::filesystem::temp_directory_path() /
