@@ -113,7 +113,8 @@ inline bool is_software_icd_json(const std::string& path) {
     return static_cast<char>(std::tolower(c));
   });
   for (const std::string marker :
-       {"llvmpipe", "lavapipe", "swrast", "softpipe", "swiftshader"}) {
+       {"llvmpipe", "lavapipe", "swrast", "softpipe", "swiftshader",
+        "lvp_icd", "libvulkan_lvp"}) {
     if (text.find(marker) != std::string::npos) {
       return true;
     }
@@ -121,11 +122,18 @@ inline bool is_software_icd_json(const std::string& path) {
   return false;
 }
 
-// Same file, spelled differently: both absolute and lexically normal.
+// Same file, spelled differently: both resolved through the filesystem
+// (weakly_canonical follows symlinks in the existing prefix) and both
+// absolute and lexically normal, so a symlink named by the hatch compares
+// against its target, never its alias.
 inline bool same_icd_path(const std::string& a, const std::string& b) {
   namespace fs = std::filesystem;
-  const fs::path pa = fs::path(a).lexically_normal();
-  const fs::path pb = fs::path(b).lexically_normal();
+  std::error_code ec;
+  const fs::path ra = fs::weakly_canonical(fs::path(a), ec);
+  const fs::path pa = (ec ? fs::path(a) : ra).lexically_normal();
+  ec.clear();
+  const fs::path rb = fs::weakly_canonical(fs::path(b), ec);
+  const fs::path pb = (ec ? fs::path(b) : rb).lexically_normal();
   return pa.is_absolute() && pb.is_absolute() && pa == pb;
 }
 

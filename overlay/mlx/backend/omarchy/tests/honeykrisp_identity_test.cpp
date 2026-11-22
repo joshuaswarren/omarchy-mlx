@@ -109,6 +109,25 @@ int main() {
   expect_throws("hatch-still-refuses-CPU", "software", {}, lvp.c_str(), "",
                 lvp.c_str());
 
+  // 3b. the real Mesa lavapipe JSON names its library libvulkan_lvp.so;
+  // the marker filter must catch that spelling too (wB1 review finding).
+  const auto real_lvp = write_json(dir, "lvp_icd.x86_64.json",
+                                   "libvulkan_lvp.so");
+  expect_throws("hatch-refuses-real-mesa-lvp-json", "software", {},
+                real_lvp.c_str(), "", real_lvp.c_str());
+
+  // 3c. a symlink named by the hatch compares against its target, so a
+  // symlink that resolves into the marker-less real Mesa lvp JSON is
+  // refused: canonicalization sees through the alias (wB1 review finding).
+  {
+    const auto sub = dir / "alias";
+    std::filesystem::create_directories(sub);
+    const auto alias = sub / "intel_icd.json";
+    std::filesystem::create_symlink(real_lvp, alias);
+    expect_throws("hatch-refuses-symlink-to-software-icd", "software", {},
+                  alias.string().c_str(), "", alias.string().c_str());
+  }
+
   // hatch mismatch: a user ICD other than the named one stays refused.
   expect_throws("hatch-mismatch-refuses", "does not match", {}, intel.c_str(),
                 "", lvp.c_str());

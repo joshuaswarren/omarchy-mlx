@@ -954,6 +954,17 @@ bool Runtime::init_impl() {
           " the backend requires Vulkan 1.2+ synchronization.";
     }
 
+    // Root guarantee for the foreign-ICD hatch: whatever a hand-picked JSON
+    // claims, a CPU device itself is never admitted (wB1 review finding).
+    if (support.supported && icd_selection.foreign &&
+        props2.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+      support.supported = false;
+      support.reason = "[omarchy] foreign-ICD hatch: device '" +
+          std::string(props2.properties.deviceName) +
+          "' reports VK_PHYSICAL_DEVICE_TYPE_CPU; the hatch admits hardware"
+          " devices only.";
+    }
+
     if (!support.supported) {
       if (first_refusal.empty()) {
         first_refusal = support.reason;
