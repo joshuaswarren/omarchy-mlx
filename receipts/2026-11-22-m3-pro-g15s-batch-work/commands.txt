@@ -45,11 +45,19 @@ env MLX_OMARCHY_BATCH_WORK=<w> MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-base]/bin/python -I receipts/2026-11-22-m3-pro-g15s-batch-work/tools/decode_sub.py \
   [models]/<model> [out]/<tag>.json <tag> <128|96> [wheel-base] [checkout]
 
-# 4. Balanced score_bench A/B (base wheel +9d6f4b188, default vs 15000, 2 balanced rounds, timeout 600s per run)
-env MLX_OMARCHY_BATCH_WORK=15000 (or env -u MLX_OMARCHY_BATCH_WORK for the default arm) MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
+# 4. Balanced score_bench A/B (base wheel +9d6f4b188, default vs 15000, order default/15000/15000/default per model,
+#    plus head wheel +bb10aab9a default; timeout 600 s per leg, 2400 s with the quiet gate). The records in
+#    runs/score-bench-ab.json are the rerun: each leg printed its provenance line first, and each Qwen3-4B leg
+#    held the GPU lock and waited for 1-minute load under 1.0 before starting.
+# Quiet gate (Qwen3-4B legs):
+for i in $(seq 1 360); do awk -v l=$(cut -d' ' -f1 /proc/loadavg) 'BEGIN{exit !(l < 1.0)}' && break; sleep 5; done; echo quiet_gate_loadavg $(cat /proc/loadavg)
+# Default arm: env -u MLX_OMARCHY_BATCH_WORK; 15000 arm: env MLX_OMARCHY_BATCH_WORK=15000 (same prefix on both commands)
+env -u MLX_OMARCHY_BATCH_WORK [venv-base]/bin/python -I -c "import sys; sys.path.insert(0, '[checkout]/scripts'); from pathlib import Path; import mlx_provenance as mp; p = mp.installed_provenance(expect_wheel=Path('[wheel-base]')); print(mp.provenance_line(p)); sys.exit(0 if p['verified'] == 'match' and p['version_match'] is True else 3)" \
+  && env -u MLX_OMARCHY_BATCH_WORK MLX_OMARCHY_NO_MLXLM_WARNING=1 HF_HUB_OFFLINE=1 \
   [venv-base]/bin/python receipts/2026-10-09-linux-vs-macos/score_bench.py \
   --model [models]/<model> --prompts receipts/2026-10-09-linux-vs-macos/prompts.jsonl \
   --label <tag> --out [out]/<tag>.json --warmup 2 --decode-new 64 --decode-limit 5 --decode-passes 2 --pf-tokens 512 --pf-reps 5
+# Head arm: the same with [venv-head] and [wheel-head], MLX_OMARCHY_BATCH_WORK unset
 
 # 5. Failing-first TDD check (test_runtime.cpp edited before encoder.h)
 .work/mlx/build-tdd-fail/tests/omarchy/omarchy_runtime_tests --test-case="submission-cap default resolves per calibrated board"
@@ -69,12 +77,12 @@ cmake --build .work/mlx/build-head --parallel 6 --target <25 standing suites> om
 # 3 interleaved pairs of decode_sub.py (base +9d6f4b188 vs head +bb10aab9a, both MLX_OMARCHY_BATCH_WORK unset) on 2B and 4B
 # score_bench.py on head +bb10aab9a (MLX_OMARCHY_BATCH_WORK unset) on 2B and 4B
 
-# 8. Backend dispatch trace on head wheel (+bb10aab9a, MLX_OMARCHY_BATCH_WORK unset). The rerun (trace/summary.json
-#    provenance_rerun) printed the provenance line in the same leg, immediately before each traced process:
-env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c "import sys; sys.path.insert(0, '[checkout]/scripts'); from pathlib import Path; import mlx_provenance as mp; p = mp.installed_provenance(expect_wheel=Path('[wheel-head]')); print(mp.provenance_line(p)); sys.exit(0 if p['verified'] == 'match' and p['version_match'] is True else 3)"
-gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3.8-2b-4bit 1 --cpu-control
-gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3.8-2b-4bit 32
-gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3-4b-2507-4bit 32
+# 8. Backend dispatch trace on head wheel (+bb10aab9a, MLX_OMARCHY_BATCH_WORK unset for every process). The rerun
+#    (trace/summary.json provenance_rerun) printed the provenance line in the same leg and stopped if it failed:
+P="import sys; sys.path.insert(0, '[checkout]/scripts'); from pathlib import Path; import mlx_provenance as mp; p = mp.installed_provenance(expect_wheel=Path('[wheel-head]')); print(mp.provenance_line(p)); sys.exit(0 if p['verified'] == 'match' and p['version_match'] is True else 3)"
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c "$P" && env -u MLX_OMARCHY_BATCH_WORK gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3.8-2b-4bit 1 --cpu-control
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c "$P" && env -u MLX_OMARCHY_BATCH_WORK gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3.8-2b-4bit 32
+env -u MLX_OMARCHY_BATCH_WORK [venv-head]/bin/python -I -c "$P" && env -u MLX_OMARCHY_BATCH_WORK gdb -batch -x receipts/2026-09-30-speech-input-gpu/harness/count_cpu.gdb.py --args [venv-head]/bin/python -I receipts/2026-11-21-m3-pro-g15s-linux/trace/trace_decode.py [models]/qwen3-4b-2507-4bit 32
 
 # 9. Final device reopen checks
 [build]/tests/omarchy/omarchy_runtime_tests --test-case="a fresh process reopens the Vulkan device"

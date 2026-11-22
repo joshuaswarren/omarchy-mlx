@@ -99,14 +99,14 @@ Greedy token IDs are identical across all 30 runs of Qwen3.8-2B (`cdf6b6529b0aa3
 
 | Model | Arm / Wheel | Decode median tok/s | vs 5000 | Prefill 512 tok/s | Digest |
 |---|---|---:|---:|---:|---|
-| Qwen3.8-2B 4-bit | Base `+9d6f4b188` (default 5000, 2 rounds) | 76.21 / 76.04 (mean 76.12) | 0.0% | 370.36 / 370.83 | `912ebb461fda3c39` |
-| Qwen3.8-2B 4-bit | Base `+9d6f4b188` (`BATCH_WORK=15000`, 2 rounds) | 81.19 / 81.00 (mean 81.09) | +6.5% | 372.33 / 372.08 | `912ebb461fda3c39` |
-| Qwen3.8-2B 4-bit | Head `+bb10aab9a` (default unset -> 15000) | 81.16 (80.52-81.52) | +6.6% | 371.93 | `912ebb461fda3c39` |
-| Qwen3-4B-2507 4-bit | Base `+9d6f4b188` (default 5000, 2 rounds) | 44.23 / 44.24 (mean 44.23) | 0.0% | 195.38 / 195.44 | `67c191eeffa36bf9` |
-| Qwen3-4B-2507 4-bit | Base `+9d6f4b188` (`BATCH_WORK=15000`, 2 rounds) | 47.07 / 47.11 (mean 47.09) | +6.5% | 196.02 / 195.93 | `67c191eeffa36bf9` |
-| Qwen3-4B-2507 4-bit | Head `+bb10aab9a` (default unset -> 15000) | 47.08 (47.02-47.26) | +6.4% | 196.08 | `67c191eeffa36bf9` |
+| Qwen3.8-2B 4-bit | Base `+9d6f4b188` (default 5000, 2 rounds) | 75.92 / 76.05 (mean 75.99) | 0.0% | 370.31 / 370.31 | `912ebb461fda3c39` |
+| Qwen3.8-2B 4-bit | Base `+9d6f4b188` (`BATCH_WORK=15000`, 2 rounds) | 81.04 / 80.85 (mean 80.94) | +6.5% | 372.43 / 371.75 | `912ebb461fda3c39` |
+| Qwen3.8-2B 4-bit | Head `+bb10aab9a` (default unset -> 15000) | 80.58 (79.96-81.37) | +6.0% | 372.14 | `912ebb461fda3c39` |
+| Qwen3-4B-2507 4-bit | Base `+9d6f4b188` (default 5000, 2 rounds) | 44.15 / 44.19 (mean 44.17) | 0.0% | 195.43 / 195.16 | `67c191eeffa36bf9` |
+| Qwen3-4B-2507 4-bit | Base `+9d6f4b188` (`BATCH_WORK=15000`, 2 rounds) | 46.98 / 46.84 (mean 46.91) | +6.2% | 196.02 / 196.01 | `67c191eeffa36bf9` |
+| Qwen3-4B-2507 4-bit | Head `+bb10aab9a` (default unset -> 15000) | 47.07 (46.96-47.18) | +6.6% | 196.11 | `67c191eeffa36bf9` |
 
-Each record in `runs/score-bench-ab.json` carries its leg's `dist_version`, `verified` and wheel provenance line (base: `libmlx.so=sha256:a204d1b156bbd7f7`; head: `libmlx.so=sha256:1570d19a9b204e54`) and the `score_bench.py` sha256. Peak memory: 1.49 GB (Qwen3.8-2B) and 2.54 GB (Qwen3-4B-2507) in every arm.
+Each record in `runs/score-bench-ab.json` carries the full provenance line its own leg printed immediately before the benchmark (`harness=c586636c8`; base `libmlx.so=sha256:a204d1b156bbd7f7`, head `libmlx.so=sha256:1570d19a9b204e54`), the `score_bench.py` sha256 and the leg's device state. The first run of the five Qwen3-4B legs is kept under `voided_cpu_contention`: it overlapped another unit's compile on this host (1-minute load 2.3 to 5.8, decode 36.8 to 44.2 tok/s); the rerun held the GPU lock and started each leg only below 1-minute load 1.0 (`quiet_gate_loadavg`). Peak memory: 1.49 GB (Qwen3.8-2B) and 2.54 GB (Qwen3-4B-2507) in every arm.
 
 ## Two-build head-vs-base A/B (`MLX_OMARCHY_BATCH_WORK` unset)
 
@@ -157,7 +157,7 @@ The breakpoint resolved in all three arms (`resolved_while_running: true`), prov
 
 ## Timing, thermal, and device reopen record
 
-Every GPU leg ran serialized under `flock /tmp/m1-gpu.lock` with a bounded foreground timeout (`timeout --foreground --kill-after=30s`), recording load average, memory, the four exposed SMC temperatures (`hwmon7`), governor (`schedutil`), AC online state (`1`), `vulkaninfo --summary`, and kernel GPU log counts before and after (`runs/timing-thermal.json`, `runs/nocpu-ab.json`, `trace/summary.json`). Across all 168 GPU legs (148 for the sweep and head verification, 17 for the CPU-disabled wheel and the controls, 3 for the trace rerun):
+Every GPU leg ran serialized under `flock /tmp/m1-gpu.lock` with a bounded foreground timeout (`timeout --foreground --kill-after=30s`) and records its exit status, the four exposed SMC temperatures (`hwmon7`) and kernel GPU log counts before and after. The sweep and head legs (`runs/timing-thermal.json`) and the `score_bench` legs (`runs/score-bench-ab.json`) also record load average, memory, governor (`schedutil`) and AC online state (`1`); the CPU-disabled decode legs (`runs/nocpu-ab.json`) record load average, governor and AC state; the trace rerun legs are in `trace/summary.json`. Across all 183 GPU legs (148 for the sweep and head verification, 17 for the CPU-disabled wheel and the controls, 3 for the trace rerun, 15 for the `score_bench` rerun, 5 of them voided):
 - **0 new GPU kernel log lines** (boot baseline 36 lines unchanged).
 - `env/info-before.json` and `env/info-after.json` are identical.
 - Final reopen checks (`reopen.txt`):
