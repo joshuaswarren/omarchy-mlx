@@ -124,15 +124,15 @@ Linux only, measured 2026-11-13 with the v0.7.41 release wheel on Fedora 44/45, 
 
 The MacBook Neo is passively cooled. Its SoC read 96 C before the Qwen3-4B run, and its Qwen3.8-2B decode samples range from 30.8 to 37.8. Raw JSON and the stack of each machine: `receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/`.
 
-## Results on the M3 Pro
+## Results on the M6 mini (G18G)
 
-Linux only, measured 2026-11-21 with the v0.7.49 release wheel on Omarchy (Arch Linux ARM), Linux 7.2.11 (`linux-aurora`) and aurora's Mesa 26.3.0-devel Borealis driver, git `a196911147` (system ICD). Same `score_bench.py`, prompts and counts as the section above. The CPU governor was schedutil, the load average 0.38 and 0.43 at the start of the two runs, and the submission budget the release default (5000). Tokens per second:
+Linux only, first receipt on this machine, measured 2026-11-22 through the idle-guard (m6 GPU ticket `3d8aec7c`) on the installed release wheel `mlx_omarchy-0.32.4.dev202611181701+83cf322` (0.7.47 series) in `/usr/lib/omarchy-mlx/venv`, Omarchy Linux, kernel 7.1.12-aurora-m6usb-ARCH, CPU governor performance. Same `score_bench.py` and prompts as the tables above: decode is the median of 10 greedy generations of 64 tokens, prefill the median of 5 runs of one 512-token prompt. The GPU driver is a local asahi Vulkan ICD build, sha256 `ee5fbac9500bfbf71c09a0d20153e9cad66712a0a2337580b85de2bac4fb2b6d`, with the mesa git sha for that build not recorded; kernel module asahi.ko `3f192f53ea1fc1b6784283d91fd07b78dc343464632d08d458783fbe8f9fbc46`. Tokens per second:
 
 | Machine | Qwen3.8-2B decode | Qwen3.8-2B prefill 512 | Qwen3-4B-Instruct-2507 decode | Qwen3-4B-Instruct-2507 prefill 512 |
 |---|---:|---:|---:|---:|
-| MacBook Pro 14-inch, M3 Pro, 14-core GPU, 18 GB | 76.14 | 370.49 | 43.94 | 195.29 |
+| Mac mini, M6 (G18G, j873g), 12-core CPU, 31 GB | 7.087 | 196.656 | 5.230 | 74.922 |
 
-Raw JSON, model revisions and the stack: `receipts/2026-11-21-m3-pro-g15s-linux/`.
+Decode stdev 0.038 (2B) and 0.031 (4B); prefill stdev 4.9 (2B) and 0.3 (4B). The G18G driver is early: these rows are not comparable with the Borealis-driver rows above. Raw JSON and provenance: `receipts/2026-11-22-m6-mini-g18g-linux/`.
 
 ## Rows on the newer driver
 
