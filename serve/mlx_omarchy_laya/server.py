@@ -503,9 +503,11 @@ def _make_handler(state: LayaState):
                 self._send_json(400, {"error": "body must be 1..%d bytes" % MAX_BODY_BYTES})
                 return
             raw = self.rfile.read(length)
+            # ValueError also covers invalid UTF-8 and over-long integer
+            # literals; RecursionError is nesting too deep for the decoder
             try:
                 req = json.loads(raw)
-            except json.JSONDecodeError as exc:
+            except (ValueError, RecursionError) as exc:
                 self._send_json(400, {"error": "invalid JSON: %s" % exc})
                 return
             if not isinstance(req, dict):
