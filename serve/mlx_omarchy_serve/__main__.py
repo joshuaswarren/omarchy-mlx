@@ -676,7 +676,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="mlx-omarchy-serve",
         description="Serve a vetted local model on the Apple GPU (admission-checked, approve-first).",
     )
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p, with_target=True):
         p.add_argument("--offline", action="store_true",
