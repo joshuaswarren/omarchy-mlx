@@ -445,6 +445,21 @@ class PlanTests(CliTestBase):
                 self.assertIn("download pattern", err)
         FIXTURE["models"][0] = fixture_entry()
 
+    def test_trailing_newline_pattern_and_repo_refused_at_plan(self):
+        # `$` also matches before a final "\n".
+        FIXTURE["models"][0] = fixture_entry(
+            extension={"download_patterns": ["*.safetensors\n"]})
+        cases = (
+            (["plan", "test-chat-4b"], "unsafe download pattern"),
+            (["plan", "someone/Some-Model\n", "--weights-gib", "9"],
+             "is not a catalog id"),
+        )
+        for argv, message in cases:
+            with self.subTest(argv=argv):
+                code, _, err = self.run_cli(argv)
+                self.assertEqual(code, 2, err)
+                self.assertIn(message, err)
+
     def test_valid_download_patterns_shown_in_plan(self):
         FIXTURE["models"][0] = fixture_entry(extension={
             "download_patterns": ["*.safetensors", "tokenizer.json"]})
