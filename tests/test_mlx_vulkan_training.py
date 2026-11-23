@@ -48,8 +48,18 @@ def _aot(mlx_vulkan, gm, example_inputs):
     from torch._dynamo.backends.common import aot_autograd
 
     def lower(gm2, ex):
-        return mlx_vulkan._boxed(
-            mlx_vulkan.mlx_vulkan_backend(gm2, ex, return_all_outputs=True))
+        runner = mlx_vulkan.mlx_vulkan_backend(gm2, ex,
+                                               return_all_outputs=True)
+
+        def call(*inputs):
+            flat = inputs
+            if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
+                    and not torch.is_tensor(inputs[0])):
+                flat = tuple(inputs[0])
+            return runner(*flat)
+
+        call._boxed_call = True
+        return call
 
     return aot_autograd(fw_compiler=lower, bw_compiler=lower)(gm, example_inputs)
 
@@ -117,7 +127,19 @@ def test_whole_graph_training_step_stays_on_mx(mlx_vulkan, caplog):
         from torch._dynamo.backends.common import aot_autograd
 
         def lower(gm2, ex):
-            return mlx_vulkan.mlx_vulkan_backend(gm2, ex, return_all_outputs=True)
+            runner = mlx_vulkan.mlx_vulkan_backend(gm2, ex,
+                                                   return_all_outputs=True)
+
+            def call(*inputs):
+                flat = inputs
+                if (len(inputs) == 1
+                        and isinstance(inputs[0], (list, tuple))
+                        and not torch.is_tensor(inputs[0])):
+                    flat = tuple(inputs[0])
+                return runner(*flat)
+
+            call._boxed_call = True
+            return call
 
         return aot_autograd(fw_compiler=lower, bw_compiler=lower)(gm,
                                                                   example_inputs)
