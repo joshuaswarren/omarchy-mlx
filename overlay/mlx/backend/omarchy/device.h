@@ -837,6 +837,11 @@ inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
 //   Qwen3-8B 4-bit decode, 128 generated, two rounds, default against the route with the value-phase pass 1: 443-token prompt 39.8 and 39.7 to 40.9 and 40.9 tokens
 //   per second (+2.9 percent), 2048 tokens 31.5 to 38.2 (+21.6), 4000 tokens 25.2 to 35.5 and 35.0 (+39.6), tokens identical. Head width 256 starts later on this
 //   part, sdpa_split_wide_min_keys. Pure.
+//   BMG G21 (Intel Arc Pro B60 eGPU, xe driver): 512 keys. The fused kernel runs a fixed 32-workgroup grid on this part (one group per query
+//   head) and reaches about 2 GB/s of 456 at ctx 512 — an occupancy wall, not bandwidth (EG-1 profile receipt). Qwen3-4B 4-bit decode,
+//   128 generated, ABBA env-forced against default on one wheel: 512 keys 104.4 to 42.2 ms per token (+148 percent), 8192 keys 223.4 to 54.0 (+314 percent),
+//   tokens identical (EG-2 receipt). The RTX 5060 Ti on the same host dispatches the same fused kernel but holds 112 tok/s against the
+//   split route's 114 at 512 keys — parity, so it keeps the fused kernel.
 inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
@@ -848,6 +853,7 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G13S") != std::string::npos) return 192;
   if (device_name.find("G14G") != std::string::npos) return 192;
   if (device_name.find("G16S") != std::string::npos) return 320;
+  if (device_name.find("BMG") != std::string::npos) return 512;
   return 0;
 }
 
