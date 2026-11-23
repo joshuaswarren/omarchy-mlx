@@ -8440,21 +8440,51 @@ TEST_CASE("BM32 BF16 projection probe matches the integer oracle for dense and c
 
 // SPD-04: the matvec row reduction folded five constant-mask ShuffleDown
 // butterflies into subgroupAdd. A first cut used `acc += subgroupAdd(acc)`,
-// which counts the lane's own value twice (w86: 529 instead of 528 on 1..32).
-// The full 1..32 sum through the gemv route is the smallest test that fails
-// on that exact defect and passes on the fold.
+// which counts the lane's own value twice (w86). Only the bf16 decode GEMV
+// (MatmulVecBF16: m=1, transposed weight, k % 128 == 0, n % 4 == 0) runs that
+// reduction, so the case asserts the route. k=128 is one 4-wide stripe per
+// lane; lane i holds 32 - i in each of the four rows (one per accumulator),
+// so every row sums 1..32 = 528. Lane 0 holds 32 because the bf16 store
+// spaces 512..1024 by 4: a doubled lane 0 stores 560, not a rounded 528.
 TEST_CASE("single-row matvec sums 1..32 exactly through the subgroup reduction") {
   if (!compute_available()) {
     return;
   }
-  Stream stream = gpu_stream();
-  std::vector<float> values(32);
-  for (int i = 0; i < 32; ++i) {
-    values[i] = float(i + 1);
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.subgroup_size != 32u ||
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) ==
+          0) {
+    skip("subgroup size != 32 or no SHUFFLE_RELATIVE; MatmulVecBF16 is not routed");
+    return;
   }
-  auto got = readback_f32(stream, matmul(
-      array({1.0f}, Shape{1, 1}),
-      array(values.begin(), Shape{1, 32}, float32), stream));
-  REQUIRE_EQ(got.size(), 1u);
-  CHECK_EQ(got[0], 528.0f);
+  Stream stream = gpu_stream();
+  constexpr int k = 128;
+  constexpr int n = 4;
+  std::vector<float> weight(n * k, 0.0f);
+  for (int row = 0; row < n; ++row) {
+    for (int lane = 0; lane < 32; ++lane) {
+      weight[row * k + lane * 4] = float(32 - lane);
+    }
+  }
+  array x = astype(full({1, k}, 1.0f, float32, stream), bfloat16, stream);
+  array w = transpose(
+      astype(array(weight.begin(), Shape{n, k}, float32), bfloat16, stream),
+      {1, 0},
+      stream);
+  eval({x, w});
+  omarchy::get_command_encoder(stream).synchronize();
+  auto& trace = omarchy::trace::counters();
+  const auto before = trace.vk_compute_dispatches.load();
+  array product = matmul(x, w, stream);
+  eval(product);
+  omarchy::get_command_encoder(stream).synchronize();
+  CHECK_EQ(trace.vk_compute_dispatches.load() - before, 1u);
+  CHECK_EQ(trace.last_dispatched_kernel.load(),
+           static_cast<int64_t>(omarchy::ComputeKernel::MatmulVecBF16));
+  auto got = readback_f32(stream, product);
+  REQUIRE_EQ(got.size(), static_cast<size_t>(n));
+  for (int row = 0; row < n; ++row) {
+    INFO("row " << row);
+    CHECK_EQ(got[row], 528.0f);
+  }
 }
