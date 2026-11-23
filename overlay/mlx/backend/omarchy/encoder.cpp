@@ -884,7 +884,7 @@ void CommandEncoder::dispatch_compute_pipeline(
           static_cast<VulkanBuffer*>(const_cast<void*>(item.owner));
       if (buf) {
         owners[owner_count++] = buf;
-        batch_buffers_.push_back(buf);
+        batch_buffers_.insert(buf);
       }
     }
     omarchy::allocator().note_batch_buffers({owners.data(), owner_count});
