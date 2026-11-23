@@ -342,6 +342,26 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(invalid, [])
         self.assertIn("A.", record["messages"][-1]["content"])
 
+    def test_deeply_nested_fence_is_repaired_not_a_turn_error(self):
+        cid = self.cid()
+        deep = ('{"version": 1, "components": ['
+                + "[" * 2000 + "]" * 2000 + "]}")
+        self.worker.scripts = [
+            [(0, delta("Before.```assistant-ui\n" + deep + "```")),
+             (0, finish("stop"))],
+            [(0, delta("```assistant-ui\n" + deep + "```")),
+             (0, finish("stop"))],
+        ]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        self.assertEqual(len(self.worker.calls), 2)
+        self.assertEqual([e for e in self.coord.store.events(cid, 0)
+                          if e["type"] == "error"], [])
+        invalid = [e for e in self.status_events_for(cid, turn)
+                   if e["data"].get("state") == "invalid_component"]
+        self.assertEqual(len(invalid), 1)
+        self.assertIn("Before.", record["messages"][-1]["content"])
+        self.assertEqual(record["messages"][-1]["status"], "complete")
+
     def test_invalid_fence_still_shows_model_text(self):
         cid = self.cid()
         bad_block = '{"version": 1, "components": [{"type": "nope"}]}'
@@ -750,9 +770,14 @@ class GenerationTests(unittest.TestCase):
                     '{"options": [{"label": "A"}, {"label": "B"}], "criteria": "x", "extra": 1}',
                     '{"options": [{"label": "A"}, {"label": "a"}], "criteria": "x"}',
                     '{"options": [{"label": "A"}, {"label": "A"}], "criteria": "x"}',
+                    '{"options": ' + "[" * 5000 + "]" * 5000 + ', "criteria": "x"}',
+                    '{"options": [{"label": "a\\ud800"}, {"label": "b"}], "criteria": "x"}',
                     'no json here'):
             with self.assertRaises((ValueError, TypeError)):
                 coord.parse_draft(bad)
+        with mock.patch.object(json, "loads", side_effect=RecursionError):
+            with self.assertRaises(ValueError):
+                coord.parse_draft(json.dumps(good))
 
     def test_context_error_blocks_inference_until_repaired(self):
         cid = self.cid()
