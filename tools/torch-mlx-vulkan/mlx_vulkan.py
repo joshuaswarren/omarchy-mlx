@@ -315,7 +315,7 @@ _FUNC_SPECS = {
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
     "empty": lambda *a, **k: mx.zeros(_shape_of(a, k)),
     "empty_like": lambda a, **k: mx.zeros(a.shape),
-    "tensor": lambda d, **k: mx.array(np.array(_torch(d)) if isinstance(d, (torch.Tensor, list, tuple)) else d),
+    "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
 }
