@@ -51,10 +51,74 @@ def test_encoder_matches_golden_capture(tmp_path):
     assert report["within_frozen_contract"], report["measured"]
 
 
+def test_duration_aware_input_keeps_the_evaluator_finite(tmp_path):
+    """A prefix-masked input must not NaN the reference evaluator.
+
+    Duration-aware runs mark only the audio frames valid, which leaves whole
+    query rows at -inf in the attention score map. The MIL guards those rows
+    before the temporal convolution and the hardware keeps them finite; an
+    evaluator that produces NaN there cannot serve as the host reference for
+    short-clip parity analysis.
+    """
+    if not PACKAGE.is_dir():
+        pytest.skip("pinned encoder.mlpackage is not installed")
+    source = emit_mlpackage(PACKAGE, tmp_path / "source", LOCK_PATH)
+    program = Program(Path(source.mil_path), Path(source.model_root))
+
+    rng = np.random.default_rng(3)
+    features = rng.standard_normal((1, 3000, 128)).astype(np.float16)
+    valid = 36
+    mask = np.zeros((1, 3000), dtype=np.float16)
+    mask[:, :valid] = 1.0
+
+    out = program.run(
+        inputs={"input_features": features, "attention_mask": mask},
+        wanted={"encoder_hidden", "encoder_mask"},
+        stop_after="encoder_mask",
+    )
+    encoder_mask = np.asarray(out["encoder_mask"]).reshape(-1)
+    assert (encoder_mask[:5] == 1).all() and (encoder_mask[5:] == 0).all()
+    hidden = np.asarray(out["encoder_hidden"], dtype=np.float32)
+    assert np.isfinite(hidden).all()
+
+
 def _program(tmp_path, statements, signature=""):
     path = tmp_path / "model.mil"
     path.write_text(f"program(1.3) {{\nfunc main<ios18>({signature}) {{\n{statements}\n}} -> (y);\n}}")
     return Program(path, tmp_path)
+
+
+def test_softmax_zeroes_only_all_neg_inf_rows(tmp_path):
+    """Only a row that is entirely -inf collapses to a zero row.
+
+    Fully-masked attention rows must evaluate to exact zeros without a
+    RuntimeWarning; partially masked and all-finite rows stay normalized.
+    NaN and +inf inputs are not masked rows: they must propagate NaN
+    instead of silently zeroing.
+    """
+    program = _program(tmp_path, """
+tensor<fp32, [4, 4]> x = const()[val = tensor<fp32, [4, 4]>([-inf, -inf, -inf, -inf, -inf, 1.0, 2.0, -inf, -inf, -1e38, -inf, -inf, 0.5, -0.5, 1.5, -2.0])];
+int32 axis = const()[val = int32(1)];
+tensor<fp32, [4, 4]> y = softmax(x = x, axis = axis);
+""")
+    with np.errstate(all="raise"):
+        out = np.asarray(program.run({}, {"y"})["y"])
+    np.testing.assert_array_equal(out[0], np.zeros(4))
+    np.testing.assert_array_equal(out[1][[0, 3]], [0.0, 0.0])
+    assert np.isfinite(out[1]).all()
+    np.testing.assert_allclose(out[1].sum(), 1.0, rtol=1e-6)
+    np.testing.assert_array_equal(out[2], [0.0, 1.0, 0.0, 0.0])
+    assert np.isfinite(out[3]).all()
+    np.testing.assert_allclose(out[3].sum(), 1.0, rtol=1e-6)
+
+    program = _program(tmp_path, """
+tensor<fp32, [2, 4]> x = const()[val = tensor<fp32, [2, 4]>([nan, 1.0, 2.0, -inf, inf, -inf, 0.0, 1.0])];
+int32 axis = const()[val = int32(1)];
+tensor<fp32, [2, 4]> y = softmax(x = x, axis = axis);
+""")
+    with np.errstate(all="ignore"):
+        out = np.asarray(program.run({}, {"y"})["y"])
+    assert np.isnan(out).all()
 
 
 @pytest.mark.parametrize(("decl", "literal", "expected"), [

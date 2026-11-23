@@ -100,9 +100,10 @@ plus Laya, and it needs a 96 GB machine.
 | M1 Ultra, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M3 Pro | [Tested on Linux](receipts/2026-11-21-m3-pro-g15s-linux/README.md): MacBook Pro 14-inch, 14-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 43.9 tok/s; standing battery 747/747 cases on source build `a893cae5c` | Untested |
-| M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port | Data-only; h16 bring-up module |
-| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 49.3 tok/s; runtime 59/60 on source build `ec849019` (independent-streams ratio 0.876 against that build's 0.95 floor; main has the 0.80 Borealis floor, not re-run) | Untested |
-| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 13.5 tok/s; [runtime 59/60, known issue](docs/KNOWN-ISSUES.md#a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails): the independent-streams timing check fails against the 0.80 Borealis floor, copies are byte-exact | Untested |
+| M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini (J773g) with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port; no qualification row posted yet | Data-only; h16 bring-up module |
+| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 49.3 tok/s; runtime 59/60 on source build `ec849019` (independent-streams ratio 0.876 against that build's 0.95 floor; main has the 0.80 Borealis floor, not re-run); [qualification-r4 row](https://github.com/joshuaswarren/omarchy-mlx/issues/537) clean bar the `test_export_unique` defect the r7 wheel fixes | Untested |
+| M4 Air | Experimental: MacBook Air (J713, T8132, G16G B0) on a bring-up Borealis driver; [qualification-r4 row](https://github.com/joshuaswarren/omarchy-mlx/issues/537) complete with only `test_export_unique` new over the reference (the r7 wheel fixes it); Qwen3-4B 4-bit decode 25.68 tok/s on the bring-up driver, not a final rate | Data-only; h16 bring-up module |
+| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 13.5 tok/s; runtime 59/60: the independent-streams timing check fails against the 0.80 Borealis floor (0.437 to 0.442 in four runs), copies are byte-exact | Untested |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
@@ -191,7 +192,7 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second. A cell show
 
 macOS shares are printed only where both sides produce identical tokens.
 
-Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
+Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 Decode on the 13-inch M1 changed with the CPU governor with no ANE work running. See [Set the CPU governor for local AI](docs/BENCHMARKS.md#set-the-cpu-governor-for-local-ai).
 

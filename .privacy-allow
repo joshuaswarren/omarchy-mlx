@@ -41,3 +41,5 @@ d1b064f031dfdab101175dab0107b462eddea5f9  scripts/test_collect.py
 aabf93115829b2e7b80ad7be0c7a1d86f6073e0b  services/community-data/test/unit/pii.test.ts
 01aa81bf04233f9dd38c0769999aacd6dfeac424  scripts/test_collect_macos.py
 da3f776b216484243e4e414a9f3129813e890c10  scripts/test_collect_macos.py
+6edb6d5429691bcaa454520f19550e72a4b99f51  scripts/check-wheel-pins.py
+169684f5b28b139414c0d0394ff87fd00db661d8  tests/test_wheel_pins.py

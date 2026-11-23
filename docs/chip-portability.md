@@ -34,8 +34,8 @@ the dangerous class; every member is marked.
 | F-09 | `compiled.cpp:37-58` | BF16 compiled tapes corrupt nondeterministically on Honeykrisp | Keyed on dtype, not on device: refused on every device, loudly | Over-refuses on drivers where the defect does not reproduce (llvmpipe is already proven correct). Safe direction — no wrong numbers — but the refusal message hard-codes a driver-empirical defect with no root cause pinned | Loud |
 | F-10 | `fused_chain.cpp:291-297` | Fused chain runs only with `shader_float16`/`shader_int16` + `storage_buffer_16bit_access`; otherwise silently unfused | Capability gate; fallback is the unfused op stream | Fused-vs-unfused bit equality is a design contract, not a capability: if a driver broke it, fusion would silently change bits. Covered only by suite legs | **SILENT** (result-preserving by design, suite-verified) |
 | F-11 | `primitives.cpp:7724-7728, 8256-8257`; `device.cpp:248-262` | Float scatter Sum uses hardware atomicAdd where `shaderBufferFloat32AtomicAdd`, else the FCAS compare-exchange twin | Capability-keyed, extension AND feature bit | The twins are exact-arithmetic equivalents by construction; route flip does not move bits. Cited as the model the other gates should converge to | Loud-safe (no risk) |
-| F-12 | `compute.h:19`, `encoder.cpp:423-425` | `maxComputeWorkGroupCount[0] >= 65535` (spec floor); dispatch clamps and chunks past it | Spec guarantee + the fixed 2026-09-08 bool-tail defect (`known-defects.md`, regression `test_select_ops.cpp`) | The clamp-chunk pattern was once a silent wrong-results bug past 16,776,960 elements; the pattern is now regression-covered. Any new kernel using the clamp must chunk, not truncate | **SILENT** (historical; fixed) |
-| F-13 | Shader corpus: `cast.comp:110-114`, `compare_bool.comp:14-20, 87-90`, `compare.comp:63-66`, `argreduce_suffix.comp:111-114`, `block_mask.comp:20-23`, `conv.comp:6-9`, `copy_general.comp:14-16`, `complex_elementwise.comp:90-94, 207-210`, `logical_or` atomicOr form (`primitives.cpp:1080-1084, 1150-1154`) | Honeykrisp miscompiles: divergent per-lane word loads, shift-then-mask with data-dependent shift, wide if/else selector store coalescing, `FLT_MAX/FLT_MAX = 0`, GLSL `/` one ulp off, inexact NIR constant reassociation | Empirical receipts (`known-defects.md`), upstream battery; workarounds are unconditional code shapes, keyed on nothing | Portable by construction today (they run everywhere and are harmless when the bug is absent). A future driver build can carry NEW miscompiles with no signal — silent wrong values until the battery runs on that build | **SILENT** (new-defect exposure) |
+| F-12 | `compute.h:19`, `encoder.cpp:423-425` | `maxComputeWorkGroupCount[0] >= 65535` (spec floor); dispatch clamps and chunks past it | Spec guarantee + the fixed 2026-09-08 bool-tail defect (the defect class, regression `test_select_ops.cpp`) | The clamp-chunk pattern was once a silent wrong-results bug past 16,776,960 elements; the pattern is now regression-covered. Any new kernel using the clamp must chunk, not truncate | **SILENT** (historical; fixed) |
+| F-13 | Shader corpus: `cast.comp:110-114`, `compare_bool.comp:14-20, 87-90`, `compare.comp:63-66`, `argreduce_suffix.comp:111-114`, `block_mask.comp:20-23`, `conv.comp:6-9`, `copy_general.comp:14-16`, `complex_elementwise.comp:90-94, 207-210`, `logical_or` atomicOr form (`primitives.cpp:1080-1084, 1150-1154`) | Honeykrisp miscompiles: divergent per-lane word loads, shift-then-mask with data-dependent shift, wide if/else selector store coalescing, `FLT_MAX/FLT_MAX = 0`, GLSL `/` one ulp off, inexact NIR constant reassociation | Empirical receipts (measured runs of 2026-10-06), upstream battery; workarounds are unconditional code shapes, keyed on nothing | Portable by construction today (they run everywhere and are harmless when the bug is absent). A future driver build can carry NEW miscompiles with no signal — silent wrong values until the battery runs on that build | **SILENT** (new-defect exposure) |
 
 Deliberately not findings (checked, spec-floor-safe or already capability-keyed):
 push constants are exactly `sizeof(ComputeParams)` = 128 bytes = the Vulkan
@@ -155,7 +155,7 @@ caveats above.
    coherent. Anything less names which routes retire (SDPA-native, coopmat
    prefill, subgroup GEMV, fused chains) and the chip ships with those routes
    off, not claimed.
-3. **Arithmetic-contract probes**: the `known-defects.md` probe set — fdiv
+3. **Arithmetic-contract probes**: the measured probe set — fdiv
    rounding (80/25, 10/25, quantize boundary), `cos` at `fl(π/2)`,
    `FLT_MAX/FLT_MAX`, `log` host-ulp, shift-then-mask byte extraction, wide
    selector stores, divergent word loads. Record which reproduce; every hit
@@ -180,7 +180,7 @@ caveats above.
    model and legs (the `receipts/native-baseline-*` pattern) — required to
    apply rule 1 of the digest policy. For BF16 legs the oracle is the float64
    round-to-nearest reference, not the macOS capture (macOS deviates on the
-   bias-cancellation elements; `known-defects.md`).
+   bias-cancellation elements; measured runs of 2026-10-06).
 8. **Compiled-tape re-probe**: the BF16 tape refusal (F-09) must be re-probed
    on the new driver build; it retires only with a receipt proving the
    corruption does not reproduce.

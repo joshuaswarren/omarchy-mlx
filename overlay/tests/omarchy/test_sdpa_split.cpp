@@ -571,33 +571,41 @@ TEST_CASE("split-K verify rows: each causal row equals the same token decoded al
     Stored v = make_bf16(pattern(static_cast<size_t>(c.kv_heads) * c.keys * c.width, 7, 1.0f), Shape{1, c.kv_heads, c.keys, c.width}, stream);
     const float scale = 1.0f / std::sqrt(static_cast<float>(c.width));
     setenv("MLX_OMARCHY_SDPA_DECODE_SPLIT", "1", 1);
-    setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", "1", 1);
-    uint64_t before = dispatches();
-    array rows = fast::scaled_dot_product_attention(q.x, k.x, v.x, scale, "causal", {}, std::nullopt, false, stream);
-    rows.eval();
-    omarchy::get_command_encoder(stream).synchronize();
-    uint64_t launched = dispatches() - before;
-    unsetenv("MLX_OMARCHY_SDPA_SPLIT_ROWS");
-    std::vector<float> got = flat(rows, stream);
-    INFO("heads " << c.heads << " width " << c.width << " keys " << c.keys << " rows " << c.rows);
-    if (split_device_ready()) {
+    // Pins the default: the route is on both with the flag unset and set
+    // to "1"; "0" is the opt-out back to the composed route.
+    for (const char* rows_env : {static_cast<const char*>(nullptr), "1"}) {
+      if (rows_env) {
+        setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", rows_env, 1);
+      } else {
+        unsetenv("MLX_OMARCHY_SDPA_SPLIT_ROWS");
+      }
+      uint64_t before = dispatches();
+      array rows = fast::scaled_dot_product_attention(q.x, k.x, v.x, scale, "causal", {}, std::nullopt, false, stream);
+      rows.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      uint64_t launched = dispatches() - before;
+      std::vector<float> got = flat(rows, stream);
+      INFO("heads " << c.heads << " width " << c.width << " keys " << c.keys << " rows " << c.rows
+           << " rows_env " << (rows_env ? rows_env : "unset"));
+      if (!split_device_ready()) {
+        printf("Skipping: split route not available on this device\n");
+        break;
+      }
       CHECK(launched == 2u * static_cast<uint64_t>(c.rows));
-    } else {
-      printf("Skipping: split route not available on this device\n");
-      continue;
-    }
-    for (int r = 0; r < c.rows; ++r) {
-      const int visible = c.keys - c.rows + 1 + r;
-      array qr = slice(q.x, Shape{0, 0, r, 0}, Shape{1, c.heads, r + 1, c.width}, stream);
-      array kr = slice(k.x, Shape{0, 0, 0, 0}, Shape{1, c.kv_heads, visible, c.width}, stream);
-      array vr = slice(v.x, Shape{0, 0, 0, 0}, Shape{1, c.kv_heads, visible, c.width}, stream);
-      Run one = run_attention(qr, kr, vr, scale, "1", stream);
-      for (int h = 0; h < c.heads; ++h) {
-        for (int d = 0; d < c.width; ++d) {
-          REQUIRE(got[(static_cast<size_t>(h) * c.rows + r) * c.width + d] == one.out[static_cast<size_t>(h) * c.width + d]);
+      for (int r = 0; r < c.rows; ++r) {
+        const int visible = c.keys - c.rows + 1 + r;
+        array qr = slice(q.x, Shape{0, 0, r, 0}, Shape{1, c.heads, r + 1, c.width}, stream);
+        array kr = slice(k.x, Shape{0, 0, 0, 0}, Shape{1, c.kv_heads, visible, c.width}, stream);
+        array vr = slice(v.x, Shape{0, 0, 0, 0}, Shape{1, c.kv_heads, visible, c.width}, stream);
+        Run one = run_attention(qr, kr, vr, scale, "1", stream);
+        for (int h = 0; h < c.heads; ++h) {
+          for (int d = 0; d < c.width; ++d) {
+            REQUIRE(got[(static_cast<size_t>(h) * c.rows + r) * c.width + d] == one.out[static_cast<size_t>(h) * c.width + d]);
+          }
         }
       }
     }
+    unsetenv("MLX_OMARCHY_SDPA_SPLIT_ROWS");
   }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }

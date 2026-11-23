@@ -163,6 +163,17 @@ class ContextTests(unittest.TestCase):
     def test_under_limit_ok(self):
         self.assertEqual(budget.resolve_context({"max_tokens": 1024}, 512), 512)
 
+    def test_non_positive_context_is_error(self):
+        # A non-positive context priced the KV cache at zero or below, and
+        # nothing on the module or omlx path refused the estimate.
+        for limit in (262144, None):
+            for bad in (0, -1, -200000, True, False, 1.5):
+                with self.subTest(limit=limit, bad=bad):
+                    with self.assertRaisesRegex(budget.BudgetError,
+                                                "--context must be a positive number"):
+                        budget.resolve_context({"max_tokens": limit}, bad)
+        self.assertEqual(budget.resolve_context({"max_tokens": None}, 1), 1)
+
 
 class MeminfoTests(unittest.TestCase):
     def test_parses_memavailable(self):

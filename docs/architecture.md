@@ -24,7 +24,7 @@ Recognition uses a bounded subprocess and retains the installed Parakeet fixture
 Sizing searches token counts against byte-based memory admission and declared model limits.
 Missing backend qualification imposes an explicit unqualified cap; it does not create a ready recommendation.
 All model inference, including speech, keeps the no-CPU-tensor contract below.
-The [design](plans/2026-09-27-offline-assistant-design.md) lists the acceptance gates that remain open.
+The open acceptance gates are the measured workspace and latency curves below.
 
 ## Backend boundary
 

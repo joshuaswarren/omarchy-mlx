@@ -2866,8 +2866,9 @@ void dispatch_reduce_general(
       params.out_strides[index] = reduced[index].stride;
     }
   } else {
-    if (collapsed_rank > static_cast<size_t>(std::numeric_limits<int>::max()) /
-            2) {
+    // reduce_general.comp stages the 2 * rank metadata words in a
+    // 512-word shared array, so the packed rank is capped at 256.
+    if (collapsed_rank > 256) {
       omarchy::unsupported(operation_name + " rank", out);
     }
     std::vector<uint32_t> words;
@@ -3623,9 +3624,10 @@ void dispatch_gather_qmm(
     // and untested layouts must not ride an unproven kernel). Counts
     // above 65535 workgroups (large-batch routed decode) are handled by
     // the kernel's x/z grid split, not by this gate.
-    const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& sub_caps = encoder.device().capabilities();
-    use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
+    // gather_qmm_sub_default_part reads MLX_OMARCHY_GATHER_QMM_SUB and
+    // defaults the route off on G18G (mesa#737 uniform-load defect).
+    use_sub = omarchy::gather_qmm_sub_default_part(sub_caps.device_name) &&
         transpose &&
         ((bits == 4u && group_size == 64u) ||
          // 2-bit codes never straddle a word, so the generic decode of the subgroup
@@ -3640,24 +3642,24 @@ void dispatch_gather_qmm(
   // 3-bit decode (the Muse routed-expert layout): the direct 8-output subgroup kernel with the
   // bit-stream decode (BITS3 variant of gather_qmm_sub.comp). f16, transposed, biases present,
   // group 64, N a multiple of 8, m == 1. Everything else at 3 bits stays on the scalar kernel.
+  const auto& q3_caps = encoder.device().capabilities();
   const bool use_sub_q3 = bits == 3 && transpose && !fp_mode && m == 1 &&
       group_size == 64 && !no_bias && out.dtype() == float16 && (n % 8) == 0 &&
-      (std::getenv("MLX_OMARCHY_GATHER_QMM_SUB") == nullptr ||
-       std::getenv("MLX_OMARCHY_GATHER_QMM_SUB")[0] != '0') &&
-      encoder.device().capabilities().subgroup_size == 32u &&
-      (encoder.device().capabilities().subgroup_operations &
+      omarchy::gather_qmm_sub_default_part(q3_caps.device_name) &&
+      q3_caps.subgroup_size == 32u &&
+      (q3_caps.subgroup_operations &
        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
-      encoder.device().capabilities().storage_buffer_16bit_access;
+      q3_caps.storage_buffer_16bit_access;
   // mxfp4 subgroup decode (gather_qmm_sub.comp -DFP_MODE): the routed experts of gpt-oss-20b are mxfp4
   // (bits 4, group 32, e8m0 scale byte, e2m1 nibbles, transposed, no output global scale). Until this route they
   // took only the scalar one-thread-per-output kernel. Same gate class as the affine subgroup kernel above;
   // MLX_OMARCHY_GATHER_QMM_SUB=0 turns it off too. nvfp4 (group 16) and mxfp8 (bits 8) stay scalar.
   bool use_sub_fp = false;
   if (fp_mode && m == 1 && transpose && bits == 4u && group_size == 32u && !out_global_scale) {
-    const char* sub_fp_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& fp_caps = encoder.device().capabilities();
     const auto& fp_hw = encoder.device().hardware_capabilities();
-    use_sub_fp = (sub_fp_env == nullptr || sub_fp_env[0] != '0') &&
+    use_sub_fp = omarchy::gather_qmm_sub_fp_default_part(
+            fp_caps.device_name) &&
         fp_caps.subgroup_size == 32u &&
         (fp_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         fp_caps.storage_buffer_16bit_access;
@@ -3756,8 +3758,8 @@ void dispatch_gather_qmm(
     // form has no dense twin and is gated against fp64. Both are opt-in developer
     // switches, off by default, so the 8-output element kernel below stays the route:
     // MLX_OMARCHY_GATHER_QMM_WORD=1 (4-bit; its teacher-forced NLL gate gave verdict
-    // REJECT, see docs/KNOWN-ISSUES.md) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
-    // hidden-state fidelity gate gave verdict WIDER, see docs/KNOWN-ISSUES.md).
+    // numerics verdict REJECT) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
+    // hidden-state fidelity gate gave verdict WIDER).
     const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
     const char* word2_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD2");
     const bool word4 = bits == 4 && group_size == 64 &&
@@ -4994,6 +4996,27 @@ size_t linalg_batch_count(const Shape& shape) {
   return batch;
 }
 
+// G18G runs the latency-bound float linalg workgroups at 128 lanes (M6X-08);
+// every other part keeps the 256-lane kernel.
+omarchy::ComputeKernel linalg_g18_kernel(
+    omarchy::CommandEncoder& encoder,
+    omarchy::ComputeKernel kernel) {
+  if (encoder.device().capabilities().device_name.find("G18G") ==
+      std::string::npos) {
+    return kernel;
+  }
+  switch (kernel) {
+    case omarchy::ComputeKernel::LinalgInverseF32:
+      return omarchy::ComputeKernel::LinalgInverseF32G18;
+    case omarchy::ComputeKernel::LinalgQrF32:
+      return omarchy::ComputeKernel::LinalgQrF32G18;
+    case omarchy::ComputeKernel::LinalgEigF32:
+      return omarchy::ComputeKernel::LinalgEigF32G18;
+    default:
+      return kernel;
+  }
+}
+
 // Every linalg kernel runs one workgroup per batch matrix and reads
 // matrix = aux_offset + gl_WorkGroupID.x with no grid-stride loop, so the
 // host chunks the batch: no dispatch requests more than the 65535
@@ -5639,7 +5662,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
 // magnitude above the envelope to the reduction. The previous
 // trig_argument_gate (a full GPU sync + host read per sin/cos call,
 // removed by 6cbf55d8f) stayed dead until this change deleted it; its
-// accuracy history lives in docs/known-defects.md.
+// accuracy history lives in the git history of the retired defect ledger.
 constexpr float kTrigArgumentLimit = 5.0e5f;
 
 void Cos::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -7517,7 +7540,11 @@ void Inverse::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(work), binding(out), binding(scratch)};
   dispatch_linalg_batch(
-      encoder, omarchy::ComputeKernel::LinalgInverseF32, bindings, params, batch);
+      encoder,
+      linalg_g18_kernel(encoder, omarchy::ComputeKernel::LinalgInverseF32),
+      bindings,
+      params,
+      batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -8100,7 +8127,10 @@ void QRF::eval_gpu(
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(work), binding(q), binding(r)};
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgQrF32, bindings, params, batch);
+      linalg_g18_kernel(encoder, omarchy::ComputeKernel::LinalgQrF32),
+      bindings,
+      params,
+      batch);
 }
 namespace {
 
@@ -9014,11 +9044,35 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         1u);
     return;
   }
+  // Tensor/MMA row routing (MLX_OMARCHY_QMM_MMA_ROWS, default off, read
+  // live): the upstream affine qmv_mma dispatch (mlx PR #4890) sends
+  // multi-row quantized matvecs to the tensor-core kernel instead of the
+  // per-row chain once the tile's fixed dispatch cost is amortized. Our
+  // analog: with the flag set, a non-batched bf16 4-bit group-64
+  // transposed product with 4..16 activation rows passing the
+  // upstream-shaped gate (K >= 512 and K % 128 == 0, N >= 512 and
+  // N % 16 == 0, N*K >= 2^21) skips the short-pass GEMV and the small-row
+  // chain and falls straight into the tile path, where the
+  // cooperative-matrix route with its alignment and capsim checks applies
+  // exactly as it does for large M. The gate requires coopmat_reachable,
+  // so a device without the 8x8x8 route keeps today's routing. The tile's
+  // accumulation order differs from the row chain, so outputs are not
+  // bit-identical across the flag; the flag exists to arm that A/B.
+  const bool qmm_mma_rows =
+      decode_path_override("MLX_OMARCHY_QMM_MMA_ROWS") > 0 &&
+      use_q4_word && transpose_ && out.dtype() == bfloat16 &&
+      batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
+      biases.ndim() == 2 && coopmat_reachable &&
+      params.matrix_m >= 4u && params.matrix_m <= 16u &&
+      params.matrix_k >= 512u && (params.matrix_k % 128u) == 0u &&
+      params.matrix_n >= 512u && (params.matrix_n % 16u) == 0u &&
+      static_cast<uint64_t>(params.matrix_n) * params.matrix_k >=
+          (uint64_t{1} << 21);
   // Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T, default off): the rows of a
   // batch-1 [1, T, K] x sit at the same strides as a [T, 1, K] decode batch,
   // so the pass runs as one batch-shared GEMV of T <= 4 rows. Each row keeps
   // the single-row chain bit for bit (tests/omarchy/test_qmv_batch.cpp).
-  if (small_t_candidate && batch == 1u && transpose_ &&
+  if (!qmm_mma_rows && small_t_candidate && batch == 1u && transpose_ &&
       params.matrix_n <= omarchy::kMaxComputeGroupCountX * kGemvColumnsPerGroup) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
@@ -9079,7 +9133,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // boundary and K is a multiple of 8 (the single-row kernel shares the K
   // rule through words_per_row; the base rule is new because rows stride by
   // K here). Unaligned views fall through to the tile path.
-  if (decode_path_override("MLX_OMARCHY_QMM_ROWS") != 0 && use_q4_word &&
+  if (!qmm_mma_rows &&
+      decode_path_override("MLX_OMARCHY_QMM_ROWS") != 0 && use_q4_word &&
       out.dtype() == bfloat16 && transpose_ && batch == 1u &&
       w.ndim() == 2 && scales.ndim() == 2 && biases.ndim() == 2 &&
       params.matrix_m >= 2u && params.matrix_m <= 4u &&
@@ -12485,7 +12540,7 @@ void Sin::eval_gpu(const std::vector<array>& inputs, array& out) {
   // handles large arguments: accurate vs float64 up to kTrigArgumentLimit
   // and NaN above it. The old trig_argument_gate (a full GPU sync +
   // host read per sin/cos call) is gone; its history and the owner's
-  // perf-tradeoff note are in docs/known-defects.md.
+  // perf-tradeoff note is dated 2026-10-03.
   dispatch_elementwise(
       name(), SinOperation, inputs, out, out.primitive().stream());
 }
@@ -12885,7 +12940,11 @@ void Eig::eval_gpu(
       binding(scratch),
       compute_ev ? binding(vacc) : binding(work)};
   dispatch_linalg_batch(
-      encoder, omarchy::ComputeKernel::LinalgEigF32, bindings, params, batch);
+      encoder,
+      linalg_g18_kernel(encoder, omarchy::ComputeKernel::LinalgEigF32),
+      bindings,
+      params,
+      batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -15897,7 +15956,7 @@ bool RoPE::use_fallback(Stream s) {
 }
 
 // Fused RoPE absorbs the eager composition's Sin and Cos primitives, so it
-// carries their kTrigArgumentLimit gate: known-defects.md, "A correction on
+// carries their kTrigArgumentLimit gate: "A correction on
 // the record", pins that a path which runs a primitive without going
 // through its eval_gpu must carry that primitive's gates. The eager gate
 // reduced the materialized theta tensor; this path never builds one, so the
@@ -16652,10 +16711,11 @@ void ScaledDotProductAttention::eval_gpu(
       head_dim == 128 && v_dim == head_dim && k_len >= q_len &&
       k_len <= kDecodeBf16StreamKeys;
   // Verify rows on the split-K route (bf16, causal, batch 1, q_len 2..16, width 128 or 256): one pass-1 and pass-2 pair per row over that row's key
-  // prefix, so each row is bit-equal to the same token decoded alone on the split route. Opt-in: MLX_OMARCHY_SDPA_SPLIT_ROWS, any non-empty value
-  // other than "0". Needs the split route itself to be engaged (MLX_OMARCHY_SDPA_DECODE_SPLIT and the per-chip key threshold).
+  // prefix, so each row is bit-equal to the same token decoded alone on the split route. Default on wherever the split route itself engages
+  // (MLX_OMARCHY_SDPA_DECODE_SPLIT and the per-chip key threshold): past kDecodeBf16StreamKeys the alternative is the composed route, which
+  // costs about 10x the split pair per row at 8K keys and grows with the cache. MLX_OMARCHY_SDPA_SPLIT_ROWS=0 keeps the composed route.
   const bool split_rows_route = decode_bf16_probe && do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
-      k_len >= q_len && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_ROWS") > 0;
+      k_len >= q_len && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_ROWS") != 0;
   // Batched decode (q_len 1, bf16, one-pass): workgroup z walks the batch
   // with per-row base offsets; each row runs the single-row arithmetic, so
   // B > 1 stays bit-identical to the composed route it replaces.

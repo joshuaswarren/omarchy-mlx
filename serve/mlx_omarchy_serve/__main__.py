@@ -266,6 +266,8 @@ def pick_recommended(cat: dict, kind: str, context_tokens: int | None, home: Pat
     the standing approval contract. Curated priority reflects quality and
     is preserved as the ordering within the recommended tier; the same
     ordering is the `ranked` display order the CLI table uses verbatim."""
+    if context_tokens is not None:
+        budget.require_positive_context(context_tokens)
     soc = machine_soc()
     ranked = sorted(
         (e for e in cat["models"] if e["kind"] == kind),
@@ -676,7 +678,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="mlx-omarchy-serve",
         description="Serve a vetted local model on the Apple GPU (admission-checked, approve-first).",
     )
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p, with_target=True):
         p.add_argument("--offline", action="store_true",

@@ -337,7 +337,10 @@ def parse_draft(text):
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end <= start:
         raise ValueError("The draft contained no JSON object")
-    draft = json.loads(raw[start:end + 1])
+    try:
+        draft = json.loads(raw[start:end + 1])
+    except RecursionError as exc:
+        raise ValueError("The draft nests deeper than the JSON parser allows") from exc
     if not isinstance(draft, dict) or set(draft) - {"criteria", "options"}:
         raise ValueError("The draft must contain exactly criteria and options")
     criteria, options = draft.get("criteria"), draft.get("options")
@@ -355,6 +358,10 @@ def parse_draft(text):
         if any(item["label"].casefold() == label.casefold() for item in labels):
             raise ValueError("Draft option labels must be distinct")
         labels.append({"label": label})
+    try:  # a JSON \ud800 escape decodes to a lone surrogate the store cannot write
+        (criteria + "".join(item["label"] for item in labels)).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("The draft text must be valid Unicode") from exc
     return {"criteria": criteria.strip(), "options": labels}
 
 
@@ -1284,7 +1291,7 @@ class Coordinator:
         from .components import validate_components, ENVELOPE_VERSION
         try:
             parsed = json.loads(envelope)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return None
         try:
             components = validate_components(parsed)
@@ -1368,7 +1375,7 @@ class Coordinator:
             return None
         try:
             components = validate_components(json.loads(body[:end]))
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, RecursionError):
             return None
         if component_count + len(components) > 32:
             return None

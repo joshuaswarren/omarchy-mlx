@@ -26,6 +26,9 @@ from mlx_omarchy_serve import budget
 
 TERMINATE_TIMEOUT_SECONDS = 10.0
 
+# Health probes go to loopback workers: never through an environment proxy.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 class WorkerError(RuntimeError):
     """A managed worker could not be spawned, reached, or stopped."""
@@ -142,7 +145,7 @@ def wait_health(url: str, deadline: float, *, abort=None) -> bool:
         if abort is not None and abort():
             return False
         try:
-            with urllib.request.urlopen(url, timeout=1) as resp:
+            with _OPENER.open(url, timeout=1) as resp:
                 if 200 <= resp.status < 300:
                     return True
         except Exception:

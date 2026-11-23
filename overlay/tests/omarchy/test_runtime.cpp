@@ -227,8 +227,8 @@ int run_child_scenario(const std::string& mode) {
     // llvmpipe, so the watchdog fires on real in-flight work (the same
     // misclassification a jumbo prefill hits); on fast hardware the
     // fills complete inside the first poll and the child still asserts
-    // clean teardown after a successful join. Per docs/known-defects.md
-    // a process that hit a wedge must be restarted before its output is
+    // clean teardown after a successful join. A
+    // process that hit a wedge must be restarted before its output is
     // trusted, so the contract under test is exit 0 through teardown,
     // not same-device recovery. The allocation is leaked on purpose:
     // the fill is still executing, and a cache-free would hand that
@@ -1613,6 +1613,65 @@ TEST_CASE("dispatch bindings stamp their owners against the open batch") {
   alloc.free(dst);
 }
 
+TEST_CASE("an open batch pre-binds each buffer once and submissions pipeline") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s = new_stream(Device::gpu);
+  auto& encoder = omarchy::get_command_encoder(s);
+  auto& dev = omarchy::device();
+  constexpr size_t kBytes = 1 << 16;
+  constexpr uint32_t kPattern = 0x00dec0de;
+  auto src = alloc.malloc(kBytes);
+  auto dst = alloc.malloc(kBytes);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  auto* dst_buf = static_cast<omarchy::VulkanBuffer*>(dst.ptr());
+  array src_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
+  src_view.set_data(
+      src, src_view.size(), src_view.strides(), src_view.flags(), 0,
+      [](allocator::Buffer) {});
+
+  // The same persistent buffer reaches the open batch three ways - an
+  // add_temporary, a dispatch binding owner, and a transfer endpoint -
+  // and binds once; dst binds on the copy. Persistent buffers (weights,
+  // KV) are the common case, so the batch must not re-list a buffer per
+  // binding.
+  encoder.add_temporary(src_view);
+  omarchy::ComputeParams params;
+  params.count = kBytes / sizeof(float);
+  params.output_size = kBytes / sizeof(float);
+  std::array<omarchy::ComputeBinding, 1> bindings{
+      omarchy::ComputeBinding{src_buf->buffer, 0, kBytes, src_buf}};
+  encoder.dispatch_compute(
+      omarchy::ComputeKernel::FillF32,
+      bindings,
+      params,
+      omarchy::compute_dispatch_group_count(kBytes / sizeof(float)));
+  encoder.copy_buffer(src_buf->buffer, dst_buf->buffer, kBytes);
+  CHECK(encoder.open_batch_buffer_count() == 2);
+
+  // Two submissions reserve consecutive completion values back to back:
+  // the second queues behind the first without the host joining it - the
+  // ring keeps building while earlier submissions execute.
+  encoder.commit();
+  const uint64_t first = encoder.last_submitted_completion();
+  CHECK(first > 0);
+  CHECK(encoder.open_batch_buffer_count() == 0);
+  encoder.fill_buffer(dst_buf->buffer, kPattern, 4);
+  encoder.commit();
+  CHECK(encoder.last_submitted_completion() == first + 1);
+
+  encoder.synchronize();
+  CHECK(dev.completions().drained_value() >= first + 1);
+  const auto* words = static_cast<const uint32_t*>(dst_buf->data);
+  CHECK(words[0] == kPattern);
+  alloc.free(src);
+  alloc.free(dst);
+}
+
 TEST_CASE("the OOM retry releases the newest quarantined generation") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
@@ -1740,11 +1799,12 @@ TEST_CASE("the OOM retry settles on progress, not global idleness") {
   alloc.free(scratch);
 }
 
-// Wave scheduling defaults on per part: G16S only; MLX_OMARCHY_WAVE_SCHED
-// overrides either way.
-TEST_CASE("wave scheduling is a G16S default only") {
+// Wave scheduling defaults on per part: G16S, G14C and G17C;
+// MLX_OMARCHY_WAVE_SCHED overrides either way.
+TEST_CASE("wave scheduling is a per-part default") {
   CHECK(omarchy::wave_sched_default_part("Apple M4 Pro (G16S B1)"));
   CHECK(omarchy::wave_sched_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M5 Max (G17C B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 Max (G13C C0)"));
@@ -2872,8 +2932,7 @@ TEST_CASE("independent streams measure against the serialized sum") {
   // timing loss is not a correctness failure. Until NVIDIA numbers are
   // collected here the floor is asserted on every driver except NVIDIA
   // proprietary; the test still prints its ratio for every run so a
-  // per-driver floor can be set from collected numbers. See
-  // docs/KNOWN-ISSUES.md.
+  // per-driver floor can be set from collected numbers.
   // Borealis on the M4 Pro (G16S) measures 0.83-0.93 over repeated runs of
   // this case (the same binary on the M1/Honeykrisp device measures 1.0 and
   // above), with every copy byte-for-byte correct; its floor is 0.80, which a

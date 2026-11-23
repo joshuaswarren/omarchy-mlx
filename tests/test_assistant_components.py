@@ -10,6 +10,7 @@ import math
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
@@ -169,6 +170,93 @@ class EnvelopeBoundTests(unittest.TestCase):
         bad = decision_envelope()
         bad["components"][0]["options"].append({"id": "Bad-ID!", "label": "X"})
         with self.assertRaises(ComponentError):
+            validate_components(bad)
+
+
+class MalformedInputTests(unittest.TestCase):
+    """These inputs once raised exceptions such as RecursionError that the
+    coordinator's invalid-component path misses; each is a ComponentError."""
+
+    @staticmethod
+    def _deep_lists(depth):
+        inner = []
+        for _ in range(depth):
+            inner = [inner]
+        return envelope(inner)
+
+    def test_deep_array_nesting_in_json_text_rejected(self):
+        for depth in (2000, 20000):
+            raw = ('{"version": 1, "components": ['
+                   + "[" * depth + "]" * depth + "]}")
+            self.assertLess(len(raw.encode()), ENVELOPE_MAX_BYTES)
+            with self.subTest(depth=depth), self.assertRaises(ComponentError):
+                validate_components(raw)
+
+    def test_deep_array_nesting_in_parsed_envelope_rejected(self):
+        for depth in (2000, 20000):
+            with self.subTest(depth=depth), self.assertRaises(ComponentError):
+                validate_components(self._deep_lists(depth))
+
+    def test_json_parser_recursion_is_component_error(self):
+        # Python 3.11's parser hits its recursion limit near 1000 levels;
+        # newer parsers reach it only above the 64 KiB bound.
+        with mock.patch.object(json, "loads", side_effect=RecursionError):
+            with self.assertRaises(ComponentError):
+                validate_components(json.dumps(decision_envelope()))
+
+    def test_non_object_confidence_rejected(self):
+        payload = decision_envelope()
+        payload["components"][0]["confidence"] = 0.85
+        with self.assertRaisesRegex(ComponentError, "confidence"):
+            validate_components(payload)
+
+    def test_number_beyond_float_range_rejected(self):
+        payload = decision_envelope()
+        payload["components"][0]["confidence"]["selected_probability"] = 10 ** 400
+        with self.assertRaisesRegex(ComponentError, "must be finite"):
+            validate_components(json.dumps(payload))
+
+    def test_lone_surrogate_escape_rejected(self):
+        raw = ('{"version": 1, "components": [{"type": "checklist", '
+               '"items": [{"id": "a", "text": "x \\ud800 y"}]}]}')
+        with self.assertRaisesRegex(ComponentError, "valid Unicode"):
+            validate_components(raw)
+
+    def test_non_utf8_bytes_rejected(self):
+        with self.assertRaises(ComponentError):
+            validate_components(b'{"version": 1, "components": ["\xff"]}')
+
+    def test_every_nested_component_shape_still_validates(self):
+        payload = envelope(
+            decision_envelope()["components"][0]
+            | {"confidence": {"selected_probability": 0.6,
+                              "runner_up": {"id": "opt-1", "probability": 0.3}}},
+            {"type": "comparison",
+             "columns": [{"id": "c1", "label": "Cost", "kind": "number"}],
+             "rows": [{"id": "r1", "label": "A", "values": [1]},
+                      {"id": "r2", "label": "B", "values": [None]}]},
+            {"type": "chart", "kind": "line", "series": [{
+                "id": "s", "label": "S", "source": "user",
+                "values": [{"label": "a", "value": 1}, {"label": "b", "value": 2}]}]},
+            {"type": "form", "fields": [{
+                "id": "f", "label": "F", "kind": "choice",
+                "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]}]},
+            {"type": "facts", "cards": [{
+                "id": "k", "heading": "H", "text": "T",
+                "sources": [{"ref": "1", "text": "src"}]}]},
+        )
+        comps = validate_components(json.dumps(payload).encode())
+        self.assertEqual([c["type"] for c in comps],
+                         ["decision", "comparison", "chart", "form", "facts"])
+        self.assertEqual(comps[0]["confidence"]["runner_up"]["id"], "opt-1")
+        self.assertEqual(comps[4]["cards"][0]["sources"][0]["ref"], "1")
+
+    def test_array_directly_inside_array_rejected(self):
+        bad = envelope({"type": "comparison",
+                        "columns": [{"id": "c1", "label": "Cost"}],
+                        "rows": [{"id": "r1", "label": "A", "values": [[1]]},
+                                 {"id": "r2", "label": "B", "values": [2]}]})
+        with self.assertRaisesRegex(ComponentError, "array directly inside an array"):
             validate_components(bad)
 
 

@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 
 INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
-LAUNCHERS = ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat", "mlx-omarchy-info")
+LAUNCHERS = ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat", "mlx-omarchy-info",
+             "mlx-omarchy-parakeet")
 
 # Deterministic offline contract tests: never resolve the latest release
 # over the network (api.github.com rate limits make that flake).
@@ -386,7 +387,8 @@ class ServeCliContractTests(unittest.TestCase):
 
     def test_uninstall_covers_serve_launchers_and_omarchy_copy(self):
         text = installer_text()
-        case_block = text[text.index("  --uninstall)"):text.index('  "") ;;')]
+        start = text.index("  --uninstall)")
+        case_block = text[start:text.index("\nesac\n", start)]
         self.assertIn('"$BIN/mlx-omarchy-serve"', case_block)
         self.assertIn('"$BIN/omarchy-mlx-serve"', case_block)
         self.assertIn("omarchy-mlx-serve", case_block)
@@ -564,6 +566,89 @@ class SocGateTests(unittest.TestCase):
         spec.loader.exec_module(catalog)
         for chip in ("t8103", "t6000", "t6001", "t6002", "t6021"):
             self.assertIn(chip, catalog.ARCHES)
+
+
+class ArgumentParsingTests(unittest.TestCase):
+    """Every argument is parsed: install flags combine in any order, and an
+    unknown or misplaced argument fails before any network call or write."""
+
+    def run_installer(self, home, *args, trace=False):
+        """Returns (result, set of stubbed commands that ran).
+
+        Failing curl and systemctl stubs record their calls, and no version
+        is pinned: the install path stops at release resolution on every
+        host, so nothing downloads, installs or touches the user session
+        even on Apple Silicon.
+        """
+        stubs = Path(home) / "stubs"
+        stubs.mkdir()
+        for name in ("curl", "systemctl"):
+            stub = stubs / name
+            stub.write_text(f'#!/bin/sh\ntouch "{stubs}/{name}-called"\nexit 1\n')
+            stub.chmod(0o755)
+        env = {**os.environ, "HOME": str(home), "PATH": f"{stubs}:{os.environ['PATH']}",
+               "PS4": "+ "}
+        for name in ("MLX_OMARCHY_VERSION", "MLX_OMARCHY_HOME", "BASH_XTRACEFD"):
+            env.pop(name, None)
+        result = subprocess.run(
+            ["bash", *(["-x"] if trace else []), str(INSTALLER), *args],
+            env=env, cwd=home, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        return result, {name for name in ("curl", "systemctl")
+                        if (stubs / f"{name}-called").exists()}
+
+    def test_unknown_argument_after_a_flag_fails_before_network(self):
+        for args in (["--voice", "--bogus-flag"], ["--ane", "--bogus-flag"],
+                     ["--voice", "--uninstall"], ["--ane", "--system"]):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as tmp:
+                result, called = self.run_installer(tmp, *args)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"unknown option: {args[1]}", result.stderr)
+                self.assertEqual(called, set())
+                self.assertEqual(sorted(os.listdir(tmp)), ["stubs"])
+
+    def test_install_flags_combine_in_either_order(self):
+        for args in (["--ane", "--voice"], ["--voice", "--ane"]):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as tmp:
+                result, _ = self.run_installer(tmp, *args, trace=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn("unknown option", result.stderr)
+                self.assertIn("+ ANE=1\n", result.stderr)
+                self.assertIn("+ VOICE=1\n", result.stderr)
+                self.assertEqual(sorted(os.listdir(tmp)), ["stubs"])
+
+    def test_uninstall_with_unknown_argument_removes_nothing(self):
+        for args in (["--uninstall", "--bogus-flag"], ["--uninstall", "--purge", "--bogus-flag"]):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as tmp:
+                launcher = Path(tmp) / ".local/bin/mlx-omarchy"
+                history = Path(tmp) / ".local/share/mlx-omarchy/assistant/history/c1.json"
+                for path in (launcher, history):
+                    path.parent.mkdir(parents=True)
+                    path.touch()
+                result, called = self.run_installer(tmp, *args)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("unknown option: --bogus-flag", result.stderr)
+                self.assertTrue(launcher.exists())
+                self.assertTrue(history.exists())
+                self.assertEqual(called, set(), "the chat service must not be disabled")
+
+    def test_patch_venv_rejects_an_extra_or_option_argument(self):
+        # A directory named like the flag must not be taken as the venv.
+        for args, bad in ((["venv", "--bogus-flag"], "--bogus-flag"), (["--system"], "--system")):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "venv").mkdir()
+                (Path(tmp) / "--system").mkdir()
+                result, called = self.run_installer(tmp, "--patch-venv", *args)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"unknown option: {bad}", result.stderr)
+                self.assertEqual(called, set())
+                self.assertFalse((Path(tmp) / ".local").exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            # The valid form still reaches release resolution.
+            result, called = self.run_installer(tmp, "--patch-venv", tmp)
+            self.assertIn("could not resolve the latest release", result.stderr)
+            self.assertEqual(called, {"curl"})
 
 
 class PipedInstallerTests(unittest.TestCase):

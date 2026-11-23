@@ -115,3 +115,14 @@ the gate enforces them.
    RECORD refuses to emit a number. Never pass a requirements input
    containing an mlx-omarchy pin to provisioning.
    `scripts/check-wheel-pins.py` rejects them in any form.
+
+## Qualification kit tags
+
+Before a `qualification-*` tag is cut, run the decode-pair gate on the
+reference M1 Max. `scripts/kit-decode-pair-gate.sh` runs the kit's
+`--benchmark-only` decode and the packaged install's `bench_decode.py`
+against the same pinned model inside the host's guard window, then refuses
+the tag when the two rates differ by more than five percent. Both rates,
+the generated-token digests, and the verdict are written to
+`receipts/decode-pair-<tag>.json`; include that pair in the release
+receipt. A refused tag does not get cut.

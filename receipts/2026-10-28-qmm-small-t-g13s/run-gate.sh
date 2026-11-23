@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # docs/numerics-gate.md for MLX_OMARCHY_QMV_SMALL_T on the parity-contract 2B model
 # (SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b, docs/parity-contract.md), ten contract prompts
-# (token ids from receipts-work/vocab-prune/out/contract-ctl-r1.json), 512 teacher tokens each.
+# (token ids from receipts/2026-09-23-vocab-prune/out/contract-ctl-r1.json), 512 teacher tokens each.
 #
 #   GPU arms: the candidate wheel in ~/.cache/omarchy-mlx-fix/venv; route off (deployed) and
 #             MLX_OMARCHY_QMV_SMALL_T=6 (candidate); text read in 4-token chunks (5 runs each)
@@ -12,7 +12,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$HOME/Projects/omarchy-mlx-fix
 model=$HOME/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381
-record=$repo/receipts-work/vocab-prune/out/contract-ctl-r1.json
+record=$repo/receipts/2026-09-23-vocab-prune/out/contract-ctl-r1.json
 gpu_py=$HOME/.cache/omarchy-mlx-fix/venv/bin/python
 ref_py=$HOME/.cache/hk/ref-venv/bin/python
 out=$HOME/.cache/omarchy-mlx-fix/gate

@@ -691,7 +691,7 @@ namespace {
 
 // Build an integer-family array from host values. Bool sources go
 // through a byte vector, never std::vector<bool> (bit-packed proxy;
-// see docs/known-defects.md).
+// measured 2026-10-03).
 array int_values_array(const std::vector<int64_t>& values, Dtype dtype) {
   Shape shape{static_cast<int>(values.size())};
   switch (dtype) {

@@ -81,6 +81,10 @@ layout(set = 0, binding = 3, std430) writeonly buffer Output {
 layout(set = 0, binding = 4, std430) readonly buffer OutGlobalScale {
   uint values[];
 } out_global_scale_data;
+// Staged copy of the bound word: lane 0 loads it so the workgroup reads
+// a shared value instead of every invocation issuing the same buffer
+// word read, which G18G answers with 0.
+shared uint out_global_scale_word;
 #endif
 
 // lhs/rhs index reads: the packed staging buffer (every variant).
@@ -88,6 +92,17 @@ layout(set = 0, binding = 4, std430) readonly buffer OutGlobalScale {
 // the fp ones whose parameter decoding differs.
 #define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
 #define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
+
+// G18G staged-index guard: the batch-index loads below are per-invocation
+// reads at per-thread addresses, and the decode shapes (small index_count)
+// showed a wrong-batch-row defect on G18G. When the count fits the stage,
+// invocation 0 issues one scalar load per index word, a barrier publishes
+// both arrays, and every thread reads shared memory instead. Counts above
+// the bound keep the direct loads (prefill shapes show no defect). 256
+// entries = 2 KiB of shared, inside every budget.
+#define STAGED_INDEX_MAX 256u
+shared uint staged_lhs[STAGED_INDEX_MAX];
+shared uint staged_rhs[STAGED_INDEX_MAX];
 
 layout(push_constant) uniform Params {
   uint count;
@@ -218,10 +233,25 @@ void main() {
   uint rhs_word_base = params.out_strides[0];
   uint total = index_count * matrix;
 #ifdef USE_OUT_GLOBAL_SCALE
-  float out_global_dec = uintBitsToFloat(
-      out_global_scale_data.values[params.aux_size]) / 2688.0;
+  if (gl_LocalInvocationIndex == 0u) {
+    out_global_scale_word =
+        out_global_scale_data.values[params.aux_size];
+  }
+  barrier();
+  float out_global_dec = uintBitsToFloat(out_global_scale_word) / 2688.0;
 #endif
   uint stride = gl_NumWorkGroups.x * 256u;
+
+  const bool stage_indices = index_count <= STAGED_INDEX_MAX;
+  if (stage_indices) {
+    if (gl_LocalInvocationIndex == 0u) {
+      for (uint i = 0u; i < index_count; ++i) {
+        staged_lhs[i] = LHS_INDEX_AT(i);
+        staged_rhs[i] = RHS_INDEX_AT(i);
+      }
+    }
+    barrier();
+  }
 
   for (uint index = gl_GlobalInvocationID.x; index < total;
        index += stride) {
@@ -229,8 +259,8 @@ void main() {
     uint within = index - batch * matrix;
     uint row = within / params.matrix_n;
     uint column = within - row * params.matrix_n;
-    uint lhs = LHS_INDEX_AT(batch);
-    uint rhs = RHS_INDEX_AT(batch);
+    uint lhs = stage_indices ? staged_lhs[batch] : LHS_INDEX_AT(batch);
+    uint rhs = stage_indices ? staged_rhs[batch] : RHS_INDEX_AT(batch);
     uint x_base = params.lhs_offset +
         lhs * (params.matrix_m * params.matrix_k) +
         row * params.matrix_k;

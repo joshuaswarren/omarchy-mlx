@@ -21,8 +21,6 @@ If you have not read these yet, do that first:
 
 - `README.md` (one-screen summary of what the project is).
 - `docs/architecture.md` (what is in the backend).
-- `docs/roadmap.md` (the proof-gated release plan).
-- `docs/known-defects.md` (the live defect ledger).
 - `AGENTS.md` (verification rules). For an outside contributor, the
   sections on "Test rules" and "Verification and receipts" are the ones to
   read.
@@ -61,8 +59,7 @@ that bounds it.
 ### Needs Apple hardware (M1), high value, harder to land
 
 1. The 2,048-token queue wedge. It is live in v0.3.4
-   (`docs/known-defects.md` "Live in v0.3.4"; see
-   `receipts/2026-09-04-hang-watchdog-hardware.md`). One `mx.eval` over a
+   (   `receipts/2026-09-04-hang-watchdog-hardware.md`). One `mx.eval` over a
    full-sequence forward at 2,048 tokens wedges the GPU queue. The
    completion timeline counter stays frozen at 0. No work retires. The
    submission watchdog correctly names the hang. Chunked work at the same
@@ -132,7 +129,7 @@ that bounds it.
    and `gelu_fast_approx` are pytest-context only. `fast_sdpa_vector`
    disagrees with its own decomposition. No standalone repro exists yet.
    One vjp path is off by one ulp. Each defect entry in
-   `docs/known-defects.md` names the test file and line. Add a
+   Name the failing test file and line. Add a
    fresh-process repro for the first. Add a standalone probe for the
    second. Add a tolerance note for the third.
 9. Documentation of the verification rules for outside readers.
@@ -152,7 +149,7 @@ that bounds it.
   `receipts/` with the exact source, wheel, and protocol.
 - Run `python3 scripts/differential_compile.py --self-test` against the
   same wheel. Copy the output.
-- Pick one defect from `docs/known-defects.md` "Live in v0.3.1". Find the
+- Pick one defect from the issue tracker. Find the
   smallest reproducer. Add a C++ unit test that fails today and passes
   after the fix lands.
 
@@ -167,9 +164,9 @@ it lost is in the linked receipt.
 | Dispatcher-wakeup polling (1 ms in-flight poll) | bf16 decode -2.5%, 4-bit decode +0.3% on M1 | within noise; the hypothesis was wrong | `receipts/2026-09-03-dispatcher-compile-and-column-replace.md` |
 | Generic tape fusion at a 7.3% ceiling | fused-fragment path covered only 7.3% of model shape changes; rest refused by name | too narrow to be worth the extra compiler surface | `receipts/2026-09-03-dispatcher-compile-and-column-replace.md` (Compiled path: two gates, two generations) |
 | Compile-the-forward alone (`ff4b05a` ordering wait, no other changes) | bf16 decode -27.5%, 4-bit decode -39.2% vs parent `4ea2f47` | the ordering fix is not free on hardware; the regression is real and ships with the correctness benefit | `receipts/2026-09-03-dispatcher-compile-and-column-replace.md` |
-| Host scalar folding (`fast::rope` host-side offset probe) | bit-exact at the offset position; the earlier divergence was the probe, not the primitive | refuted by the corrected probe; rope stands | `docs/known-defects.md` "The rope divergence: the probe, not the primitive" |
+| Host scalar folding (`fast::rope` host-side offset probe) | bit-exact at the offset position; the earlier divergence was the probe, not the primitive | refuted by the corrected probe; rope stands | measured probe runs of 2026-10-04 |
 | Deep batching (16-100 ops per submission) | 4.5x slower on llvmpipe (0.637 vs 2.838 prompt tok/s); slower on M1 | per-op flush makes the throttle wait span one op; batched flush makes it span the whole batch; code deleted from the diff | `receipts/2026-09-03-submission-ring-descriptor-cache.md` "Batching: implemented, measured, DELETED" |
-| Software Payne-Hanek for `mx.sin`/`mx.cos` above 1e5 | on M1 returns -7.9e15 for sin(5e6) | the carry chain rides the same dynamic-indexing miscompile class as the masked-scatter defect | `docs/known-defects.md` "mx.sin and mx.cos degrade above 1e5..." |
+| Software Payne-Hanek for `mx.sin`/`mx.cos` above 1e5 | on M1 returns -7.9e15 for sin(5e6) | the carry chain rides the same dynamic-indexing miscompile class as the masked-scatter defect | measured 2026-10-06 |
 | ~~GEMV decode path~~ - the kill was wrong | stood down 2026-09-02 on timings taken with 1 of 8 CPU cores online; re-measured 2026-09-04 with all cores: 4-bit decode 12.83 -> 17.61 tok/s (+37%), bf16 unchanged | shipped on main as `qmm_vec.comp`. Listed here so nobody trusts the 2026-09-02 verdict: a strategy killed under a contaminated condition is not killed | `receipts/2026-09-04-qmm-gemv-subgroup-m1.md` |
 
 A variation of one of these is not a fresh angle. It inherits the loss. New
@@ -184,7 +181,7 @@ release.
    timeline frozen at 0? The watchdog correctly classifies it as a hang.
    The wedge reproduces on the M1. Chunked work of the same length is
    unaffected. `mlx_lm` is unaffected. The defect entry is
-   `docs/known-defects.md` "Live in v0.3.4". A reproducer would answer it
+   The defect list it came from is retired; a reproducer would answer it
    if it names the resource the queue waits on. Candidates: descriptor,
    semaphore, fence, allocator page, in-flight submission. Likely inputs:
    shape threshold, allocator pool exhaustion, an in-flight submission that

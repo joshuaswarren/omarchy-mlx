@@ -40,7 +40,7 @@ Speech scheduling now interleaves: a queued read-aloud parks generation at a rea
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
 Automatic decision routing is ON by default (owner decision 2026-10-03; [release receipt](../receipts/2026-10-03-routing-on/README.md)). The kill switch is the environment variable `MLX_OMARCHY_ROUTING`: set it to `0` (also `off`, `false`, or `no`) in the assistant's service environment to disable, or save an explicit `gate: "off"` in the pair's selection evidence; both beat the default. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
-The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
+The measured admission curves below are binding.
 
 ### Per-pair gate status, 2026-10-01
 

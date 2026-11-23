@@ -738,6 +738,40 @@ TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
         32u);
 }
 
+TEST_CASE("the small-M qmm prefill arm on G16S: the occupancy floor governs") {
+  using mlx::core::omarchy::coopmat_tile_rows;
+  const std::string g16s = "Apple M4 Pro (G16S B1)";
+  // G16S carries its core count (M4 Pro, 20-core GPU, J616s/T6040), so
+  // the measured occupancy floor (6 workgroups/core,
+  // receipts/2026-09-14-qmm-occupancy-tilem) governs the small-M arm:
+  // grids under 20*6 = 120 workgroups step down to the 16-row twin,
+  // wider grids keep the shipped 32-row tile, and M <= 16 keeps its
+  // unconditional 16-row tile. At M in 17..31 one 32-row m-group covers
+  // the prompt (the kit workload is M=23, 9 of 32 tile rows dead).
+  CHECK(coopmat_tile_rows(16u, 64u, g16s, false) == 16u);
+  // M=23: n_groups = ceil(N/32); N=1024 -> 32, N=2048 -> 64,
+  // N=4096 -> 128, N=12288 -> 384. The floor boundary is exact.
+  CHECK(coopmat_tile_rows(23u, 32u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 64u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 119u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 120u, g16s, false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 128u, g16s, false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 384u, g16s, false) == 32u);
+  // Deeper in the arm four 32-row m-groups need a smaller column grid.
+  CHECK(coopmat_tile_rows(127u, 29u, g16s, false) == 16u); // 4*29 < 120
+  CHECK(coopmat_tile_rows(127u, 30u, g16s, false) == 32u); // 4*30 = 120
+  // The 64-row default at M >= 128 keeps its fill gate now that the
+  // core count is known; the tile64 receipt's shapes still fill.
+  CHECK(coopmat_tile_rows(128u, 64u, g16s, true) == 64u);
+  CHECK(coopmat_tile_rows(128u, 128u, g16s, true) == 64u);
+  // A 64-row grid too small to fill the part falls to the floor
+  // compare instead of the vacuous always-64.
+  CHECK(coopmat_tile_rows(128u, 32u, g16s, true) == 32u); // 64<120 -> floor 128>=120
+  // A part with a known core count still steps a small grid down.
+  const std::string m1max = "Apple M1 Max (G13C C0)";
+  CHECK(coopmat_tile_rows(23u, 2u, m1max, false) == 16u);
+}
+
 TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
   if (!compute_available()) {
     return;
@@ -6187,6 +6221,27 @@ TEST_CASE("qmm coopmat output is bit-identical across x offset alignment") {
 
 namespace {
 
+// Saves and restores one environment variable so a test can pin an
+// unset state without leaking it (pattern: EnvGuard in test_runtime.cpp).
+struct EnvGuard {
+  const char* name;
+  bool had_value = false;
+  std::string value;
+  explicit EnvGuard(const char* n) : name(n) {
+    if (const char* current = std::getenv(name)) {
+      had_value = true;
+      value = current;
+    }
+  }
+  ~EnvGuard() {
+    if (had_value) {
+      setenv(name, value.c_str(), 1);
+    } else {
+      unsetenv(name);
+    }
+  }
+};
+
 uint64_t alpha1_fnv1a64(const void* data, size_t bytes) {
   const uint8_t* p = (const uint8_t*)data;
   uint64_t h = 0xcbf29ce484222325ull;
@@ -6210,6 +6265,41 @@ std::vector<float> alpha1_pattern(size_t count, uint32_t seed) {
 }
 
 }  // namespace
+
+TEST_CASE("gather_qmm fp subgroup decode defaults off on G18G") {
+  // omarchy-mlx#655: gather_qmm_sub.comp -DFP_MODE reads the e8m0 scale
+  // byte wrong on G18G (outputs ~2^-125 low); the scalar kernel is right.
+  EnvGuard guard("MLX_OMARCHY_GATHER_QMM_SUB");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "1", 1);
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+}
+
+TEST_CASE("gather_qmm affine and q3 subgroup decodes default off on G18G") {
+  // mesa#737: every gather_qmm_sub.comp route runs a 256-lane workgroup
+  // whose subgroup-uniform SSBO reads return 0 from lanes 128-255 on
+  // G18G. The fp route's wrong output is measured (#655); the affine
+  // (use_sub) and 3-bit (use_sub_q3) gates share the kernel mechanism,
+  // so the same default applies.
+  EnvGuard guard("MLX_OMARCHY_GATHER_QMM_SUB");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "1", 1);
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+}
 
 TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain") {
   if (!compute_available()) {
@@ -6571,16 +6661,137 @@ TEST_CASE("gather_qmm multi-output decode rows give the one-output kernel's outp
   }
 }
 
+TEST_CASE("gather_qmm staged index broadcast: every output row uses its own lhs/rhs element") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // The G18G staged-index guard lives in gather_qmm.comp. Pin the scalar
+  // kernel so no subgroup or tiled route can mask the index path under
+  // test; the staged broadcast then carries the lhs/rhs words.
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  setenv("MLX_OMARCHY_GATHER_QMM_TILE", "0", 1);
+  setenv("MLX_OMARCHY_GATHER_QMM_ROWS", "0", 1);
+  std::mt19937 gen(83);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  auto dtype_round_trip = [&](const std::vector<float>& values, Dtype dtype) {
+    array f32(values.begin(),
+              Shape{static_cast<int>(values.size())},
+              float32);
+    array round = astype(astype(f32, dtype, stream), float32, stream);
+    round.eval();
+    synchronize(stream);
+    const float* data = round.data<float>();
+    return std::vector<float>(data, data + round.size());
+  };
+  const int experts = 8;
+  const std::vector<uint32_t> rhs_pattern{7, 1, 4, 1, 0, 6, 2, 5};
+  // index_count 8 exercises the staged broadcast (decode shape); 300
+  // crosses the stage bound and exercises the direct-load fallback.
+  for (int index_count : {8, 300}) {
+    for (Dtype dtype : {bfloat16, float16, float32}) {
+      if (dtype == float16 && !float16_available()) {
+        continue;
+      }
+      const int k = 128;
+      const int n = 64;
+      std::vector<uint32_t> w_all;
+      std::vector<float> scales_all;
+      std::vector<float> biases_all;
+      std::vector<HostQuantizedWeights> host_w;
+      for (int e = 0; e < experts; ++e) {
+        std::vector<float> matrix(static_cast<size_t>(n) * k);
+        for (auto& value : matrix) {
+          value = dist(gen);
+        }
+        HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 64, 4);
+        // The host reference sees the same rounded scales/biases the
+        // kernel sees, so row mismatches name the index path, not
+        // quantization rounding.
+        host.scales = dtype_round_trip(host.scales, dtype);
+        host.biases = dtype_round_trip(host.biases, dtype);
+        host_w.push_back(host);
+        w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+        scales_all.insert(scales_all.end(), host.scales.begin(), host.scales.end());
+        biases_all.insert(biases_all.end(), host.biases.begin(), host.biases.end());
+      }
+      std::vector<float> x_all(static_cast<size_t>(index_count) * k);
+      for (auto& value : x_all) {
+        value = dist(gen);
+      }
+      // Same contract as the scales: the reference and the kernel both
+      // see the dtype-rounded activations.
+      x_all = dtype_round_trip(x_all, dtype);
+      std::vector<uint32_t> lhs_v(index_count);
+      std::vector<uint32_t> rhs_v(index_count);
+      for (int b = 0; b < index_count; ++b) {
+        lhs_v[b] = static_cast<uint32_t>(b);
+        rhs_v[b] = rhs_pattern[b % rhs_pattern.size()];
+      }
+      array w_words(w_all.begin(), Shape{experts, n, k / 8}, uint32);
+      array scales = astype(
+          array(scales_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+      array biases = astype(
+          array(biases_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+      array x = astype(
+          array(x_all.begin(), Shape{index_count, 1, k}, float32), dtype, stream);
+      array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+      array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+      array out = gather_qmm(x, w_words, scales, biases, lhs, rhs,
+          /*transpose=*/true, 64, 4, "affine", std::nullopt,
+          /*sorted_indices=*/false, stream);
+      REQUIRE(evaluation_error(out).empty());
+      const int64_t kernel =
+          omarchy::trace::counters().last_dispatched_kernel.load();
+      const omarchy::ComputeKernel expected =
+          dtype == float32 ? omarchy::ComputeKernel::GatherQmmF32
+          : dtype == float16 ? omarchy::ComputeKernel::GatherQmmF16
+                             : omarchy::ComputeKernel::GatherQmmBF16;
+      INFO("index_count=" << index_count << " dtype=" << dtype);
+      CHECK(kernel == static_cast<int64_t>(expected));
+      const std::vector<float> values = readback_f32(stream, out);
+      REQUIRE_EQ(values.size(), static_cast<size_t>(index_count) * n);
+      const double tol =
+          dtype == float32 ? 1e-4 : dtype == float16 ? 2e-3 : 8e-3;
+      for (int b = 0; b < index_count; ++b) {
+        const float* x_row = x_all.data() + static_cast<size_t>(b) * k;
+        std::vector<float> x_row_v(x_row, x_row + k);
+        const std::vector<float> ref = host_quantized_matmul(
+            host_w[rhs_v[b]], x_row_v, 1, n, k, 64, 4);
+        INFO("batch element " << b << " rhs=" << rhs_v[b]);
+        for (int c = 0; c < n; ++c) {
+          const double got = values[static_cast<size_t>(b) * n + c];
+          const double want = ref[c];
+          CHECK_LE(std::fabs(got - want),
+              tol * (1.0 + std::fabs(want)));
+        }
+      }
+    }
+  }
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+}
+
 TEST_CASE("gather_qmm mxfp4 decode: the subgroup kernel matches the scalar kernel and a host reference") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
   const auto& caps = omarchy::device(0).capabilities();
-  // The scalar kernel is checked against the host reference on every device. The subgroup kernel only where the route exists.
-  const bool has_sub = caps.subgroup_size == 32u &&
-      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
-      caps.storage_buffer_16bit_access;
+  // The scalar kernel is checked against the host reference on every device. The subgroup kernel only where the route exists and the unset default enables it (G18G defaults the route off, omarchy-mlx#655/#656).
+  bool has_sub;
+  {
+    // Evaluate the gate's unset default: an ambient
+    // MLX_OMARCHY_GATHER_QMM_SUB=1 would otherwise mark G18G as has_sub
+    // while run(nullptr) still dispatches the scalar kernel.
+    EnvGuard sub_env("MLX_OMARCHY_GATHER_QMM_SUB");
+    unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    has_sub = caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+        caps.storage_buffer_16bit_access &&
+        omarchy::gather_qmm_sub_fp_default_part(caps.device_name);
+  }
   std::mt19937 gen(91);
   std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
   std::uniform_int_distribution<uint32_t> word_dist(0u, 0xFFFFFFFFu);
@@ -6663,7 +6874,12 @@ TEST_CASE("gather_qmm mxfp4 decode: the subgroup kernel matches the scalar kerne
         };
         INFO("dtype=" << c.dtype << " k=" << k << " n=" << n);
         const std::vector<float> scalar = run("0", static_cast<int64_t>(c.scalar_kernel));
-        const std::vector<float> sub = has_sub ? run(nullptr, static_cast<int64_t>(c.sub_kernel)) : scalar;
+        // With the route on, the unset default dispatches the subgroup kernel;
+        // where the gate defaults it off (G18G) the same unset default must
+        // dispatch the scalar kernel, so run(nullptr) is checked either way.
+        const std::vector<float> sub = has_sub
+            ? run(nullptr, static_cast<int64_t>(c.sub_kernel))
+            : run(nullptr, static_cast<int64_t>(c.scalar_kernel));
         REQUIRE_EQ(sub.size(), reference.size());
         REQUIRE_EQ(scalar.size(), reference.size());
         const double tolerance = c.relative_tolerance * scale_of_output;
@@ -6772,6 +6988,48 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     const float* ref_data = reference.data<float>();
     std::vector<float> expected(ref_data, ref_data + reference.size());
 
+    // CPU reference (the G18G guard check): dequant the exact words, scales
+    // and biases the device buffers carry and contract in double on the
+    // host. The tile kernel can then be proven identical to a reference
+    // that never ran on the GPU - the guard this test exists for is a
+    // driver defect, so a GPU-built reference could share it.
+    parts[0].eval();
+    parts[1].eval();
+    parts[2].eval();
+    array x_f32 = astype(x, float32, stream);
+    x_f32.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const uint32_t* w_words_h = parts[0].data<uint32_t>();
+    std::vector<float> scales_h =
+        readback_f32(stream, astype(parts[1], float32, stream));
+    std::vector<float> biases_h =
+        readback_f32(stream, astype(parts[2], float32, stream));
+    const float* x_h = x_f32.data<float>();
+    const int words_per_row = k / 8;
+    const int groups = k / 64;
+    std::vector<float> expected_cpu(static_cast<size_t>(rows) * n);
+    for (int p = 0; p < rows; ++p) {
+      const uint32_t* expert_words =
+          w_words_h + static_cast<size_t>(rhs_v[p]) * n * words_per_row;
+      const float* expert_scales =
+          scales_h.data() + static_cast<size_t>(rhs_v[p]) * n * groups;
+      const float* expert_biases =
+          biases_h.data() + static_cast<size_t>(rhs_v[p]) * n * groups;
+      for (int c = 0; c < n; ++c) {
+        double acc = 0.0;
+        for (int inner = 0; inner < k; ++inner) {
+          uint32_t word = expert_words[c * words_per_row + inner / 8];
+          uint32_t code = (word >> (4 * (inner % 8))) & 0xfu;
+          int group = inner / 64;
+          double dequant = static_cast<double>(code) *
+                  expert_scales[c * groups + group] +
+              expert_biases[c * groups + group];
+          acc += static_cast<double>(x_h[p * k + inner]) * dequant;
+        }
+        expected_cpu[static_cast<size_t>(p) * n + c] = static_cast<float>(acc);
+      }
+    }
+
     auto run_gather = [&](const char* tile) {
       setenv("MLX_OMARCHY_GATHER_QMM_TILE", tile, 1);
       array out = gather_qmm(
@@ -6806,6 +7064,7 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
 
     double vs_ref = rel_l2(tiled.first, expected);
     double vs_row = rel_l2(tiled.first, per_row.first);
+    double vs_cpu = rel_l2(tiled.first, expected_cpu);
     size_t identical = 0;
     for (size_t i = 0; i < expected.size(); ++i) {
       identical += tiled.first[i] == per_row.first[i];
@@ -6813,21 +7072,34 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     std::cout << "[gather_qmm_tile] rows=" << rows << " E=" << experts << " N=" << n
               << " K=" << k << (dtype == float16 ? " f16" : " bf16")
               << (shuffled ? " shuffled" : "") << " tile-vs-f32-ref " << vs_ref
+              << " tile-vs-cpu-ref " << vs_cpu
               << " tile-vs-per-row " << vs_row << " bit-identical "
               << identical << "/" << expected.size() << "\n";
     std::string what_ref = "tile route vs f32 reference, rel L2 " +
         std::to_string(vs_ref) + " rows=" + std::to_string(rows);
+    std::string what_cpu = "tile route vs CPU reference, rel L2 " +
+        std::to_string(vs_cpu) + " rows=" + std::to_string(rows);
     std::string what_row = "tile route vs per-row route, rel L2 " +
         std::to_string(vs_row) + " rows=" + std::to_string(rows);
     CHECK_MESSAGE(vs_ref <= tolerance, what_ref);
+    CHECK_MESSAGE(vs_cpu <= tolerance, what_cpu);
     CHECK_MESSAGE(vs_row <= tolerance, what_row);
   };
 
   run_case({50, 0, 31, 33, 64, 22}, 128, 128, bfloat16, false, 0.01);
   run_case({1, 95}, 64, 192, bfloat16, false, 0.01);
   run_case({50, 0, 31, 33, 64, 22}, 128, 128, bfloat16, true, 0.01);
+  // M6X-01 (mesa#737 guard): runs so short that one 32-row tile holds 8+
+  // expert runs. On the old 256-lane kernel, subgroups 4-7 read expert 0
+  // and scanned different run boundaries - divergent barriers, the exact
+  // hang shape. The 128-lane kernel must produce the CPU-reference output.
+  run_case({4, 4, 4, 4, 4, 4, 4, 4, 32, 28}, 128, 128, bfloat16, false, 0.01);
+  run_case({2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 32, 32}, 64, 128,
+           bfloat16, false, 0.01);
   if (float16_available()) {
     run_case({40, 40, 40}, 192, 64, float16, false, 0.005);
+    run_case({4, 4, 4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 24, 32}, 128, 64, float16,
+             false, 0.005);
   }
 }
 
@@ -7767,12 +8039,13 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
     skip("small-row route needs subgroup_size==32+ARITHMETIC.");
     return;
   }
-  if (!cpu::is_available()) {
-    skip("no CPU backend");
-    return;
-  }
   Stream stream = gpu_stream();
-  Stream cpu = default_stream(Device::cpu);
+  // The weights quantize mirrors the mlx pipeline's CPU stream when that
+  // backend exists; a no_cpu build has no cpu stream to take, and
+  // default_stream(Device::cpu) throws vector::_M_range_check there, so
+  // the compute stream stands in. Either way the per-row comparison below
+  // only contrasts the two GPU dispatch paths.
+  const Stream wq = cpu::is_available() ? default_stream(Device::cpu) : stream;
   std::mt19937 rng(892);
   std::uniform_real_distribution<float> frac(-1.0f, 1.0f);
   for (int m : {2, 3, 4}) {
@@ -7793,7 +8066,7 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
         array x = astype(
             array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
         array w_fp = array(matrix.begin(), Shape{n, k}, float32);
-        auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+        auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, wq);
         array scales = astype(parts[1], bfloat16, stream);
         array biases = astype(parts[2], bfloat16, stream);
         eval(x, parts[0], scales, biases);
@@ -7858,7 +8131,7 @@ TEST_CASE("small-row qmm matches per-row single-row dispatch bit for bit") {
     array x = astype(
         array(x_values.begin(), Shape{m, k}, float32), bfloat16, stream);
     array w_fp = array(matrix.begin(), Shape{n, k}, float32);
-    auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, cpu);
+    auto parts = quantize(w_fp, 64, 4, "affine", std::nullopt, wq);
     array scales = astype(parts[1], bfloat16, stream);
     array biases = astype(parts[2], bfloat16, stream);
     setenv("MLX_OMARCHY_QMM_ROWS", "1", 1);

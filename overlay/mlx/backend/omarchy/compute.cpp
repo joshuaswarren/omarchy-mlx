@@ -252,6 +252,9 @@
 #include "fused_chain_f32.h"
 #include "fused_chain_f16.h"
 #include "fused_chain_bf16.h"
+#include "fused_chain_f32_l128.h"
+#include "fused_chain_f16_l128.h"
+#include "fused_chain_bf16_l128.h"
 #include "fast_rope_bf16.h"
 #include "fast_rope_halfsplit_bf16.h"
 #include "fast_rope_halfsplit_f16.h"
@@ -665,6 +668,9 @@
 #include "linalg_qr_f32.h"
 #include "linalg_eigh_f32.h"
 #include "linalg_eig_f32.h"
+#include "linalg_eig_f32_g18.h"
+#include "linalg_inverse_f32_g18.h"
+#include "linalg_qr_f32_g18.h"
 #include "linalg_svd_f32.h"
 #include "linalg_svd_finalize_f32.h"
 #include "complex_elementwise.h"
@@ -1376,16 +1382,22 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {linalg_cholesky_f32, linalg_cholesky_f32_size};
     case ComputeKernel::LinalgInverseF32:
       return {linalg_inverse_f32, linalg_inverse_f32_size};
+    case ComputeKernel::LinalgInverseF32G18:
+      return {linalg_inverse_f32_g18, linalg_inverse_f32_g18_size};
     case ComputeKernel::LinalgLuF32:
       return {linalg_lu_f32, linalg_lu_f32_size};
     case ComputeKernel::LinalgQrF32:
       return {linalg_qr_f32, linalg_qr_f32_size};
+    case ComputeKernel::LinalgQrF32G18:
+      return {linalg_qr_f32_g18, linalg_qr_f32_g18_size};
     case ComputeKernel::LinalgEighF32:
       return {linalg_eigh_f32, linalg_eigh_f32_size};
     case ComputeKernel::LinalgSvdF32:
       return {linalg_svd_f32, linalg_svd_f32_size};
     case ComputeKernel::LinalgEigF32:
       return {linalg_eig_f32, linalg_eig_f32_size};
+    case ComputeKernel::LinalgEigF32G18:
+      return {linalg_eig_f32_g18, linalg_eig_f32_g18_size};
     case ComputeKernel::LinalgSvdFinalizeF32:
       return {linalg_svd_finalize_f32, linalg_svd_finalize_f32_size};
     // Complex64Transport: complex64 transport and elementwise. See
@@ -1767,6 +1779,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {quantize_fp_f32, quantize_fp_f32_size};
     case ComputeKernel::FusedChainBF16:
       return {fused_chain_bf16, fused_chain_bf16_size};
+    case ComputeKernel::FusedChainF32L128:
+      return {fused_chain_f32_l128, fused_chain_f32_l128_size};
+    case ComputeKernel::FusedChainF16L128:
+      return {fused_chain_f16_l128, fused_chain_f16_l128_size};
+    case ComputeKernel::FusedChainBF16L128:
+      return {fused_chain_bf16_l128, fused_chain_bf16_l128_size};
     case ComputeKernel::BinaryVecF16:
       return {binary_vec_f16, binary_vec_f16_size};
     case ComputeKernel::BinaryVecBF16:

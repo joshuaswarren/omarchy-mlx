@@ -19,6 +19,7 @@ LAUNCHERS = (
     "mlx-omarchy-demo",
     "mlx-omarchy-chat",
     "mlx-omarchy-info",
+    "mlx-omarchy-parakeet",
     "mlx-omarchy-serve",
     "omarchy-mlx-serve",
 )
@@ -78,6 +79,7 @@ class RetireLegacyTest(unittest.TestCase):
         self.assertIn(f"would remove file: {self.apps / DESKTOP}", result.stdout)
         self.assertIn(f"would remove shim: {self.center_shim}", result.stdout)
         self.assertIn("Dry run", result.stdout)
+        self.assertNotIn("--purge-data", result.stdout)
         self.assertTrue((self.prefix / "venv" / "pyvenv.cfg").exists())
         self.assertTrue((self.bin_dir / "mlx-omarchy").exists())
         self.assertTrue(self.center_shim.exists())
@@ -106,6 +108,8 @@ class RetireLegacyTest(unittest.TestCase):
     def test_purge_data_needs_yes_and_then_removes_the_root(self):
         dry = self.run_retire("--purge-data")
         self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertIn("Dry run", dry.stdout)
+        self.assertIn("(with --purge-data)", dry.stdout)
         self.assertTrue(self.prefix.exists())
         purged = self.run_retire("--yes", "--purge-data")
         self.assertEqual(purged.returncode, 0, purged.stderr)

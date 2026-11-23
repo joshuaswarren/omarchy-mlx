@@ -80,8 +80,10 @@ At submission, the allocator stamps the collected buffers with a completion valu
 It recounts pending quarantined bytes under its mutex
 ([allocator.cpp:392-410](../overlay/mlx/backend/omarchy/allocator.cpp#L392-L410)).
 On free, an in-flight buffer must remain outside the reuse cache.
-Recycling requires the completion-generation rule and execution-fence check
-([allocator.cpp:344-385](../overlay/mlx/backend/omarchy/allocator.cpp#L344-L385)).
+Recycling requires the completion-generation rule alone
+([allocator.cpp:344-385](../overlay/mlx/backend/omarchy/allocator.cpp#L344-L385)):
+a block recycles only after a later generation has drained, or once the
+queue has been idle for a poll interval after the last drain.
 
 ### Dependency tracking and host records
 
@@ -126,7 +128,10 @@ When all four are busy, it waits for the oldest completion before recording into
 [`submit`](../overlay/mlx/backend/omarchy/encoder.cpp#L1116-L1398) closes the command buffer,
 constructs semaphore arrays, and locks the device queue.
 Inside that lock it flushes noncoherent host writes, reserves a completion value, stamps buffers,
-and calls `QueueSubmit` with an execution fence.
+and calls `QueueSubmit` without a submission fence.
+The completion timeline is the only retirement proof: submissions carry
+no `VkFence`, so the host issues no per-submit syncobj query and keeps
+recording the next batch while earlier submissions execute.
 It also retains the submission data used by bounded recovery.
 The queue lock does not span a host completion wait.
 

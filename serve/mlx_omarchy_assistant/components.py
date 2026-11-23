@@ -21,7 +21,7 @@ Trust model
 Bounds (design 2026-09-27): 64 KiB per envelope, 32 components per turn,
 object depth 4 (the component object is depth 1; arrays are length-bounded and
 element-validated but do not add depth), 20 form fields per form, 1000 total
-table/chart data values per envelope.
+table/chart data values per envelope. No array may directly hold another array.
 
 Stdlib only.
 """
@@ -68,6 +68,10 @@ def _str_value(component_type: str, field: str, value, cap: int, allow_empty: bo
         _fail(component_type, field, f"longer than {cap} characters")
     if not allow_empty and not value.strip():
         _fail(component_type, field, "must not be empty")
+    try:  # a JSON \ud800 escape decodes to a lone surrogate the store cannot write
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail(component_type, field, "must be valid Unicode")
     return value
 
 
@@ -87,7 +91,10 @@ def _bool_value(component_type: str, field: str, value):
 def _finite_number(component_type: str, field: str, value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail(component_type, field, "must be a number")
-    value = float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        _fail(component_type, field, "must be finite")
     if value != value or value in (float("inf"), float("-inf")):
         _fail(component_type, field, "must be finite")
     return value
@@ -367,6 +374,7 @@ FORBIDDEN_IDENTITY_KEYS = {"id", "revision", "turn_id", "conversation_id"}
 
 
 def _v_confidence(ctype, value):
+    value = _obj(ctype, value, "confidence")
     out = {"selected_probability": _probability(
         ctype, "confidence.selected_probability", value.get("selected_probability", 0.0))}
     if value.get("runner_up") is not None:
@@ -404,21 +412,28 @@ def _v_cards(ctype, value):
     return out
 
 
-def _check_depth(obj, limit: int = MAX_OBJECT_DEPTH):
+def _check_depth(obj, limit: int = MAX_OBJECT_DEPTH, in_array: bool = False):
+    # No schema field holds an array of arrays, so refusing one keeps the
+    # recursion bounded for any input.
     if isinstance(obj, dict):
         if limit == 0:
             raise ComponentError("envelope nests objects deeper than the allowed depth")
         for value in obj.values():
             _check_depth(value, limit - 1)
     elif isinstance(obj, list):
+        if in_array:
+            raise ComponentError("envelope nests an array directly inside an array")
         for value in obj:
-            _check_depth(value, limit)
+            _check_depth(value, limit, in_array=True)
 
 
 def parse_envelope(payload) -> dict:
     """Parse raw fenced-block text/bytes or an already-decoded dict."""
     if isinstance(payload, (bytes, bytearray)):
-        payload = bytes(payload).decode("utf-8")
+        try:
+            payload = bytes(payload).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ComponentError(f"envelope is not valid UTF-8: {exc}") from exc
     if isinstance(payload, str):
         if len(payload.encode("utf-8")) > ENVELOPE_MAX_BYTES:
             raise ComponentError(
@@ -427,6 +442,8 @@ def parse_envelope(payload) -> dict:
             payload = json.loads(payload, parse_constant=_reject_constant)
         except (json.JSONDecodeError, ValueError) as exc:
             raise ComponentError(f"envelope is not valid JSON: {exc}") from exc
+        except RecursionError as exc:
+            raise ComponentError("envelope nests deeper than the JSON parser allows") from exc
     if not isinstance(payload, dict):
         raise ComponentError("envelope must be a JSON object")
     if set(payload) != {"version", "components"}:

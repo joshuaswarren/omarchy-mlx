@@ -1085,6 +1085,37 @@ TEST_CASE("CrossEntropyVJP accepts strided inputs and a broadcast cotangent") {
       "strided cross entropy vjp host math");
 }
 
+TEST_CASE("CrossEntropyVJP matches host math on a >128-lane shape") {
+  // G18G guard: the cotangent/target loads run under the forward
+  // kernel's thread-0-guard pattern with a shared-memory broadcast.
+  // cols > 128 puts every lane's strided load loop past one iteration,
+  // so the broadcast values (not a stale per-lane read) drive the math.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const size_t rows = 3;
+  const size_t cols = 320;
+  auto logits_data = pattern(rows * cols, 79);
+  std::vector<int> targets{0, 137, 319};
+  auto cot_data = pattern(rows, 83);
+  array logits =
+      array(logits_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array targets_arr = array(targets.begin(), Shape{int(rows)}, int32);
+  array cot = array(cot_data.begin(), Shape{int(rows)}, float32);
+  auto fun = [&](const std::vector<array>& inputs) {
+    return std::vector<array>{
+        fast::cross_entropy(inputs[0], targets_arr, stream)};
+  };
+  auto [outputs, grads] = vjp(fun, std::vector<array>{logits}, {cot});
+  require_close(
+      flat(grads[0], stream),
+      host_cross_entropy_vjp(
+          widen(logits_data), targets, widen(cot_data), rows, cols),
+      1e-5,
+      "cross entropy vjp >128-lane host math");
+}
+
 TEST_CASE("native-order decode SDPA handles the strided Qwen KV cache") {
   if (!compute_available()) {
     return;
@@ -1583,6 +1614,46 @@ TEST_CASE("scaled_dot_product_attention folds sinks into the denominator") {
         2e-2,
         "sdpa sinks f16 gqa");
   }
+}
+
+TEST_CASE("scaled_dot_product_attention sinks normalize across row-loop iterations") {
+  // G18G guard: softmax_suffix's per-row sink load runs under a thread-0
+  // shared-memory broadcast. With output_size > 65535 workgroups iterate
+  // more than one row, so the broadcast must reload per row; a stale or
+  // per-lane load would fold the wrong sink into the denominator.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int B = 2, H = 8, KV = 8, qL = 8193, kL = 8, D = 8;
+  const float scale = 1.0f / std::sqrt(float(D));
+  auto q_data = pattern(B * H * qL * D, 163);
+  auto k_data = pattern(B * KV * kL * D, 167);
+  auto v_data = pattern(B * KV * kL * D, 173);
+  auto sink_data = pattern(H, 179);
+  array q = array(q_data.begin(), Shape{B, H, qL, D}, float32);
+  array k = array(k_data.begin(), Shape{B, KV, kL, D}, float32);
+  array v = array(v_data.begin(), Shape{B, KV, kL, D}, float32);
+  array sinks = array(sink_data.begin(), Shape{H}, float32);
+  auto out = fast::scaled_dot_product_attention(
+      q, k, v, scale, "", {}, sinks, false, stream);
+  require_close(
+      flat(out, stream),
+      host_sdpa(
+          q_data,
+          k_data,
+          v_data,
+          B,
+          H,
+          KV,
+          qL,
+          kL,
+          D,
+          scale,
+          false,
+          sink_data),
+      1e-5,
+      "sdpa sinks >65535-row softmax broadcast");
 }
 
 // gpt-oss-20b (mlx-lm) feeds bf16 q/k/v and bf16 sinks: H = 64 query heads,
@@ -2137,7 +2208,7 @@ constexpr double f32_tolerance = 1e-6;
 // but the AGX backend compiles each shader independently and does not
 // promise the two compilations agree in the last bit - and the
 // driver's sin/cos range reduction has a documented accuracy envelope
-// (known-defects: 4.8e-3 absolute error at theta 123457). Observed on
+// (measured: 4.8e-3 absolute error at theta 123457). Observed on
 // the M1 (13-inch M1 rope-fastops.log, main 6a57c84, 2026-09-04): f32 deltas
 // <= 6.2e-4 and f16 deltas <= 2 ulp, every failing element inside
 // that envelope; no garbage-corruption class values. llvmpipe codegen
@@ -3938,8 +4009,8 @@ TEST_CASE("sdpa vjp fd parity across degenerate rep=1 shapes (dq dk dv)") {
 //    causal (1,3,5,8).
 // Standalone probes of the obvious suspects (matmul with inner dim 1,
 // General copies of the {kL,1} transposed views) are clean, so the
-// defect lives in the composition. See docs/known-defects.md "SDPA
-// backward fused VJP value defects at small rep=1 shapes".
+// defect lives in the composition (measured 2026-10-03, hardware-confirmed
+// at qL=1 kL>1 all-zero dk/dv).
 TEST_CASE("sdpa vjp fd parity at small rep=1 shapes (known defects)" *
           doctest::may_fail(true)) {
   sdpa_vjp_fd_case(1, 1, 2, 4, false);

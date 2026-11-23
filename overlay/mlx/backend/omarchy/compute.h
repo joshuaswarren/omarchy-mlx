@@ -905,6 +905,8 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4WordSubgroupBatch4BF16,
   // Small-row bf16 decode (MLX_OMARCHY_QMM_ROWS, default on, R <= 8 per
   // pass). Appended after Batch4 so profile kernel ids stay stable.
+  // MLX_OMARCHY_QMM_MMA_ROWS (default off) diverts 4..16-row gate-passing
+  // calls to the QmmPrefillCoopmat route instead of this chain.
   QmmVecQ4WordSubgroupRows8BF16,
   // Wider batch-shared bf16 decode GEMV (B <= 8): one dispatch for a short
   // verify pass of 5 to 8 rows, so the weight stream is read once instead of
@@ -1161,6 +1163,19 @@ enum class ComputeKernel : uint16_t {
   ElementwisePowerF32,
   ElementwisePowerF16,
   ElementwisePowerBF16,
+  // G18G builds of the latency-bound float linalg kernels at 128 lanes
+  // (M6X-08); the 256-lane kernels above stay the default elsewhere.
+  // Appended to keep profile kernel ids stable.
+  LinalgInverseF32G18,
+  LinalgQrF32G18,
+  LinalgEigF32G18,
+  // 128-lane fused_chain variants (shaders/fused_chain.comp
+  // -DLOCAL_SIZE_X=128): four subgroups instead of eight, the reference
+  // layout the G18G shared-program fetch is checked against. Appended to
+  // keep profile kernel ids stable.
+  FusedChainF32L128,
+  FusedChainF16L128,
+  FusedChainBF16L128,
   Count,
 };
 

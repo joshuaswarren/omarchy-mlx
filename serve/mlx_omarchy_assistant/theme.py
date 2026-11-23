@@ -48,8 +48,9 @@ FALLBACK_LIGHT = {
     "warn": "#8a5a00",
 }
 
-_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{3}$")
-_ASCII_FONT_RE = re.compile(r"^[\w -]{1,64}$")
+# Use fullmatch with these: "$" also matches before a trailing newline.
+_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3}")
+_ASCII_FONT_RE = re.compile(r"[\w -]{1,64}")
 _FONT_TIMEOUT = 2.0
 
 # Application-owned CSS variable map (kept in sync with css/app.css).
@@ -177,7 +178,7 @@ def _focus_ink(focus: str) -> str:
 
 
 def _sanitize(value) -> str | None:
-    if not isinstance(value, str) or not _COLOR_RE.match(value):
+    if not isinstance(value, str) or not _COLOR_RE.fullmatch(value):
         return None
     # Normalize 3-digit hex to 6-digit for a single output shape.
     h = value.lstrip("#")
@@ -190,7 +191,7 @@ def _read_slug(home: Path) -> str | None:
     name_file = home / ".local" / "state" / "omarchy" / "current" / "theme.name"
     try:
         text = name_file.read_text(encoding="utf-8").strip()
-    except (FileNotFoundError, PermissionError, IsADirectoryError):
+    except (OSError, UnicodeDecodeError):
         return None
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", text):
         return None
@@ -223,7 +224,7 @@ def _parse_colors_toml(path: Path) -> tuple[dict[str, str], str | None]:
     try:
         with path.open("rb") as fh:
             data = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}, None
     if not isinstance(data, dict):
         return {}, None
@@ -296,12 +297,12 @@ def _fc_default(match: str) -> str | None:
             text=True,
             timeout=_FONT_TIMEOUT,
         )
-    except (subprocess.SubprocessError, OSError):
+    except (subprocess.SubprocessError, OSError, UnicodeDecodeError):
         return None
     if result.returncode != 0:
         return None
     family = result.stdout.split(",", 1)[0].strip()
-    if not family or not _ASCII_FONT_RE.match(family):
+    if not family or not _ASCII_FONT_RE.fullmatch(family):
         return None
     return family
 
@@ -430,7 +431,7 @@ def _safe_family(family: str | None, role: str) -> str:
     if not family:
         return fallback
     parts = [p.strip() for p in family.split(",") if p.strip()]
-    if not parts or not all(_ASCII_FONT_RE.match(p) for p in parts):
+    if not parts or not all(_ASCII_FONT_RE.fullmatch(p) for p in parts):
         return fallback
     # Wrap whitespace-bearing single-family values in quotes for CSS safety.
     def quote(part: str) -> str:

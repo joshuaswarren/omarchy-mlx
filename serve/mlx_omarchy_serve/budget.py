@@ -206,11 +206,18 @@ def estimate_required(memory: dict, context_tokens: int,
     return Estimate(weights, kv, kv_known, workspace, False, weights + kv + workspace)
 
 
+def require_positive_context(requested: int) -> None:
+    """Require a positive token count before estimating KV memory."""
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+        raise BudgetError(f"--context must be a positive number of tokens, got {requested!r}")
+
+
 def resolve_context(context: dict, requested: int | None) -> int:
     """Explicit per-model context admission. Over the model limit is an
     error, not a silent clamp; the limit is the admission contract."""
     limit = context.get("max_tokens")
     if requested is not None:
+        require_positive_context(requested)
         if limit is not None and requested > limit:
             raise BudgetError(
                 f"requested context {requested} exceeds this model's limit {limit}; "

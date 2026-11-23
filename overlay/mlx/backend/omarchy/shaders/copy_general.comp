@@ -13,7 +13,7 @@
 // unravel serves positive and negative strides alike.
 // The load stays one straight-line per-thread read at a linear address,
 // the shape the Honeykrisp driver reads correctly (see gather_rows.comp
-// and docs/known-defects.md).
+// and the 2026-09-03 stale-shape-tape receipt).
 #version 460
 
 #ifdef USE_FP16

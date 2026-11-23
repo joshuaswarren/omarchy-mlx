@@ -78,6 +78,14 @@ layout(push_constant) uniform Params {
 
 shared float block_values[256];
 
+// The per-row cotangent and target go through the forward kernel's
+// thread-0-guard pattern: one lane performs the loads and the whole
+// workgroup reads them back through shared memory. On G18G (Apple M6)
+// the every-lane form of these uniform loads is the class of read that
+// issue #655 measured wrong; the forward shape is verified good there.
+shared float scale_bcast;
+shared int target_bcast;
+
 void main() {
   uint thread = gl_LocalInvocationID.x;
   uint row_length = params.reduce_size;
@@ -120,9 +128,13 @@ void main() {
       barrier();
     }
     float lse = row_max + log(block_values[0]);
-    float scale = cotangent_data.values[params.aux_offset + row];
-    int target = target_data.values[params.rhs_offset + row];
+    if (thread == 0u) {
+      scale_bcast = cotangent_data.values[params.aux_offset + row];
+      target_bcast = target_data.values[params.rhs_offset + row];
+    }
     barrier();
+    float scale = scale_bcast;
+    int target = target_bcast;
 
     for (uint index = thread; index < row_length; index += threads) {
       float probability =

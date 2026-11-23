@@ -6753,6 +6753,8 @@ HostFpQuantized host_fp_quantize(
         q_scale = host_e8m0_encode(scale_dec);
         decoded = host_e8m0_decode(q_scale);
       }
+      result.scale_bytes[static_cast<size_t>(row) * groups + group] =
+          q_scale;
       float inv = (decoded == 0.0f) ? 0.0f : scale_enc / decoded;
       for (int i = 0; i < group_size; ++i) {
         float value = matrix[row * cols + group * group_size + i] * inv;
@@ -6909,8 +6911,13 @@ void check_fp_mode(
 
   // Quantized matmul through both dispatch shapes: M=1 rides the fused
   // GEMV kernel, M=7 the m-tiled prefill kernel. The reference is the
-  // host fp dequant dot.
+  // host fp dequant dot. The plain qmm contract binds no global scale,
+  // so the nvfp4+gs arm skips this leg; its gemm coverage is the qqmm
+  // HGS case in test_matmul_family.cpp.
   for (int m : {1, 7}) {
+    if (has_global_scale) {
+      break;
+    }
     std::vector<float> x_values(static_cast<size_t>(m) * columns);
     std::mt19937 xgen(41 + m);
     std::uniform_real_distribution<float> xdist(-1.0f, 1.0f);
@@ -6967,6 +6974,20 @@ void check_fp_mode(
       }
     }
   }
+}
+
+TEST_CASE("fp quantize-dequantize round-trip matches the host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // nvfp4 with a bound global scale walks the staged lane-0 read in
+  // quantize.comp; a zeroed stage leaves the encode factor out of the
+  // scale bytes and every element check misses by orders of magnitude.
+  check_fp_mode("mxfp4", 32, 4, false, stream);
+  check_fp_mode("mxfp8", 32, 8, false, stream);
+  check_fp_mode("nvfp4", 16, 4, true, stream);
+  check_fp_mode("nvfp4", 16, 4, false, stream);
 }
 
 

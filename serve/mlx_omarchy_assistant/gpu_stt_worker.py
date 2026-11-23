@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -87,6 +88,11 @@ def voiced_seconds(xp, audio) -> float:
     return float((rms > threshold).sum()) * _FRAME / SAMPLE_RATE
 
 
+def _fast_tdt_enabled() -> bool:
+    """Runtime kill switch for the batched TDT decoder (default on)."""
+    return os.environ.get("MLX_OMARCHY_GPU_STT_FAST_TDT", "").strip().lower() != "off"
+
+
 def decode_with_retry(generate, xp, audio, noise) -> str:
     """``generate(audio) -> str``, retried once with padded edges when it is
     empty but voiced (see the module docstring)."""
@@ -95,6 +101,26 @@ def decode_with_retry(generate, xp, audio, noise) -> str:
         return text
     n = int(RETRY_PAD_SECONDS * SAMPLE_RATE)
     return generate(xp.concatenate([noise[:n], audio, noise[-n:]]))
+
+
+def generate_with_model(model, audio) -> str:
+    """``model.generate`` through the batched TDT decoder when supported.
+
+    The fast decoder must produce the same transcript as the reference loop;
+    any unexpected failure falls back to the reference path and never blocks
+    recognition.
+    """
+    from mlx_omarchy_assistant import gpu_stt_tdt
+
+    if _fast_tdt_enabled() and gpu_stt_tdt.supports(model):
+        try:
+            from mlx_audio.stt.models.parakeet.audio import log_mel_spectrogram
+
+            mel = log_mel_spectrogram(audio, model.preprocessor_config)
+            return str(gpu_stt_tdt.fast_tdt_decode(model, mel).text or "")
+        except Exception as exc:  # pragma: no cover - safety fallback
+            print(f"fast tdt decode fell back: {exc}", file=sys.stderr, flush=True)
+    return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
 
 
 def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
@@ -110,7 +136,7 @@ def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
     # 1-D only: a (1, N) input makes Parakeet-TDT on mlx-audio 0.5.6
     # silently return "".
     def generate(audio) -> str:
-        return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
+        return generate_with_model(model, audio)
 
     try:
         audio = resample_to_16k(mx.array(samples), rate)

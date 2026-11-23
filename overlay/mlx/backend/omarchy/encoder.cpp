@@ -38,63 +38,60 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
 
 } // namespace
 
-std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
+void wave_levels_into(
+    std::span<const WaveNode> nodes,
+    WaveIndex& index,
+    std::vector<uint32_t>& levels) {
   // Earlier reads and writes of each buffer, one entry per exact byte range
   // with the highest level that touched it. A node takes 1 + the highest
   // level among overlapping earlier writes (RAW, WAW) and, for its writes,
   // overlapping earlier reads (WAR). Read-read pairs never hazard. Many
   // nodes that read one range, or write disjoint slices of one buffer, keep
   // each query short, so the pass stays near linear in the batch length.
-  struct RangeLevels {
-    std::map<std::pair<VkDeviceSize, VkDeviceSize>, uint32_t> ranges;
-    VkDeviceSize max_len = 0;
-    int64_t max_overlap(const TrackedRange& q) const {
-      int64_t best = -1;
-      for (auto it = ranges.lower_bound({q.end, 0}); it != ranges.begin();) {
-        --it;
-        const auto [offset, end] = it->first;
-        if (offset <= q.offset && q.offset - offset >= max_len) {
-          break;
-        }
-        if (q.offset < end) {
-          best = std::max<int64_t>(best, it->second);
-        }
-      }
-      return best;
-    }
-    void add(const TrackedRange& r, uint32_t level) {
-      auto [it, inserted] = ranges.try_emplace({r.offset, r.end}, level);
-      if (!inserted) {
-        it->second = std::max(it->second, level);
-      }
-      max_len = std::max(max_len, r.end - r.offset);
-    }
-  };
-  std::unordered_map<VkBuffer, RangeLevels> writers;
-  std::unordered_map<VkBuffer, RangeLevels> readers;
-  auto highest = [](const std::unordered_map<VkBuffer, RangeLevels>& index,
+  index.reset();
+  levels.clear();
+  levels.resize(nodes.size(), 0);
+  auto highest = [](const std::vector<WaveRangeLevels>& v,
+                    const BufferSlots& slots,
                     const TrackedRange& q) -> int64_t {
-    auto it = index.find(q.buffer);
-    return it == index.end() ? -1 : it->second.max_overlap(q);
+    // One slot table serves both indexes: a slot another index assigned
+    // names a buffer this index has no entries for.
+    const uint32_t s = slots.find(q.buffer);
+    return s == UINT32_MAX || s >= v.size() ? -1 : v[s].max_overlap(q);
   };
-  std::vector<uint32_t> level(nodes.size(), 0);
+  auto entry = [](std::vector<WaveRangeLevels>& v,
+                  uint32_t s) -> WaveRangeLevels& {
+    if (s >= v.size()) {
+      v.resize(s + 1);
+    }
+    return v[s];
+  };
   for (size_t i = 0; i < nodes.size(); ++i) {
     int64_t source = -1;
     for (const auto& r : nodes[i].reads) {
-      source = std::max(source, highest(writers, r));
+      source = std::max(source, highest(index.writers, index.slots, r));
     }
     for (const auto& w : nodes[i].writes) {
-      source = std::max({source, highest(writers, w), highest(readers, w)});
+      source = std::max(
+          {source,
+           highest(index.writers, index.slots, w),
+           highest(index.readers, index.slots, w)});
     }
-    level[i] = static_cast<uint32_t>(source + 1);
+    levels[i] = static_cast<uint32_t>(source + 1);
     for (const auto& r : nodes[i].reads) {
-      readers[r.buffer].add(r, level[i]);
+      entry(index.readers, index.slots.slot_of(r.buffer)).add(r, levels[i]);
     }
     for (const auto& w : nodes[i].writes) {
-      writers[w.buffer].add(w, level[i]);
+      entry(index.writers, index.slots.slot_of(w.buffer)).add(w, levels[i]);
     }
   }
-  return level;
+}
+
+std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
+  WaveIndex index;
+  std::vector<uint32_t> levels;
+  wave_levels_into(nodes, index, levels);
+  return levels;
 }
 
 bool CommandEncoder::wave_sched() {
@@ -409,9 +406,7 @@ void CommandEncoder::upload_device_local_if_needed(
         // program order plus the barrier tracker/wave scheduler orders the
         // inline vkCmdUpdateBuffer after it without flushing. Only flush if
         // another encoder holds the uncommitted use of vb.
-        const bool on_this_encoder =
-            std::find(batch_buffers_.begin(), batch_buffers_.end(), vb) !=
-            batch_buffers_.end();
+        const bool on_this_encoder = batch_buffers_.count(vb) != 0;
         if (!on_this_encoder) {
           synchronize_pending_encoders();
           comp = omarchy::allocator().buffer_completion(vb);
@@ -425,7 +420,7 @@ void CommandEncoder::upload_device_local_if_needed(
         add_semaphore_wait(device_.completions().semaphore(), comp, nullptr);
       }
       if (auto* noted = omarchy::allocator().note_buffer_handle(vb->buffer)) {
-        batch_buffers_.push_back(noted);
+        batch_buffers_.insert(noted);
       }
       if (wave_sched()) {
         PendingNode& node = pending_.emplace_back();
@@ -498,10 +493,10 @@ void CommandEncoder::copy_buffer(
     commit_device_local_write(dst_vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
-    batch_buffers_.push_back(vb);
+    batch_buffers_.insert(vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
-    batch_buffers_.push_back(vb);
+    batch_buffers_.insert(vb);
   }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
@@ -557,7 +552,7 @@ void CommandEncoder::fill_buffer(
   upload_device_local_if_needed(dst_vb, false, true, offset, size, true);
   commit_device_local_write(dst_vb);
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
-    batch_buffers_.push_back(vb);
+    batch_buffers_.insert(vb);
   }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
@@ -878,8 +873,21 @@ void CommandEncoder::dispatch_compute_pipeline(
       }
     }
   }
-  for (const auto& item : bindings) {
-    note_binding_owner(item.owner);
+  {
+    // One allocator lock for the whole binding set (note_batch_buffers):
+    // a per-binding lock + handle probe was ~10% of host encode on the
+    // M1/M2 Max decode profile.
+    std::array<VulkanBuffer*, kComputeBindingBudget> owners{};
+    size_t owner_count = 0;
+    for (const auto& item : bindings) {
+      auto* buf =
+          static_cast<VulkanBuffer*>(const_cast<void*>(item.owner));
+      if (buf) {
+        owners[owner_count++] = buf;
+        batch_buffers_.insert(buf);
+      }
+    }
+    omarchy::allocator().note_batch_buffers({owners.data(), owner_count});
   }
   group_count_x = std::min(group_count_x, kMaxComputeGroupCountX);
   group_count_y = std::min(group_count_y, kMaxComputeGroupCountX);
@@ -1147,19 +1155,19 @@ void CommandEncoder::emit_pending() {
   auto& compute = device_.compute();
   ensure_recording();
 
-  std::vector<WaveNode> nodes;
-  nodes.reserve(pending_.size());
+  wave_nodes_.clear();
+  wave_nodes_.reserve(pending_.size());
   for (const auto& p : pending_) {
-    nodes.push_back({{p.rd.data(), p.nr}, {p.wr.data(), p.nw}});
+    wave_nodes_.push_back({{p.rd.data(), p.nr}, {p.wr.data(), p.nw}});
   }
-  std::vector<uint32_t> levels;
+  auto& levels = wave_levels_buf_;
   {
     timeline::ScopedEvent tl_sched(
         timeline::Kind::CmdRecord,
         timeline::SubKind::WaveSchedule,
         encoder_id_,
         static_cast<uint64_t>(pending_.size()));
-    levels = wave_levels(nodes);
+    wave_levels_into(wave_nodes_, wave_index_, levels);
   }
   uint32_t waves = 0;
   for (uint32_t l : levels) {
@@ -1188,14 +1196,14 @@ void CommandEncoder::emit_pending() {
           // keep the LAST node one wave below; any is representative
         }
       }
-      const WaveNode& src = nodes[best];
+      const WaveNode& src = wave_nodes_[best];
       bool raw = false, waw = false, war = false;
-      for (const auto& r : nodes[i].reads) {
+      for (const auto& r : wave_nodes_[i].reads) {
         for (const auto& w : src.writes) {
           raw = raw || overlaps(r, w);
         }
       }
-      for (const auto& w : nodes[i].writes) {
+      for (const auto& w : wave_nodes_[i].writes) {
         for (const auto& tw : src.writes) {
           waw = waw || overlaps(w, tw);
         }
@@ -1427,8 +1435,11 @@ void CommandEncoder::submit() {
     close_t = prof::get().profiling() ? prof::host_ns() : 0;
   }
 
-  std::vector<VkSemaphore> wait_sems;
-  std::vector<uint64_t> wait_values;
+  auto& wait_sems = submit_wait_sems_;
+  auto& wait_values = submit_wait_values_;
+  auto& wait_stages = submit_wait_stages_;
+  wait_sems.clear();
+  wait_values.clear();
   wait_sems.reserve(wait_semaphores_.size() + 1);
   wait_values.reserve(wait_semaphores_.size() + 1);
   // In-order stream: this submission waits for the stream's previous
@@ -1448,8 +1459,7 @@ void CommandEncoder::submit() {
     wait_sems.push_back(pending.semaphore);
     wait_values.push_back(pending.value);
   }
-  std::vector<VkPipelineStageFlags> wait_stages(
-      wait_sems.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+  wait_stages.assign(wait_sems.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
   VkTimelineSemaphoreSubmitInfo timeline{
       VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
@@ -1466,8 +1476,10 @@ void CommandEncoder::submit() {
 
   // Every submission also signals the device completion timeline; user
   // (event) signals ride along in the same submission, in order.
-  std::vector<VkSemaphore> signal_sems;
-  std::vector<uint64_t> signal_values;
+  auto& signal_sems = submit_signal_sems_;
+  auto& signal_values = submit_signal_values_;
+  signal_sems.clear();
+  signal_values.clear();
   signal_sems.reserve(signal_semaphores_.size() + 1);
   signal_values.reserve(signal_semaphores_.size() + 1);
   for (auto& pending : signal_semaphores_) {
@@ -1541,8 +1553,6 @@ void CommandEncoder::submit() {
     timeline.pSignalSemaphoreValues = signal_values.data();
     si.signalSemaphoreCount = static_cast<uint32_t>(signal_sems.size());
     si.pSignalSemaphores = signal_sems.data();
-    // Declared outside the try so the catch can detach it.
-    VkFence submit_fence = VK_NULL_HANDLE;
     try {
       queue_t0 = prof::get().profiling() ? prof::host_ns() : 0;
       // Deterministic swallow simulation for the recovery ladder, in the
@@ -1587,13 +1597,6 @@ void CommandEncoder::submit() {
       bool simulate_drop = env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SUBMIT");
       bool simulate_strip =
           !simulate_drop && env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SIGNAL");
-      submit_fence = device_.completions().acquire_execution_fence();
-      // Attach BEFORE the submit: a concurrent free() on another stream
-      // must never see an empty fence deque for this value and recycle a
-      // buffer the queue is about to write. A failed submit detaches in
-      // the catch below.
-      device_.completions().attach_execution_fence(
-          completion_value, submit_fence);
       if (simulate_strip) {
         si.signalSemaphoreCount = 0;
         si.pSignalSemaphores = nullptr;
@@ -1612,8 +1615,12 @@ void CommandEncoder::submit() {
             timeline::SubKind::VkQueueSubmit,
             encoder_id_,
             completion_value);
+        // No submission fence: recycle safety comes from the completion
+        // timeline's one-generation rule (observing a later drain proves
+        // the driver's submit-final cleanup), so a submit carries no
+        // fence and the host issues no per-submit syncobj poll.
         const VkResult submit_result =
-            dt.QueueSubmit(device_.queue(), 1, &si, submit_fence);
+            dt.QueueSubmit(device_.queue(), 1, &si, VK_NULL_HANDLE);
         if (submit_result != VK_SUCCESS) {
           // A synchronous QueueSubmit failure is a rejection of this
           // submission, not a GPU hang: on Borealis the kernel's -EINVAL
@@ -1643,15 +1650,11 @@ void CommandEncoder::submit() {
               " command_buffer=" + std::to_string(si.commandBufferCount) +
               " wait_values=[" + waits + "]" +
               " signal_values=[" + signals + "]" +
-              " fence=" + std::to_string(
-                  reinterpret_cast<uintptr_t>(submit_fence)) +
               ")");
         }
       }
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {
-      device_.completions().detach_execution_fence(
-          completion_value, submit_fence);
       // The submission never reached the driver: the ended command buffer
       // and the pending semaphore lists are dead (their keepalives have
       // already moved into the local payload and die with this frame).
@@ -1661,6 +1664,7 @@ void CommandEncoder::submit() {
       // their arrays or the quarantine.
       batch_buffers_.clear();
       pending_.clear();
+      dep_records_.clear();
       recording_ = false;
       node_count_ = 0;
       batch_work_ = 0;
@@ -1718,6 +1722,9 @@ void CommandEncoder::submit() {
   node_count_ = 0;
   batch_work_ = 0;
   pending_.clear();
+  // Phase-1 records have no consumer yet; bound the vector at the batch
+  // boundary like every other per-batch list.
+  dep_records_.clear();
   wait_semaphores_.clear();
   signal_semaphores_.clear();
   completed_handlers_.clear();

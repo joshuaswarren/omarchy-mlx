@@ -65,5 +65,5 @@ curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/inst
   `VK_ICD_FILENAMES`/`VK_DRIVER_FILES` you set for other software.
 - Model download hangs: the demo reads `HF_HUB_OFFLINE`, `HF_ENDPOINT`, and
   the usual proxy variables, like any Hugging Face download.
-- Something else: [docs/known-defects.md](../docs/known-defects.md), then an
-  issue with the output of `mlx-omarchy -c 'import mlx.core as mx; print(mx.__version__, mx.device_info())'`.
+- Something else: open an issue with the output of
+  `mlx-omarchy -c 'import mlx.core as mx; print(mx.__version__, mx.device_info())'`.

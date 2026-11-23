@@ -1,0 +1,3 @@
+bin
+mlx
+mlx_omarchy-0.32.4.dev202611230425+300ea86.dist-info

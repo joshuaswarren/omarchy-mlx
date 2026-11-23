@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
@@ -27,6 +28,7 @@ from mlx_omarchy_serve._mlxlm_server import (  # noqa: E402
     YieldGate,
     install_yield_gate,
 )
+from mlx_omarchy_assistant import speech_yield  # noqa: E402
 from mlx_omarchy_assistant.speech_yield import (  # noqa: E402
     MAX_PENDING_SPEAKS,
     SPEAK_PARK_ACK_SECONDS,
@@ -426,6 +428,82 @@ class SchedulerTests(unittest.TestCase):
         thread.join(2)
         self.assertIsNone(result["grant"])
         self.assertTrue(self.gpu.locked())
+
+    def _yield_past_abandoned_speak(self, beside=None):
+        """Run yield_point for a speak request that gives up (refused) while
+        the park ack is pending; ``beside(waiter, log)`` returns a callable
+        that runs alongside."""
+        gave_up = threading.Event()
+        log = []
+        result = {}
+
+        def speak():
+            result["grant"] = self.scheduler.enter(threading.Event(), wait=5)
+            gave_up.set()
+
+        self.gpu.acquire()
+        threads = [threading.Thread(target=speak, daemon=True)]
+        threads[0].start()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not self.scheduler._pending:
+            time.sleep(0.005)
+        with self.scheduler._cond:
+            self.assertEqual(len(self.scheduler._pending), 1)
+            waiter = self.scheduler._pending[0]
+
+        class Client:
+            def hold(self, secret, ack_timeout):
+                waiter.refuse.set()
+                return gave_up.wait(2)
+
+            def release(self, secret):
+                log.append("client-release")
+
+        def generate():
+            self.scheduler.yield_point(Client(), "s", threading.Event())
+            log.append("yield-returned")
+
+        if beside is not None:
+            threads.append(threading.Thread(target=beside(waiter, log),
+                                            daemon=True))
+        threads.append(threading.Thread(target=generate, daemon=True))
+        deadline = time.monotonic() + 0.9
+        with mock.patch.object(speech_yield, "SPEAK_TAKE_TIMEOUT_SECONDS", 0.1):
+            for thread in threads[1:]:
+                thread.start()
+            for thread in threads:
+                thread.join(max(0, deadline - time.monotonic()))
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertIsNone(result["grant"])
+        self.assertTrue(self.gpu.locked())
+        self.assertFalse(self.scheduler._pending)
+        return log
+
+    def test_yield_point_retakes_lock_when_granted_speak_gave_up(self):
+        log = self._yield_past_abandoned_speak()
+        self.assertEqual(log, ["client-release", "yield-returned"])
+
+    def test_yield_point_waits_for_late_holder_before_returning(self):
+        """Another thread holds the freed lock past the take wait (and a
+        timed re-take): the generation waits for it, then returns."""
+        def late_holder(waiter, log):
+            holding = threading.Event()
+            take_wait = waiter.taken.wait
+            waiter.taken.wait = lambda timeout: (holding.wait(2)
+                                                 and take_wait(timeout))
+
+            def hold_lock():
+                if waiter.granted.wait(2) and self.gpu.acquire(timeout=1):
+                    log.append("late-acquired")
+                    holding.set()
+                    time.sleep(0.4)
+                    log.append("late-released")
+                    self.gpu.release()
+            return hold_lock
+
+        log = self._yield_past_abandoned_speak(late_holder)
+        self.assertEqual(log, ["late-acquired", "late-released",
+                               "client-release", "yield-returned"])
 
 
 if __name__ == "__main__":

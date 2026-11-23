@@ -8,6 +8,7 @@ numerical comparison against pinned upstream torch lives in
 tests/test_laya_reference.py (env-gated).
 """
 
+import http.client
 import importlib.util
 import json
 import os
@@ -31,6 +32,7 @@ from mlx_omarchy_laya.sequence import (  # noqa: E402
     build_sequence,
     collate,
     confidence_from_probs,
+    encode_questions,
     render_options,
     serialize_state,
     temp_bucket,
@@ -167,6 +169,92 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(b["attention_mask"].tolist(), [[1, 1, 1], [1, 1, 0]])
         self.assertEqual(b["marker_mask"].tolist(), [[True, False], [True, True]])
         self.assertEqual(b["n_tokens"], 5)
+
+
+class DecisionsValidationTests(unittest.TestCase):
+    """POST /v1/decisions rejects malformed client input with 400 before the
+    engine runs. The fake engine renders through the real encode_questions, so
+    every request the validator admits must also render."""
+
+    class _Tok:
+        mask_token = "[MASK]"
+        cls_token_id, sep_token_id, mask_token_id = 1, 2, 3
+
+        def encode(self, text):
+            return [10 + ord(c) % 50 for c in text]
+
+    @classmethod
+    def setUpClass(cls):
+        import threading
+        from http.server import ThreadingHTTPServer
+        from types import SimpleNamespace
+
+        from mlx_omarchy_laya import server as srv
+
+        tok = cls._Tok()
+
+        def system_one(state, questions):
+            ids, _ = encode_questions(tok, state, questions, max_len=256, head_max_len=128)
+            return {"answers": dict.fromkeys(ids)}
+
+        state = SimpleNamespace(engine=SimpleNamespace(system_one=system_one), max_questions=64)
+        handler = srv._make_handler(state)
+        handler.log_message = lambda *args: None
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def _post(self, body):
+        conn = http.client.HTTPConnection(*self.httpd.server_address, timeout=10)
+        try:
+            conn.request("POST", "/v1/decisions", json.dumps(body))
+            r = conn.getresponse()
+            return r.status, json.loads(r.read())
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _question(qtype, **fields):
+        return {"state": "s", "questions": {"q": {"type": qtype, "instructions": "i", **fields}}}
+
+    def test_non_object_body_is_400(self):
+        for body in ([], "hi", 123, None):
+            with self.subTest(body=body):
+                self.assertEqual(self._post(body), (400, {"error": "request body must be a JSON object"}))
+
+    def test_unrenderable_criteria_is_400(self):
+        cases = [
+            ("choice", {}),
+            ("choice", {"criteria": "abc"}),
+            ("choice", {"criteria": ["a", 1]}),
+            ("score", {}),
+            ("score", {"criteria": 5}),
+            ("score", {"criteria": "abc"}),
+            ("noul", {"criteria": "x"}),
+            ("noul", {"criteria": {"true": 1}}),
+        ]
+        for qtype, fields in cases:
+            with self.subTest(qtype=qtype, fields=fields):
+                code, out = self._post(self._question(qtype, **fields))
+                self.assertEqual(code, 400)
+                self.assertTrue(out["error"].startswith("question 'q': 'criteria' must be"), out)
+
+    def test_renderable_criteria_reach_the_engine(self):
+        cases = [
+            ("choice", {"criteria": {"a": None, "b": "bee"}}),
+            ("choice", {"criteria": ["a", "b"], "instructions": {"k": "v"}}),
+            ("score", {"criteria": ["low", "high"]}),
+            ("noul", {}),
+            ("noul", {"criteria": None}),
+            ("noul", {"criteria": {"false": "nope", "true": "yep"}}),
+        ]
+        for qtype, fields in cases:
+            with self.subTest(qtype=qtype, fields=fields):
+                self.assertEqual(self._post(self._question(qtype, **fields)), (200, {"answers": {"q": None}}))
 
 
 @unittest.skipUnless(HAS_MLX, "needs mlx (the server imports it)")
@@ -409,6 +497,104 @@ class ManagedCoServingTests(unittest.TestCase):
         self.assertIn("memory reservation skipped", out + err)
         self.assertNotIn("refusing to serve", out + err)
         self.assertNotIn("managed co-serving", (out + err).lower())
+
+
+class QualifyDeviceGuardTests(unittest.TestCase):
+    """qualify refuses a non-GPU default device unless --allow-cpu, in both
+    direct and --url modes. mlx.core is stubbed so the guard runs without mlx;
+    str(mx.default_device()) is "Device(cpu, 0)", never "cpu"."""
+
+    @classmethod
+    def setUpClass(cls):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        fixture = json.loads((REPO / "tests/fixtures/laya/laya_reference.json").read_text())
+        by_questions = {json.dumps(c["questions"], sort_keys=True): c["expected_mlx_fp32_cpu"]
+                        for c in fixture["cases"]}
+        cls.posts = posts = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                posts.append(self.path)
+                out = json.dumps(by_questions[json.dumps(body["questions"], sort_keys=True)]).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        cls.url = "http://127.0.0.1:%d" % cls.httpd.server_port
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def setUp(self):
+        del self.posts[:]
+
+    def _qualify(self, default, *argv):
+        import contextlib
+        import io
+        import types
+        import unittest.mock as mock
+
+        class Device:
+            def __init__(self, kind):
+                self.kind = kind
+
+            def __eq__(self, other):
+                return isinstance(other, Device) and other.kind == self.kind
+
+            def __str__(self):
+                return "Device(%s, 0)" % self.kind
+
+        core = types.ModuleType("mlx.core")
+        core.__version__ = "stub"
+        # Real mx.gpu is a DeviceType that compares equal to Device(gpu, 0);
+        # a fresh Device per call keeps an identity check from passing.
+        core.gpu = Device("gpu")
+        core.default_device = lambda: Device(default)
+        pkg = types.ModuleType("mlx")
+        pkg.core = core
+        from mlx_omarchy_laya import qualify
+
+        stdout = io.StringIO()
+        with mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), \
+                contextlib.redirect_stdout(stdout):
+            rc = qualify.main(["--model", str(REPO / "no-such-checkpoint"), *argv])
+        return rc, stdout.getvalue()
+
+    def test_cpu_default_refuses_url_mode_without_allow_cpu(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._qualify("cpu", "--url", self.url)
+        self.assertIn("default device is Device(cpu, 0), not mx.gpu", str(cm.exception.code))
+        self.assertEqual(self.posts, [], "no case may be sent to the server before the refusal")
+
+    def test_cpu_default_refuses_direct_mode_without_allow_cpu(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._qualify("cpu")
+        self.assertIn("default device is Device(cpu, 0), not mx.gpu", str(cm.exception.code))
+
+    def test_allow_cpu_runs_url_mode_and_labels_device(self):
+        rc, out = self._qualify("cpu", "--url", self.url, "--allow-cpu")
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.posts), 6)
+        self.assertIn("device: Device(cpu, 0)", out)
+        self.assertIn("VERDICT: PASS", out)
+
+    def test_gpu_default_runs_url_mode_without_allow_cpu(self):
+        rc, out = self._qualify("gpu", "--url", self.url)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.posts), 6)
+        self.assertIn("device: Device(gpu, 0)", out)
+        self.assertIn("VERDICT: PASS", out)
 
 
 # ---------------------------------------------------------------- helpers

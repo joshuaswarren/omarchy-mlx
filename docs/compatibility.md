@@ -57,7 +57,13 @@ nothing about Linux execution.
   tokens per second, Qwen3.8-2B 4-bit and Qwen3-4B-Instruct-2507 4-bit:
   M1 Pro 61.6 / 280.0 and 31.5 / 133.9; M2 38.7 / 168.4 and 19.4 / 78.8;
   M4 Pro 105.5 / 512.6 and 49.3 / 239.6; A18 Pro 33.3 / 108.8 and
-  13.5 / 44.1 ([receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md)). ANE: Untested.
+  13.5 / 44.1 ([receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md)).
+  The M4 Pro's J616s qualification-r4 row on #537 (machine id
+  `2adf2b644fdcac6f`) matched 80/80 reference failures and 81/81 skips;
+  its only new failure is `test_export_unique`, fixed in the r7 wheel.
+  Its r3 macOS arm reported the Core ML smoke pass with ANE placement
+  unverified; the Linux arm's ANE step was `unavailable` (no
+  `omarchy-ane-smoke` on the image). ANE: Untested.
 - M1 Ultra, M2 Pro, M2 Ultra. Untested
   ([README table](../README.md#supported-hardware)).
 - M3. Experimental: aurora mesa-m3 graphics; compute not certified
@@ -86,7 +92,8 @@ nothing about Linux execution.
   tokens, against 37.28 / 23.91 before, with identical token ids
   ([2026-11-22 receipt](../receipts/2026-11-22-m3-pro-g15s-sdpa-f16/README.md)).
   ANE: Untested.
-- M4 (Mac mini, J773g / T8132, GPU G16G). GPU: Experimental. Requires the out-of-tree G16G GPU kernel driver (kernel 7.1.13, `asahi_m4`) and Mesa Honeykrisp with the Apple9 compute port (techmore/mesa `m4-honeykrisp-compute`), with `AGX_APPLE9_MAX_SHARED=32768`. With the M4 changes of #316-#321 the standing battery runs every suite and every capability-simulation profile; 34 of 800 cases fail, the same 34 that fail on `main` there, 32 of them compute pipelines the driver rejects (complex ops, eig, wide-row partition). Decode, 64 greedy tokens, mlx-lm 0.31.3: granite-4.0-1b-4bit 51.3 tok/s, Qwen2.5-1.5B-Instruct-4bit 63.2, gemma-3-1b-it-4bit 54.0, Qwen3.5-4B-MLX-4bit 15.7, Mistral-7B-Instruct-v0.3-4bit 18.6 ([receipt](../receipts/2026-11-01-m4-g16g-part1/README.md)). The receipt covers the numerical battery, the dispatch trace and device reopen. ANE: Data-only; h16 bring-up module.
+- M4 (Mac mini, J773g / T8132, GPU G16G). GPU: Experimental. Requires the out-of-tree G16G GPU kernel driver (kernel 7.1.13, `asahi_m4`) and Mesa Honeykrisp with the Apple9 compute port (techmore/mesa `m4-honeykrisp-compute`), with `AGX_APPLE9_MAX_SHARED=32768`. With the M4 changes of #316-#321 the standing battery runs every suite and every capability-simulation profile; 34 of 800 cases fail, the same 34 that fail on `main` there, 32 of them compute pipelines the driver rejects (complex ops, eig, wide-row partition). Decode, 64 greedy tokens, mlx-lm 0.31.3: granite-4.0-1b-4bit 51.3 tok/s, Qwen2.5-1.5B-Instruct-4bit 63.2, gemma-3-1b-it-4bit 54.0, Qwen3.5-4B-MLX-4bit 15.7, Mistral-7B-Instruct-v0.3-4bit 18.6 ([receipt](../receipts/2026-11-01-m4-g16g-part1/README.md)). The receipt covers the numerical battery, the dispatch trace and device reopen. No qualification row is posted on #537 for this machine yet; its machine id is unassigned. ANE: Data-only; h16 bring-up module.
+- M4 Air (MacBook Air, J713 / T8132, GPU G16G B0). GPU: Experimental, on a bring-up Borealis build (kernel 7.3.0-bj713b7+). Its qualification-r4 row on #537 (machine id `729c0299075fafa2`) completed all 34 suite files: the only new failure over the M1 Max reference is `test_export_unique`, which the r7 wheel fixes, and one reference failure (`test_sdpa_long_masked_sequence`) passes on this machine. Qwen3-4B 4-bit decode 25.68 tok/s, prefill 94.98 tok/s — bring-up driver rates, not final. ANE: Data-only; h16 bring-up module (the row's ANE step reported `unavailable`: no `omarchy-ane-smoke` on the run's image).
 
 ## Non-Apple GPUs (development drivers)
 
@@ -143,8 +150,7 @@ bit-exact against eager by construction; the C++ compiled-tape battery
 pins this with raw-uint16 comparisons, including a bf16 shapeless
 trace-then-reuse case (the exact mlx-lm trigger). The in-model
 fused-bf16 corruption behind the 2026-09-18 fence was the DivLast leaf
-misindexing fixed at `da43969e`; the fence is removed (see the
-fused-chain defect entry in [known-defects.md](known-defects.md)).
+misindexing fixed at `da43969e`; the fence is removed (fixed at commit `da43969e`).
 
 ### Compiled tapes on Apple GPUs - fixed and re-enabled
 
@@ -159,10 +165,9 @@ and the `MLX_OMARCHY_ALLOW_UNSAFE_COMPILE` override were retired with
 the fix. bf16 tapes run per-node (the 2026-09-02 bf16 gate above was
 the same stale-shape defect, lifted 2026-09-18), fused bf16 chains are
 fenced separately, and the trig domain gate is now the shared in-shader
-Cody-Waite reduction (accurate to 5e5, NaN above; the 2026-10-03
-entry in known-defects.md).
+Cody-Waite reduction (accurate to 5e5, NaN above; measured 2026-10-03).
 Full record:
-[known-defects.md](known-defects.md) and
+`receipts/2026-09-03-stale-shape-tape-corruption.md` and
 `receipts/2026-09-03-stale-shape-tape-corruption.md`. Compiled-versus-
 eager speed is not measured yet (TCF-2).
 
@@ -943,7 +948,7 @@ A Supported row must link every applicable record.
   the rep=1 fd sweep now covers B=1/2, qL=1/2/5, kL=1/2/5/7, D=4/8/64,
   causal and maskless. Two value defects remain open at small shapes
   (qL=1 kL>1 all-zero dk/dv, hardware-confirmed; B=1 kL=5 zero spots,
-  llvmpipe) - see docs/known-defects.md; qL=1 is decode geometry, so
+  llvmpipe)  - hardware-confirmed; qL=1 is decode geometry, so
   backward through a single-query step loses dk/dv until fixed.
   GQA (rep > 1) stays composed: the fused dk/dv run ~0.7x short
   of host finite differences at rep=2 (GQA reduce/matmul shortfall,
@@ -959,6 +964,7 @@ A Supported row must link every applicable record.
 - Receipts: receipts/2026-10-03-norm-apple/README.md.
 
 ## 2026-10-03 — qmm prefill rasterization default (G13, landed)
+- G16S carries its core count (M4 Pro, 20-core J616s) in the tile selector, so the measured occupancy floor (6 workgroups/core) governs its small-M prefill arm: at M in 17..31, column grids under 120 workgroups (N < 3840, e.g. the 1024-column projections) take the 16-row twin, wider grids keep 32 rows; M <= 16 keeps its unconditional 16-row tile. Before 2026-11-23 the part had no count, so its small-M arm was unreachable and the 64-row M >= 128 fill gate was vacuous. Cross-arm identity at the new M in 17..31 shapes is gated on device (`receipts/2026-11-23-g412-small-m-jwm1/`); the on-part (J616s) timing A/B is staged in `receipts/2026-11-22-g412-small-m-ab/`.
 - Group-of-GM=4 rasterization is the default workgroup order of the 32-row `QmmPrefillCoopmatBF16X32[FullN]` prefill route for multi-row-tile grids (m > 32): 4 consecutive workgroups share one 32-column dequantized weight slab across 4 adjacent row tiles. `MLX_OMARCHY_QMM_NO_RASTER=1` restores the shipped order; `MLX_OMARCHY_QMM_RASTER=swap|2|4|8`, `MLX_OMARCHY_QMM_TWON=1`, `MLX_OMARCHY_QMM_PERSIST=<rows>` remain as experiment overrides. Every twin keeps the per-output ascending-k f32 chain — bit-identical to the shipped kernel, pinned by a hardware doctest (baseline = shipped order via the opt-out env) across 8 K,N x 12 odd M in {17..2047}.
 - On G16S the same route uses a 64-row tile when M ≥ 128 and the 64-row grid still fills the part (`QmmPrefillCoopmatM64BF16X32FullNLdsPad`): one dequantized 16×32 (or STEP_K×32) weight tile is reused across twice the output rows, and every output keeps the same ascending-k f32 chain — bit-identical to the 32-row kernel. `MLX_OMARCHY_QMM_COOPMAT_ROWS=32` restores the 32-row tile; `=64` forces 64-row on other parts; `=64sg4` is a 128-lane experiment that was slower on G16S. Measured on the M4 Pro (G16S B1), Qwen3-8B-4bit, five interleaved runs, 32 greedy tokens, identical sha `a8bdfde11f24` / `1dd5a67f8afc`: pf2060 317.78 → 338.75 tok/s (+6.60%, ranges 307.53–318.76 vs 338.17–339.94 disjoint); pf520 329.82 → 334.46 (+1.41%, overlapping). Other chips keep the 32-row default.
 

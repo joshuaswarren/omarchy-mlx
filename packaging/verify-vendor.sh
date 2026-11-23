@@ -5,7 +5,8 @@
 #
 # Every lock line must resolve to exactly one wheel whose sha256 matches
 # the pin. Extra wheels in the directory are named (stale vendor bytes).
-# Exit 1 on any missing file, hash mismatch, or unpinned lock line.
+# Exit 1 on any missing file, duplicate wheels for a pin, hash mismatch, or
+# unpinned lock line.
 set -euo pipefail
 
 vendor="${1:?usage: verify-vendor.sh <wheel-dir> <lock>}"
@@ -32,21 +33,26 @@ while IFS= read -r line; do
   want="${rest#--hash=sha256:}"
   name="${req%%==*}"
   version="${req#*==}"
-  found=""
+  matches=()
   for wheel in "$vendor"/*.whl; do
     [[ -e $wheel ]] || break
     base="$(basename "$wheel" .whl)"
     fname_norm="$(printf '%s' "${base%%-*}" | sed 's/[-_.]\+/-/g' | tr 'A-Z' 'a-z')"
     if [[ "$fname_norm" == "$name" && "${base#*-}" == "$version-"* ]]; then
-      found="$wheel"
-      break
+      matches+=("$wheel")
     fi
   done
-  if [[ -z $found ]]; then
+  if (( ${#matches[@]} == 0 )); then
     echo "error: $name==$version is pinned but no wheel provides it" >&2
     status=1
     continue
   fi
+  if (( ${#matches[@]} > 1 )); then
+    echo "error: multiple wheels provide $name==$version: ${matches[*]##*/}" >&2
+    status=1
+    continue
+  fi
+  found="${matches[0]}"
   got="$(sha256sum "$found" | cut -d' ' -f1)"
   if [[ $got != "$want" ]]; then
     echo "error: hash mismatch for $(basename "$found"): lock $want, file $got" >&2

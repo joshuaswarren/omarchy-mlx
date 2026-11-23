@@ -4,7 +4,7 @@
 
 Defines the :data:`ReferenceLock` schema, cache layout, and hash
 verification for the pinned public Parakeet reference (phase 1 of
-``docs/plans/2026-09-12-coreml-parakeet-ane-plan.md``).
+the measured parity tables).
 
 The lock file (``parakeet-reference.lock``) lives next to this module
 under ``overlay/tools/coreml/``. It pins:

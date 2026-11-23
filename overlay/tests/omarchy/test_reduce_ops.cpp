@@ -1781,6 +1781,122 @@ TEST_CASE("scans cover int64, complex64, and bool cumsum widths") {
       stream);
 }
 
+
+TEST_CASE("external-axis reductions stage metadata per workgroup") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // Rank-6 (2,2,3,2,3,4) holding a permutation of 1..288 so every arg
+  // result is unique. Reducing the non-adjacent axes {0,2,4} leaves kept
+  // dims {1,3,5}: six collapsed axes, past the four inline slots, so
+  // matrix_k != 0 and the kernel reads the axis-metadata buffer.
+  std::vector<float> raw(288);
+  for (size_t i = 0; i < raw.size(); ++i) {
+    raw[i] = static_cast<float>((i * 53u) % 288u) + 1.0f;
+  }
+  array grid(raw.begin(), Shape{2, 2, 3, 2, 3, 4}, float32);
+  auto at = [&raw](int i0, int i1, int i2, int i3, int i4, int i5) {
+    return raw[(((((i0 * 2 + i1) * 3 + i2) * 2 + i3) * 3 + i4) * 4 + i5)];
+  };
+
+  std::vector<float> expected_sum;
+  std::vector<float> expected_min;
+  std::vector<float> expected_max;
+  for (int i1 = 0; i1 < 2; ++i1) {
+    for (int i3 = 0; i3 < 2; ++i3) {
+      for (int i5 = 0; i5 < 4; ++i5) {
+        float total = 0.0f;
+        float lo = std::numeric_limits<float>::infinity();
+        float hi = -std::numeric_limits<float>::infinity();
+        for (int i0 = 0; i0 < 2; ++i0) {
+          for (int i2 = 0; i2 < 3; ++i2) {
+            for (int i4 = 0; i4 < 3; ++i4) {
+              float v = at(i0, i1, i2, i3, i4, i5);
+              total += v;
+              lo = std::min(lo, v);
+              hi = std::max(hi, v);
+            }
+          }
+        }
+        expected_sum.push_back(total);
+        expected_min.push_back(lo);
+        expected_max.push_back(hi);
+      }
+    }
+  }
+  check_values(
+      sum(grid, std::vector<int>{0, 2, 4}, false, stream), expected_sum,
+      stream);
+  check_values(
+      min(grid, std::vector<int>{0, 2, 4}, false, stream), expected_min,
+      stream);
+  check_values(
+      max(grid, std::vector<int>{0, 2, 4}, false, stream), expected_max,
+      stream);
+  array kept = sum(grid, std::vector<int>{0, 2, 4}, true, stream);
+  CHECK_EQ(kept.shape(), Shape({1, 2, 1, 2, 1, 4}));
+  check_values(kept, expected_sum, stream);
+
+  // Prod on rank-5 (2,2,3,2,2) over axes {0,2}: five collapsed axes,
+  // still the external metadata path. Products stay below 48^6.
+  std::vector<float> praw(48);
+  for (size_t i = 0; i < praw.size(); ++i) {
+    praw[i] = static_cast<float>(i) + 1.0f;
+  }
+  array pgrid(praw.begin(), Shape{2, 2, 3, 2, 2}, float32);
+  std::vector<float> expected_prod;
+  for (int i1 = 0; i1 < 2; ++i1) {
+    for (int i3 = 0; i3 < 2; ++i3) {
+      for (int i4 = 0; i4 < 2; ++i4) {
+        float total = 1.0f;
+        for (int i0 = 0; i0 < 2; ++i0) {
+          for (int i2 = 0; i2 < 3; ++i2) {
+            total *= praw[((((i0 * 2 + i1) * 3 + i2) * 2 + i3) * 2 + i4)];
+          }
+        }
+        expected_prod.push_back(total);
+      }
+    }
+  }
+  check_values(
+      prod(pgrid, std::vector<int>{0, 2}, false, stream), expected_prod,
+      stream);
+
+  // Single-axis arg reductions on the rank-6 grid: the values are a
+  // permutation, so the arg indices are unique.
+  std::vector<uint32_t> expected_argmin;
+  std::vector<uint32_t> expected_argmax;
+  for (int i0 = 0; i0 < 2; ++i0) {
+    for (int i1 = 0; i1 < 2; ++i1) {
+      for (int i3 = 0; i3 < 2; ++i3) {
+        for (int i4 = 0; i4 < 3; ++i4) {
+          for (int i5 = 0; i5 < 4; ++i5) {
+            int lo_i = 0;
+            int hi_i = 0;
+            for (int i2 = 1; i2 < 3; ++i2) {
+              if (at(i0, i1, i2, i3, i4, i5) <
+                  at(i0, i1, lo_i, i3, i4, i5)) {
+                lo_i = i2;
+              }
+              if (at(i0, i1, i2, i3, i4, i5) >
+                  at(i0, i1, hi_i, i3, i4, i5)) {
+                hi_i = i2;
+              }
+            }
+            expected_argmin.push_back(lo_i);
+            expected_argmax.push_back(hi_i);
+          }
+        }
+      }
+    }
+  }
+  check_uint32_values(
+      argmin(grid, 2, false, stream), expected_argmin, stream);
+  check_uint32_values(
+      argmax(grid, 2, false, stream), expected_argmax, stream);
+}
+
 TEST_CASE("reductions over flip views materialize negative strides") {
   if (!compute_available()) {
     return;

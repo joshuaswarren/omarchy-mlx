@@ -164,6 +164,19 @@ struct CapabilityReport {
   // family's reported priorities and silently keeps the default when the
   // requested one is absent.
   bool queue_global_priority{false};
+  // VK_EXT_memory_priority with the memoryPriority feature and
+  // VK_EXT_pageable_device_local_memory with pageableDeviceLocalMemory:
+  // enabled only as a pair (pageable memory is what the priority hint
+  // acts on), matching lily's device init on Honeykrisp-M5. Lets a later
+  // change pin weight allocations resident under memory pressure.
+  bool memory_priority{false};
+  bool pageable_device_local_memory{false};
+  // VK_EXT_external_memory_host advertised. Probe only: the extension is
+  // not enabled until the change that imports host weight memory.
+  bool external_memory_host{false};
+  // VK_EXT_calibrated_timestamps advertised. Enabled only under
+  // MLX_OMARCHY_TRACE_DISPATCH, as lily gates it on trace::on().
+  bool calibrated_timestamps{false};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};
@@ -304,26 +317,7 @@ class CompletionDispatcher {
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
 
-  // Attach the submission fence for |value| BEFORE the value's
-  // QueueSubmit: execution_complete() must see the fence from the moment
-  // the batch is on the queue, or a concurrent free() would read an
-  // empty fence deque as "completed" and recycle a live buffer.
-  void attach_execution_fence(uint64_t value, VkFence fence);
-  // The submit never reached the driver (QueueSubmit failed): forget the
-  // fence and return it to the pool.
-  void detach_execution_fence(uint64_t value, VkFence fence);
-  // Non-stalling: true when every submission <= |value| provably finished
-  // executing (all attached fences signalled). The only sound safe-to-
-  // recycle test; the timeline observation is not.
-  bool execution_complete(uint64_t value);
-  VkFence acquire_execution_fence();
-  // Retire front execution fences whose fence has signalled, advancing
-  // the done-through watermark; true when a release_quarantine pass is
-  // due (fences still outstanding or just retired). Drives the
-  // dispatcher's idle tick so a fence that signals after the last
-  // completion drained still recycles its quarantined buffers.
-  bool tick_execution_fences();
-  // Blocks until generation |value| can release under the fence
+  // Blocks until generation |value| can release under the one-generation
   // contract: the drain covers |value| and either a later generation
   // has also drained (submits drain in value order, so observing
   // |value + 1| proves cleanup for |value|) or the queue is idle and
@@ -346,16 +340,6 @@ class CompletionDispatcher {
   // Completion value -> the batch that carries it, retained until the
   // completion drains so a dropped submission can be resubmitted.
   std::map<uint64_t, ResubmitBatch> resubmitable_;
-  // Submission execution fences, in value order: recycle decisions use
-  // these, not the pre-cleanup timeline observation.
-  struct ExecutionFence {
-    uint64_t value;
-    VkFence fence;
-  };
-  std::deque<ExecutionFence> execution_fences_;
-  std::vector<VkFence> execution_fence_pool_;
-  uint64_t execution_done_through_{0};
-  std::mutex execution_mutex_;
   // Payloads of already-drained completions, released one completion
   // later. Mesa signals a submission's semaphores before its submit-final
   // cleanup releases timeline points, so a completion value on this
@@ -744,9 +728,12 @@ inline bool wave_sched_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_WAVE_SCHED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // G16S and measured G14C default on; initial G17C keeps off pending M5 calibration.
+  // G16S and measured G14C default on; G17C (Apple M5 Max, Borealis):
+  // Qwen3.8-2B decode wave off vs on 38.76 -> 40.23 tok/s (+3.8%), ids
+  // digest identical (w7C M5-04, receipts/2026-11-23-*).
   return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
+      device_name.find("G14C") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;
 }
 
 // Two-pass block count for the fused f16 decode SDPA kernel (0 = one pass).
@@ -791,6 +778,28 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   }
   // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
   return device_name.find("G16S") != std::string::npos;
+}
+
+// gather_qmm_sub.comp subgroup routes — affine (bits 4/2, group 64/128),
+// 3-bit (group 64), and mxfp4 (-DFP_MODE, group 32) — share one kernel
+// template: a 256-lane workgroup whose subgroup-uniform SSBO reads
+// (SCALE_WORD/BIAS_WORD) return 0 from lanes 128-255 on G18G (Apple M6;
+// mesa#737). The fp route's wrong output is measured (omarchy-mlx#655:
+// every output ~2^-125 low); the affine/q3 routes ride the same mechanism
+// and stay off with it. Measured wrong on m6, correct on M1 (jwm1) with
+// the same kernel dispatched. MLX_OMARCHY_GATHER_QMM_SUB=1 forces the
+// route on for bisection; =0 forces it off everywhere, as before. Pure.
+inline bool gather_qmm_sub_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G18G") == std::string::npos;
+}
+// mxfp4 fp-mode subgroup gather decode (gather_qmm_sub.comp -DFP_MODE):
+// the route measured wrong in omarchy-mlx#655. Named alias of the shared
+// gate, kept for readability at the fp call site. Pure.
+inline bool gather_qmm_sub_fp_default_part(const std::string& device_name) {
+  return gather_qmm_sub_default_part(device_name);
 }
 // Row rule of the two-pass route: the dequantize pass costs one weight read and one bf16 write per call, which enough rows amortize.
 // G16S, milliseconds per call, single-kernel against two-pass (best of three runs of six calls):

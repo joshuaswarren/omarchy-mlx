@@ -4,8 +4,13 @@ Stdlib unittest only, no network, no mlx import: the hash-comparison
 core runs against a fake install tree built in a temp directory.
 """
 
+import hashlib
+import io
+import json
 import sys
 import unittest
+import zipfile
+from contextlib import redirect_stdout
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,7 +27,8 @@ class ProvenanceSelfTest(unittest.TestCase):
         # _self_test builds a fake site-packages and proves: matching
         # tree verifies clean, swapped binary refuses, compiled-vs-dist
         # version disagreement refuses, positive control detects a
-        # foreign library, and --expect-wheel compares members.
+        # foreign library, --expect-wheel compares members, and a RECORD
+        # mismatch survives a later binary with no RECORD entry.
         self.assertIsNone(prov._self_test())
 
 
@@ -40,6 +46,48 @@ class ProvenanceLineTests(unittest.TestCase):
 
     def test_control_string_is_the_baked_in_literal(self):
         self.assertEqual(prov.CONTROL_STRING, b"MLX_DISABLE_COMPILE")
+
+
+class RecordMismatchPrecedenceTests(unittest.TestCase):
+    def test_unhashed_binary_does_not_clear_an_earlier_record_mismatch(self):
+        core_rel = "mlx/core/core.cpython-311-x86_64-linux-gnu.so"
+        with TemporaryDirectory() as tmp:
+            site = Path(tmp) / "site"
+            (site / "mlx" / "lib").mkdir(parents=True)
+            (site / "mlx" / "core").mkdir()
+            (site / core_rel).write_bytes(b"core")
+            (site / "mlx" / "lib" / "libmlx.so").write_bytes(b"lib")
+            wheel = Path(tmp) / "claimed.whl"
+            with zipfile.ZipFile(wheel, "w") as zf:
+                zf.writestr(core_rel, b"core")
+                zf.writestr("mlx/lib/libmlx.so", b"lib")
+            # The extension's RECORD hash is stale; libmlx.so has no entry.
+            records = {core_rel: hashlib.sha256(b"stale-core").hexdigest()}
+            mlx = SimpleNamespace(core=SimpleNamespace(__version__="1.0"))
+            dist = SimpleNamespace(version="1.0",
+                                   locate_file=lambda rel: site / rel)
+            for argv in ([], ["--expect-wheel", str(wheel)]):
+                out = io.StringIO()
+                with self.subTest(argv=argv):
+                    with (
+                        patch.dict(sys.modules,
+                                   {"mlx": mlx, "mlx.core": mlx.core}),
+                        patch.object(prov.importlib.metadata, "distribution",
+                                     return_value=dist),
+                        patch.object(prov, "_record_hashes",
+                                     return_value=records),
+                        patch.object(sys, "argv",
+                                     ["mlx_provenance.py", *argv]),
+                        redirect_stdout(out),
+                        self.assertRaises(SystemExit) as exit_,
+                    ):
+                        prov.main()
+                    self.assertEqual(exit_.exception.code, 3)
+                    report = json.loads(out.getvalue())
+                    self.assertEqual([f["match"] for f in report["files"]],
+                                     [False, None])
+                    self.assertEqual(report["verified"], "mismatch")
+                    self.assertIn("RECORD says", report["mismatch"])
 
 
 class UpstreamCpuProvenanceTests(unittest.TestCase):

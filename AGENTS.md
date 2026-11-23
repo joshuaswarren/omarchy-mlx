@@ -6,12 +6,7 @@ Read these files before changing code:
 
 1. `README.md`
 2. `docs/architecture.md`
-3. `docs/roadmap.md`
-4. `docs/compatibility.md`
-5. `docs/plans/2026-08-29-mlx-omarchy-ane-compatibility-plan.md`
-6. `docs/plans/2026-09-12-coreml-parakeet-ane-plan.md` (Core ML/Parakeet
-   plan; package inspection, reference capture, and compiler preparation
-   exist in source. Linux encoder execution remains unqualified.)
+3. `docs/compatibility.md`
 
 Run `scripts/prepare-mlx.sh` before inspecting the pinned MLX source.
 Inspect the affected backend under `.work/mlx`.
@@ -63,12 +58,10 @@ Do not open an upstream MLX pull request or push to an Apple remote from an agen
 
 ## Implementation order
 
-Work in the dependency order in `docs/roadmap.md`.
 The Vulkan baseline does not wait for ANE.
-Owner direction, 2026-09-12: the Core ML/Parakeet ANE lane
-(`docs/plans/2026-09-12-coreml-parakeet-ane-plan.md`) runs concurrently
-with GPU performance-parity work; neither lane waits on the other's
-numbers. The correctness gates do not move: the ANE exporter still
+Owner direction, 2026-09-12: the Core ML/Parakeet ANE lane runs
+concurrently with GPU performance-parity work; neither lane waits on
+the other's numbers. The correctness gates do not move: the ANE exporter still
 waits for the MIL compiler proof, general MLX lowering still waits for
 the one-operation MIL proof and the stable `libane` ABI, and the
 exporter still does not wait for dma-buf support.
@@ -91,24 +84,6 @@ Use an independent `/tmp/m1-gpu.lock` on each physical host. Exclude a
 serving host from LiteLLM and confirm it is quiescent before benchmarking.
 Native performance comparisons must match the physical machine; never
 use the base M1 as the M1 Max denominator.
-
-**Hardware status (2026-09-20).** m1-test-host (13-inch M1) runs provisioned
-Omarchy; its Linux ANE qualification ladder has Step 5 closed — full-ASR
-104/104 across two bit-exact repeats on the fork driver and a 10/10
-perf battery (encoder AC median 5217.4 ms vs 259.9 ms macOS same-encoder
-divisor, cross-OS indicative, no parity claim;
-[`ane-linux-experiments` 3babdb5](https://github.com/joshuaswarren/ane-linux-experiments/commit/3babdb5)
-/
-[119b954](https://github.com/joshuaswarren/ane-linux-experiments/commit/119b954)).
-Hybrid partition and full-encoder coverage are pending. Pre-provisioning
-M1 ANE / Parakeet numbers in this tree are historical dated evidence from
-prior m1-test-host Linux boots. t6001-test-host (T6001) Linux ANE is live. t6021-test-host (T6021)
-Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND, no
-`/dev/accel/accel0`. T6021 GPU is qualified
-([`ane-linux-experiments/receipts/2026-09-23-m2-gpu-qwen38/README.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-23-m2-gpu-qwen38/README.md));
-T6021 ANE is **not** live-inference-qualified on the Linux driver
-(macOS-side numbers are macOS CoreML / `aned` measurements, not Linux
-execution). Apple GPU and Apple ANE are separate lanes.
 
 New descriptor, synchronization, and dma-buf tests can reset the device or machine.
 Use a bounded timeout for every new hardware path.
@@ -150,7 +125,7 @@ Published docs, READMEs, model cards, release notes, and posts state what works 
 - If something does not work, fix it or leave it out. Do not publish a caveat about it.
 - State requirements plainly: RAM, OS, kernel, and hardware (for example, "96 GB of unified memory; 64 GB machines can't run it").
 - Do not mention Asahi in public prose. Technical identifiers (paths, device-tree properties, upstream repo names) stay as they are.
-- Receipts and internal notes under `receipts/` and `receipts-work/` keep their full detail; this rule covers what readers see first.
+- Receipts and internal notes under `receipts/` keep their full detail; this rule covers what readers see first.
 
 ## Test rules
 
@@ -158,24 +133,16 @@ Published docs, READMEs, model cards, release notes, and posts state what works 
   defect claim, including throwaway probes. `scripts/mlx_provenance.py`
   hashes the loaded `libmlx.so`, compares it against the installed
   wheel's RECORD, and reports the harness commit. A venv can silently
-  hold a wheel from another tree: on 2026-09-03 that produced four
-  separate wrong conclusions in one day - a retracted byte-identity
-  claim, a phantom missing profiler, a stale-checkout crash that idled
-  the M1 for 47 minutes, and a reported eager-evaluation defect that did
-  not exist. Each looked entirely plausible. An unlabelled number is not
-  evidence, and a defect report from an unverified environment costs
-  more than no report.
+  hold a wheel from another tree. An unlabelled number is not evidence,
+  and a defect report from an unverified environment costs more than no
+  report.
 - An A/B run must prove its two sides are different builds before it
   reports numbers. Wheels stamp their source commit into the version
   (`0.32.2.dev<timestamp>+<short7>`, diagnostics `+diag.<short7>`), so
   assert that each side's stamp equals the commit that side was meant to
-  be, and that the two stamps differ. Fail with both stamps printed. On
-  2026-09-03 two comparisons were voided after the fact - one built the
-  wrong branch because a helper resolved HEAD instead of the branch
-  name, the other built both sides from the same tree - and a third run
-  died on a shared cmake cache left behind by an earlier build. Clear
-  the cache per build for the same reason: an environment that lies
-  about what it built produces numbers that look fine.
+  be, and that the two stamps differ. Fail with both stamps printed.
+  Clear the cmake cache per build: an environment that lies about what
+  it built produces numbers that look fine.
 - Add one focused test for each new observable contract.
 - Run the release-equivalent build with CPU primitive evaluation unavailable.
 - Trace every ecosystem workflow at least once and require zero CPU tensor dispatches.
@@ -188,17 +155,8 @@ Published docs, READMEs, model cards, release notes, and posts state what works 
 - A shader that compiles on the development box may fail on the M1,
   because the two machines run different shader compilers. The build
   prefers `glslc` and falls back to `glslangValidator`
-  (`overlay/mlx/backend/omarchy/CMakeLists.txt:10-27`). The x86
-  development box has `glslangValidator` 12.0.0 and a `glslc` shim
-  (`/usr/local/bin/glslc`: a 10-line script over a glslang 16.6.0 build in
-  `/opt/glslang-src`; it is NOT shaderc's glslc, but it is much closer to the
-  M1/M2 `glslc` 2026.3). Use the shim for every compile-only check of a new
-  shader (it compiles cooperative-matrix shaders but cannot run them).
-  m1-test-host has `glslc` 2026.3. The older 12.0.0 validator accepts
-  constructs the newer compiler
-  rejects. On 2026-09-03 a fused RoPE shader read `gl_WorkGroupSize`
-  with no `local_size` declaration, compiled clean here behind three
-  green batteries, and broke the aarch64 wheel build on the M1.
+  (`overlay/mlx/backend/omarchy/CMakeLists.txt:10-27`). The older
+  validator accepts constructs the newer compiler rejects.
   `add_dependencies(mlx omarchy_shaders)` means the batteries DO compile
   shaders, so a green battery is real evidence about this box's compiler
   and no evidence at all about the M1's. Before pushing a change under
@@ -224,11 +182,8 @@ Published docs, READMEs, model cards, release notes, and posts state what works 
   `omarchy_fast_regression_tests`, `omarchy_scatter_determinism_tests`,
   `omarchy_eq_math_tests`, `omarchy_fused_chain_tests`,
   `omarchy_error_contract_tests`, `omarchy_ane_bundle_tests`, plus the
-  `omarchy_capability_sim_tests` profile matrix. The prior pattern of
-  running only `omarchy_matmul_family_tests` +
-  `omarchy_runtime_tests` left the f16 SDPA route untested on the M1 for
-  months and let a simulation-only refusal pattern be mistaken for a real
-  defect (`receipts/2026-09-11-f16-sdpa-gap-analysis`).
+  `omarchy_capability_sim_tests` profile matrix. Running a subset of the
+  battery hides routes that then fail on hardware.
 - This repository is public. A receipt carries the evidence a reader needs
   to judge a measurement, and nothing about the owner's private
   infrastructure. Never commit host addresses (LAN or VPN), service
@@ -238,18 +193,13 @@ Published docs, READMEs, model cards, release notes, and posts state what works 
   driver build, and a placeholder for the host; `scripts/collect_common.py`
   has a `Redactor` that shows the intended shape. Harnesses that sample
   `ps`, `system_profiler`, or `tmutil` must record counts and verdicts, not
-  raw output: on 2026-09-11 the native-baseline harness had put process
-  command lines, a NAS backup URL and a battery serial into published
-  receipts, and a planning doc named the owner's router container, config
-  path and model aliases (scrubbed forward in
-  `receipts/2026-09-11-public-repo-scrub`).
+  raw output.
 
 Do not lower tolerances, shorten a stability run, or remove a failing workload to make a gate pass.
 
 ## Documentation
 
 Update `docs/architecture.md` when a backend or memory boundary changes.
-Update `docs/roadmap.md` only when a proof gate changes.
 Update `docs/compatibility.md` from evidence, not intent.
 Delete stale paths and replaced design text in the same change.
 

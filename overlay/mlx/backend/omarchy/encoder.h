@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "mlx/array.h"
@@ -41,37 +42,18 @@ namespace mlx::core::omarchy {
 // 3-byte range would have the shader touch a byte outside the bound
 // range. BYTE_AT extracts only lanes below the array's element count
 // and unclaimed output lanes stay at the host pre-zero fill, so the
-// widened window keeps results bit-exact. Allocations are page-rounded
-// (round_size), so the rounded range stays inside the backing buffer;
-// the clamp below keeps that true regardless.
+// widened window keeps results bit-exact.
 inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
-  VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
-      static_cast<VkDeviceSize>(value.data_size()) * value.itemsize();
-  // A strided window (concatenate and pad outputs) can reach past
-  // data_size, and pad marks its window contiguous: bind through the last
-  // element the positive strides reach, or a device with robust buffer
-  // access drops those writes.
-  if (value.size() > 0) {
-    VkDeviceSize reach = 0;
-    for (int axis = 0; axis < value.ndim(); ++axis) {
-      if (value.strides()[axis] > 0) {
-        reach += static_cast<VkDeviceSize>(value.shape(axis) - 1) *
-            static_cast<VkDeviceSize>(value.strides()[axis]);
-      }
-    }
-    end = std::max<VkDeviceSize>(
-        end,
-        static_cast<VkDeviceSize>(value.offset()) +
-            (reach + 1) * value.itemsize());
-  }
-  const VkDeviceSize word_end = (end + 3) & ~static_cast<VkDeviceSize>(3);
-  // A zero range is invalid Vulkan; an empty array keeps one byte.
+  // Bind the full allocation. The range must cover every byte a dispatch
+  // might write: the concatenate's second copy writes the upper half of a
+  // buffer whose first-half view would declare a shorter range, and
+  // conformant drivers drop writes outside the descriptor range. The
+  // full-allocation range removes that class entirely.
   return {
       buffer->buffer,
       0,
-      std::min<VkDeviceSize>(std::max<VkDeviceSize>(word_end, 1),
-                             buffer->size),
+      std::max<VkDeviceSize>(buffer->size, 1),
       buffer};
 }
 
@@ -295,13 +277,6 @@ inline bool batch_over_budget(
 // batch against Honeykrisp's 7.56 GiB heap without this (2026-09-08).
 inline constexpr size_t kBatchByteBudgetDivisor = 16;
 
-// One buffered node's access sets for wave scheduling: the byte ranges a
-// node reads and writes (SPIR-V reflected readonly/writeonly split).
-struct WaveNode {
-  std::span<const TrackedRange> reads;
-  std::span<const TrackedRange> writes;
-};
-
 // Greedy earliest-wave schedule for one batch: level[i] is the smallest
 // wave index such that every earlier tape node that node i hazards sits
 // in a strictly smaller wave. A hazard is RAW (i reads a range an earlier
@@ -337,7 +312,7 @@ class MLX_API CommandEncoder {
       return;
     }
     allocator().note_batch_buffer(buf);
-    batch_buffers_.push_back(buf);
+    batch_buffers_.insert(buf);
   }
 
   // Record one dispatch binding's owning buffer exactly like
@@ -352,7 +327,7 @@ class MLX_API CommandEncoder {
       return;
     }
     allocator().note_batch_buffer(buf);
-    batch_buffers_.push_back(buf);
+    batch_buffers_.insert(buf);
   }
 
   // Handlers run on the device completion thread when this submission's
@@ -508,6 +483,13 @@ class MLX_API CommandEncoder {
 
   uint64_t last_submitted_completion() const {
     return last_completion_;
+  }
+
+  // Distinct buffers bound to the open batch. A persistent buffer bound
+  // by many dispatches counts once (pre-binding), so this stays small on
+  // weight/KV-heavy graphs.
+  size_t open_batch_buffer_count() const {
+    return batch_buffers_.size();
   }
 
  private:
@@ -666,15 +648,31 @@ class MLX_API CommandEncoder {
   uint32_t desc_pool_remaining_{0};
   std::vector<PendingSemaphore> wait_semaphores_;
   std::vector<PendingSemaphore> signal_semaphores_;
-  // Raw buffers referenced by the open batch. Owned by their arrays or,
-  // after free(), by the allocator quarantine; this list only carries
-  // the completion stamp at submit time.
-  std::vector<VulkanBuffer*> batch_buffers_;
+  // Raw buffers referenced by the open batch, pre-bound once each: a
+  // persistent buffer (weights, KV) touched by many dispatches inserts
+  // on its first binding and dedups on every later one, so submit() and
+  // the allocator scan it once per batch rather than once per dispatch
+  // binding. Owned by their arrays or, after free(), by the allocator
+  // quarantine; the set only carries the completion stamp at submit
+  // time.
+  std::unordered_set<VulkanBuffer*> batch_buffers_;
   // Descriptor pools retired during recording. They ride the dispatcher
   // payload (one-generation retire) so a set allocated from them cannot
   // outlive its pool.
   std::vector<std::shared_ptr<void>> retired_pools_;
   std::vector<std::function<void()>> completed_handlers_;
+
+  // Per-submission scratch (the per-token arena): this storage survives
+  // submit(), so emit_pending() and submit() stop re-allocating the same
+  // vectors on every batch.
+  std::vector<WaveNode> wave_nodes_;
+  std::vector<uint32_t> wave_levels_buf_;
+  WaveIndex wave_index_;
+  std::vector<VkSemaphore> submit_wait_sems_;
+  std::vector<uint64_t> submit_wait_values_;
+  std::vector<VkPipelineStageFlags> submit_wait_stages_;
+  std::vector<VkSemaphore> submit_signal_sems_;
+  std::vector<uint64_t> submit_signal_values_;
 };
 
 MLX_API CommandEncoder& get_command_encoder(Stream s);

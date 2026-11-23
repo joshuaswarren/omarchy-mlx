@@ -5,7 +5,7 @@
 attention-mask select on the ANE, and every other tensor op on the Apple GPU
 through mlx-omarchy (Vulkan).
 
-Phase 6 of docs/plans/2026-09-12-coreml-parakeet-ane-plan.md. Per transformer
+Per transformer
 layer, three ANE islands carry the attention:
 
   island A (bundle parakeet-encoder-island-attn-a-kt, 2 programs, 416 TDs)

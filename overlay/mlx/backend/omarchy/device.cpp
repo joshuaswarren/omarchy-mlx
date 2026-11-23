@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/device_exts.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/cpu_uclamp.h"
 #include "mlx/backend/omarchy/step_timeline.h"
@@ -512,6 +513,8 @@ CapabilityReport collect_capabilities(
     const VkPhysicalDeviceShaderAtomicFloatFeaturesEXT& fa,
     const VkPhysicalDeviceCooperativeMatrixFeaturesKHR& cm,
     const VkPhysicalDevice16BitStorageFeatures& f16,
+    const VkPhysicalDeviceMemoryPriorityFeaturesEXT& mp,
+    const VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT& pl,
     const VkPhysicalDeviceMaintenance3Properties& m3,
     const VkPhysicalDeviceMaintenance4Properties& m4,
     const VkPhysicalDeviceSubgroupProperties& subgroup) {
@@ -644,6 +647,23 @@ CapabilityReport collect_capabilities(
         } else if (
             std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
           caps.queue_global_priority = true;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_memory_priority") == 0) {
+          caps.memory_priority = mp.memoryPriority == VK_TRUE;
+        } else if (
+            std::strcmp(
+                e.extensionName,
+                "VK_EXT_pageable_device_local_memory") == 0) {
+          caps.pageable_device_local_memory =
+              pl.pageableDeviceLocalMemory == VK_TRUE;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_external_memory_host") ==
+            0) {
+          caps.external_memory_host = true;
+        } else if (
+            std::strcmp(
+                e.extensionName, "VK_EXT_calibrated_timestamps") == 0) {
+          caps.calibrated_timestamps = true;
 #ifdef OMARCHY_BF16_CMAT
         } else if (
             std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
@@ -937,12 +957,18 @@ bool Runtime::init_impl() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    VkPhysicalDeviceMemoryPriorityFeaturesEXT mp{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+    VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pl{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
     VkPhysicalDeviceFeatures2 feats2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     f16.pNext = &f12;
     f12.pNext = &f13;
     f13.pNext = &fa;
     fa.pNext = &cm;
+    cm.pNext = &mp;
+    mp.pNext = &pl;
     feats2.pNext = &f16;
     it.GetPhysicalDeviceFeatures2(pd, &feats2);
 
@@ -989,6 +1015,8 @@ bool Runtime::init_impl() {
         fa,
         cm,
         f16,
+        mp,
+        pl,
         m3,
         m4,
         subgroup);
@@ -1480,7 +1508,33 @@ Device::Device(uint32_t physical_device_index) {
     enabled_cm.pNext = &enabled_bf16;
   }
 #endif
+  VkPhysicalDeviceMemoryPriorityFeaturesEXT enabled_mp{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+  enabled_mp.memoryPriority =
+      hw.memory_priority && hw.pageable_device_local_memory ? VK_TRUE
+                                                            : VK_FALSE;
+  VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT enabled_pl{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
+  enabled_pl.pageableDeviceLocalMemory = enabled_mp.memoryPriority;
   enabled2.pNext = &enabled16;
+  // pNext tail walk: the structs above link only when their capability
+  // enabled them (cooperative matrix behind float-atomic, bf16 behind
+  // cooperative matrix). The memory-priority pair chains after whatever
+  // tail exists when both bits are set, matching the extension pair in
+  // device_extension_names.
+  void** tail = &enabled_fa.pNext;
+  if (hw.cooperative_matrix_f32_8) {
+    tail = &enabled_cm.pNext;
+#ifdef OMARCHY_BF16_CMAT
+    if (hw.cooperative_matrix_bf16_8) {
+      tail = &enabled_bf16.pNext;
+    }
+#endif
+  }
+  if (enabled_mp.memoryPriority == VK_TRUE) {
+    *tail = &enabled_mp;
+    enabled_mp.pNext = &enabled_pl;
+  }
 
   // M1 receipt: Mesa Honeykrisp exposes one compute queue (family 0,
   // queueCount 1). Request exactly that; never invent additional queues.
@@ -1538,36 +1592,31 @@ Device::Device(uint32_t physical_device_index) {
       }
     }
   }
-  std::vector<const char*> priority_exts;
-  if (qci.pNext != nullptr) {
-    priority_exts.push_back("VK_EXT_global_priority");
-  }
-
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   dci.pNext = &enabled2;
   dci.queueCreateInfoCount = 1;
   dci.pQueueCreateInfos = &qci;
   // Extensions enabled only from hardware truth: a simulated
   // cooperative-matrix or float-atomic claim can never enable an
-  // extension the driver does not actually provide.
-  auto feature_exts = [&hw] {
-    std::vector<const char*> exts;
-    if (hw.shader_atomic_float_add) {
-      exts.push_back("VK_EXT_shader_atomic_float");
-    }
-    if (hw.cooperative_matrix_f32_8) {
-      exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-    }
+  // extension the driver does not actually provide. Selection lives in
+  // device_extension_names (unit-tested pure function); the low-queue
+  // name is requested only when the priority chain above linked, and
+  // the calibrated-timestamps extension only under trace.
+  DeviceExtInput ext_in;
+  ext_in.shader_atomic_float_add = hw.shader_atomic_float_add;
+  ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
 #ifdef OMARCHY_BF16_CMAT
-    if (hw.cooperative_matrix_bf16_8) {
-      exts.push_back(VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME);
-    }
+  ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
 #endif
-    return exts;
-  };
-  std::vector<const char*> device_exts = feature_exts();
-  device_exts.insert(
-      device_exts.end(), priority_exts.begin(), priority_exts.end());
+  ext_in.memory_priority = hw.memory_priority;
+  ext_in.pageable_device_local_memory = hw.pageable_device_local_memory;
+  ext_in.external_memory_host = hw.external_memory_host;
+  ext_in.calibrated_timestamps = hw.calibrated_timestamps;
+  ext_in.queue_global_priority = hw.queue_global_priority;
+  std::vector<const char*> device_exts = device_extension_names(
+      ext_in,
+      qci.pNext != nullptr,
+      std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr);
   if (!device_exts.empty()) {
     dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
     dci.ppEnabledExtensionNames = device_exts.data();
@@ -1582,7 +1631,10 @@ Device::Device(uint32_t physical_device_index) {
   // unsupported priority value is a separate, transient refusal.
   if (create_res != VK_SUCCESS && qci.pNext != nullptr) {
     qci.pNext = nullptr;
-    device_exts = feature_exts();
+    device_exts = device_extension_names(
+        ext_in,
+        false,
+        std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr);
     if (!device_exts.empty()) {
       dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
       dci.ppEnabledExtensionNames = device_exts.data();
@@ -2531,10 +2583,9 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
   // Completion boundary: buffers freed while their submission was in
   // flight wait in the quarantine; this pass recycles the ones from
   // generation ready_value - 1 (observing generation N proves cleanup
-  // for N-1 ran) whose execution fence has already signalled. A fence
-  // that signals later is picked up by the dispatcher's idle tick, which
-  // keeps running release passes while fences are outstanding or blocks
-  // are parked.
+  // for N-1 ran). The dispatcher's idle tick keeps running release
+  // passes while blocks are parked so a buffer freed after the last
+  // drain still recycles.
   omarchy::allocator().release_quarantine(ready_value - 1);
   // Semaphore-keepalive payloads retire one completion generation late:
   // Mesa signals a submission's semaphores (including the completion
@@ -2566,94 +2617,6 @@ uint64_t CompletionDispatcher::drained_value() {
   return drained_value_;
 }
 
-VkFence CompletionDispatcher::acquire_execution_fence() {
-  timeline::ScopedEvent tl_fence(
-      timeline::Kind::FenceOp, timeline::SubKind::FenceAcquire);
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  if (!execution_fence_pool_.empty()) {
-    VkFence fence = execution_fence_pool_.back();
-    execution_fence_pool_.pop_back();
-    VKX_CHECK(vk::device_table().ResetFences(device_, 1, &fence));
-    return fence;
-  }
-  tl_fence.set_detail(1);
-  VkFence fence = VK_NULL_HANDLE;
-  VkFenceCreateInfo ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  VKX_CHECK(vk::device_table().CreateFence(device_, &ci, nullptr, &fence));
-  return fence;
-}
-
-void CompletionDispatcher::attach_execution_fence(uint64_t value, VkFence fence) {
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  execution_fences_.push_back({value, fence});
-}
-
-void CompletionDispatcher::detach_execution_fence(
-    uint64_t value,
-    VkFence fence) {
-  if (fence == VK_NULL_HANDLE) {
-    return;
-  }
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  for (auto it = execution_fences_.begin(); it != execution_fences_.end();
-       ++it) {
-    if (it->fence == fence) {
-      execution_fences_.erase(it);
-      break;
-    }
-  }
-  execution_fence_pool_.push_back(fence);
-}
-
-bool CompletionDispatcher::tick_execution_fences() {
-  timeline::ScopedEvent tl_poll(
-      timeline::Kind::FenceOp, timeline::SubKind::FencePoll);
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  bool due = !execution_fences_.empty();
-  if (!due) {
-    tl_poll.cancel();
-    return false;
-  }
-  uint64_t retired_through = 0;
-  while (!execution_fences_.empty() &&
-         vk::device_table().GetFenceStatus(
-             device_, execution_fences_.front().fence) == VK_SUCCESS) {
-    retired_through = execution_fences_.front().value;
-    execution_fence_pool_.push_back(execution_fences_.front().fence);
-    execution_fences_.pop_front();
-  }
-  if (retired_through != 0) {
-    execution_done_through_ =
-        std::max(execution_done_through_, retired_through);
-    due = true;
-  }
-  tl_poll.set_detail(retired_through);
-  return due;
-}
-
-bool CompletionDispatcher::execution_complete(uint64_t value) {
-  timeline::ScopedEvent tl_poll(
-      timeline::Kind::FenceOp, timeline::SubKind::FencePoll, 0, value);
-  std::lock_guard<std::mutex> lk(execution_mutex_);
-  if (value <= execution_done_through_) {
-    tl_poll.cancel();
-    return true;
-  }
-  while (!execution_fences_.empty() &&
-         execution_fences_.front().value <= value) {
-    auto& front = execution_fences_.front();
-    if (vk::device_table().GetFenceStatus(device_, front.fence) ==
-        VK_SUCCESS) {
-      execution_fence_pool_.push_back(front.fence);
-      execution_fences_.pop_front();
-      continue;
-    }
-    return false;
-  }
-  execution_done_through_ = std::max(execution_done_through_, value);
-  return true;
-}
-
 void CompletionDispatcher::run() {
   // Polling, not vkWaitSemaphores: a host wait issued from this thread
   // while the queue executes the signal stalls some drivers (observed on
@@ -2668,19 +2631,22 @@ void CompletionDispatcher::run() {
           return;
         }
         // A quarantined buffer recycles one generation after its own
-        // completion once its execution fence signals - which on
-        // Honeykrisp can be after the last completion drained (the fence
-        // lags the timeline observation). Keep ticking release passes so
-        // mid-generation frees never wait for the next submission. The
-        // newest drained generation itself recycles only once the drain
-        // has settled for one poll interval: while submissions drain
-        // steadily (decode) the tick stays strictly behind the newest
-        // generation - matching free()'s direct path and the drain
-        // passes - and once the queue goes quiet the final generation
-        // still recycles inside the release contract. All state is read
-        // under |mutex_|; the probes and the pass run unlocked (they
-        // take allocator/execution locks, and free() on another thread
-        // may hold an allocator lock while reading dispatcher state).
+        // completion: observing generation N's drain proves the driver
+        // finished submit-final cleanup for N-1 (the same one-generation
+        // rule the drain pass and free()'s direct path use; the fence
+        // per submission that used to prove the newest generation's
+        // cleanup directly was the per-submit SyncobjQuery2 poll -
+        // removed, submission-pipelining lever). Keep ticking release
+        // passes so mid-generation frees never wait for the next
+        // submission. The newest drained generation itself recycles
+        // only once the drain has settled for one poll interval: while
+        // submissions drain steadily (decode) the tick stays strictly
+        // behind the newest generation, and once the queue goes quiet
+        // the final generation still recycles inside the release
+        // contract. All state is read under |mutex_|; the probes and the
+        // pass run unlocked (they take allocator locks, and free() on
+        // another thread may hold an allocator lock while reading
+        // dispatcher state).
         cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
           return stop_ || !pending_.empty();
         });
@@ -2694,8 +2660,7 @@ void CompletionDispatcher::run() {
             settled ? drained_value_
                     : (drained_value_ > 0 ? drained_value_ - 1 : 0);
         lk.unlock();
-        if (tick_execution_fences() ||
-            omarchy::allocator().has_quarantined()) {
+        if (omarchy::allocator().has_quarantined()) {
           omarchy::allocator().release_quarantine(through);
         }
         continue;

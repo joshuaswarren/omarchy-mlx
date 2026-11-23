@@ -346,9 +346,6 @@ class LoudNever:
     def process(self, pcm):
         return False
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PrepareModels(unittest.TestCase):
     """--prepare: the one networked step. Fetch and verify every model, then exit."""
@@ -434,3 +431,70 @@ class ModelFilesAreVerifiedNotTrusted(unittest.TestCase):
                 vad.prepare(home, fetch=lambda url: good[:10],
                             digest=hashlib.sha256(good).hexdigest())
             self.assertEqual(sorted(p.name for p in (Path(home) / "vad").iterdir()), [])
+
+
+class LoopSurvivesReplyFailure(unittest.TestCase):
+    def test_a_failed_reply_keeps_the_session_listening(self):
+        """One failed reply transport must not end the hands-free session (the
+        #642 review finding): the loop drops the turn and keeps listening."""
+        codes = iter([500, 200])
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                code = next(codes, 200)
+                if code != 200:
+                    self.send_response(code)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(b"data: " + json.dumps(
+                    {"choices": [{"delta": {"content": "Two. "}}]}).encode() + b"\n\n")
+                self.wfile.write(b"data: [DONE]\n\n")
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.addCleanup(server.shutdown)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+        class TwoPhrases:
+            """Fires on the first quiet chunk after each loud phrase, twice."""
+
+            def __init__(self):
+                self.loud = 0
+
+            def process(self, pcm):
+                x = np.frombuffer(pcm, dtype=np.int16).astype(np.float64)
+                rms = np.sqrt(np.mean(x ** 2))
+                if rms > 1000:
+                    self.loud = 1
+                elif self.loud == 1:
+                    self.loud = 2
+                    return True
+                return False
+
+        source = (tone(0.4) + silence(0.16) + tone(0.8) + silence(1.3)
+                  + tone(0.4) + silence(0.16) + tone(0.8) + silence(1.5))
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = voice_loop.WavSink(Path(tmp) / "r.wav", 24000)
+            loop = voice_loop.VoiceLoop(
+                voice_loop.Endpointer(TwoPhrases(), rms_floor=500),
+                lambda wav, c=None: "count",
+                "http://127.0.0.1:%d/v1/chat/completions" % server.server_port,
+                lambda text, c=None: iter([PcmChunk(24000, bytes(480))]),
+                sink, model="m")
+            turns = loop.run(voice_loop.chunks(source))
+            sink.close()
+        roles = [message["role"] for message in loop._history if message["role"] != "system"]
+        self.assertEqual(len(turns), 1, "the second turn must still be served")
+        self.assertEqual(turns[0]["reply"], "Two.")
+        self.assertNotIn(["user", "user"], [roles[i:i + 2] for i in range(len(roles))],
+                         "a failed turn must not leave a dangling user exchange")
+
+
+if __name__ == "__main__":
+    unittest.main()

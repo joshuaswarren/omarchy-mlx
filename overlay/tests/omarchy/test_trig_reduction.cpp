@@ -8,7 +8,7 @@
 // kernels, and the complex logsumexp scan. The old trig_argument_gate
 // (per-call GPU sync + host read) was removed by 6cbf55d8f; the
 // per-call refusal became a NaN-above-the-limit contract at the
-// owner's perf tradeoff - docs/known-defects.md, 2026-10-03.
+// owner's perf tradeoff - measured 2026-10-03.
 //
 // Measured error envelope of the reduction band (max abs err vs float64
 // over logspace samples + edges, receipts/2026-10-03-trig-contract/):

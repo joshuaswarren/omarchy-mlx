@@ -320,6 +320,29 @@ class PlanTests(CliTestBase):
         self.assertEqual(code, 2)
         self.assertIn("exceeds this model's limit", err)
 
+    def test_non_positive_context_refuses_on_every_backend(self):
+        # mlx-lm caught this only through its prefill-step check; the module
+        # and omlx backends budgeted a zero or negative KV cache as FITS.
+        FIXTURE["models"].append(fixture_entry(
+            id="laya-negative-context", repo="mlx-community/Laya", priority=6,
+            kind="decisions", recommended=False,
+            serve={"backend": "module", "module": "mlx_omarchy_laya.server"}))
+        # recommend and the targetless auto-pick check before any entry is
+        # considered, so a kind with no entries ("embed") refuses too.
+        for argv in (["plan", "laya-negative-context"],
+                     ["plan", "test-chat-4b", "--server", "omlx"],
+                     ["plan", "test-chat-4b"],
+                     ["plan"],
+                     ["recommend", "--kind", "decisions"],
+                     ["recommend", "--kind", "embed"]):
+            for value in ("0", "-200000"):
+                with self.subTest(argv=argv, value=value):
+                    self.stdout, self.stderr = io.StringIO(), io.StringIO()
+                    code, out, err = self.run_cli(argv + ["--context", value])
+                    self.assertEqual(code, 2, (out, err))
+                    self.assertIn("--context must be a positive number of tokens", err)
+                    self.assertEqual(out, "")
+
     def test_manual_unqualified_target_warns_but_plans(self):
         code, out, err = self.run_cli(["plan", "unqualified-chat"])
         self.assertEqual(code, 0)
@@ -984,6 +1007,18 @@ class CatalogCommandTests(CliTestBase):
              unittest.mock.patch.object(catalog, "refresh", poisoned):
             code, _, err = self.run_cli(["reserve", "laya", "1", "--note", ""])
         self.assertEqual(code, 0, err)
+
+    def test_no_command_prints_usage_without_catalog(self):
+        def poisoned(*a, **k):
+            raise AssertionError("a bare invocation must not refresh the catalog")
+        with unittest.mock.patch.object(catalog, "refresh", poisoned), \
+             self.assertRaises(SystemExit) as ctx:
+            self.run_cli([])
+        self.assertEqual(ctx.exception.code, 2)
+        err = self.stderr.getvalue()
+        self.assertIn("usage:", err)
+        self.assertIn("mlx-omarchy-serve: error: the following arguments are required: command",
+                      err)
 
     def test_offline_flag_blocks_download(self):
         with unittest.mock.patch.object(serve_cli, "probe_snapshot",

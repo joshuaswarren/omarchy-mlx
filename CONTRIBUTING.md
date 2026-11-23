@@ -5,7 +5,7 @@ You can help with small backend changes and M1 tests that others can repeat.
 
 ## Before you start
 
-1. Read `docs/architecture.md` and `docs/roadmap.md`.
+1. Read `docs/architecture.md`.
 2. Check `docs/compatibility.md` for the current gate.
 3. Run `scripts/prepare-mlx.sh` to create `.work/mlx`.
 4. Open an issue before you change a public API, driver ABI, or bundle format.

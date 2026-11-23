@@ -136,6 +136,29 @@ class VendorToolingTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no wheel provides it", result.stderr)
 
+    def test_verify_rejects_duplicate_wheels_for_one_pin(self):
+        wheel = next(self.vendor.glob("fakelib-*.whl"))
+        dup = self.vendor / "fakelib-1.0-py2.py3-none-any.whl"
+        dup.write_bytes(wheel.read_bytes())
+        result = self._verify()
+        self.assertNotEqual(result.returncode, 0)
+        err_lines = [
+            line for line in result.stderr.splitlines()
+            if "multiple wheels provide fakelib==1.0" in line
+        ]
+        self.assertEqual(len(err_lines), 1, result.stderr)
+        self.assertIn(wheel.name, err_lines[0])
+        self.assertIn(dup.name, err_lines[0])
+
+    def test_verify_notes_unpinned_extra_wheel(self):
+        wheel = next(self.vendor.glob("fakelib-*.whl"))
+        extra = self.vendor / "otherlib-2.0-py3-none-any.whl"
+        extra.write_bytes(wheel.read_bytes())
+        result = self._verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("verified 2", result.stdout)
+        self.assertIn(f"{extra.name} is vendored but not in the lock", result.stderr)
+
 
 class BuildVenvTest(unittest.TestCase):
     """build-venv.sh: offline, hash-checked, interpreter-tag-checked."""
