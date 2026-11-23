@@ -248,5 +248,184 @@ class MirrorIndexDepthTests(unittest.TestCase):
                           (out / "SUMMARY.md").read_text("utf-8"))
 
 
+ZW = "\u200b"  # breaks a GitHub autolink without showing
+
+
+def _deep_list(depth):
+    value = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def _table_rows(path):
+    return [line for line in path.read_text("utf-8").splitlines()
+            if line.startswith("| [")]
+
+
+class MirrorSummaryEscapeTests(unittest.TestCase):
+    def test_untrusted_fields_stay_inside_their_cells(self):
+        record = {
+            "content_sha256": "dead] [x](https://evil.invalid/) y",
+            "kind": "deep|extra",
+            "chip": "M1 @ 3.2 GHz, Max@ 3\n\n# Injected https://evil.invalid/",
+            "kernel": "7.1.6\r\n| a | b | x&#64;b.invalid",
+            "mesa_driver": "[click](https://evil.invalid/)",
+            "mlx_version": "<img src=x> C:\\dir WWW.evil.invalid a@b.invalid",
+            "benchmark": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "SUMMARY.md"
+            mirror.write_summary(out, BASE_URL, [record],
+                                 {"generated_at": "2026-11-23\n# Injected"})
+            lines = out.read_text(encoding="utf-8").splitlines()
+        url = (f"{BASE_URL}/v1/results/"
+               "dead%5D%20%5Bx%5D%28https%3A%2F%2Fevil.invalid%2F%29%20y")
+        self.assertIn(
+            "Records: 1 | dataset generated_at: 2026-11-23 # Injected"
+            f" | source: {BASE_URL}", lines)
+        self.assertIn(
+            f"| [dead\\] \\[x\\](ht]({url}) | deep\\|extra "
+            f"| M1 @ 3.2 GHz, Max@ 3 # Injected https:{ZW}//evil.invalid/ "
+            "| 7.1.6 \\| a \\| b \\| x\\&#64;b.invalid "
+            f"| \\[click\\](https:{ZW}//evil.invalid/) "
+            f"| \\<img src=x> C:\\\\dir WWW{ZW}.evil.invalid a{ZW}@b.invalid "
+            f"| [0]({url}/archive) |", lines)
+        self.assertFalse([line for line in lines
+                          if line.startswith(("# Injected", "| a |"))])
+
+    def test_dot_segment_or_blank_hash_links_stay_on_results(self):
+        records = [{"content_sha256": sha, "kind": "deep"}
+                   for sha in ("..", ".", " " * 12 + "abc")]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "SUMMARY.md"
+            mirror.write_summary(out, BASE_URL, records, None)
+            rows = _table_rows(out)
+        unknown = f"{BASE_URL}/v1/results/unknown"
+        blank = f"{BASE_URL}/v1/results/{'%20' * 12}abc"
+        self.assertEqual(rows, [
+            f"| [unknown]({unknown}) | deep | - | - | - | - "
+            f"| [0]({unknown}/archive) |",
+            f"| [unknown]({unknown}) | deep | - | - | - | - "
+            f"| [0]({unknown}/archive) |",
+            f"| [unknown]({blank}) | deep | - | - | - | - "
+            f"| [0]({blank}/archive) |",
+        ])
+
+    def test_unreadable_record_fields_render_dash(self):
+        deep = _deep_list(200_000)
+        nested = {
+            "content_sha256": _sha("b"),
+            "kind": "deep",
+            "benchmark": [{"n": deep, "tflops": 1.0}],
+            "payload": {"mesa": {"gpu": {"driverName": deep,
+                                         "deviceName": deep}}},
+        }
+        huge = {
+            "content_sha256": _sha("c"),
+            "kind": "deep",
+            "benchmark": [{"n": 256, "tflops": 10 ** 400}],
+        }
+        for accessor in (mirror.q.record_chip, mirror.q.record_mesa,
+                         mirror.q.record_benchmarks):
+            with self.assertRaises(RecursionError):
+                run_with_small_stack(lambda: accessor(nested))
+        with self.assertRaises(OverflowError):
+            mirror.q.record_benchmarks(huge)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "SUMMARY.md"
+            run_with_small_stack(lambda: mirror.write_summary(
+                out, BASE_URL, [nested, huge], None))
+            rows = _table_rows(out)
+        self.assertEqual(rows, [
+            f"| [{sha[:12]}]({BASE_URL}/v1/results/{sha}) "
+            f"| deep | - | - | - | - "
+            f"| [-]({BASE_URL}/v1/results/{sha}/archive) |"
+            for sha in (_sha("b"), _sha("c"))
+        ])
+
+    def test_lone_surrogates_still_write_summary(self):
+        record = {"content_sha256": "ab\ud800", "kind": "deep",
+                  "chip": "M1\udc00"}
+        index = {"generated_at": "2026\udc00", "schema_version": 1}
+        bodies = {
+            f"{BASE_URL}/v1/dataset/latest.jsonl":
+                (json.dumps(record) + "\n").encode("ascii"),
+            f"{BASE_URL}/v1/results": json.dumps(index).encode("ascii"),
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(mirror.urllib.request, "urlopen",
+                                  _fake_urlopen(bodies)), \
+                mock.patch("sys.stdout", io.StringIO()), \
+                mock.patch("sys.stderr", io.StringIO()) as stderr:
+            out = Path(tmp) / "snapshot"
+            self.assertEqual(
+                mirror.main(["--base-url", BASE_URL, "--out-dir", str(out)]),
+                0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(
+                sorted(p.name for p in out.iterdir()),
+                ["SUMMARY.md", "index.json", "latest.jsonl"])
+            summary = (out / "SUMMARY.md").read_text("utf-8")
+            rows = _table_rows(out / "SUMMARY.md")
+        self.assertIn("dataset generated_at: 2026?", summary)
+        url = f"{BASE_URL}/v1/results/ab%3F"
+        self.assertEqual(
+            rows, [f"| [ab?]({url}) | deep | M1? | - | - | - "
+                   f"| [0]({url}/archive) |"])
+
+
+class MirrorIndexFieldTypeTests(unittest.TestCase):
+    def _fetch(self, body):
+        bodies = {f"{BASE_URL}/v1/results": body.encode("utf-8")}
+        with mock.patch.object(mirror.urllib.request, "urlopen",
+                               _fake_urlopen(bodies)):
+            return mirror.fetch_index(BASE_URL)
+
+    def test_scalar_fields_pass_through(self):
+        index = {"generated_at": "2026-09-03T18:09:05Z",
+                 "schema_version": 1, "count": 3}
+        self.assertEqual(self._fetch(json.dumps(index)), index)
+        self.assertEqual(
+            self._fetch('{"schema_version": "1"}')["schema_version"], "1")
+
+    def test_wrong_typed_fields_read_as_none(self):
+        empty = {"generated_at": None, "schema_version": None, "count": None}
+        for body in (
+            '{"generated_at": ["2026"], "schema_version": true,'
+            ' "count": {"n": 1}}',
+            '{"generated_at": 7, "schema_version": 1.5, "count": "3"}',
+            '{"generated_at": null, "schema_version": [1], "count": false}',
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(self._fetch(body), empty)
+
+    def test_main_drops_nested_index_field_and_keeps_the_rest(self):
+        nested = "[" * 450 + "]" * 450
+        record = {"content_sha256": _sha("1"), "kind": "deep"}
+        bodies = {
+            f"{BASE_URL}/v1/dataset/latest.jsonl":
+                (json.dumps(record) + "\n").encode("utf-8"),
+            f"{BASE_URL}/v1/results": (
+                f'{{"generated_at": {nested}, "schema_version": 2,'
+                ' "count": 1}').encode("ascii"),
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(mirror.urllib.request, "urlopen",
+                                  _fake_urlopen(bodies)), \
+                mock.patch("sys.stdout", io.StringIO()):
+            out = Path(tmp) / "snapshot"
+            self.assertEqual(
+                mirror.main(["--base-url", BASE_URL, "--out-dir", str(out)]),
+                0)
+            text = (out / "index.json").read_text("utf-8")
+            summary = (out / "SUMMARY.md").read_text("utf-8")
+        index = json.loads(text)
+        self.assertIsNone(index["generated_at"])
+        self.assertEqual(index["schema_version"], 2)
+        self.assertLess(len(text), 1024)
+        self.assertIn("dataset generated_at: -", summary)
+
+
 if __name__ == "__main__":
     unittest.main()
