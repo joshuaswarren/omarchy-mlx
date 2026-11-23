@@ -15414,6 +15414,32 @@ void GreedyQuantizedArgmax::eval_gpu(
       binding(survivors),
       binding(row_values),
       binding(stats)};
+  // FUSE-5: MLX_OMARCHY_GREEDY_TWO_STAGE=1 replaces the eight staged
+  // dispatches with one partial (every row's exact logit, row order) and
+  // one final (the full path's logsumexp, bf16 subtract, first-index
+  // argmax); the token is the staged path's per the vocab-prune proof
+  // (receipts/2026-09-23-vocab-prune.md) and the identity tests. Read
+  // per call so one process can run both arms.
+  const char* two_stage = std::getenv("MLX_OMARCHY_GREEDY_TWO_STAGE");
+  if (two_stage != nullptr && two_stage[0] == '1') {
+    params.operation = 0u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedy2BF16,
+        bindings,
+        params,
+        256u,
+        1u,
+        1u);
+    params.operation = 1u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedy2BF16,
+        bindings,
+        params,
+        1u,
+        1u,
+        1u);
+    return;
+  }
   // Stage group counts: prologue 1; bounds 128 rows per workgroup;
   // candidates and survivors 64 x 8 columns in flight; compact 256 rows
   // per workgroup; select 1; full rows 256 x 8 in flight (flagged tokens

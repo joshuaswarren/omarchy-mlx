@@ -88,6 +88,9 @@ uint16_t bf16_store(float value) {
     defined(QMM_VEC_MULTI))
 #error "QMM_VEC_GREEDY builds on the bf16 subgroup Q4 word column"
 #endif
+#if defined(QMM_VEC_GREEDY2) && !defined(QMM_VEC_GREEDY)
+#error "QMM_VEC_GREEDY2 builds on the QMM_VEC_GREEDY section"
+#endif
 #if defined(QMM_VEC_OUTGATE) && \
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
 #error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
@@ -1381,6 +1384,95 @@ void main() {
   uint groups_per_row = params.matrix_k / 64u;
   uint x_row = params.lhs_offset;
   uint stage = params.operation;
+#if defined(QMM_VEC_GREEDY2)
+  // FUSE-5 two-stage form (MLX_OMARCHY_GREEDY_TWO_STAGE): operation 0 is
+  // the partial dispatch - every row's exact logit through the same Q4
+  // word column, written in row order for the final's reductions.
+  // Operation 1 is the final dispatch - the full path's logsumexp, bf16
+  // subtract, and first-index argmax, statement for statement. The token
+  // matches the staged prune path by the vocab-prune proof
+  // (receipts/2026-09-23-vocab-prune.md) and the identity tests; the
+  // flagged stats report n rows evaluated and the logsumexp bits.
+  if (stage == 0u) {
+    for (uint k = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+         k < n;
+         k += gl_NumWorkGroups.x * COLUMNS_PER_GROUP) {
+      float value = greedy_exact(k, lane_in_slot);
+      if (lane_in_slot == 0u) {
+        row_values.values[k] = value;
+      }
+    }
+    return;
+  }
+  float local_max = NEG_INF;
+  for (uint index = lane; index < n; index += 256u) {
+    float next = row_values.values[index];
+    if (isnan(next) || next > local_max) {
+      local_max = next;
+    }
+  }
+  greedy_values[lane] = local_max;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      greedy_values[lane] =
+          max(greedy_values[lane], greedy_values[lane + stride]);
+    }
+    barrier();
+  }
+  float row_max = greedy_values[0];
+  barrier();
+  float local_sum = 0.0;
+  for (uint index = lane; index < n; index += 256u) {
+    local_sum += exp(row_values.values[index] - row_max);
+  }
+  greedy_values[lane] = local_sum;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      greedy_values[lane] += greedy_values[lane + stride];
+    }
+    barrier();
+  }
+  float row_sum = greedy_values[0];
+  float value = isinf(row_max) ? row_max : row_max + log(row_sum);
+  float lse = LOAD_VALUE(STORE_VALUE(value));
+  barrier();
+  float local_value = NEG_INF;
+  uint local_index = 0u;
+  for (uint index = lane; index < n; index += 256u) {
+    float next = LOAD_VALUE(STORE_VALUE(row_values.values[index] - lse));
+    if (next > local_value) {
+      local_value = next;
+      local_index = index;
+    }
+  }
+  greedy_values[lane] = local_value;
+  greedy_rows[lane] = local_index;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      float mine = greedy_values[lane];
+      float theirs = greedy_values[lane + stride];
+      bool wins = theirs > mine;
+      bool ties = theirs == mine &&
+          greedy_rows[lane + stride] < greedy_rows[lane];
+      if (wins || ties) {
+        greedy_values[lane] = theirs;
+        greedy_rows[lane] = greedy_rows[lane + stride];
+      }
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    token.values[0] = greedy_rows[0];
+    stats.values[0] = n;
+    stats.values[1] = 1u;
+    stats.values[2] = floatBitsToUint(lse);
+  }
+  return;
+}
+#else
   if (stage == 0u) {
     uvec4 xw = input_x.values[(x_row + lane * 8u) / 8u];
     float xs[8];
@@ -1684,6 +1776,7 @@ void main() {
     stats.values[2] = floatBitsToUint(lse);
   }
 }
+#endif
 #else
 // Weight layout routing mirrors qmm.comp. Transposed (flags bit 0
 // clear): w batch slice [N, Kp], groups along K, scale [n][k / gs].

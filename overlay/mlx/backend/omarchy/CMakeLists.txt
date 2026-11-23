@@ -429,6 +429,7 @@ omarchy_shader(qmm_vec_q4_multi_token8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -D
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)
+omarchy_shader(qmm_vec_greedy2_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1 -DQMM_VEC_GREEDY2=1)
 # Bonsai 1-bit affine decode (M=1, decode), uint8 packed weights
 # (8 values/byte). The Bonsai extension's qmv_fast kernel; omarchy's
 # stock qmm_vec.comp q4 word path reads uint32 and cannot index into

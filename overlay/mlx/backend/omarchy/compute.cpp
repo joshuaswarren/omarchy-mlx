@@ -406,6 +406,7 @@
 #include "gdn_conv_decode_bf16.h"
 #include "gdn_conv_decode_apple_bf16.h"
 #include "qmm_vec_greedy_bf16.h"
+#include "qmm_vec_greedy2_bf16.h"
 #include "bonsai_q1_qmv_subgroup_f32.h"
 #include "bonsai_q1_qmv_subgroup_f16.h"
 #include "bonsai_q1_qmv_subgroup_bf16.h"
@@ -1716,6 +1717,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gdn_conv_decode_apple_bf16, gdn_conv_decode_apple_bf16_size};
     case ComputeKernel::QmmVecGreedyBF16:
       return {qmm_vec_greedy_bf16, qmm_vec_greedy_bf16_size};
+    case ComputeKernel::QmmVecGreedy2BF16:
+      return {qmm_vec_greedy2_bf16, qmm_vec_greedy2_bf16_size};
     case ComputeKernel::BonsaiQ1QmvSubgroupF32:
       return {bonsai_q1_qmv_subgroup_f32, bonsai_q1_qmv_subgroup_f32_size};
     case ComputeKernel::BonsaiQ1QmvSubgroupF16:

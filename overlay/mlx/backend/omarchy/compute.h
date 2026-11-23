@@ -746,6 +746,7 @@ enum class ComputeKernel : uint16_t {
   // compaction, exact survivor columns, selection, and the flagged full
   // path, one kernel selected per stage. Append-only profile id.
   QmmVecGreedyBF16,
+  QmmVecGreedy2BF16,
   // Four-wide contiguous unary Sigmoid on 16-bit storage
   // (shaders/unary_vec.comp); dispatch_float_elementwise_to gates on
   // alignment. Appended to keep profile kernel ids stable.
