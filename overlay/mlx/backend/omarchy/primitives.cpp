@@ -7923,11 +7923,15 @@ void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
     params.lhs_offset = 0;
     params.rhs_offset = 0;
     params.output_offset = 0;
-    auto extended = [](array& a, size_t bytes) {
+    auto extended = [](array& a, size_t) {
       auto* buf = static_cast<omarchy::VulkanBuffer*>(a.buffer().ptr());
+      // Bind the full allocation, the same policy as binding(): a view's
+      // own byte count can fall short of what a later dispatch writes
+      // into the same allocation, and conformant drivers drop writes
+      // outside the descriptor range.
       return omarchy::ComputeBinding{buf->buffer,
           0,
-          static_cast<VkDeviceSize>(std::min(bytes, size_t(buf->size))),
+          std::max<VkDeviceSize>(buf->size, 1),
           buf};
     };
     std::array<omarchy::ComputeBinding, 3> bindings{

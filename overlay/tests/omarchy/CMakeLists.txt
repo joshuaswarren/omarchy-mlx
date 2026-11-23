@@ -664,6 +664,22 @@ doctest_discover_tests(omarchy_scatter_determinism_tests)
 add_test(NAME omarchy_scatter_determinism_tests
          COMMAND omarchy_scatter_determinism_tests)
 
+# MaskedScatterConcat: a masked_scatter result feeding a concatenate must
+# stay exact through the recycled-allocation path once MaskedScatter binds
+# the full allocation (the same defect class the binding fix covered for
+# concatenate's second copy).
+add_executable(omarchy_masked_scatter_concat_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_masked_scatter_concat.cpp)
+target_link_libraries(omarchy_masked_scatter_concat_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_masked_scatter_concat_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_masked_scatter_concat_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_masked_scatter_concat_tests)
+add_test(NAME omarchy_masked_scatter_concat_tests
+         COMMAND omarchy_masked_scatter_concat_tests)
+
 # FixEqualNanAndMath: W2 equal_nan flag plumbing on Equal + the bool
 # comparison sextet through logical_or.comp, W5 log10 exactness
 # (f32-exact powers of ten), and W8 sin/cos/tan on the common and
