@@ -2,6 +2,8 @@
 # d-0102 p1: the diag profiling harness must refuse to run when the venv's
 # mlx_lm carries no apply-mlx-lm-patches stamp (SC-11/SC-12/GAP-E profiled an
 # unpatched mlx-lm and reported 800 launches/token where prod runs 205).
+# no set -e: the suite asserts intentional failing exit codes (rc 1/2/3) from
+# the tool; -e would abort on the first deliberate failure
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 src=$(cd "$here/../.." && pwd)
