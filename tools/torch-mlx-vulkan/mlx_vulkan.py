@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import operator
+import os
 
 import numpy as np
 import torch
@@ -31,6 +32,8 @@ def _mx(v):
     if isinstance(v, mx.array):
         return v
     if isinstance(v, torch.Tensor):
+        if v.dtype == torch.bfloat16:
+            return mx.view(mx.array(v.detach().cpu().view(torch.uint16).numpy()), mx.bfloat16)
         return mx.array(v.detach().cpu().numpy())
     return v
 
@@ -535,6 +538,64 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
 
 _DT = mx.bfloat16
 
+# Optional weight quantization (MV_QUANT=4): static params whose every
+# consumer chain ends at a matmul-family op are stored packed via mx.quantize
+# and matmul lowerings emit mx.quantized_matmul. Transparent ops propagate a
+# transpose flag; any other consumer dequantizes on the fly.
+_Q_BITS = int(os.environ.get("MV_QUANT", "0") or 0)
+_Q_GS = int(os.environ.get("MV_QUANT_GS", "64"))
+_Q_MM = {"linear", "matmul", "mm", "bmm", "addmm"}
+_Q_TR = {"t", "transpose", "permute"}
+_Q_PASS = {"to", "detach", "clone", "contiguous", "float", "half", "type"}
+
+
+class _QW:
+    __slots__ = ("w", "s", "b", "tr")
+
+    def __init__(self, w, s, b, tr=False):
+        self.w, self.s, self.b, self.tr = w, s, b, tr
+
+    def dequant(self):
+        return mx.dequantize(self.w, self.s, self.b, group_size=_Q_GS, bits=_Q_BITS)
+
+
+def _dqall(v):
+    if isinstance(v, _QW):
+        return v.dequant()
+    if isinstance(v, (tuple, list)):
+        return type(v)(_dqall(x) for x in v)
+    return v
+
+
+def _node_name(n):
+    if n.op == "call_method":
+        return str(n.target)
+    return getattr(n.target, "__name__", None) or _opname(n)
+
+
+def _quantizable_phs(phs):
+    """Static 2-D params used only by matmul-family ops (through transparent ops)."""
+    ok = set()
+    for p in phs:
+        if not str(p.target).startswith("G_"):
+            continue
+        good, seen, stack = True, set(), list(p.users)
+        while stack and good:
+            u = stack.pop()
+            if u in seen:
+                continue
+            seen.add(u)
+            nm = _node_name(u)
+            if nm in _Q_MM:
+                continue
+            if nm in _Q_TR or nm in _Q_PASS:
+                stack.extend(u.users)
+                continue
+            good = False
+        if good:
+            ok.add(str(p.target))
+    return ok
+
 
 def _fuse_rmsnorm(nodes):
     """x -> [to] -> pow(2) -> mean -> add(eps) -> rsqrt -> mul(x, r) -> [to] -> mul(w)"""
@@ -601,6 +662,7 @@ def make_compiled_executor(gm):
     state_names = {str(n.target) for n in phs if "_cache_layers_" in str(n.target)}
     static_names = {str(n.target) for n in phs if str(n.target).startswith("G_")}
     mutated = [n for n in phs if str(n.target) in state_names]
+    quant_names = _quantizable_phs(phs) if _Q_BITS else set()
     conv_static = {}
     state = {}
     holder = {"ar": None}
@@ -609,7 +671,9 @@ def make_compiled_executor(gm):
         return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
 
     def build(*flat):
-        env = {n: v for n, v in zip(phs, flat)}
+        env = {}
+        for n, v in zip(phs, flat):
+            env[n] = _QW(*v) if str(n.target) in quant_names and isinstance(v, (tuple, list)) else v
 
         def res(a):
             if isinstance(a, torch.fx.Node):
@@ -638,6 +702,43 @@ def make_compiled_executor(gm):
                 continue
             args = tuple(res(a) for a in n.args)
             kwargs = {k: res(v) for k, v in n.kwargs.items()}
+            if any(isinstance(a, _QW) for a in args) or any(
+                    isinstance(v, _QW) for v in kwargs.values()):
+                done = False
+                if isinstance(args[0], _QW):
+                    if name in ("t", "transpose"):
+                        env[n] = _QW(args[0].w, args[0].s, args[0].b, not args[0].tr)
+                        done = True
+                    elif name == "permute":
+                        dims = args[1] if len(args) > 1 else tuple(args[1:])
+                        if tuple(dims) == (1, 0):
+                            env[n] = _QW(args[0].w, args[0].s, args[0].b, not args[0].tr)
+                            done = True
+                        elif tuple(dims) == (0, 1):
+                            env[n] = args[0]
+                            done = True
+                    elif name in _Q_PASS:
+                        env[n] = args[0]
+                        done = True
+                if not done and len(args) > 1 and isinstance(args[1], _QW):
+                    q = args[1]
+                    if name == "linear":
+                        y = mx.quantized_matmul(_cast(args[0]), q.w, q.s, q.b,
+                                                transpose=not q.tr,
+                                                group_size=_Q_GS, bits=_Q_BITS)
+                        if len(args) > 2 and args[2] is not None:
+                            y = y + _cast(args[2])
+                        env[n] = y.astype(mx.float32)
+                        done = True
+                    elif name in ("matmul", "mm", "bmm"):
+                        env[n] = mx.quantized_matmul(_cast(args[0]), q.w, q.s, q.b,
+                                                     transpose=q.tr,
+                                                     group_size=_Q_GS, bits=_Q_BITS).astype(mx.float32)
+                        done = True
+                if done:
+                    continue
+                args = _dqall(args)
+                kwargs = {k: _dqall(v) for k, v in kwargs.items()}
             if name == "index_copy_":
                 t, dim, idx, src = args[0], args[1], args[2], args[3]
                 smax = t.shape[dim]
@@ -711,9 +812,11 @@ def make_compiled_executor(gm):
         raise RuntimeError("no output node")
 
     cfn = mx.compile(build)
-    stats = {"fused_rms": len(fused), "state": len(state_names)}
+    stats = {"fused_rms": len(fused), "state": len(state_names), "quant": len(quant_names)}
+    log.warning("compiled executor: fused_rms=%d state=%d quant=%d",
+                stats["fused_rms"], stats["state"], stats["quant"])
 
-    import os, time as _t
+    import time as _t
     _profile = os.environ.get("MV_PROF")
     _acc = {"prep": 0.0, "cfn": 0.0, "conv": 0.0, "n": 0}
 
@@ -735,7 +838,15 @@ def make_compiled_executor(gm):
             else:
                 arr = _mx(v)
                 if name in static_names:
-                    arr = arr if name in fp32_params else _cast(arr)
+                    if name in quant_names:
+                        try:
+                            arr = mx.quantize(arr, group_size=_Q_GS, bits=_Q_BITS)
+                            mx.eval(*arr)  # force now: lazy graphs would hold every bf16 source
+                        except Exception:
+                            quant_names.discard(name)
+                            arr = _cast(arr)
+                    elif name not in fp32_params:
+                        arr = _cast(arr)
                     conv_static[name] = arr
                 flat.append(arr)
         t1 = _t.perf_counter()

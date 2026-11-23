@@ -1,5 +1,6 @@
-import sys, time, json, logging
+import sys, time, json, logging, os
 import torch
+torch.backends.mkldnn.enabled = False  # aarch64 mkldnn bf16 GEMM is broken
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import DynamicCache, StaticCache
 
@@ -8,14 +9,14 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
                     filename=f"{logdir}/mlx_vulkan_lowering.log", filemode="w")
 import mlx_vulkan  # registers backend mlx_vulkan
 
-SNAP = "/home/joshuawarren/scratch/w7Y-mlxvk/qwen3-0.6b"
+SNAP = os.environ.get("SNAP", "/home/joshuawarren/scratch/w7Y-mlxvk/qwen3-0.6b")
+DT = {"bf16": torch.bfloat16, "fp32": torch.float32}[os.environ.get("MDT", "fp32")]
 PROMPT = "The capital of France is"
-N_TOK = 32
+N_TOK = int(os.environ.get("NTOK", "32"))
 SMAX = 64
 
 tok = AutoTokenizer.from_pretrained(SNAP)
-model = AutoModelForCausalLM.from_pretrained(SNAP, dtype=torch.float32,
-                                           attn_implementation="sdpa").eval()
+model = AutoModelForCausalLM.from_pretrained(SNAP, attn_implementation="sdpa", dtype=DT).eval()
 print("attn:", model.config._attn_implementation, "dtype:", model.dtype)
 
 ids = tok(PROMPT, return_tensors="pt").input_ids
@@ -50,11 +51,23 @@ def eager_step(ids_, pos, cache):
     o = model(input_ids=ids_, position_ids=pos, past_key_values=cache, use_cache=True)
     return o.logits
 
-ref_ids, tp_e, td_e = greedy(eager_step, N_TOK, DynamicCache)
-print("CPU:", json.dumps({"prefill_s": round(tp_e, 3), "decode_s_per_tok": round(td_e, 4),
-                          "decode_tps": round(1 / td_e, 2)}))
-print("REF ids:", ref_ids)
-print("REF text:", tok.decode(ref_ids))
+import os, sys
+PHASE = os.environ.get("PHASE", "both")
+REFJ = os.environ.get("REFJ", "")
+if PHASE != "mlx":
+    ref_ids, tp_e, td_e = greedy(eager_step, N_TOK, DynamicCache)
+    print("CPU:", json.dumps({"prefill_s": round(tp_e, 3), "decode_s_per_tok": round(td_e, 4),
+                              "decode_tps": round(1 / td_e, 2)}))
+    print("REF ids:", ref_ids)
+    print("REF text:", tok.decode(ref_ids))
+if PHASE == "cpu":
+    json.dump({"ids": ref_ids, "prefill_s": tp_e, "td": td_e},
+              open(REFJ or "/tmp/ref_ids.json", "w"))
+    sys.exit(0)
+if PHASE != "mlx":
+    pass
+else:
+    ref_ids = json.load(open(REFJ or "/tmp/ref_ids.json"))["ids"]
 
 @torch.compile(backend="mlx_vulkan", dynamic=False)
 def comp_step(ids_, pos, cache):
