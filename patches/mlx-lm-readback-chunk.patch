@@ -1,6 +1,6 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -658,6 +658,11 @@
+@@ -658,6 +658,12 @@
          mx.async_eval(y)
      else:
          mx.async_eval(y, logprobs)
