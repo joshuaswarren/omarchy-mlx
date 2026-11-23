@@ -42,6 +42,7 @@ import os
 import reprlib
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 DEFAULT_TIMEOUT = 60
@@ -51,6 +52,13 @@ CHUNK_BYTES = 768 * 1024
 MAX_ARCHIVE_BYTES = 8 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 256 * 1024
 POW_DIFFICULTY = 18
+
+# Client-only: the most a pow_invalid answer may ask for. The server
+# accepts up to 64 bits, but solve_pow is pure Python and costs about
+# 2**bits hashes: 24 bits is seconds on one core, and each extra bit
+# doubles it. A higher ask, from a hostile or broken server, is refused
+# instead of hanging the collector.
+MAX_POW_DIFFICULTY = 24
 
 USER_AGENT = "mlx-omarchy-collector/1"
 
@@ -134,11 +142,23 @@ def _decode(body):
     return obj if isinstance(obj, dict) else {}
 
 
-def _min_difficulty(decoded):
-    """The difficulty a pow_invalid answer asks for, or None."""
+def _retry_difficulty(status, body, request_id, decoded, difficulty):
+    """The higher difficulty a pow_invalid answer asks for, or None.
+
+    SubmitError when the ask is above MAX_POW_DIFFICULTY.
+    """
+    if status != 403 or decoded.get("error") != "pow_invalid":
+        return None
     detail = decoded.get("detail")
     wanted = detail.get("min_difficulty") if isinstance(detail, dict) else None
-    return wanted if type(wanted) is int else None
+    if type(wanted) is not int or wanted <= difficulty:
+        return None
+    if wanted > MAX_POW_DIFFICULTY:
+        raise SubmitError(
+            f"endpoint asked for proof-of-work difficulty {wanted}, above "
+            f"the collector's limit of {MAX_POW_DIFFICULTY}: "
+            f"{_server_note(status, body, request_id)}")
+    return wanted
 
 
 def _missing_chunks(decoded, chunk_count):
@@ -176,6 +196,30 @@ def alias_header_value(aliases):
     return ",".join(clean) if clean else None
 
 
+def _endpoint_base(endpoint):
+    """The endpoint without its trailing slash.
+
+    SubmitError unless it is an http or https URL with a host and no
+    whitespace, control characters, query or fragment: the collectors
+    catch only SubmitError, and urllib raises ValueError on a mistyped
+    URL before any request is sent.
+    """
+    try:
+        if any(ch.isspace() or not ch.isprintable() for ch in endpoint):
+            raise ValueError("whitespace or control character")
+        # Checked on the raw string: urlsplit drops an empty "?" or "#".
+        if "?" in endpoint or "#" in endpoint:
+            raise ValueError("query and fragment are not allowed")
+        parts = urllib.parse.urlsplit(endpoint)
+        parts.port  # ValueError on a non-numeric or out-of-range port
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("expected an http:// or https:// URL with a host")
+    except ValueError as exc:
+        raise SubmitError(
+            f"invalid submit endpoint {reprlib.repr(endpoint)}: {exc}") from exc
+    return endpoint.rstrip("/")
+
+
 def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
            token=None, aliases=None):
     """Submit one archive; returns {"url", "deduplicated", "status"}.
@@ -190,7 +234,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     if urlopen is None:
         opener = urllib.request.build_opener()
         urlopen = opener.open
-    base = endpoint.rstrip("/")
+    base = _endpoint_base(endpoint)
     digest = sha256_hex(data)
     chunks = chunk_archive(data)
 
@@ -237,12 +281,11 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
                 method="POST"),
             timeout)
         decoded = _decode(body)
-        if status == 403 and decoded.get("error") == "pow_invalid":
-            wanted = _min_difficulty(decoded)
-            if wanted is not None and wanted > difficulty:
-                difficulty = wanted
-                continue
-        break
+        wanted = _retry_difficulty(status, body, request_id, decoded,
+                                   difficulty)
+        if wanted is None:
+            break
+        difficulty = wanted
 
     if status != 200:
         raise SubmitError(
@@ -305,7 +348,7 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     if urlopen is None:
         opener = urllib.request.build_opener()
         urlopen = opener.open
-    base = endpoint.rstrip("/")
+    base = _endpoint_base(endpoint)
     body = json.dumps(payload, sort_keys=True,
                       separators=(",", ":")).encode("utf-8")
     if len(body) > MAX_PAYLOAD_BYTES:
@@ -353,12 +396,11 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
                 method="POST"),
             timeout)
         decoded = _decode(raw)
-        if status == 403 and decoded.get("error") == "pow_invalid":
-            wanted = _min_difficulty(decoded)
-            if wanted is not None and wanted > difficulty:
-                difficulty = wanted
-                continue
-        break
+        wanted = _retry_difficulty(status, raw, request_id, decoded,
+                                   difficulty)
+        if wanted is None:
+            break
+        difficulty = wanted
 
     if status != 200:
         raise SubmitError(
