@@ -6,12 +6,7 @@ Read these files before changing code:
 
 1. `README.md`
 2. `docs/architecture.md`
-3. `docs/roadmap.md`
-4. `docs/compatibility.md`
-5. `docs/plans/2026-08-29-mlx-omarchy-ane-compatibility-plan.md`
-6. `docs/plans/2026-09-12-coreml-parakeet-ane-plan.md` (Core ML/Parakeet
-   plan; package inspection, reference capture, and compiler preparation
-   exist in source. Linux encoder execution remains unqualified.)
+3. `docs/compatibility.md`
 
 Run `scripts/prepare-mlx.sh` before inspecting the pinned MLX source.
 Inspect the affected backend under `.work/mlx`.
@@ -63,12 +58,10 @@ Do not open an upstream MLX pull request or push to an Apple remote from an agen
 
 ## Implementation order
 
-Work in the dependency order in `docs/roadmap.md`.
 The Vulkan baseline does not wait for ANE.
-Owner direction, 2026-09-12: the Core ML/Parakeet ANE lane
-(`docs/plans/2026-09-12-coreml-parakeet-ane-plan.md`) runs concurrently
-with GPU performance-parity work; neither lane waits on the other's
-numbers. The correctness gates do not move: the ANE exporter still
+Owner direction, 2026-09-12: the Core ML/Parakeet ANE lane runs
+concurrently with GPU performance-parity work; neither lane waits on
+the other's numbers. The correctness gates do not move: the ANE exporter still
 waits for the MIL compiler proof, general MLX lowering still waits for
 the one-operation MIL proof and the stable `libane` ABI, and the
 exporter still does not wait for dma-buf support.
@@ -249,7 +242,6 @@ Do not lower tolerances, shorten a stability run, or remove a failing workload t
 ## Documentation
 
 Update `docs/architecture.md` when a backend or memory boundary changes.
-Update `docs/roadmap.md` only when a proof gate changes.
 Update `docs/compatibility.md` from evidence, not intent.
 Delete stale paths and replaced design text in the same change.
 
