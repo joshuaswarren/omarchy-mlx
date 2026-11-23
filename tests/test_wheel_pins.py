@@ -9,6 +9,7 @@ stale wheel generation in every fresh venv.
 
 import importlib.util
 import unittest
+import warnings
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -62,6 +63,43 @@ class WheelPinTests(unittest.TestCase):
     def test_range_pin_and_underscore_name_rejected(self):
         self.assertEqual(len(self.violations("mlx-omarchy>=0.3",
                                              "mlx_omarchy==0.1")), 2)
+
+    def test_direct_url_pin_with_any_spacing_rejected(self):
+        # PEP 508 allows no space, or space on one side only, around '@';
+        # pip installs every one of these, and none ends in .whl.
+        for line in (
+            "mlx-omarchy@git+https://github.com/example/omarchy-mlx@main",
+            "mlx-omarchy@ https://example.com/mlx-omarchy-0.32.tar.gz",
+            "mlx-omarchy @https://example.com/mlx-omarchy-0.32.tar.gz",
+            "mlx_omarchy@git+https://github.com/example/omarchy-mlx",
+            "mlx-omarchy[extra]@git+https://github.com/example/omarchy-mlx",
+        ):
+            with self.subTest(line=line):
+                found = self.violations(line)
+                self.assertEqual(len(found), 1)
+                self.assertIn("pinned in a requirements input", found[0])
+
+    def test_parenthesized_and_hash_pins_rejected(self):
+        for line in ("mlx-omarchy (==0.1)", "mlx-omarchy(==0.1)",
+                     "mlx-omarchy (>=0.3)",
+                     "mlx-omarchy===0.1",
+                     "mlx-omarchy --hash=sha256:6e54ab2b"):
+            with self.subTest(line=line):
+                self.assertEqual(len(self.violations(line)), 1)
+
+    def test_other_direct_url_packages_pass(self):
+        self.assertEqual(self.violations(
+            "foo@git+https://github.com/example/foo",
+            "mlx-lm@ https://example.com/mlx_lm-0.4.tar.gz",
+            "mlx-omarchy-tools@git+https://github.com/example/tools",
+            "mlx-omarchy/other_pkg-1.0-py3-none-any.whl",
+        ), [])
+
+    def test_no_deprecation_warning(self):
+        # Python 3.13+ warns on a positional re.split maxsplit.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self.assertEqual(len(self.violations("mlx-omarchy==0.32.2")), 1)
 
     def test_editable_install_is_warning_only(self):
         out = list(pins.check_lines(["-e ./src/mlx-omarchy"]))
