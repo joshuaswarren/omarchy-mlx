@@ -694,6 +694,112 @@ class SubmitProtocol(unittest.TestCase):
                               {"schema_version": 1}, urlopen=opener)
                 self.assertIn("IncompleteRead", str(ctx.exception))
 
+    # The collectors catch only SubmitError. urllib raises ValueError on
+    # a mistyped URL while building the request, before any I/O.
+    BAD_ENDPOINTS = (
+        "example.invalid-no-scheme", "ftp://e.example", "http://",
+        "https:///v1", "http://:80", "http://e.example:99999",
+        "http://e.example:x", "http://[::1", "http://e .example",
+        "http://e.example\n", "http://e.example/\x1b[2J",
+        "http://e.example?x=1", "http://e.example?", "http://e.example#top",
+        "http://e.example#", "")
+
+    def call_entry(self, name, server, endpoint="http://endpoint.example"):
+        import collect_submit as cs
+        if name == "submit":
+            return cs.submit(endpoint, server.archive,
+                             {"schema_version": 1, "kind": "deep"},
+                             urlopen=server.open)
+        return cs.submit_payload(endpoint,
+                                 {"schema_version": 1, "kind": "quick"},
+                                 urlopen=server.open)
+
+    def test_invalid_endpoint_raises_submit_error_before_any_request(self):
+        import collect_submit as cs
+        for name in ("submit", "submit_payload"):
+            for endpoint in self.BAD_ENDPOINTS:
+                server = SubmitProtocol.FakeServer()
+                with self.subTest(name, endpoint=endpoint):
+                    with self.assertRaises(cs.SubmitError) as ctx:
+                        self.call_entry(name, server, endpoint)
+                    self.assertIn("invalid submit endpoint",
+                                  str(ctx.exception))
+                    self.assertEqual(server.requests, [])
+
+    def test_endpoint_with_port_path_and_trailing_slash_is_used(self):
+        for name in ("submit", "submit_payload"):
+            server = SubmitProtocol.FakeServer(probe=(
+                200, {"status": "duplicate", "receipt_url": "http://r/1"}))
+            with self.subTest(name):
+                self.call_entry(name, server, "https://e.example:8443/base/")
+                url = server.requests[0].get_full_url()
+                self.assertTrue(url.startswith(
+                    "https://e.example:8443/base/v1/submit/"), url)
+
+    @staticmethod
+    def capped_solver(digest, difficulty):
+        import collect_submit as cs
+        if difficulty > cs.MAX_POW_DIFFICULTY:
+            raise AssertionError(f"solve_pow asked for {difficulty} bits")
+        return "0"
+
+    def test_pow_ask_above_cap_raises_without_solving(self):
+        import collect_submit as cs
+        for name in ("submit", "submit_payload"):
+            for wanted in (cs.MAX_POW_DIFFICULTY + 1, 1000000):
+                server = SubmitProtocol.FakeServer(initiate=[
+                    (403, {"error": "pow_invalid",
+                           "detail": {"min_difficulty": wanted}})])
+                with self.subTest(name, wanted=wanted), \
+                        patch.object(cs, "solve_pow",
+                                     side_effect=self.capped_solver):
+                    with self.assertRaises(cs.SubmitError) as ctx:
+                        self.call_entry(name, server)
+                    message = str(ctx.exception)
+                    self.assertIn(f"proof-of-work difficulty {wanted}",
+                                  message)
+                    self.assertIn("HTTP 403", message)
+                    self.assertEqual(len(self.initiate_bodies(server)), 1)
+
+    def test_pow_ask_at_cap_is_solved_and_retried(self):
+        import collect_submit as cs
+        for name in ("submit", "submit_payload"):
+            server = SubmitProtocol.FakeServer(initiate=[
+                (403, {"error": "pow_invalid",
+                       "detail": {"min_difficulty": cs.MAX_POW_DIFFICULTY}}),
+                (200, {"status": "stored", "receipt_url": "http://r/1"})])
+            with self.subTest(name), patch.object(
+                    cs, "solve_pow", side_effect=self.capped_solver):
+                receipt = self.call_entry(name, server)
+            self.assertEqual(receipt["url"], "http://r/1")
+            self.assertEqual(
+                [b["pow"]["difficulty"] for b in self.initiate_bodies(server)],
+                [cs.POW_DIFFICULTY, cs.MAX_POW_DIFFICULTY])
+
+    def test_collectors_report_invalid_endpoint_as_failed_submit(self):
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--submit")
+        args = ap.parse_args(["--submit", "example.invalid-no-scheme"])
+        report = {"host": {"arch": "aarch64", "kernel_release": "6.12.8",
+                           "devicetree": {"compatible": ["apple,t8103"]}},
+                  "mesa": {"available": False}}
+        payload = {"schema_version": cc.SCHEMA_VERSION, "kind": "deep",
+                   "generated_at": "2026-10-12T00:00:00Z",
+                   "chip": "apple,t8103", "model": None,
+                   "mesa_device": None, "mesa_driver": None}
+        for name, call in (
+                ("quick", lambda: cq.maybe_submit(args, report)),
+                ("deep", lambda: cd.maybe_submit(
+                    args, b"x", "deep.tar.gz", "deep.tar.gz", payload))):
+            err = io.StringIO()
+            with self.subTest(name):
+                with contextlib.redirect_stderr(err), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    code = call()
+                self.assertEqual(code, 4)
+                self.assertIn("[submit] FAILED: invalid submit endpoint",
+                              err.getvalue())
+
 
 class SubmitEndpointWiring(unittest.TestCase):
     """--submit resolves: bare flag -> public endpoint, URL/env override wins,
