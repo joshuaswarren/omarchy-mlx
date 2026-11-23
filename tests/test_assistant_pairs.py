@@ -15,6 +15,7 @@ model itself is replaced.
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ import time
 import types
 import unittest
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -1029,6 +1031,39 @@ class WaitHealthTests(unittest.TestCase):
         elapsed = time.monotonic() - start
         self.assertFalse(ok)
         self.assertLess(elapsed, 5)
+
+    def test_ignores_environment_proxy(self):
+        # A fresh interpreter: urllib's global opener keeps the proxies it
+        # saw on first use, so an in-process run would depend on test order.
+        class Health(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        # Bound but never listening: the proxy refuses every connection.
+        dead_proxy = socket.socket()
+        self.addCleanup(dead_proxy.close)
+        dead_proxy.bind(("127.0.0.1", 0))
+        env = {k: v for k, v in os.environ.items()
+               if k.lower() not in ("http_proxy", "no_proxy")}
+        env.update(http_proxy=f"http://127.0.0.1:{dead_proxy.getsockname()[1]}",
+                   PYTHONPATH=SERVE_ROOT)
+        probe = ("import sys; from mlx_omarchy_assistant import managed; "
+                 "print(managed.wait_health(sys.argv[1], deadline=5))")
+        out = subprocess.run(
+            [sys.executable, "-c", probe,
+             f"http://127.0.0.1:{server.server_address[1]}/health"],
+            env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "True"),
+                         out.stderr)
 
 
 # ------------------------------------------------------------------ pair sizing
