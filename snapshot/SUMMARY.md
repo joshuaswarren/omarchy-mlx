@@ -1,6 +1,6 @@
 # Community hardware data snapshot
 
-Records: 243 | dataset generated_at: - | source: https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
+Records: 245 | dataset generated_at: - | source: https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
 
 Mirrored by `.github/workflows/community-data.yml` from the public
 read API. Summaries only; archive blobs stay on the endpoint.
@@ -250,6 +250,8 @@ read API. Summaries only; archive blobs stay on the endpoint.
 | [8fa1de611eb7](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/8fa1de611eb7dde69f7c0ded469cb0387189fdf2c6003427907e0b38b6f9fd7c) | quick | apple,t6020 | 7.2.12-3-1-ARCH | Honeykrisp | - | 0 |
 | [98961bcdf757](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/98961bcdf757eb70462b5bb264f677965858aad8078c31b2704eff9463b8480b) | deep | apple,t6022 | 7.2.15 | - | - | [0](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/98961bcdf757eb70462b5bb264f677965858aad8078c31b2704eff9463b8480b/archive) |
 | [b5095c3b8e1a](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/b5095c3b8e1a9ca0131a89262694d92be3faa1016ff1bbed591d53b8c01f1008) | deep | apple,t6030 | 7.2.11-14-1-ARCH | Borealis | 0.32.4.dev202611210550+bf5631d | [6](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/b5095c3b8e1a9ca0131a89262694d92be3faa1016ff1bbed591d53b8c01f1008/archive) |
+| [0846cbcc5337](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/0846cbcc533741b91fc791def6d7238af35ddd60023d8d3bfb5c940ae4ebe160) | deep | apple,t6002 | 7.2.12-3-1-ARCH | Honeykrisp | - | [0](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/0846cbcc533741b91fc791def6d7238af35ddd60023d8d3bfb5c940ae4ebe160/archive) |
+| [af77afa3a958](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/af77afa3a958f75d518e1e538a21290d69dbafc3c6f9d7b8eeadb901246eb9d4) | quick | apple,t6020 | 7.2.12-3-1-ARCH | Honeykrisp | - | 0 |
 
 Query this snapshot:
 
