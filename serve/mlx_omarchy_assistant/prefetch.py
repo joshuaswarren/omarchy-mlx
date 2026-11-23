@@ -137,12 +137,12 @@ def prefetch(home: Path, pair_id: str, *, wake: str | None = None,
     return manifest
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    import mlx_omarchy_paths
     parser = argparse.ArgumentParser(
         prog="mlx-omarchy-assistant-prefetch",
         description="Download every offline-runtime artifact once and "
                     "record a sha256 manifest of what was fetched.")
-    import mlx_omarchy_paths
     parser.add_argument("--home", type=Path,
                         default=mlx_omarchy_paths.default_data_home())
     parser.add_argument("--pair", choices=("everyday", "quality", "compact"),
@@ -153,6 +153,11 @@ def main(argv=None) -> int:
                         help="rebuild the manifest from staged artifacts; no download")
     parser.add_argument("--manifest-out", type=Path, default=None,
                         help="also write the manifest here (comparison copies)")
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     started = time.monotonic()
