@@ -194,7 +194,8 @@ bool CommandEncoder::compute_barrier() {
   // compute barrier instead of the full one (select_compute_barrier: default
   // on for discrete GPUs, MLX_OMARCHY_COMPUTE_BARRIER=0/1 overrides). The
   // batch head, a copy, fill or inline update since the last full barrier,
-  // or wave scheduling keeps the full barrier.
+  // or a wave-scheduled hazard edge that touches a transfer node keeps the
+  // full barrier.
   static const bool on = []() {
     const int setting = std::getenv("MLX_OMARCHY_COMPUTE_BARRIER") == nullptr
         ? -1
@@ -204,12 +205,7 @@ bool CommandEncoder::compute_barrier() {
   return on;
 }
 
-void CommandEncoder::record_dispatch_barrier() {
-  if (!compute_barrier() || !head_synced_ || transfer_since_barrier_ ||
-      wave_sched()) {
-    record_dependency_barrier();
-    return;
-  }
+void CommandEncoder::record_compute_barrier() {
   VkMemoryBarrier compute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
   compute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
   compute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -226,6 +222,15 @@ void CommandEncoder::record_dispatch_barrier() {
       nullptr);
   tracker_.clear();
   head_synced_ = true;
+}
+
+void CommandEncoder::record_dispatch_barrier() {
+  if (!compute_barrier() || !head_synced_ || transfer_since_barrier_ ||
+      wave_sched()) {
+    record_dependency_barrier();
+    return;
+  }
+  record_compute_barrier();
 }
 
 void CommandEncoder::reset_dependency_tracking() {
@@ -1166,6 +1171,56 @@ void CommandEncoder::emit_pending() {
     waves = std::max(waves, l);
   }
 
+  // With MLX_OMARCHY_COMPUTE_BARRIER on, a wave-head barrier demotes to the
+  // narrow compute-stage form when every hazard edge crossing that boundary
+  // runs dispatch->dispatch: copy, fill and inline-update writes are
+  // transfer-stage work the compute barrier cannot order, so any boundary
+  // crossed by a hazard edge that touches such a node keeps the full
+  // barrier. Edge (src, tgt) crosses boundary w iff level[src] < w <=
+  // level[tgt]; collect each non-dispatch node's hazard interval
+  // (earliest hazard source level, latest hazard target level] and mark
+  // every boundary inside it.
+  std::vector<char> full_boundary(waves + 1, 0);
+  if (compute_barrier()) {
+    auto ranges_overlap = [](const TrackedRange& a, const TrackedRange& b) {
+      return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
+    };
+    auto hazards = [&](const PendingNode& a, const PendingNode& b) {
+      for (uint32_t i = 0; i < a.nw; ++i) {
+        for (uint32_t j = 0; j < b.nr + b.nw; ++j) {
+          const TrackedRange& r = j < b.nr ? b.rd[j] : b.wr[j - b.nr];
+          if (ranges_overlap(a.wr[i], r)) {
+            return true;
+          }
+        }
+      }
+      for (uint32_t i = 0; i < a.nr; ++i) {
+        for (uint32_t j = 0; j < b.nw; ++j) {
+          if (ranges_overlap(a.rd[i], b.wr[j])) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    for (size_t n = 0; n < pending_.size(); ++n) {
+      if (pending_[n].kind == PendingNode::Kind::Dispatch) {
+        continue;
+      }
+      uint32_t lo = levels[n];
+      uint32_t hi = levels[n];
+      for (size_t m = 0; m < pending_.size(); ++m) {
+        if (m != n && hazards(pending_[n], pending_[m])) {
+          lo = std::min(lo, levels[m]);
+          hi = std::max(hi, levels[m]);
+        }
+      }
+      for (uint32_t w = lo + 1; w <= hi; ++w) {
+        full_boundary[w] = 1;
+      }
+    }
+  }
+
   if (wave_diag()) {
     // Classify the level-determining edge of every node: which access
     // class (RAW/WAW/WAR) against the deepest hazard source forces this
@@ -1237,11 +1292,18 @@ void CommandEncoder::emit_pending() {
       if (levels[i] != w) {
         continue;
       }
-      // One full dependency barrier per wave, on the wave head; every
-      // later node of the wave rides it hazard-free.
+      // One barrier per wave, on the wave head; every later node of the
+      // wave rides it hazard-free. Full form unless
+      // MLX_OMARCHY_COMPUTE_BARRIER is on and every hazard edge crossing
+      // this boundary is dispatch->dispatch (full_boundary); the batch
+      // head keeps the full barrier for host writes and allocator flush.
       bool preceded_by_barrier = barrier_owed;
       if (barrier_owed) {
-        record_dependency_barrier();
+        if (w > 0 && compute_barrier() && !full_boundary[w]) {
+          record_compute_barrier();
+        } else {
+          record_dependency_barrier();
+        }
         trace::counters().barriers_emitted++;
         prof::get().on_barrier(true);
         barrier_owed = false;

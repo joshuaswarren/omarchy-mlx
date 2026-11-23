@@ -645,6 +645,9 @@ class MLX_API CommandEncoder {
   // Compute-to-compute barrier for a dispatch when MLX_OMARCHY_COMPUTE_BARRIER
   // is on and no transfer ran since the last full barrier; else the full one.
   void record_dispatch_barrier();
+  // The narrow compute-stage barrier itself: orders shader writes before
+  // shader reads/writes on the compute pipeline stage only.
+  void record_compute_barrier();
   static bool compute_barrier();
   void reset_dependency_tracking();
   DependencyTracker tracker_;
