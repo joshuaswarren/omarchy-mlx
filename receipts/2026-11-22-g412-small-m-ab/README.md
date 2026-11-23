@@ -58,7 +58,8 @@ MLX_OMARCHY_GPU_CORES=100000 MESA_SHADER_CACHE_DISABLE=true \
 # bit-identity gate: the sha column must match row for row (arm and us dropped)
 diff <(awk '{print $2,$3,$4,$6}' small-m-ctl.txt) \
      <(awk '{print $2,$3,$4,$6}' small-m-16.txt) && echo ALL_MATCH
-# canary check: the last row's us must differ by >= 5x between the files
+# canary check: the last row's us must differ by >= 1.3x between the files (a
+# tie within ~5% means the env did not reach the selector: VOID)
 paste small-m-ctl.txt small-m-16.txt | tail -1
 # timing comparison for the default decision
 paste small-m-ctl.txt small-m-16.txt

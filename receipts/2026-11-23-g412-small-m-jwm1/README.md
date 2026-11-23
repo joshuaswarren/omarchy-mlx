@@ -7,6 +7,27 @@ fleet-hardware leg of card G412; the J616s (M4 Pro, G16S) timing A/B stays
 staged in `receipts/2026-11-22-g412-small-m-ab/` (that host is not
 fleet-reachable).
 
+## Host identity (same boot throughout the run)
+
+- Kernel: `7.3.0-2-20261110.1-lab-ARCH`, hostname `jwm1-linux`, boot ID
+  `e95200d1-1043-4e69-8bc0-b0a89c2d7a05`, up since 2026-11-22 16:36:02 UTC
+  (the 04:10–04:33 run sits inside this boot; captured 2026-11-23 ~05:20 UTC).
+- Vulkan driver: Mesa 26.3.0-devel (git-69bde15340), Borealis ICD
+  (`/usr/share/vulkan/icd.d/asahi_icd.json`).
+- Selector unit runs: the Release tests build of this branch
+  (`cmake -S $W/mlx -B $B -DCMAKE_BUILD_TYPE=Release -DMLX_BUILD_METAL=OFF
+  -DMLX_BUILD_CPU=ON -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_TESTS=ON
+  -DMLX_BUILD_PYTHON_BINDINGS=OFF -DMLX_BUILD_EXAMPLES=OFF
+  -DMLX_BUILD_BENCHMARKS=OFF -DBLAS_INCLUDE_DIRS=/usr/include/openblas
+  -DLAPACK_INCLUDE_DIRS=/usr/include/openblas`), executed as
+  `~/bin/gpu-turn -m 10 -- <omarchy_matmul_family_tests> --test-case="*small-M
+  qmm prefill arm on G16S*" --no-colors`.
+- Sweep runs (per arm): `~/bin/gpu-turn -m 10 -- $W/venv-build/bin/python
+  small_m_sweep.py` with `MESA_SHADER_CACHE_DISABLE=true PYTHONPATH=$WT` and
+  either no `MLX_OMARCHY_GPU_CORES` (ctl) or `MLX_OMARCHY_GPU_CORES=100000`
+  (m16); the tool is
+  `receipts/2026-11-22-g412-small-m-ab/tools/small_m_sweep.py` at 300ea86a08.
+
 ## What ran
 
 1. **Selector red/green** (`omarchy_matmul_family_tests`, filtered to the

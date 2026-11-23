@@ -196,9 +196,8 @@ inline uint32_t coopmat_tile_rows(
   uint32_t cores = apple_gpu_cores(device_name);
   uint32_t per_core = coopmat_workgroups_per_core();
   // 64-row experiment: take it only when M is large enough that the
-  // 64-row grid still fills the part. G16S is not in apple_gpu_cores
-  // (returns 0) and would otherwise be stuck at 32; the env is still
-  // honored there for M >= 128.
+  // 64-row grid still fills the part (m_groups_64 * n_groups against
+  // the part's core count; G16S carries 20).
   if (allow_rows64 && qmm_coopmat_rows64_requested(device_name) &&
       matrix_m >= 128u) {
     uint32_t m_groups_64 = (matrix_m + 63u) / 64u;

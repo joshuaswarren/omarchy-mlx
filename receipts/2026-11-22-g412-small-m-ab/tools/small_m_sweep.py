@@ -8,9 +8,9 @@
 #   MLX_OMARCHY_GPU_CORES=100000 python3 small_m_sweep.py        # m16: floor forces the 16-row twin
 # The two outputs must agree on every digest (bit-identity gate) and differ
 # only in us (the timing the default flip is decided from). The canary row
-# (M=520, N=4096) must time an order of magnitude apart: it proves the two
-# arms really dispatched different kernels. Identical canary times void the
-# run - it means the env did not reach the selector.
+# (M=520, N=4096) must time >= 1.3x apart: it proves the two arms really
+# dispatched different kernels (the tile geometry predicts 1.5-2x; a tie
+# within ~5% means the env did not reach the selector and voids the run).
 import hashlib
 import os
 import time
