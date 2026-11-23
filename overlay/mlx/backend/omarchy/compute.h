@@ -1177,6 +1177,12 @@ enum class ComputeKernel : uint16_t {
   FusedChainF16L128,
   FusedChainBF16L128,
   QmmVecQ4MultiSubgroupBF16R2S16W2,
+  // Depthwise 2-D conv (shaders/conv_dw2d.comp), bit-exact to conv.comp
+  // on the depthwise shape: one thread per output element, taps in
+  // ascending (kh, kw) order, padding handled by bounds guards.
+  ConvDw2dF32,
+  ConvDw2dF16,
+  ConvDw2dBF16,
   Count,
 };
 

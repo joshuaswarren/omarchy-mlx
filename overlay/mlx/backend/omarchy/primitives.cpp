@@ -5427,6 +5427,47 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
 
+  // Depthwise 2-D (Parakeet frontend convs): same straight-line approach
+  // as ConvDw1d, with stride/pad/dilation carried in params and the pad
+  // taps skipped by bounds guards — the same +0.0 terms conv.comp's
+  // guards add, so the stored bits are identical. Flagged with the
+  // unit-window direct-GEMM route above (VS-3 residual).
+  if (conv_direct_mm && spatial == 2 && groups_ == in_channels &&
+      out_channels == in_channels && in_channels_per_group == 1 &&
+      !flip_ && axis_or_one(input_dilation_, 0) == 1u &&
+      axis_or_one(input_dilation_, 1) == 1u) {
+    omarchy::ComputeParams dw;
+    dw.count = total;
+    dw.operation = checked_u32(kern_ext[1], "Convolution", out);
+    dw.lhs_size = checked_u32(in_ext[0], "Convolution", out);
+    dw.rhs_size = checked_u32(in_ext[1], "Convolution", out);
+    dw.reduce_size = checked_u32(in_channels, "Convolution", out);
+    dw.output_size = checked_u32(out.shape(1), "Convolution", out);
+    dw.matrix_m = checked_u32(out.shape(2), "Convolution", out);
+    dw.aux_offset = checked_u32(kern_ext[0], "Convolution", out);
+    dw.in_strides[0] = axis_or_one(kernel_strides_, 0);
+    dw.in_strides[1] = axis_or_one(kernel_strides_, 1);
+    dw.out_strides[0] = pad_lo_axis(0);
+    dw.out_strides[1] = pad_lo_axis(1);
+    dw.out_strides[2] = axis_or_one(kernel_dilation_, 0);
+    dw.out_strides[3] = axis_or_one(kernel_dilation_, 1);
+    dw.lhs_offset = checked_item_offset(x, x.size(), "Convolution", out);
+    dw.rhs_offset = checked_item_offset(w, w.size(), "Convolution", out);
+    dw.output_offset = checked_item_offset(out, out.size(), "Convolution", out);
+    std::array<omarchy::ComputeBinding, 3> dw2d_bindings{
+        binding(x), binding(w), binding(out)};
+    encoder.dispatch_compute(
+        select_float_kernel(
+            out.dtype(),
+            omarchy::ComputeKernel::ConvDw2dF32,
+            omarchy::ComputeKernel::ConvDw2dF16,
+            omarchy::ComputeKernel::ConvDw2dBF16),
+        dw2d_bindings,
+        dw,
+        omarchy::compute_dispatch_group_count(total));
+    return;
+  }
+
   // 1-D k-tap GEMM decomposition (2026-10-01 OpCost receipt): the direct
   // conv.comp kernel is memory-bound per output element and measured
   // 22-121 ms on the Kokoro vocoder shapes while the same convolution as
@@ -5672,44 +5713,164 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
         omarchy::ComputeKernel::MatmulF32,
         omarchy::ComputeKernel::MatmulF16,
         omarchy::ComputeKernel::MatmulBF16);
-    const auto base_params = params;
-    for (uint32_t row_base = 0; row_base < rows; row_base += block_rows) {
-      const uint32_t block = std::min(block_rows, rows - row_base);
-      params = base_params;
-      params.flags = (flip_ ? 1u : 0u) | 16u;
-      params.in_strides[3] = row_base;
-      params.count = block * kernel_products;
-      std::array<omarchy::ComputeBinding, 4> gather_bindings{
-          binding(x), binding(w), binding(x), binding(patches)};
-      encoder.dispatch_compute(
-          kernel,
-          gather_bindings,
-          params,
-          omarchy::compute_dispatch_group_count(params.count));
-      omarchy::ComputeParams gemm;
-      gemm.count = block * out_cols;
-      gemm.reduce_size = kernel_products;
-      gemm.output_size = gemm.count;
-      gemm.matrix_m = block;
-      gemm.matrix_n = out_cols;
-      gemm.matrix_k = kernel_products;
-      gemm.flags = 1u;
-      gemm.lhs_gap = kernel_products;
-      gemm.rhs_gap = kernel_products;
-      gemm.lhs_offset = 0;
-      gemm.rhs_offset = base_params.rhs_offset;
-      gemm.output_offset = base_params.output_offset + row_base * out_cols;
-      gemm.lhs_size = params.count;
-      gemm.rhs_size = checked_u32(w.size(), "Convolution", out);
-      std::array<omarchy::ComputeBinding, 4> gemm_bindings{
-          binding(patches), binding(w), binding(out), binding(out)};
-      encoder.dispatch_compute(
-          gemm_kernel,
-          gemm_bindings,
-          gemm,
-          matrix_group_count(out_cols),
-          matrix_group_count(block),
-          1u);
+    uint32_t gemm_tile_n = 16u;
+    uint32_t gemm_tile_m = 16u;
+    // Flag-on (VS-3 residual): run the im2col GEMM on the direct Nt
+    // kernel. When kernel_products is not a multiple of 8 (Parakeet
+    // frontend 3x3, K=9), gather stays compact and a strided copy into a
+    // zero-filled padded buffer adds the extra K columns as +0.0 terms —
+    // the same contributions the unpadded GEMM never evaluates, so the
+    // accumulator bits are unchanged.
+    const auto& caps = encoder.device().capabilities();
+    static const bool coopmat_disabled =
+        omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+    const Dtype im2col_dtype = out.dtype() == float16
+        ? float16
+        : out.dtype() == bfloat16 ? bfloat16 : float32;
+    const bool im2col_direct =
+        conv_direct_mm && caps.cooperative_matrix_f32_8 &&
+        caps.subgroup_size == 32u && !coopmat_disabled &&
+        out_cols >= 32u && (out_cols & 1u) == 0u &&
+        (im2col_dtype == float32 ||
+         (im2col_dtype == float16 && caps.cooperative_matrix_f16_8) ||
+         (im2col_dtype == bfloat16 && caps.cooperative_matrix_bf16_8));
+    const uint32_t k_eff = (kernel_products + 7u) / 8u * 8u;
+    auto run_rows = [&](const array* lhs_p,
+                        const array* rhs_p,
+                        bool use_direct) {
+      const auto base_params = params;
+      for (uint32_t row_base = 0; row_base < rows; row_base += block_rows) {
+        const uint32_t block = std::min(block_rows, rows - row_base);
+        params = base_params;
+        params.flags = (flip_ ? 1u : 0u) | 16u;
+        params.in_strides[3] = row_base;
+        params.count = block * kernel_products;
+        std::array<omarchy::ComputeBinding, 4> gather_bindings{
+            binding(x), binding(w), binding(x), binding(patches)};
+        encoder.dispatch_compute(
+            kernel,
+            gather_bindings,
+            params,
+            omarchy::compute_dispatch_group_count(params.count));
+        omarchy::ComputeParams gemm;
+        gemm.count = block * out_cols;
+        gemm.reduce_size = kernel_products;
+        gemm.output_size = gemm.count;
+        gemm.matrix_m = block;
+        gemm.matrix_n = out_cols;
+        gemm.matrix_k = kernel_products;
+        gemm.flags = 1u;
+        gemm.lhs_gap = kernel_products;
+        gemm.rhs_gap = kernel_products;
+        gemm.lhs_offset = 0;
+        gemm.rhs_offset = base_params.rhs_offset;
+        gemm.output_offset = base_params.output_offset + row_base * out_cols;
+        gemm.lhs_size = params.count;
+        gemm.rhs_size = checked_u32(w.size(), "Convolution", out);
+        std::array<omarchy::ComputeBinding, 4> gemm_bindings{
+            binding(patches), binding(w), binding(out), binding(out)};
+        auto pick_kernel = gemm_kernel;
+        uint32_t pick_tile_n = gemm_tile_n;
+        uint32_t pick_tile_m = gemm_tile_m;
+        // The padded path binds zero-based temporaries with k_eff gaps
+        // (even by construction); only the output offset can be odd.
+        const bool direct_aligned = rhs_p != nullptr
+            ? (gemm.output_offset & 1u) == 0u
+            : ((gemm.lhs_offset | gemm.rhs_offset | gemm.output_offset |
+                gemm.lhs_gap | gemm.rhs_gap) &
+               1u) == 0u;
+        if (use_direct && block >= 32u && direct_aligned) {
+          const omarchy::ComputeKernel direct_pick =
+              im2col_dtype == float16
+              ? omarchy::ComputeKernel::MatmulDirectF16Nt
+              : im2col_dtype == bfloat16
+                  ? omarchy::ComputeKernel::MatmulDirectBF16Nt
+                  : omarchy::ComputeKernel::MatmulDirectF32Nt;
+          const omarchy::DirectMatmulRoute route =
+              omarchy::select_direct_matmul_route(
+                  omarchy::kDirectMatmulRows,
+                  caps.device_name,
+                  im2col_dtype,
+                  false,
+                  true,
+                  block,
+                  out_cols,
+                  {direct_pick, 64u});
+          pick_kernel = route.kernel;
+          pick_tile_n = route.tile_n;
+          pick_tile_m = 64u;
+          if (rhs_p != nullptr) {
+            encoder.fill_buffer(
+                binding(*lhs_p).buffer,
+                0u,
+                static_cast<uint64_t>(block) * k_eff * out.itemsize(),
+                0);
+            copy_gpu_inplace(
+                patches,
+                *lhs_p,
+                Shape{static_cast<int64_t>(block),
+                      static_cast<int64_t>(kernel_products)},
+                Strides{static_cast<int64_t>(kernel_products), 1},
+                Strides{static_cast<int64_t>(k_eff), 1},
+                0,
+                0,
+                CopyType::General,
+                out.primitive().stream());
+            gemm.matrix_k = k_eff;
+            gemm.reduce_size = k_eff;
+            gemm.lhs_gap = k_eff;
+            gemm.rhs_gap = k_eff;
+            gemm.rhs_offset = 0;
+            gemm.lhs_size = checked_u32(
+                static_cast<uint64_t>(block) * k_eff, "Convolution", out);
+            gemm.rhs_size = checked_u32(
+                static_cast<uint64_t>(out_cols) * k_eff, "Convolution", out);
+            gemm_bindings = std::array<omarchy::ComputeBinding, 4>{
+                binding(*lhs_p),
+                binding(*rhs_p),
+                binding(out),
+                binding(out)};
+          }
+        }
+        encoder.dispatch_compute(
+            pick_kernel,
+            gemm_bindings,
+            gemm,
+            matrix_group_count(out_cols, pick_tile_n),
+            matrix_group_count(block, pick_tile_m),
+            1u);
+      }
+    };
+    if (im2col_direct && k_eff != kernel_products) {
+      array apad(
+          Shape{static_cast<int>(block_rows), static_cast<int>(k_eff)},
+          out.dtype(),
+          nullptr,
+          {});
+      apad.set_data(allocate_omarchy(apad.nbytes()));
+      encoder.add_temporary(apad);
+      array wpad(
+          Shape{static_cast<int>(out_cols), static_cast<int>(k_eff)},
+          out.dtype(),
+          nullptr,
+          {});
+      wpad.set_data(allocate_omarchy(wpad.nbytes()));
+      encoder.add_temporary(wpad);
+      encoder.fill_buffer(binding(wpad).buffer, 0u, wpad.nbytes(), 0);
+      copy_gpu_inplace(
+          w,
+          wpad,
+          Shape{static_cast<int64_t>(out_cols),
+                static_cast<int64_t>(kernel_products)},
+          Strides{static_cast<int64_t>(kernel_products), 1},
+          Strides{static_cast<int64_t>(k_eff), 1},
+          0,
+          0,
+          CopyType::General,
+          out.primitive().stream());
+      run_rows(&apad, &wpad, true);
+    } else {
+      run_rows(nullptr, nullptr, im2col_direct);
     }
     return;
   }
