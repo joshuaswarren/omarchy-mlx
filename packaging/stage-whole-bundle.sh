@@ -76,6 +76,9 @@ with open('$pin_path') as fh:
     # bundle as newer than any prior build output (the same rule
     # prepare-mlx.sh applies to the overlay).
     touch "$bundle_staging/manifest.json" "$bundle_staging/program-0.anec"
+    if [[ -n "${MLX_OMARCHY_WHOLE_BUNDLE_WHEEL:-}" ]]; then
+      rm -rf "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}"
+    fi
     echo "[bundle] staged $bundle_staging (manifest $actual_manifest, program $actual_program)"
   else
     echo "[bundle] runtime pin does not declare parakeet-encoder-whole; skipping whole-bundle stage"

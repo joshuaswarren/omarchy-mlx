@@ -62,3 +62,5 @@ fi
 echo "PASS unset source refused"
 
 echo "ALL PASS"
+
+# cleanup nit from review: remove the extract dir after staging
