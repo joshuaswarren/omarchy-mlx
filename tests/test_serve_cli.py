@@ -999,6 +999,29 @@ class CatalogCommandTests(CliTestBase):
         self.assertEqual(code, 0)
         self.assertIn("bundled fallback", out)
 
+    def catalog_status_with_cache(self, data: bytes) -> str:
+        cache = Path(self.tmp.name) / "cache.json"
+        cache.write_bytes(data)
+        with unittest.mock.patch.object(catalog, "cache_path", lambda _h=None: cache):
+            code, out, _ = self.run_cli(["catalog", "status"])
+        self.assertEqual(code, 0)
+        return out
+
+    def test_catalog_status_valid_cache_is_live(self):
+        out = self.catalog_status_with_cache(catalog.bundled_path().read_bytes())
+        self.assertIn("live:   cache\n", out)
+        self.assertIn("h old)\n", out)
+
+    def test_catalog_status_corrupt_cache_names_bundled_fallback(self):
+        # load_catalog() rejects these caches and serves the bundled file.
+        schema_invalid = json.dumps({"version": catalog.SCHEMA_VERSION}).encode()
+        for label, data in (("bad json", b"{not json"), ("bad schema", schema_invalid)):
+            with self.subTest(label):
+                self.stdout = io.StringIO()
+                out = self.catalog_status_with_cache(data)
+                self.assertIn("live:   bundled fallback\n", out)
+                self.assertIn("h old, invalid)", out)
+
     def test_reserve_round_trip(self):
         code, out, _ = self.run_cli(["reserve", "laya", "1.1", "--note", "decisions"])
         self.assertEqual(code, 0)

@@ -1093,17 +1093,21 @@ def cmd_catalog(args, _cat, home) -> int:
         return 0
     if args.catalog_command == "status":
         path = catalog.cache_path(home)
+        cache_ok = False
         if path.is_file():
             age_h = 0.0
             import time
 
             age_h = (time.time() - path.stat().st_mtime) / 3600.0
-            print(f"cache:  {path} ({age_h:.1f}h old)")
+            # load_catalog() serves the cache only when it validates; say the same.
+            cache_ok = catalog._is_valid(path)
+            note = "" if cache_ok else ", invalid"
+            print(f"cache:  {path} ({age_h:.1f}h old{note})")
         else:
             print(f"cache:  none at {path}")
         print(f"bundled: {catalog.bundled_path()}")
         print(f"url:    {os.environ.get('MLX_OMARCHY_CATALOG_URL') or catalog.DEFAULT_CATALOG_URL}")
-        print(f"live:   {'cache' if path.is_file() else 'bundled fallback'}")
+        print(f"live:   {'cache' if cache_ok else 'bundled fallback'}")
         return 0
     result = catalog.refresh(home=home, offline=offline_requested(args))
     print(f"catalog refresh: {result['status']} ({result['detail']})")
