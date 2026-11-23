@@ -272,12 +272,15 @@ void check_batched(int batch, int heads, int kv_heads, int keys, float amplitude
   CHECK(e_split.max <= e_fused.max + 2.0 * rounding + 1e-6);
   CHECK(e_split.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
   CHECK(e_split.max <= 3.0 * rounding + 1e-5);
-  // MLX_OMARCHY_SDPA_DECODE_BATCH=0 restores the batch == 1 gate: the same call falls back to the composed route.
+  // MLX_OMARCHY_SDPA_DECODE_BATCH=0 restores the batch == 1 gate: the same call falls back to the composed route under
+  // either split flag, so compare killed to a baseline run under the same env, not to the batched fused kernel.
   setenv("MLX_OMARCHY_SDPA_DECODE_BATCH", "0", 1);
   Run killed = run_attention(q.x, k.x, v.x, scale, "1", stream);
+  Run baseline = run_attention(q.x, k.x, v.x, scale, "0", stream);
   unsetenv("MLX_OMARCHY_SDPA_DECODE_BATCH");
   if (split_device_ready()) {
-    CHECK(killed.launched == fused.launched);
+    CHECK(killed.launched == baseline.launched);
+    CHECK(killed.out == baseline.out);
     CHECK(killed.out == fused.out);
   }
 }
@@ -611,10 +614,10 @@ TEST_CASE("split-K decode SDPA: uncovered shapes keep their dispatch count") {
     CHECK(on.out == off.out);
   }
   {
-    Stored q = make_bf16(pattern(2 * 32 * 128, 8, 1.0f), Shape{2, 32, 1, 128}, stream);
-    Stored k = make_bf16(pattern(2 * 8 * 300 * 128, 9, 1.0f), Shape{2, 8, 300, 128}, stream);
-    Stored v = make_bf16(pattern(2 * 8 * 300 * 128, 10, 1.0f), Shape{2, 8, 300, 128}, stream);
-    float scale = 1.0f / std::sqrt(128.0f);
+    Stored q = make_bf16(pattern(2 * 14 * 64, 8, 1.0f), Shape{2, 14, 1, 64}, stream);
+    Stored k = make_bf16(pattern(2 * 2 * 300 * 64, 9, 1.0f), Shape{2, 2, 300, 64}, stream);
+    Stored v = make_bf16(pattern(2 * 2 * 300 * 64, 10, 1.0f), Shape{2, 2, 300, 64}, stream);
+    float scale = 1.0f / std::sqrt(64.0f);
     Run off = run_attention(q.x, k.x, v.x, scale, "0", stream);
     Run on = run_attention(q.x, k.x, v.x, scale, "1", stream);
     CHECK(on.launched == off.launched);
