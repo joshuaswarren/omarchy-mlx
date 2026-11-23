@@ -42,37 +42,21 @@ namespace mlx::core::omarchy {
 // 3-byte range would have the shader touch a byte outside the bound
 // range. BYTE_AT extracts only lanes below the array's element count
 // and unclaimed output lanes stay at the host pre-zero fill, so the
-// widened window keeps results bit-exact. Allocations are page-rounded
-// (round_size), so the rounded range stays inside the backing buffer;
-// the clamp below keeps that true regardless.
+// widened window keeps results bit-exact.
 inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
-  VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
-      static_cast<VkDeviceSize>(value.data_size()) * value.itemsize();
-  // A strided window (concatenate and pad outputs) can reach past
-  // data_size, and pad marks its window contiguous: bind through the last
-  // element the positive strides reach, or a device with robust buffer
-  // access drops those writes.
-  if (value.size() > 0) {
-    VkDeviceSize reach = 0;
-    for (int axis = 0; axis < value.ndim(); ++axis) {
-      if (value.strides()[axis] > 0) {
-        reach += static_cast<VkDeviceSize>(value.shape(axis) - 1) *
-            static_cast<VkDeviceSize>(value.strides()[axis]);
-      }
-    }
-    end = std::max<VkDeviceSize>(
-        end,
-        static_cast<VkDeviceSize>(value.offset()) +
-            (reach + 1) * value.itemsize());
-  }
-  const VkDeviceSize word_end = (end + 3) & ~static_cast<VkDeviceSize>(3);
-  // A zero range is invalid Vulkan; an empty array keeps one byte.
+
+  // Bind the full allocation. A window computed from this array's own
+  // offset and item size can fall short when a later dispatch writes
+  // past it (the concatenate's second copy writes the upper half of a
+  // buffer whose first-half view declared the range), and conformant
+  // drivers drop out-of-range writes. Allocations are page-rounded, so
+  // the full size stays inside the backing memory.
+
   return {
       buffer->buffer,
       0,
-      std::min<VkDeviceSize>(std::max<VkDeviceSize>(word_end, 1),
-                             buffer->size),
+      std::max<VkDeviceSize>(buffer->size, 1),
       buffer};
 }
 
