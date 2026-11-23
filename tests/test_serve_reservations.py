@@ -6,7 +6,10 @@ plausible bug would break.
 """
 
 import multiprocessing
+import os
+import subprocess
 import tempfile
+import threading
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -156,6 +159,90 @@ class ConcurrentSetReservationTests(unittest.TestCase):
                 for name, val in regs.items():
                     self.assertEqual(val["bytes"], int(1 * GiB),
                                      f"{name} has wrong bytes")
+
+
+def _deep_list(depth):
+    """A depth-deep nested list, built without recursion."""
+    deep = []
+    for _ in range(depth):
+        deep = [deep]
+    return deep
+
+
+class UnreadableReservationsFileTests(unittest.TestCase):
+    """A reservations file that is not valid UTF-8 JSON, or nests too
+    deeply, is a BudgetError (CLI exit 2), never a raw traceback."""
+
+    CASES = {
+        "invalid_utf8": b'{"x": {"bytes": 1, "note": "\xff"}}',
+        "deep_nesting": b"[" * 200000 + b"]" * 200000,
+        "huge_int": b'{"x": {"bytes": ' + b"1" * 5000 + b"}}",
+    }
+
+    def _home_with(self, raw):
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        (home / budget.RESERVATIONS_FILE).write_bytes(raw)
+        return home
+
+    def _load_on_small_stack(self, home):
+        """Load in a thread with a 4 MiB stack, so the nesting limit does
+        not depend on the host's ulimit -s. Returns the exception raised."""
+        caught = []
+
+        def run():
+            try:
+                budget.load_reservations(home)
+            except BaseException as exc:  # returned for the caller to assert on
+                caught.append(exc)
+
+        old = threading.stack_size(4 * 1024 * 1024)
+        try:
+            worker = threading.Thread(target=run)
+            worker.start()
+        finally:
+            threading.stack_size(old)
+        worker.join()
+        return caught[0] if caught else None
+
+    def test_load_raises_budget_error(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)  # the CLI child drops PYTHONINTMAXSTRDIGITS too
+        for label, raw in self.CASES.items():
+            with self.subTest(label):
+                exc = self._load_on_small_stack(self._home_with(raw))
+                self.assertIsInstance(exc, budget.BudgetError)
+                self.assertIn("refusing to guess", str(exc))
+
+    def test_deeply_nested_field_raises_budget_error(self):
+        # Decodes on 3.14, then the validator's repr() recurses.
+        for field in ("note", "state"):
+            with self.subTest(field):
+                home = self._home_with(b"{}")
+                parsed = {"x": {"bytes": 1, field: _deep_list(200000)}}
+                with unittest.mock.patch.object(budget.json, "loads",
+                                                return_value=parsed):
+                    exc = self._load_on_small_stack(home)
+                self.assertIsInstance(exc, budget.BudgetError)
+                self.assertIn("refusing to guess", str(exc))
+
+    def test_cli_unreserve_exits_2(self):
+        for label, raw in self.CASES.items():
+            with self.subTest(label):
+                home = self._home_with(raw)
+                env = dict(os.environ, MLX_OMARCHY_HOME=str(home),
+                           PYTHONPATH=str(REPO_ROOT / "serve"))
+                env.pop("PYTHONINTMAXSTRDIGITS", None)
+                # Pin the child's stack at 8 MiB before exec: Python 3.14
+                # bounds JSON nesting by the C stack, so a bigger ulimit -s
+                # would let the deep payload decode.
+                proc = subprocess.run(
+                    ["/bin/sh", "-c", 'ulimit -S -s 8192 2>/dev/null; exec "$@"', "sh",
+                     sys.executable, "-m", "mlx_omarchy_serve", "unreserve", "x"],
+                    env=env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("refusing to guess", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
 
 
 def _install_patch(home_str):  # pragma: no cover (multiprocessing init)

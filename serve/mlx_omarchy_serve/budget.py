@@ -236,8 +236,17 @@ def _load_reservations_file(path: Path) -> dict[str, dict]:
         obj = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
+        # ValueError covers JSONDecodeError, UnicodeDecodeError and the
+        # int-digit limit; RecursionError covers deeply nested JSON.
         raise BudgetError(f"reservations file unreadable ({exc}); refusing to guess") from exc
+    try:
+        return _validate_reservations(obj)
+    except RecursionError as exc:  # repr() of a deeply nested field
+        raise BudgetError("reservations file nested too deeply; refusing to guess") from exc
+
+
+def _validate_reservations(obj) -> dict[str, dict]:
     if not isinstance(obj, dict):
         raise BudgetError("reservations file must be an object of name -> reservation")
     out: dict[str, dict] = {}
