@@ -5353,13 +5353,17 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
 
   // Same depthwise kernel over a zero-padded copy when padding is
   // symmetric (Parakeet conformer conv1d, k=9 pad=4): the pad taps read
-  // the zeroed region and contribute the same +0.0 terms conv.comp's
-  // index guards add, so the ascending-tap accumulator and the stored
-  // bits are identical. Batch 1 only; flagged with the unit-window
-  // direct-GEMM route above (VS-3).
+  // the zeroed region and contribute +0.0*w terms where conv.comp's
+  // index guards skip the tap entirely. That is bit-identical except
+  // one corner: a window accumulating exactly -0.0 flips to +0.0 when a
+  // skipped tap's weight is positive. Accepted because the measured
+  // encoder outputs were bit-identical across the ABBA corpus, and a
+  // per-tap bound check would cost the straight-line win this route
+  // exists for. Batch 1, contiguous input only; flagged with the
+  // unit-window direct-GEMM route above (VS-3).
   if (conv_direct_mm && spatial == 1 && groups_ == in_channels &&
       out_channels == in_channels && in_channels_per_group == 1 &&
-      !flip_ && batch == 1 &&
+      !flip_ && batch == 1 && x.flags().row_contiguous &&
       axis_or_one(kernel_strides_, 0) == 1u && pad_lo_axis(0) > 0u &&
       axis_or_one(padding_hi_, 0) == pad_lo_axis(0) &&
       axis_or_one(kernel_dilation_, 0) == 1u &&
