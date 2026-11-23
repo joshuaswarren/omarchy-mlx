@@ -775,7 +775,23 @@ def _kokoro_runtime(assets_dir: str):
     for name in KOKORO_PACK["voices"]:
         path = Path(assets_dir) / "voices" / f"{name}.safetensors"
         pipe.voices[name] = load_voice_tensor(str(path))
+    _g2p_reload_without_dead_pipes(pipe.g2p)
     return pipe
+
+
+def _g2p_reload_without_dead_pipes(g2p) -> None:
+    """misaki's English G2P reads only text/tag_/whitespace_ off each spaCy
+    token, so the parser, NER and lemmatizer pipes run for nothing (~50% of
+    per-call G2P time, phoneme-identical on 108 tag-sensitive phrases; VS-5).
+    Reload the same model without them. Other languages' G2Ps carry no
+    .nlp and are left alone."""
+    nlp = getattr(g2p, "nlp", None)
+    if nlp is None:
+        return
+    import spacy
+    g2p.nlp = spacy.load(
+        f"{nlp.meta['lang']}_{nlp.meta['name']}",
+        disable=["parser", "ner", "lemmatizer"])
 
 
 def _kokoro_streamer(assets_dir: str):
