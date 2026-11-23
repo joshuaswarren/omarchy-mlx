@@ -227,7 +227,73 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   }
 }
 
+// (T,1) batched serving: B sequences, each an independent single-query decode on its own strided
+// cache region. The route dispatches the one-token pass pair once per sequence, so the launched
+// count is 2 * batch and every sequence's output meets the same float64 gate as the batch-1 case.
+void check_batched(int batch, int heads, int kv_heads, int keys, float amplitude, int width = 128) {
+  Stream stream = gpu_stream();
+  Stored q = make_bf16(
+      pattern(static_cast<size_t>(batch) * heads * width, 11, amplitude),
+      Shape{batch, heads, 1, width}, stream);
+  Stored k = make_bf16(
+      pattern(static_cast<size_t>(batch) * kv_heads * keys * width, 23, amplitude),
+      Shape{batch, kv_heads, keys, width}, stream);
+  Stored v = make_bf16(
+      pattern(static_cast<size_t>(batch) * kv_heads * keys * width, 37, 1.0f),
+      Shape{batch, kv_heads, keys, width}, stream);
+  const float scale = 1.0f / std::sqrt(static_cast<float>(width));
+  std::vector<double> ref(static_cast<size_t>(batch) * heads * width);
+  for (int b = 0; b < batch; ++b) {
+    auto seq = reference(
+        std::vector<float>(q.values.begin() + static_cast<size_t>(b) * heads * width,
+                           q.values.begin() + static_cast<size_t>(b + 1) * heads * width),
+        std::vector<float>(k.values.begin() + static_cast<size_t>(b) * kv_heads * keys * width,
+                           k.values.begin() + static_cast<size_t>(b + 1) * kv_heads * keys * width),
+        std::vector<float>(v.values.begin() + static_cast<size_t>(b) * kv_heads * keys * width,
+                           v.values.begin() + static_cast<size_t>(b + 1) * kv_heads * keys * width),
+        heads, kv_heads, keys, keys, 0, width, scale);
+    std::copy(seq.begin(), seq.end(), ref.begin() + static_cast<size_t>(b) * heads * width);
+  }
+  Run fused = run_attention(q.x, k.x, v.x, scale, "0", stream);
+  Run split = run_attention(q.x, k.x, v.x, scale, "1", stream);
+  Errors e_fused = error_against(fused.out, ref);
+  Errors e_split = error_against(split.out, ref);
+  INFO("batch " << batch << " heads " << heads << " kv " << kv_heads << " keys " << keys
+                << " split launches " << split.launched);
+  if (split_device_ready()) {
+    CHECK(split.launched == static_cast<uint64_t>(2 * batch));
+  } else {
+    printf("Skipping: split route not available on this device\n");
+  }
+  double rounding = 0.0;
+  for (double r : ref) {
+    rounding = std::max(rounding, std::fabs(r) * std::ldexp(1.0, -8));
+  }
+  CHECK(e_split.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_split.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_split.max <= 3.0 * rounding + 1e-5);
+  // MLX_OMARCHY_SDPA_DECODE_BATCH=0 restores the batch == 1 gate: the same call falls back to the composed route.
+  setenv("MLX_OMARCHY_SDPA_DECODE_BATCH", "0", 1);
+  Run killed = run_attention(q.x, k.x, v.x, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_BATCH");
+  if (split_device_ready()) {
+    CHECK(killed.launched == fused.launched);
+    CHECK(killed.out == fused.out);
+  }
+}
+
 } // namespace
+
+TEST_CASE("split-K decode SDPA: batched (T,1) serving dispatches the one-token pair per sequence") {
+  if (!compute_available()) {
+    return;
+  }
+  check_batched(2, 32, 8, 500, 1.0f);
+  check_batched(4, 32, 8, 1030, 1.0f);
+  check_batched(3, 16, 16, 320, 1.0f);
+  check_batched(2, 32, 8, 9000, 1.0f);
+  check_batched(2, 16, 4, 513, 1.0f, 256);
+}
 
 TEST_CASE("split-K decode SDPA: error against float64 and two dispatches, group 4") {
   if (!compute_available()) {

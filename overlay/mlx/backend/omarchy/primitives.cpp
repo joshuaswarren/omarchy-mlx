@@ -16724,7 +16724,7 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
-  // Split-K decode route (bf16, head width 128 or 256, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
+  // Split-K decode route (bf16, head width 128 or 256, one query token; batch 1, or (T,1) batched serving under the same decode_batch_ok rule): pass 1 per (key-value head, block of 128 keys) for the
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
   // fused kernel above is one 256-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
   // blocks and reads each K and V row once per group. Float32 arithmetic in a different order, so the result is not bit-equal to the
@@ -16744,11 +16744,13 @@ void ScaledDotProductAttention::eval_gpu(
     if (split_wanted && split_device_ready &&
         (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
         q.dtype() == bfloat16 && k.dtype() == bfloat16 && v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
-        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && batch == 1 && (q_len == 1 || split_rows_route) &&
+        inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ && decode_batch_ok && (q_len == 1 || split_rows_route) &&
         (head_dim == 128 || head_dim == 256) && v_dim == head_dim && k_len > 0 && 1048577 > k_len &&
         (split_group == 1u || split_group == 2u || split_group == 4u || split_group == 8u) &&
         q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
-        k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 && v.strides()[1] % 2 == 0 && v.strides()[2] % 2 == 0) {
+        k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 && v.strides()[1] % 2 == 0 && v.strides()[2] % 2 == 0 &&
+        (batch == 1 ||
+            (k.strides()[0] % 8 == 0 && v.strides()[0] % 4 == 0 && out.strides()[3] == 1))) {
       omarchy::ComputeParams split_params;
       split_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
       split_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
@@ -16805,25 +16807,38 @@ void ScaledDotProductAttention::eval_gpu(
         const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
             : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
         const uint32_t split_q_offset = split_params.lhs_offset;
+        const uint32_t split_k_offset = split_params.rhs_offset;
+        const uint32_t split_v_offset = split_params.aux_offset;
         const uint32_t split_out_offset = split_params.output_offset;
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
-        split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
-        // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
-        for (uint32_t row = 0; row < split_rows; ++row) {
-          const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
-          const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
-          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 2);
-          array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
-          scratch.set_data(allocate_omarchy(scratch.nbytes()));
-          encoder.add_temporary(scratch);
-          split_params.matrix_k = row_k;
-          split_params.lhs_offset = split_q_offset + row * split_q_row;
-          split_params.output_offset = split_out_offset + row * split_out_row;
-          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
-          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
-          std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
-          encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+        split_params.out_strides[0] =
+            (split_rows > 1u || batch > 1) ? checked_u32(out.strides()[1], tag, out) : 0u;
+        const uint32_t split_q_batch = checked_u32(q.strides()[0], tag, out);
+        const uint32_t split_k_batch = checked_u32(k.strides()[0], tag, out);
+        const uint32_t split_v_batch = checked_u32(v.strides()[0], tag, out);
+        const uint32_t split_o_batch = checked_u32(out.strides()[0], tag, out);
+        // Batched (T,1) decode walks the sequences on the host: each pair of passes runs on one sequence's strided
+        // cache view, so a batch row is bit-equal to the same sequence decoded alone on this route. Verify rows:
+        // row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
+        for (uint32_t b = 0; b < static_cast<uint32_t>(batch); ++b) {
+          split_params.rhs_offset = split_k_offset + b * split_k_batch;
+          split_params.aux_offset = split_v_offset + b * split_v_batch;
+          for (uint32_t row = 0; row < split_rows; ++row) {
+            const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
+            const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
+            const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 2);
+            array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
+            scratch.set_data(allocate_omarchy(scratch.nbytes()));
+            encoder.add_temporary(scratch);
+            split_params.matrix_k = row_k;
+            split_params.lhs_offset = split_q_offset + b * split_q_batch + row * split_q_row;
+            split_params.output_offset = split_out_offset + b * split_o_batch + row * split_out_row;
+            std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+            encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+            std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+            encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+          }
         }
         return;
       }
