@@ -117,10 +117,16 @@ void main() {
     }
 
     float sub_partial = subgroupAdd(reg_sq);
-    // flags&1: parity slot breaks the row-to-row WAR edge on s_partial, and
-    // every subgroup reduces the partials itself, so neither the write-back
-    // barrier nor the tail barrier is needed (one barrier per row).
-    uint slot = (((params.flags & 1u) != 0u) && ((row & 1u) != 0u)) ? 8u : 0u;
+    // flags&1: per-iteration parity slot (row / grid alternates every loop
+    // trip for any grid size) breaks the row-to-row WAR edge on s_partial,
+    // and every subgroup reduces the partials itself, so neither the
+    // write-back barrier nor the tail barrier is needed (one barrier per
+    // row).
+    uint slot =
+        (((params.flags & 1u) != 0u) &&
+         (((row / gl_NumWorkGroups.x) & 1u) != 0u))
+            ? 8u
+            : 0u;
     if (lane == 0u) {
       s_partial[slot + sub_id] = sub_partial;
     }
