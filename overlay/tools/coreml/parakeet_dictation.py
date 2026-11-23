@@ -21,6 +21,7 @@ arbitrary recognition, preflight never does.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import importlib.machinery
 import importlib.util
 import json
@@ -481,19 +482,52 @@ class DictationTranscriber:
                 samples, self._fixture_samples_sha)
             session_errors = _session_error_kinds()
             try:
-                for length in plan_chunks(int(samples.size)):
-                    if self._cancelled(cancel):
-                        raise DictationCancelled("cancelled at a chunk boundary")
-                    if time.monotonic() - started > deadline / 1000.0:
-                        raise DictationTimedOut(
-                            f"transcription exceeded its {deadline} ms deadline"
+                if os.environ.get("MLX_OMARCHY_LONGFORM_PREFETCH") == "1":
+                    plan = plan_chunks(int(samples.size))
+                    chunk_parts = []
+                    offset = 0
+                    for length in plan:
+                        chunk_parts.append(samples[offset:offset + length])
+                        offset += length
+                    with concurrent.futures.ThreadPoolExecutor(
+                            max_workers=1) as pool:
+                        pending = pool.submit(
+                            self._encode_chunk, chunk_parts[0],
+                            duration_aware)
+                        for i in range(len(chunk_parts)):
+                            if self._cancelled(cancel):
+                                raise DictationCancelled(
+                                    "cancelled at a chunk boundary")
+                            if (time.monotonic() - started
+                                    > deadline / 1000.0):
+                                raise DictationTimedOut(
+                                    f"transcription exceeded its "
+                                    f"{deadline} ms deadline")
+                            decode_hidden, decode_frames = pending.result()
+                            if i + 1 < len(chunk_parts):
+                                pending = pool.submit(
+                                    self._encode_chunk, chunk_parts[i + 1],
+                                    duration_aware)
+                            chunk_tokens, hidden, cell = self._decode_chunk(
+                                decode_hidden, decode_frames, hidden, cell,
+                                cancel)
+                            tokens.extend(chunk_tokens)
+                else:
+                    for length in plan_chunks(int(samples.size)):
+                        if self._cancelled(cancel):
+                            raise DictationCancelled(
+                                "cancelled at a chunk boundary")
+                        if time.monotonic() - started > deadline / 1000.0:
+                            raise DictationTimedOut(
+                                f"transcription exceeded its "
+                                f"{deadline} ms deadline"
+                            )
+                        chunk = samples[:length]
+                        samples = samples[length:]
+                        chunk_tokens, hidden, cell = self._transcribe_chunk(
+                            chunk, hidden, cell, cancel, duration_aware
                         )
-                    chunk = samples[:length]
-                    samples = samples[length:]
-                    chunk_tokens, hidden, cell = self._transcribe_chunk(
-                        chunk, hidden, cell, cancel, duration_aware
-                    )
-                    tokens.extend(chunk_tokens)
+                        tokens.extend(chunk_tokens)
             except session_errors as error:
                 # The resident session (or its worker/daemon) ended
                 # under this request. Refusing this one request keeps
@@ -505,6 +539,17 @@ class DictationTranscriber:
 
     def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel,
                           duration_aware: bool):
+        decode_hidden, decode_frames = self._encode_chunk(
+            chunk_waveform, duration_aware)
+        return self._decode_chunk(
+            decode_hidden, decode_frames, hidden, cell, cancel)
+
+    def _encode_chunk(self, chunk_waveform, duration_aware: bool):
+        # Feature stage: mel frontend plus the encoder island. Under
+        # MLX_OMARCHY_LONGFORM_PREFETCH this half runs on a single-worker
+        # executor thread while the main thread decodes the previous chunk;
+        # the runner is only ever called by that worker, so island submits
+        # stay serial and decoder inputs are bit-identical.
         mx = self._mx
         with mx.stream(mx.gpu):
             waveform = mx.array(chunk_waveform)
@@ -542,7 +587,13 @@ class DictationTranscriber:
                     "slice-decode a mask with holes")
         decode_hidden = (encoder_hidden if decode_frames == window
                          else encoder_hidden[:, :decode_frames, :])
+        return decode_hidden, decode_frames
 
+    def _decode_chunk(self, decode_hidden, decode_frames, hidden, cell,
+                      cancel):
+        # Decode stage: recurrent state plus the TDT joint loop, all on the
+        # GPU stream. Prefetch overlaps the next chunk's encoder with this.
+        mx = self._mx
         if hidden is None:
             with mx.stream(mx.gpu):
                 hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
