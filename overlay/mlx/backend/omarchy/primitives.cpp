@@ -190,6 +190,14 @@ const QmmGeometry& qmm_geometry() {
               dev.physical_type(),
               wide_caps,
               omarchy::device_local_activations_enabled())) {
+        // BMG defaults to the uvec2 fast-tile load: +2.2% at ctx 512 (5/5
+        // interleaved pairs, ids identical), neutral at ctx 8192 and on
+        // the Apple path.
+        if (caps.device_name.find("BMG") != std::string::npos) {
+          return QmmGeometry{
+              32u, 32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+              K::QmmVecQ4MultiSubgroupBF16R2S16W2, "2x16w2"};
+        }
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
