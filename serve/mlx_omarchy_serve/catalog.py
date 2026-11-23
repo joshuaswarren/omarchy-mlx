@@ -357,7 +357,7 @@ def validate_catalog(obj) -> None:
                                    f"{where}.first_text_budget_ms")
         for field, kind in (("chat_model", "chat"), ("decision_model", "decisions")):
             ref = pair[field]
-            if ref not in model_by_id:
+            if not isinstance(ref, str) or ref not in model_by_id:
                 _fail(f"{where}.{field}: unknown model id {ref!r}")
             if model_by_id[ref]["kind"] != kind:
                 _fail(f"{where}.{field}: {ref!r} is kind {model_by_id[ref]['kind']!r}, "
@@ -384,9 +384,13 @@ def validate_file(path: Path) -> dict:
         raise CatalogError(f"{path}: {len(raw)} bytes exceeds {CATALOG_MAX_BYTES}")
     try:
         obj = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    # ValueError covers bad JSON, bad UTF-8 and over-long integers.
+    except (ValueError, RecursionError) as exc:
         raise CatalogError(f"{path}: invalid JSON ({exc})") from exc
-    validate_catalog(obj)
+    try:
+        validate_catalog(obj)
+    except RecursionError as exc:  # repr() of a deeply nested value in an error message
+        raise CatalogError(f"{path}: nested too deeply") from exc
     return obj
 
 
@@ -396,6 +400,14 @@ def _is_fresh(path: Path, ttl_hours: float, now: float | None) -> bool:
     ts = now if now is not None else datetime.now(timezone.utc).timestamp()
     age_hours = (ts - path.stat().st_mtime) / 3600.0
     return age_hours < ttl_hours
+
+
+def _is_valid(path: Path) -> bool:
+    try:
+        validate_file(path)
+    except (OSError, CatalogError):
+        return False
+    return True
 
 
 def load_catalog(home: Path | None = None, prefer_cache: bool = True) -> dict:
@@ -483,13 +495,16 @@ def refresh(
 
     if offline:
         return {"status": "skipped", "path": str(dest), "detail": "offline opt-out honored"}
-    if _is_fresh(dest, ttl, now):
+    # A missing or damaged cache is never fresh and never revalidated with
+    # the stored ETag: a 304 would leave it damaged until upstream changes.
+    cache_ok = _is_valid(dest)
+    if cache_ok and _is_fresh(dest, ttl, now):
         return {"status": "fresh", "path": str(dest), "detail": f"cache younger than {ttl:g}h"}
 
     etag_path = dest.with_suffix(dest.suffix + ".etag")
     headers = {"User-Agent": "mlx-omarchy-serve-catalog"}
     try:
-        if etag_path.is_file():
+        if cache_ok and etag_path.is_file():
             stored = etag_path.read_text(encoding="utf-8").strip()
             if stored:
                 headers["If-None-Match"] = stored
@@ -505,9 +520,13 @@ def refresh(
             body = response.read(CATALOG_MAX_BYTES + 1)
             new_etag = response.headers.get("ETag", "")
     except urllib.error.HTTPError as exc:
-        if exc.code == 304:
-            dest.touch()
-            return {"status": "not-modified", "path": str(dest), "detail": "etag match"}
+        if exc.code == 304 and _is_valid(dest):  # recheck: the cache may change in flight
+            try:
+                os.utime(dest)  # unlike touch(), never creates a missing cache
+            except OSError:
+                pass
+            else:
+                return {"status": "not-modified", "path": str(dest), "detail": "etag match"}
         status = "fallback" if not dest.is_file() else "kept"
         return {"status": status, "path": str(dest), "detail": f"fetch failed: {exc}"}
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -519,7 +538,7 @@ def refresh(
                 "detail": f"catalog exceeds {CATALOG_MAX_BYTES} bytes"}
     try:
         validate_catalog(json.loads(body))
-    except (json.JSONDecodeError, UnicodeDecodeError, CatalogError) as exc:
+    except (ValueError, RecursionError, CatalogError) as exc:
         return {"status": "kept" if dest.is_file() else "fallback", "path": str(dest),
                 "detail": f"fetched catalog rejected: {exc}"}
 

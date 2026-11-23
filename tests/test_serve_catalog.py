@@ -69,6 +69,7 @@ def catalog_of(*models, **top):
 
 
 VALID = catalog_of(entry())
+DEEPLY_NESTED = b"[" * 100_000 + b"]" * 100_000  # RecursionError in json.loads
 
 
 class ValidateTests(unittest.TestCase):
@@ -257,6 +258,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(500)
             return
         match = self.headers.get("If-None-Match")
+        store["if_none_match"].append(match)
+        if store.get("before_reply"):
+            store.pop("before_reply")()
         if match and store.get("etag") and match == store["etag"] and not store.get("changed"):
             self.send_response(304)
             self.end_headers()
@@ -287,7 +291,8 @@ class RefreshTests(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.store = {"body": json.dumps(VALID).encode(), "etag": '"v1"',
-                      "requests": 0, "fail": False, "changed": False}
+                      "requests": 0, "fail": False, "changed": False,
+                      "if_none_match": []}
         self.server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
         self.server.catalog_store = self.store
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -318,12 +323,59 @@ class RefreshTests(unittest.TestCase):
     def test_etag_304_keeps_cache(self):
         self.refresh(ttl_hours=0)
         cache = catalog.cache_path(self.home)
-        before = (cache.read_bytes(), cache.stat().st_mtime_ns)
-        result = self.refresh(ttl_hours=0)
+        body = cache.read_bytes()
+        expired = cache.stat().st_mtime - 48 * 3600
+        os.utime(cache, (expired, expired))
+        result = self.refresh(ttl_hours=24)
         self.assertEqual(result["status"], "not-modified")
+        self.assertEqual(self.store["if_none_match"][-1], '"v1"')
+        self.assertEqual(cache.read_bytes(), body)
+        self.assertEqual(self.refresh(ttl_hours=24)["status"], "fresh")  # the 304 renewed the TTL
+
+    def _assert_damaged_cache_refetches(self, damage):
+        self.assertEqual(self.refresh(ttl_hours=0)["status"], "updated")
         cache = catalog.cache_path(self.home)
-        self.assertEqual(cache.read_bytes(), before[0])
-        self.assertGreaterEqual(cache.stat().st_mtime_ns, before[1])  # touch revalidates TTL
+        damage(cache)  # the stored .etag stays behind
+        result = self.refresh(ttl_hours=24)  # a damaged cache is never fresh
+        self.assertEqual(result["status"], "updated")
+        self.assertIsNone(self.store["if_none_match"][-1])
+        self.assertEqual(catalog.validate_file(cache)["version"], 1)
+
+    def test_deleted_cache_refetches_despite_stored_etag(self):
+        self._assert_damaged_cache_refetches(Path.unlink)
+
+    def test_empty_cache_refetches_despite_stored_etag(self):
+        self._assert_damaged_cache_refetches(lambda path: path.write_bytes(b""))
+
+    def test_malformed_pair_reference_refetches_despite_stored_etag(self):
+        def damage(path):
+            obj = bundled_catalog()
+            obj["pairs"][0]["chat_model"] = ["not", "an", "id"]  # unhashable
+            path.write_text(json.dumps(obj))
+        self._assert_damaged_cache_refetches(damage)
+
+    def test_huge_integer_cache_refetches_despite_stored_etag(self):
+        self._assert_damaged_cache_refetches(  # ValueError: int digit limit
+            lambda path: path.write_bytes(b'{"version": ' + b"1" * 5000 + b"}"))
+
+    def test_deeply_nested_cache_refetches_despite_stored_etag(self):
+        self._assert_damaged_cache_refetches(lambda path: path.write_bytes(DEEPLY_NESTED))
+
+    def test_deeply_nested_field_cache_refetches_despite_stored_etag(self):
+        def damage(path):  # parses on 3.14; the validator's error message recurses
+            deep = "[" * 50_000 + "]" * 50_000
+            path.write_text(json.dumps(bundled_catalog()).replace(
+                '"version": 1', '"version": ' + deep, 1))
+        self._assert_damaged_cache_refetches(damage)
+
+    def test_304_does_not_recreate_a_cache_deleted_in_flight(self):
+        self.refresh(ttl_hours=0)
+        cache = catalog.cache_path(self.home)
+        self.store["before_reply"] = cache.unlink
+        result = self.refresh(ttl_hours=0)
+        self.assertEqual(self.store["if_none_match"][-1], '"v1"')
+        self.assertEqual(result["status"], "fallback")
+        self.assertFalse(cache.exists())
 
     def test_invalid_body_keeps_last_known_good(self):
         self.refresh(ttl_hours=0)
@@ -344,6 +396,10 @@ class RefreshTests(unittest.TestCase):
         result = self.refresh(ttl_hours=0, offline=True)
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(self.store["requests"], 0)
+
+    def test_deeply_nested_body_rejected(self):
+        self.store["body"] = DEEPLY_NESTED
+        self.assertEqual(self.refresh(ttl_hours=0)["status"], "fallback")
 
     def test_oversized_body_rejected(self):
         self.store["body"] = (json.dumps(VALID) + " " * (catalog.CATALOG_MAX_BYTES + 1)).encode()
