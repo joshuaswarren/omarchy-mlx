@@ -74,6 +74,10 @@ class HttpTests(unittest.TestCase):
         return response.status, json.loads(response.read())
 
     def test_deeply_nested_json_body_is_a_bad_request(self):
+        # Python 3.14 bounds JSON nesting by the thread's C stack, which
+        # follows ulimit -s. Pin the request threads' stack so these bodies
+        # overflow it on any host.
+        self.addCleanup(threading.stack_size, threading.stack_size(4 * 1024 * 1024))
         anonymous = {'Origin': self.origin, 'Content-Type': 'application/json'}
         for raw in (b'[' * 200000, b'{"a":' * 100000):
             status, body = self.raw_post('/api/session', raw, anonymous)
