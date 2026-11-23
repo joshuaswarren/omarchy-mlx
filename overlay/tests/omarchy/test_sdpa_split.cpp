@@ -639,7 +639,7 @@ TEST_CASE("split-K verify rows: each causal row equals the same token decoded al
     setenv("MLX_OMARCHY_SDPA_DECODE_SPLIT", "1", 1);
     // Pins the default: the route is on both with the flag unset and set
     // to "1"; "0" is the opt-out back to the composed route.
-    for (const char* rows_env : {nullptr, "1"}) {
+    for (const char* rows_env : std::initializer_list<const char*>{nullptr, "1"}) {
       if (rows_env) {
         setenv("MLX_OMARCHY_SDPA_SPLIT_ROWS", rows_env, 1);
       } else {
