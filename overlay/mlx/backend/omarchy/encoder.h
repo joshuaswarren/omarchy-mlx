@@ -646,6 +646,14 @@ class MLX_API CommandEncoder {
   // is on and no transfer ran since the last full barrier; else the full one.
   void record_dispatch_barrier();
   static bool compute_barrier();
+  // MLX_OMARCHY_BARRIER_ELIDE (SC-9): skip a dispatch barrier whose only
+  // hazard is WAR (no read-after-write or write-after-write edge), and a
+  // wave-head barrier no RAW/WAW edge crosses. Off keeps byte-identical
+  // recording.
+  static bool barrier_elide();
+  // MLX_OMARCHY_HAZARD_DUMP (SC-9): per barrier decision, print the
+  // hazard classes and buffer signature; the hazard table input.
+  static bool hazard_dump();
   void reset_dependency_tracking();
   DependencyTracker tracker_;
   bool head_synced_{false};

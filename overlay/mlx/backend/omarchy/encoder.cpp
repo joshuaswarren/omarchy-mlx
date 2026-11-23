@@ -204,6 +204,30 @@ bool CommandEncoder::compute_barrier() {
   return on;
 }
 
+bool CommandEncoder::barrier_elide() {
+  // MLX_OMARCHY_BARRIER_ELIDE (SC-9): default OFF. A dispatch whose only
+  // hazard against unsynced work is WAR skips its barrier, and a wave
+  // boundary no RAW/WAW edge crosses skips the wave-head barrier. Read
+  // once: it shapes recorded commands, like gated_barriers.
+  static const bool on = []() {
+    return std::getenv("MLX_OMARCHY_BARRIER_ELIDE") != nullptr &&
+        env_flag("MLX_OMARCHY_BARRIER_ELIDE");
+  }();
+  return on;
+}
+
+bool CommandEncoder::hazard_dump() {
+  // MLX_OMARCHY_HAZARD_DUMP (SC-9): default OFF. Prints one [sc9haz]
+  // line per tape-mode barrier decision and one [sc9wav] line per wave
+  // boundary with the crossing hazard classes, plus a [sc9wav-summary]
+  // per flush. Counts only unless barrier_elide() is also set.
+  static const bool on = []() {
+    return std::getenv("MLX_OMARCHY_HAZARD_DUMP") != nullptr &&
+        env_flag("MLX_OMARCHY_HAZARD_DUMP");
+  }();
+  return on;
+}
+
 void CommandEncoder::record_dispatch_barrier() {
   if (!compute_barrier() || !head_synced_ || transfer_since_barrier_ ||
       wave_sched()) {
@@ -1011,12 +1035,55 @@ void CommandEncoder::dispatch_compute_pipeline(
         wr[nw++] = ranges[i];
       }
     }
-    if (!head_synced_ ||
-        tracker_.needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
-      record_dispatch_barrier();
-      trace::counters().barriers_emitted++;
-      prof::get().on_barrier(true);
-      barrier_recorded = true;
+    const bool sc9 = barrier_elide() || hazard_dump();
+    unsigned haz = 0;
+    bool need = !head_synced_;
+    if (!need) {
+      if (sc9) {
+        haz = tracker_.hazard_mask({rd.data(), nr}, {wr.data(), nw});
+        need = haz != 0;
+      } else {
+        need = tracker_.needs_barrier({rd.data(), nr}, {wr.data(), nw});
+      }
+    }
+    if (need) {
+      // Elide only WAR-only edges: no read-after-write and no
+      // write-after-write hazard crosses this boundary. The batch-head
+      // barrier (host writes, allocator flush) always stays.
+      const bool elide = barrier_elide() && head_synced_ &&
+          (haz & 0x3u) == 0;
+      if (hazard_dump()) {
+        uint32_t sig = 0;
+        for (size_t i = 0; i < nr + nw; ++i) {
+          const TrackedRange& r = i < nr ? rd[i] : wr[i - nr];
+          sig = sig * 31 +
+              uint32_t((uintptr_t)r.buffer ^ r.offset ^ r.end);
+        }
+        std::fprintf(
+            stderr,
+            "[sc9haz] prim=%.*s nr=%zu nw=%zu raw=%u waw=%u war=%u "
+            "head=%d sig=%08x emit=%d\n",
+            static_cast<int>(trace::current_prim().size()),
+            trace::current_prim().data(),
+            nr,
+            nw,
+            (haz >> 0) & 1u,
+            (haz >> 1) & 1u,
+            (haz >> 2) & 1u,
+            head_synced_ ? 0 : 1,
+            sig,
+            elide ? 0 : 1);
+        std::fflush(stderr);
+      }
+      if (elide) {
+        trace::counters().barriers_skipped++;
+        prof::get().on_barrier(false);
+      } else {
+        record_dispatch_barrier();
+        trace::counters().barriers_emitted++;
+        prof::get().on_barrier(true);
+        barrier_recorded = true;
+      }
     } else {
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
@@ -1219,6 +1286,88 @@ void CommandEncoder::emit_pending() {
     std::fflush(stderr);
   }
 
+  // SC-9: the hazard classes crossing each wave boundary. An edge j->i
+  // (level[j] < level[i]) crosses every boundary w in [level[j]+1,
+  // level[i]]; a boundary with no RAW or WAW edge crossing it orders
+  // only write-after-read pairs, which barrier_elide() may drop.
+  const bool sc9 = barrier_elide() || hazard_dump();
+  std::vector<uint8_t> strict(waves + 1, 1);
+  if (sc9 && waves > 0) {
+    auto overlap = [](const TrackedRange& a, const TrackedRange& b) {
+      return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
+    };
+    std::vector<int64_t> cls_d[3];
+    for (auto& d : cls_d) {
+      d.assign(waves + 2, 0);
+    }
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      for (size_t j = 0; j < i; ++j) {
+        if (levels[j] >= levels[i]) {
+          continue;
+        }
+        unsigned cls = 0;
+        for (const auto& r : nodes[i].reads) {
+          for (const auto& w : nodes[j].writes) {
+            if (overlap(r, w)) {
+              cls |= 1u;
+            }
+          }
+        }
+        for (const auto& w : nodes[i].writes) {
+          for (const auto& t : nodes[j].writes) {
+            if (overlap(w, t)) {
+              cls |= 2u;
+            }
+          }
+          for (const auto& t : nodes[j].reads) {
+            if (overlap(w, t)) {
+              cls |= 4u;
+            }
+          }
+        }
+        if (cls == 0) {
+          continue;
+        }
+        for (int b = 0; b < 3; ++b) {
+          if ((cls >> b) & 1u) {
+            cls_d[b][levels[j] + 1]++;
+            cls_d[b][levels[i] + 1]--;
+          }
+        }
+      }
+    }
+    int64_t raw = 0, waw = 0, war = 0;
+    uint64_t removable = 0;
+    for (uint32_t w = 1; w <= waves; ++w) {
+      raw += cls_d[0][w];
+      waw += cls_d[1][w];
+      war += cls_d[2][w];
+      strict[w] = (raw + waw) != 0 ? 1 : 0;
+      if (!strict[w]) {
+        ++removable;
+      }
+      if (hazard_dump()) {
+        std::fprintf(
+            stderr,
+            "[sc9wav] wave=%u raw=%lld waw=%lld war=%lld keep=%d\n",
+            w,
+            static_cast<long long>(raw),
+            static_cast<long long>(waw),
+            static_cast<long long>(war),
+            strict[w]);
+      }
+    }
+    if (hazard_dump()) {
+      std::fprintf(
+          stderr,
+          "[sc9wav-summary] nodes=%zu boundaries=%u strict_removable=%llu\n",
+          nodes.size(),
+          waves,
+          static_cast<unsigned long long>(removable));
+      std::fflush(stderr);
+    }
+  }
+
   // The batch-head dependency: a freshly begun command buffer records its
   // first barrier before any command (host writes, allocator flush, the
   // previous submission's writes), exactly like the tape-order path.
@@ -1232,7 +1381,8 @@ void CommandEncoder::emit_pending() {
         encoder_id_,
         static_cast<uint64_t>(waves + 1));
     for (uint32_t w = 0; w <= waves; ++w) {
-    bool barrier_owed = (w > 0) || head_needs_barrier;
+    bool barrier_owed = (w == 0 && head_needs_barrier) ||
+        (w > 0 && !(barrier_elide() && !strict[w]));
     for (size_t i = 0; i < pending_.size(); ++i) {
       if (levels[i] != w) {
         continue;

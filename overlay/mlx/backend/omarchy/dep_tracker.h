@@ -98,6 +98,35 @@ class DependencyTracker {
     return false;
   }
 
+  // Hazard classes the node carries against tracked work: bit 0 RAW
+  // (a read hits a tracked write), bit 1 WAW (a write hits a tracked
+  // write), bit 2 WAR (a write hits a tracked read). Same overlap test
+  // as needs_barrier, split so a caller can tell a WAR-only edge from a
+  // true producer/consumer one.
+  unsigned hazard_mask(
+      std::span<const TrackedRange> reads,
+      std::span<const TrackedRange> writes) const {
+    unsigned m = 0;
+    for (const auto& r : reads) {
+      if (hit(r, &Sets::writes)) {
+        m |= 1u;
+        break;
+      }
+    }
+    for (const auto& w : writes) {
+      if (hit(w, &Sets::writes)) {
+        m |= 2u;
+      }
+      if (hit(w, &Sets::reads)) {
+        m |= 4u;
+      }
+      if (m == 6u) {
+        break;
+      }
+    }
+    return m;
+  }
+
   void add_read(const TrackedRange& r) {
     sets_[r.buffer].reads.add(r.offset, r.end);
   }
