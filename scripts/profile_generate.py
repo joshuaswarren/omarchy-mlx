@@ -42,6 +42,8 @@ def main():
         mf.write(json.dumps({"t": time.monotonic_ns(), "p": phase}) + "\n")
         mf.flush()
 
+    from mlx_patch_stamp import require_stamp
+    require_stamp()
     from mlx_lm.utils import load
     from mlx_lm.generate import stream_generate
 

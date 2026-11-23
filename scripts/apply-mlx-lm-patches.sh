@@ -402,3 +402,9 @@ fi
 # Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
 DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
 printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"
+
+# d-0102 p1: stamp the venv so the diag profiling harnesses refuse an
+# unpatched mlx-lm (they read this file via scripts/mlx_patch_stamp.py).
+python3 "$(dirname "$0")/mlx_patch_stamp.py" write \
+  "$("$VENV/bin/python" -c 'import mlx_lm, os; print(os.path.join(os.path.dirname(mlx_lm.__file__), "__init__.py"))')" \
+  "${SERIES:-patches}"

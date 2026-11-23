@@ -82,6 +82,13 @@ def phase_chat(model_path, out_dir):
     code = """
 import sys, time, json
 import mlx.core as mx
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.getcwd(), "scripts"))
+try:
+    from mlx_patch_stamp import require_stamp
+    require_stamp()
+except SystemExit:
+    raise
 from mlx_lm import load, generate
 t0 = time.time()
 model, tokenizer = load(sys.argv[1])
