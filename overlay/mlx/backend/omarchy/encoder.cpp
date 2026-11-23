@@ -902,7 +902,11 @@ void CommandEncoder::dispatch_compute_pipeline(
       UINT64_MAX - batch_work_ > groups ? batch_work_ + groups : UINT64_MAX;
 
   auto& dt = vk::device_table();
-  VkDescriptorSet descriptor_set = acquire_descriptor_set(compute);
+  // Push mode allocates no set: the layout carries PUSH_DESCRIPTOR_BIT,
+  // so every write goes straight into the command buffer.
+  const bool push_desc = compute.push_descriptors();
+  VkDescriptorSet descriptor_set =
+      push_desc ? VK_NULL_HANDLE : acquire_descriptor_set(compute);
 
   std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info{};
   std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes{};
@@ -916,7 +920,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &buffer_info[index];
   }
-  {
+  if (!push_desc) {
     timeline::ScopedEvent tl_write(
         timeline::Kind::DescUpdate,
         timeline::SubKind::DescWrite,
@@ -928,8 +932,8 @@ void CommandEncoder::dispatch_compute_pipeline(
         writes.data(),
         0,
         nullptr);
+    trace::counters().vk_descriptor_update_writes += bindings.size();
   }
-  trace::counters().vk_descriptor_update_writes += bindings.size();
 
   if (wave_sched()) {
     // Buffer the node; submit() records it in wave order (emit_pending).
@@ -1083,15 +1087,30 @@ void CommandEncoder::dispatch_compute_pipeline(
 
   VkPipelineLayout pipeline_layout = compute.pipeline_layout();
   dt.CmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-  dt.CmdBindDescriptorSets(
-      cmd_,
-      VK_PIPELINE_BIND_POINT_COMPUTE,
-      pipeline_layout,
-      0,
-      1,
-      &descriptor_set,
-      0,
-      nullptr);
+  if (push_desc) {
+    timeline::ScopedEvent tl_push_write(
+        timeline::Kind::DescUpdate,
+        timeline::SubKind::DescWrite,
+        encoder_id_,
+        static_cast<uint64_t>(bindings.size()));
+    dt.CmdPushDescriptorSetKHR(
+        cmd_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_layout,
+        0,
+        static_cast<uint32_t>(bindings.size()),
+        writes.data());
+  } else {
+    dt.CmdBindDescriptorSets(
+        cmd_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipeline_layout,
+        0,
+        1,
+        &descriptor_set,
+        0,
+        nullptr);
+  }
   dt.CmdPushConstants(
       cmd_,
       pipeline_layout,
@@ -1270,15 +1289,43 @@ void CommandEncoder::emit_pending() {
         VkPipelineLayout pipeline_layout = compute.pipeline_layout();
         dt.CmdBindPipeline(
             cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, node.pipeline);
-        dt.CmdBindDescriptorSets(
-            cmd_,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            pipeline_layout,
-            0,
-            1,
-            &node.descriptor_set,
-            0,
-            nullptr);
+        if (compute.push_descriptors()) {
+          std::array<VkDescriptorBufferInfo, kComputeBindingBudget>
+              buffer_info{};
+          std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes{};
+          for (uint32_t b = 0; b < node.binding_count; ++b) {
+            buffer_info[b] = {node.bindings[b].buffer,
+                              node.bindings[b].offset,
+                              node.bindings[b].range};
+            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstBinding = b;
+            writes[b].descriptorCount = 1;
+            writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[b].pBufferInfo = &buffer_info[b];
+          }
+          timeline::ScopedEvent tl_push_write(
+              timeline::Kind::DescUpdate,
+              timeline::SubKind::DescWrite,
+              encoder_id_,
+              static_cast<uint64_t>(node.binding_count));
+          dt.CmdPushDescriptorSetKHR(
+              cmd_,
+              VK_PIPELINE_BIND_POINT_COMPUTE,
+              pipeline_layout,
+              0,
+              node.binding_count,
+              writes.data());
+        } else {
+          dt.CmdBindDescriptorSets(
+              cmd_,
+              VK_PIPELINE_BIND_POINT_COMPUTE,
+              pipeline_layout,
+              0,
+              1,
+              &node.descriptor_set,
+              0,
+              nullptr);
+        }
         dt.CmdPushConstants(
             cmd_,
             pipeline_layout,

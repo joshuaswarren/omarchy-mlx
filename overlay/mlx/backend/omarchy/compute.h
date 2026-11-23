@@ -1290,6 +1290,13 @@ class ComputeRuntime {
   VkDescriptorSetLayout descriptor_layout() const {
     return descriptor_layout_;
   }
+  // True when this runtime was built for push descriptors
+  // (MLX_OMARCHY_PUSH_DESCRIPTORS=1 with VK_KHR_push_descriptor resolved):
+  // the descriptor layout carries PUSH_DESCRIPTOR_BIT, so no set may be
+  // allocated from it and every dispatch must push.
+  bool push_descriptors() const {
+    return push_descriptors_;
+  }
   // Per-binding access of a built pipeline, reflected from the SPIR-V
   // NonWritable/NonReadable member decorations (GLSL readonly/writeonly).
   // Bit i of read_mask/write_mask set = binding i may be read/written; an
@@ -1314,6 +1321,7 @@ class ComputeRuntime {
 
   uint32_t binding_limit_{0};
   uint32_t required_subgroup_size_{0};
+  bool push_descriptors_{false};
 
   VkDevice device_;
   VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};

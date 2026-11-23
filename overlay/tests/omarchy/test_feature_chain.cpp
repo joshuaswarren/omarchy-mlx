@@ -189,6 +189,7 @@ bool allowed_extension(const std::string& name) {
       "VK_EXT_memory_priority",
       "VK_EXT_pageable_device_local_memory",
       "VK_EXT_calibrated_timestamps",
+      "VK_KHR_push_descriptor",
   };
   for (const char* a : allowed) {
     if (name == a) {
