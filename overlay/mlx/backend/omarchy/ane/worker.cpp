@@ -125,12 +125,18 @@ void execute_plan(
                   binding, found->second.data(), found->second.size());
     }
     device.exec(validated.manifest_index);
-    for (size_t position = 0; position < program.outputs.size(); ++position) {
-      const auto& binding = program.outputs[position];
+    const auto read_out = [&](size_t position, const AneProgramBinding& binding) {
       AneWorker::Buffer buffer(binding.logical_bytes);
       device.read(validated.manifest_index, static_cast<uint32_t>(position),
                   binding, buffer.data(), buffer.size());
       values[binding.tensor] = std::move(buffer);
+    };
+    for (size_t position = 0; position < program.outputs.size(); ++position) {
+      read_out(position, program.outputs[position]);
+    }
+    for (size_t position = 0; position < program.aux_outputs.size(); ++position) {
+      read_out(
+          program.outputs.size() + position, program.aux_outputs[position]);
     }
   }
   for (const auto& tensor : bundle.manifest.outputs) {
@@ -420,7 +426,8 @@ AneWorkerReport AneWorker::run(
     try {
       std::unique_ptr<AneDevice> device = factory_();
       for (const auto& program : bundle.programs) {
-        device->load(program);
+        device->load(
+            program, bundle.manifest.programs.at(program.manifest_index));
       }
       write_all(fds[1], kTokenLoaded, std::strlen(kTokenLoaded));
       for (int iteration = 0; iteration < options_.iterations; ++iteration) {
@@ -888,10 +895,17 @@ AneWorkerReport AneWorker::open(
             stall(factory_started));
       }
       size_t loaded = 0;
+      size_t manifest_base = 0;
       for (const auto& bundle : resident) {
+        // manifest_index is offset by the programs claimed by earlier
+        // resident bundles; within each bundle's own manifest the program
+        // position is manifest_index - base.
         for (const auto& program : bundle.programs) {
           const auto load_started = std::chrono::steady_clock::now();
-          device->load(program);
+          device->load(
+              program,
+              bundle.manifest.programs.at(
+                  program.manifest_index - manifest_base));
           if (timing) {
             std::fprintf(
                 stderr,
@@ -901,6 +915,7 @@ AneWorkerReport AneWorker::open(
           }
           ++loaded;
         }
+        manifest_base += bundle.programs.size();
       }
       if (timing) {
         std::fprintf(stderr, "[omarchy-ane] child loaded %zu programs\n",

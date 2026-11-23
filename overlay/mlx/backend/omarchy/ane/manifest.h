@@ -62,6 +62,12 @@ struct AneProgramBinding {
   uint64_t element_offset{0};
   uint64_t element_count{0};
   uint64_t physical_elements{0};
+  // ABI-2 port table fields (T6021): the BAR slot the operation record
+  // binds the surface to and the buffer_id the io record carries. Zero
+  // means unset; bundles that do not declare ports leave both at zero
+  // and the M1-style positional path runs unchanged.
+  uint64_t bar_slot{0};
+  uint64_t buffer_id{0};
 };
 
 struct AneProgram {
@@ -72,6 +78,12 @@ struct AneProgram {
   uint64_t scratch_bytes{0};
   std::vector<AneProgramBinding> inputs;
   std::vector<AneProgramBinding> outputs;
+  // Output surfaces the task stream marks as destinations beyond the
+  // ANEC header's destination_count. The positional libane API cannot
+  // address them; the ABI-2 port-table path (ane_m2_init_ports) can.
+  // H13 bundles leave this empty and validation requires it covers
+  // exactly the extra derived destination channels.
+  std::vector<AneProgramBinding> aux_outputs;
 };
 
 struct AnePayload {

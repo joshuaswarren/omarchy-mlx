@@ -113,6 +113,42 @@ std::string anec_bytes(char seed) {
 
 }
 
+// Task-1 marks only the aux destination on channel 7: no source register
+// writes at all, so bind_task_dma leaves both source slots disabled.
+void write_h13_aux_task(std::string& bytes) {
+  const size_t at = kAnecPayloadOffset + 64;
+  REQUIRE(at + 64 <= bytes.size());
+  std::fill(bytes.begin() + at, bytes.begin() + at + 64, 0);
+  write_le<uint32_t>(bytes, at + 4, ((64 / 4 - 1) & 0x1ff) << 16);
+  write_le<uint32_t>(bytes, at + 8 * 4, 7u << 12);
+  write_le<uint32_t>(bytes, at + 40, 0x17800u);
+  write_le<uint32_t>(bytes, at + 44, 0x040000c1u);
+}
+
+std::string anec_bytes_aux() {
+  std::string bytes(kAnecPayloadOffset + kPayloadBytes, '\0');
+  for (uint64_t i = 0; i < kPayloadBytes; ++i) {
+    bytes[kAnecPayloadOffset + i] = static_cast<char>('A' + (i % 7));
+  }
+  write_le<uint64_t>(bytes, 0, kPayloadBytes);
+  write_le<uint32_t>(bytes, 8, 64);
+  write_le<uint32_t>(bytes, 12, 2);
+  write_le<uint64_t>(bytes, 16, 0x1f8);
+  write_le<uint64_t>(bytes, 24, 0x400);
+  write_le<uint32_t>(bytes, 32, 2);
+  write_le<uint32_t>(bytes, 36, 1);
+  for (uint32_t channel : {0u, 4u, 5u, 6u, 7u}) {
+    write_le<uint32_t>(bytes, 40 + channel * sizeof(uint32_t), 1);
+  }
+  for (uint32_t channel : {4u, 5u, 6u, 7u}) {
+    write_nchw(bytes, channel);
+  }
+  write_h13_task(bytes, 0x00024966u);
+  write_le<uint32_t>(bytes, kAnecPayloadOffset + 7 * 4, 64);
+  write_h13_aux_task(bytes);
+  return bytes;
+}
+
 nlohmann::json tensor(const std::string& name, uint64_t index) {
   return {
       {"name", name},
@@ -293,6 +329,90 @@ struct Fixture {
   void write() const {
     write_file(dir.path() / "program-0.anec", payload_bytes[0]);
     write_file(dir.path() / "program-1.anec", payload_bytes[1]);
+    write_file(dir.path() / "manifest.json", manifest.dump(2) + "\n");
+  }
+};
+
+// ABI-2 (H14) single-program bundle: destination_count=1 while the task
+// stream marks a second destination on channel 7. The positional API
+// cannot address it, so the manifest routes it through aux_outputs and
+// every io binding carries its port-table bar_slot.
+struct AuxFixture {
+  TempDir dir;
+  std::string payload = anec_bytes_aux();
+  nlohmann::json manifest;
+
+  AuxFixture() {
+    auto out = binding("y", 4);
+    out["bar_slot"] = 6;
+    out["buffer_id"] = 4;
+    auto aux = binding("mask", 7);
+    aux["bar_slot"] = 7;
+    aux["buffer_id"] = 7;
+    auto in0 = binding("a", 5);
+    in0["bar_slot"] = 4;
+    in0["buffer_id"] = 5;
+    auto in1 = binding("b", 6);
+    in1["bar_slot"] = 5;
+    in1["buffer_id"] = 6;
+    manifest = {
+        {"manifest_version", 4},
+        {"name", "h14-whole-aux"},
+        {"graph_hash", hex(64, '2')},
+        {"task_descriptors", 2},
+        {"inputs", {tensor("a", 0), tensor("b", 1)}},
+        {"outputs", {tensor("y", 0), tensor("mask", 1)}},
+        {"logical_results",
+         {logical_result("y", "y"), logical_result("mask", "mask")}},
+        {"state", nlohmann::json::array()},
+        {"intermediates", nlohmann::json::array()},
+        {"programs",
+         {{
+             {"payload", "program-0.anec"},
+             {"operation", "whole"},
+             {"encoder", "h14-port-table"},
+             {"task_descriptors", 2},
+             {"scratch_bytes", 0},
+             {"inputs", {in0, in1}},
+             {"outputs", {out}},
+             {"aux_outputs", {aux}},
+         }}},
+        {"dispatch_plan", {0}},
+        {"payloads",
+         {{{"role", "anec"},
+           {"path", "program-0.anec"},
+           {"sha256", digest()},
+           {"byte_size", payload.size()}}}},
+        {"compiler",
+         {{"host_build", "Linux test host"},
+          {"toolchain", "hwx-h14 test source"},
+          {"target", "h14"}}},
+        {"driver_abi_major", 2},
+        {"provenance",
+         {{"source_repo", "joshuaswarren/omarchy-mlx"},
+          {"source_commit", hex(40, 'd')},
+          {"exported_at", "2026-11-23"}}},
+        {"release_asset",
+         {{"model", "h14-whole-aux"}, {"model_sha256", ""}}},
+    };
+    manifest["release_asset"]["model_sha256"] =
+        payload_collection_identity(manifest["payloads"]);
+  }
+
+  std::string digest() const {
+    return sha256_hex(
+        reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+  }
+
+  void refresh_payload() {
+    manifest["payloads"][0]["sha256"] = digest();
+    manifest["payloads"][0]["byte_size"] = payload.size();
+    manifest["release_asset"]["model_sha256"] =
+        payload_collection_identity(manifest["payloads"]);
+  }
+
+  void write() const {
+    write_file(dir.path() / "program-0.anec", payload);
     write_file(dir.path() / "manifest.json", manifest.dump(2) + "\n");
   }
 };
@@ -1601,4 +1721,86 @@ TEST_CASE("root-owned read-only chain takes the source-fd fast path") {
   for (const AneSealedFile& image : sealed) {
     CHECK_FALSE(fd_is_sealed_memfd(image.fd));
   }
+}
+
+TEST_CASE("aux_outputs cover unaddressed destination channels") {
+  AuxFixture fixture;
+  fixture.write();
+  AneBundle bundle = load_bundle(fixture.dir.path());
+  const auto& program = bundle.manifest.programs[0];
+  REQUIRE(program.aux_outputs.size() == 1);
+  CHECK(program.aux_outputs[0].tensor == "mask");
+  CHECK(program.aux_outputs[0].channel == 7);
+  CHECK(program.aux_outputs[0].bar_slot == 7);
+  CHECK(program.aux_outputs[0].buffer_id == 7);
+  CHECK(program.inputs[0].bar_slot == 4);
+}
+
+TEST_CASE("missing aux_outputs rejects the extra destination") {
+  AuxFixture fixture;
+  fixture.manifest["programs"][0].erase("aux_outputs");
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "not fully bound for role 'output'");
+}
+
+TEST_CASE("aux output without bar_slot fails the port table contract") {
+  AuxFixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0].erase("bar_slot");
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); }, "requires bar_slot >= 4");
+}
+
+TEST_CASE("duplicate bar_slot across io bindings is rejected") {
+  AuxFixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0]["bar_slot"] = 6;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "shares a bar_slot with another surface");
+}
+
+TEST_CASE("aux output on the wrong channel is rejected") {
+  AuxFixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0]["channel"] = 5;
+  fixture.manifest["programs"][0]["aux_outputs"][0]["buffer_id"] = 5;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "duplicates another surface binding");
+}
+
+TEST_CASE("buffer_id defaults to the binding channel") {
+  AuxFixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0].erase("buffer_id");
+  fixture.write();
+  AneBundle bundle = load_bundle(fixture.dir.path());
+  CHECK(bundle.manifest.programs[0].aux_outputs[0].buffer_id == 7);
+}
+
+TEST_CASE("aux_outputs under ABI-1 is refused at manifest validation") {
+  AuxFixture fixture;
+  fixture.manifest["driver_abi_major"] = 1;
+  fixture.manifest["compiler"]["target"] = "h13";
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "require driver_abi_major 2");
+}
+
+TEST_CASE("bar_slot on an ABI-1 binding is refused at manifest validation") {
+  AuxFixture fixture;
+  fixture.manifest["driver_abi_major"] = 1;
+  fixture.manifest["compiler"]["target"] = "h13";
+  fixture.manifest["programs"][0].erase("aux_outputs");
+  fixture.manifest["outputs"].erase(
+      fixture.manifest["outputs"].begin() + 1);
+  fixture.manifest["logical_results"].erase(
+      fixture.manifest["logical_results"].begin() + 1);
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "require driver_abi_major 2");
 }

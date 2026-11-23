@@ -328,6 +328,13 @@ std::vector<LoadedProgram> load_programs(
   std::vector<LoadedProgram> loaded;
   loaded.reserve(bundle.programs.size());
   for (const auto& program : bundle.programs) {
+    const auto& manifest = bundle.manifest.programs.at(program.manifest_index);
+    if (!manifest.aux_outputs.empty()) {
+      throw runtime_error(
+          "program " + std::to_string(program.manifest_index) +
+          " declares ABI-2 aux_outputs; this worker's statically linked "
+          "libane is ABI-1 and cannot load it");
+    }
     errno = 0;
     std::unique_ptr<ane_nn, AneHandleDeleter> handle(
         __ane_init(program.anec.c_str(), 0));
@@ -338,7 +345,6 @@ std::vector<LoadedProgram> load_programs(
           std::string(profile.env_name) + " is required (errno=" +
           std::to_string(errno) + ")");
     }
-    const auto& manifest = bundle.manifest.programs.at(program.manifest_index);
     for (size_t i = 0; i < manifest.inputs.size(); ++i) {
       const uint64_t size = __ane_src_size(handle.get(), static_cast<uint32_t>(i));
       if (size != manifest.inputs[i].allocation_bytes) {

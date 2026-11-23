@@ -50,7 +50,9 @@ struct FakeDevice : AneDevice {
     return "fake-device";
   }
 
-  void load(const AneValidatedProgram& program) override {
+  void load(
+      const AneValidatedProgram& program,
+      const AneProgram& manifest_program) override {
     if (behavior == Behavior::RefuseLoad) {
       throw AneDeviceError(
           "fake device refused to load " + program.anec.string());
@@ -190,6 +192,26 @@ AneBundle second_bundle() {
   return bundle;
 }
 
+// The same toy program plus one aux output surface (the ABI-2 case:
+// a destination the positional API cannot address). The worker must
+// read it into the same values map as positional outputs.
+AneBundle aux_bundle() {
+  AneBundle bundle = toy_bundle();
+  bundle.manifest.name = "toy-add-aux";
+  AneTensor mask;
+  mask.name = "mask";
+  mask.dtype = "fp16";
+  mask.shape = {1, 8, 1, 1};
+  mask.byte_size = 16;
+  bundle.manifest.outputs.push_back(mask);
+  AneProgramBinding aux;
+  aux.tensor = "mask";
+  aux.logical_bytes = 16;
+  aux.allocation_bytes = 16;
+  bundle.manifest.programs[0].aux_outputs = {aux};
+  return bundle;
+}
+
 AneWorker::Buffer marked_input(uint8_t marker) {
   AneWorker::Buffer payload(128, marker);
   return payload;
@@ -222,6 +244,27 @@ TEST_CASE("a completed run reports iterations, outputs, and release") {
   CHECK(std::memcmp(outputs["y"].data(), expected.data(), 128) == 0);
   // detail_extra never leaks to callers.
   CHECK(report.detail_extra.empty());
+}
+
+TEST_CASE("aux outputs are read after positional outputs") {
+  FakeDevice::behavior = FakeDevice::Behavior::Succeed;
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(4000);
+  AneWorker worker([] { return std::unique_ptr<AneDevice>(new FakeDevice); },
+                   options);
+
+  std::map<std::string, AneWorker::Buffer> inputs;
+  inputs["a"] = input_bytes(0x11);
+  inputs["b"] = input_bytes(0x22);
+  std::map<std::string, AneWorker::Buffer> outputs;
+  auto report = worker.run(aux_bundle(), inputs, &outputs);
+
+  REQUIRE(report.status == AneWorkerStatus::Completed);
+  REQUIRE(outputs.count("y") == 1);
+  REQUIRE(outputs.count("mask") == 1);
+  CHECK(outputs["mask"].size() == 16);
+  CHECK(std::memcmp(
+            outputs["mask"].data(), "maskmaskmaskmask", 16) == 0);
 }
 
 TEST_CASE("a hanging device is killed at the deadline and quarantined") {
