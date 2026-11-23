@@ -88,6 +88,7 @@ SERIES_PATCHES=(
   mlx-lm-gdn-verify-seq.patch
   mlx-lm-spec-split-rows.patch
   mlx-lm-kv-host-offset.patch
+  mlx-lm-readback-chunk.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -350,6 +351,13 @@ apply mlx-lm-gdn-verify-seq.patch
 # q_len 2..16 only) is bit-equal to single-token decode. speculative_generate_step sets
 # it once per process when unset (never per pass, #452). Both series.
 apply mlx-lm-spec-split-rows.patch
+# Opt-in chunked token readback (MLX_OMARCHY_READBACK_CHUNK=N): the sampled
+# token arrays stay device-resident and one concatenated readback happens per
+# N tokens, deepening the submission backlog so per-token host time and
+# inter-submission gaps overlap GPU execution. M2 prod P22 ABBA (HOST-3):
+# N=16 7.10 ms/tok vs 8.10 stock, greedy ids identical; N=4 is net-negative.
+# EOS is checked at chunk boundaries, so a late EOS trims extra tokens.
+apply mlx-lm-readback-chunk.patch
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
