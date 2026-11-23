@@ -354,6 +354,7 @@ void CommandEncoder::ensure_recording() {
   }
   current_slot_ = chosen;
   cmd_ = slots_[chosen].cmd;
+  bound_pipeline_ = VK_NULL_HANDLE;
   {
     timeline::ScopedEvent tl_begin(
         timeline::Kind::CmdBegin,
@@ -1086,7 +1087,10 @@ void CommandEncoder::dispatch_compute_pipeline(
   prof::get().before_dispatch(this, current_slot_, cmd_, barrier_recorded);
 
   VkPipelineLayout pipeline_layout = compute.pipeline_layout();
-  dt.CmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+  if (pipeline != bound_pipeline_) {
+    dt.CmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    bound_pipeline_ = pipeline;
+  }
   if (push_desc) {
     timeline::ScopedEvent tl_push_write(
         timeline::Kind::DescUpdate,
@@ -1287,8 +1291,11 @@ void CommandEncoder::emit_pending() {
         prof::get().before_dispatch(
             this, current_slot_, cmd_, preceded_by_barrier);
         VkPipelineLayout pipeline_layout = compute.pipeline_layout();
-        dt.CmdBindPipeline(
-            cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, node.pipeline);
+        if (node.pipeline != bound_pipeline_) {
+          dt.CmdBindPipeline(
+              cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, node.pipeline);
+          bound_pipeline_ = node.pipeline;
+        }
         if (compute.push_descriptors()) {
           std::array<VkDescriptorBufferInfo, kComputeBindingBudget>
               buffer_info{};
