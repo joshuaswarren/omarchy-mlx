@@ -33,6 +33,7 @@ sample 5 * f0 + s, f0 = 0 for the first window else 120 * c0 + 1.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Iterator
@@ -257,6 +258,20 @@ class KokoroStreamer:
         mx.eval(har, x)
         frames = int(asr.shape[2])
         p0, end = keep or (0, frames)
+        # MLX_OMARCHY_KOKORO_WHOLE_LAST=1 runs the last stage over the kept
+        # range in one dispatch set instead of WINDOW_FRAMES-sized windows:
+        # a kept frame's output depends only on the CONTEXT_FRAMES margin, so
+        # the single pass returns the same audio without the per-window
+        # evals and overlap recompute (~46% of a warm call on G13C, mostly
+        # inside this stage's resblocks). Streaming callers leave it off.
+        if os.environ.get("MLX_OMARCHY_KOKORO_WHOLE_LAST") == "1":
+            c0 = max(0, p0 - CONTEXT_FRAMES)
+            c1 = min(frames, end + CONTEXT_FRAMES)
+            audio, f0 = self._last_stage(x, s, har, c0, c1)
+            piece = audio[FRAME_SAMPLES * p0 - 5 * f0:FRAME_SAMPLES * end - 5 * f0]
+            if piece.size:
+                yield np.ascontiguousarray(piece, dtype=np.float32)
+            return
         while p0 < end:
             p1 = min(end, p0 + WINDOW_FRAMES)
             c0 = max(0, p0 - CONTEXT_FRAMES)
