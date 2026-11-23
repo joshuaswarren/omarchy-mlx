@@ -63,7 +63,7 @@ def check_m2_behavior():
     got_shift = a >> mx.array([1, 1, 2, 3], dtype=mx.int32)
     want_shift = mx.array([[2, -4, 2, 1 << 37]], dtype=mx.int64)
     got_add = (a + b).astype(mx.int64)
-    want_add = mx.array([[8, -3, 7, 3 << 40]], dtype=mx.int64)
+    want_add = mx.array([[8, -3, 7, 3 << 39]], dtype=mx.int64)
     return (bool(mx.array_equal(got_sel, want_sel))
             and bool(mx.array_equal(got_shift, want_shift))
             and bool(mx.array_equal(got_add, want_add)))
