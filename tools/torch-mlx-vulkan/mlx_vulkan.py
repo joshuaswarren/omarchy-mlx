@@ -146,13 +146,59 @@ def _sum(a, dim=None, keepdim=False, **k):
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
-    if scale is not None:
-        kw["scale"] = scale
+    # mlx 0.32's fast binding requires scale explicitly (no default).
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    kw["scale"] = scale
     if attn_mask is not None:
         kw["mask"] = _mx(attn_mask)
     elif is_causal:
         kw["mask"] = "causal"
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
+
+def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
+    # torch: a NCHW, w OIHW ; mlx.conv2d: x NHWC, w (H, W, I/groups, O)
+    if groups != 1:
+        return _raise("grouped conv2d")
+    x = _mx(a).transpose(0, 2, 3, 1)
+    wt = _mx(w).transpose(0, 2, 3, 1)  # OIHW -> O,H,W,I (mlx conv2d weight layout)
+    p = tuple(padding) if isinstance(padding, (list, tuple)) else (padding, padding)
+    st = tuple(stride) if isinstance(stride, (list, tuple)) else (stride, stride)
+    dl = tuple(dilation) if isinstance(dilation, (list, tuple)) else (dilation, dilation)
+    y = mx.conv2d(x, wt, stride=st, padding=p, dilation=dl)
+    if b is not None:
+        y = y + _mx(b).reshape(1, 1, 1, -1)
+    return y.transpose(0, 3, 1, 2)
+
+def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
+    # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
+    x = _mx(a)
+    n, c = x.shape[0], x.shape[1]
+    xg = x.reshape(n, num_groups, -1)
+    mean = xg.mean(axis=-1, keepdims=True)
+    var = ((xg - mean) ** 2).mean(axis=-1, keepdims=True)
+    xn = ((xg - mean) / mx.sqrt(var + eps)).reshape(x.shape)
+    if w is not None:
+        xn = xn * _mx(w).reshape(1, -1, 1, 1)
+    if b is not None:
+        xn = xn + _mx(b).reshape(1, -1, 1, 1)
+    return xn
+
+def _interpolate(a, size=None, scale_factor=None, mode="nearest",
+                 align_corners=None, recompute_scale_factor=None, **k):
+    # torch NCHW; nearest-neighbor upsample (the SD UNet upsampler mode).
+    if mode != "nearest":
+        return _raise("interpolate mode " + str(mode))
+    x = _mx(a).transpose(0, 2, 3, 1)  # NHWC
+    n, h, w, c = x.shape
+    if size is not None:
+        th, tw = (size if isinstance(size, (list, tuple)) else (size, size))
+    else:
+        sf = scale_factor if isinstance(scale_factor, (list, tuple)) else (scale_factor, scale_factor)
+        th, tw = int(h * sf[0]), int(w * sf[1])
+    yi = (mx.arange(th) * (h / th)).astype(mx.int32)
+    xi = (mx.arange(tw) * (w / tw)).astype(mx.int32)
+    return x[:, yi][:, :, xi].transpose(0, 3, 1, 2)
 
 # ---------------- lowering tables ----------------
 
@@ -166,6 +212,7 @@ _FUNC_SPECS = {
     "sub": lambda a, b, *k: _mx(a) - _mx(b),
     "mul": lambda a, b, *k: _mx(a) * _mx(b),
     "div": lambda a, b, *k: _mx(a) / _mx(b),
+    "truediv": lambda a, b, *k: _mx(a) / _mx(b),
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
@@ -202,6 +249,9 @@ _FUNC_SPECS = {
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
+    "conv2d": _conv2d,
+    "group_norm": _group_norm,
+    "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
     "_softmax": lambda a, dim, half=False: mx.softmax(a, axis=dim),
     "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
