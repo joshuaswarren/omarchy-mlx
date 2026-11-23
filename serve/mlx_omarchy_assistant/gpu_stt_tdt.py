@@ -97,7 +97,8 @@ def fast_tdt_decode(model, mel) -> object:
         cell_out = cell_out.astype(features.dtype)
         mx.eval(decoder_output, hidden_out, cell_out)
 
-        logits = model.joint(features[:, time:max_length, :], decoder_output)
+        segment_start = time
+        logits = model.joint(features[:, segment_start:max_length, :], decoder_output)
         pred_ids = mx.argmax(logits[0, :, 0, : blank_id + 1], axis=-1)
         decisions = mx.argmax(logits[0, :, 0, blank_id + 1 :], axis=-1)
         mx.eval(pred_ids, decisions)
@@ -105,8 +106,13 @@ def fast_tdt_decode(model, mel) -> object:
         decision_host = np.asarray(decisions).tolist()
 
         adopted = False
-        local = 0
+        # The reference loop consults exactly the frames the duration walk
+        # lands on: after a blank frame with duration d it re-enters at
+        # time + d, never at the skipped frames in between. Index the
+        # precomputed tail by absolute frame, not by walk order, so the
+        # visited frames and timestamps match the reference exactly.
         while time < max_length:
+            local = time - segment_start
             duration_i = durations[decision_host[local]]
             if pred_host[local] != blank_id:
                 last_token = pred_host[local]
@@ -127,7 +133,6 @@ def fast_tdt_decode(model, mel) -> object:
             elif max_symbols is not None and max_symbols <= new_symbols:
                 time += 1
                 new_symbols = 0
-            local += 1
             if adopted:
                 break
 

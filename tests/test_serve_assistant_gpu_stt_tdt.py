@@ -96,7 +96,7 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
             ),
         )
 
-    def _model(self, max_symbols=None, favor_duration_index=1):
+    def _model(self, max_symbols=None, favor_duration_index=1, blank_bias=-1.0):
         import mlx.core as mx
         import mlx.nn as nn
 
@@ -124,7 +124,7 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
         final_linear = model.joint.joint_net[2]
         n_classes = final_linear.bias.shape[0]
         n_durations = n_classes - model.blank_id - 1
-        values = [0.05] * model.blank_id + [-1.0]
+        values = [0.05] * model.blank_id + [blank_bias]
         values += [-1.0 if i != favor_duration_index else 50.0
                    for i in range(n_durations)]
         final_linear.bias = mx.array(values, dtype=final_linear.bias.dtype)
@@ -141,7 +141,7 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
         )
 
     def _reference_tokens(self, model, mel):
-        """Token sequence from the reference per-frame loop, verbatim."""
+        """(id, start, duration) per emitted token from the reference loop."""
         import mlx.core as mx
 
         batch_features, lengths = model.encoder(mel)
@@ -152,6 +152,10 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
         blank_id = model.blank_id
         durations = model.durations
         from mlx_audio.stt.models.parakeet import tokenizer
+
+        subsampling = model.encoder_config.subsampling_factor
+        sample_rate = model.preprocessor_config.sample_rate
+        hop_length = model.preprocessor_config.hop_length
 
         hypothesis = []
         last_token = blank_id
@@ -172,7 +176,11 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
                 last_token = pred_token_i
                 decoder_hidden = (hidden, cell)
                 if not tokenizer.is_special_token(last_token, vocabulary):
-                    hypothesis.append(pred_token_i)
+                    hypothesis.append((
+                        pred_token_i,
+                        time * subsampling / sample_rate * hop_length,
+                        duration_i * subsampling / sample_rate * hop_length,
+                    ))
             time += duration_i
             new_symbols += 1
             if duration_i != 0:
@@ -185,21 +193,56 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
     def _check_equal(self, model, mel):
         reference = model.decode(mel)[0]
         fast = self.tdt.fast_tdt_decode(model, mel)
-        ref_tokens = self._reference_tokens(model, mel)
-        fast_tokens = [t.id for s in fast.sentences for t in s.tokens]
+        # Independent walk of the reference loop: ids and visited positions.
+        ref_walk = [t[0] for t in self._reference_tokens(model, mel)]
+        # Full assembly-level comparison on both sides' results, timestamps
+        # included: both token lists have passed through the same
+        # tokens_to_sentences assembly, so like is compared with like.
+        ref_tokens = [
+            (t.id, round(t.start, 6), round(t.duration, 6))
+            for s in reference.sentences
+            for t in s.tokens
+        ]
+        fast_tokens = [
+            (t.id, round(t.start, 6), round(t.duration, 6))
+            for s in fast.sentences
+            for t in s.tokens
+        ]
+        self.assertEqual([t[0] for t in fast_tokens], ref_walk)
         self.assertEqual(fast_tokens, ref_tokens)
         self.assertEqual(fast.text, reference.text)
 
     def test_equals_reference_loop(self):
         for seed in (11, 12, 13):
-            model = self._model()
+            model = self._model(blank_bias=0.05)
             mel = self._mel(seconds=2, seed=seed)
             self._check_equal(model, mel)
+
+    def test_equals_reference_loop_blank_heavy(self):
+        """Blank-favored arms walk the skip path: after a blank with duration
+        d the reference re-enters at time + d, so the tail must be indexed by
+        absolute frame. Timestamps are asserted per token. Duration indices
+        1, 2, 3 map to durations 1, 2, 4 in the test's durations list."""
+        for blank_bias in (0.05, 0.3, 1.0):
+            for favor in (1, 2, 3):
+                model = self._model(blank_bias=blank_bias,
+                                    favor_duration_index=favor)
+                mel = self._mel(seconds=2, seed=21)
+                self._check_equal(model, mel)
 
     def test_equals_reference_loop_with_max_symbols(self):
         model = self._model(max_symbols=3, favor_duration_index=0)
         mel = self._mel(seconds=2, seed=14)
         self._check_equal(model, mel)
+
+    def test_equals_reference_loop_with_max_symbols_blank_heavy(self):
+        """Duration-0 blanks under the cap: the walk must stay in bounds and
+        match the reference frame-for-frame."""
+        for blank_bias in (0.3, 1.0):
+            model = self._model(max_symbols=3, favor_duration_index=0,
+                                blank_bias=blank_bias)
+            mel = self._mel(seconds=2, seed=15)
+            self._check_equal(model, mel)
 
     def test_supports_rejects_non_tdt_models(self):
         class NotTDT:
