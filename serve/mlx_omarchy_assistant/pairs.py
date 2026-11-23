@@ -432,11 +432,16 @@ def load_pair_lock(home: Path, pair_id: str) -> dict | None:
         lock = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise PairError(f"pair lock {path} is unreadable: {exc}") from exc
+    models = lock.get("models") if isinstance(lock, dict) else None
+    # adopt_saved() repr()s a mismatched revision, which recurses on a deeply
+    # nested value: every model entry must carry a string revision.
     if not isinstance(lock, dict) or lock.get("version") != 1 \
             or lock.get("pair_id") != pair_id \
-            or not isinstance(lock.get("models"), dict):
+            or not isinstance(models, dict) \
+            or not all(isinstance(model, dict) and isinstance(model.get("revision"), str)
+                       for model in models.values()):
         raise PairError(f"pair lock {path} is not a valid v1 lock for {pair_id!r}")
     return lock
 
@@ -538,7 +543,7 @@ def _read_manifest(model_dir: Path) -> dict:
     path = Path(model_dir) / "manifest.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, RecursionError):
         return {}
 
 
