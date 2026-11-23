@@ -488,6 +488,59 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m1, 0, 8192, 252));
 }
 
+TEST_CASE("split-K decode SDPA: the M3 Pro (G15S) defaults and their variable overrides; the M3 (G15G) stays uncalibrated") {
+  const std::string m3pro = "Apple M3 Pro (G15S B1)";
+  const std::string m3 = "Apple M3 (G15G B1)";
+  CHECK(omarchy::sdpa_split_min_keys(m3pro) == 192);
+  CHECK_FALSE(omarchy::sdpa_split_default(m3pro, 191));
+  CHECK(omarchy::sdpa_split_default(m3pro, 192));
+  CHECK(omarchy::sdpa_split_wide_min_keys(m3pro) == 1408);
+  CHECK_FALSE(omarchy::sdpa_split_default(m3pro, 1407, 256));
+  CHECK(omarchy::sdpa_split_default(m3pro, 1408, 256));
+  CHECK(omarchy::sdpa_split_pv_default(m3pro, 1280));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default(m3pro, 1281));
+  CHECK(omarchy::sdpa_split_bk64_default(m3pro, 640));
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default(m3pro, 641));
+  // Width 256, 36 workgroups: 2 key-value heads (the Qwen3.8-2B) through 2304 keys, 4 heads through 1152.
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m3pro) == 36);
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 2304, m3pro, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 2305, m3pro, 0, 8192, 256));
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1152, m3pro, 0, 8192, 256));
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1153, m3pro, 0, 8192, 256));
+  // The base M3 is not calibrated: every rule keeps its off value.
+  CHECK(omarchy::sdpa_split_min_keys(m3) == 0);
+  CHECK(omarchy::sdpa_split_wide_min_keys(m3) == 0);
+  CHECK(omarchy::sdpa_split_pv_max_keys(m3) == 0);
+  CHECK(omarchy::sdpa_split_bk64_max_keys(m3) == 0);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m3) == 0);
+  CHECK_FALSE(omarchy::sdpa_split_default(m3, 4096));
+  // Each variable replaces the part value; the wide threshold falls back to the width-128 variable on a part without its own row.
+  for (const char* name : {"MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS", "MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS", "MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS",
+                           "MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS", "MLX_OMARCHY_SDPA_HD256_PV_LIMIT"}) {
+    REQUIRE(std::getenv(name) == nullptr);
+  }
+  setenv("MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS", "4096", 1);
+  CHECK(omarchy::sdpa_split_min_keys(m3pro) == 4096);
+  CHECK(omarchy::sdpa_split_min_keys(m3) == 4096);
+  CHECK(omarchy::sdpa_split_wide_min_keys(m3) == 4096);
+  CHECK(omarchy::sdpa_split_wide_min_keys(m3pro) == 1408);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS");
+  setenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_split_default(m3pro, 4096, 256));
+  CHECK(omarchy::sdpa_split_default(m3pro, 4096, 128));
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS");
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_split_pv_default(m3pro, 320));
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS");
+  setenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default(m3pro, 320));
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS");
+  setenv("MLX_OMARCHY_SDPA_HD256_PV_LIMIT", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m3pro, 0, 8192, 256));
+  unsetenv("MLX_OMARCHY_SDPA_HD256_PV_LIMIT");
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m3pro, 0, 8192, 256));
+}
+
 TEST_CASE("split-K decode SDPA: the width-256 value-phase variant meets the float64 gate at group 4, and the flag-off arm keeps the old pass 1") {
   if (!compute_available()) {
     return;
