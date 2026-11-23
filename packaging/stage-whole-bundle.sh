@@ -24,6 +24,24 @@ with open('$pin_path') as fh:
     pin = json.load(fh)
 sys.exit(0 if 'parakeet-encoder-whole' in pin.get('assets', {}).get('bundles', {}) else 1)
 "; then
+    if [[ -z "${MLX_OMARCHY_WHOLE_BUNDLE_DIR:-}" && -n "${MLX_OMARCHY_WHOLE_BUNDLE_WHEEL:-}" ]]; then
+      # Supply the bundle from a published wheel instead of a directory:
+      # the wheel ships mlx/share/mlx-omarchy/parakeet-1/bundles/
+      # parakeet-encoder-whole/{manifest.json,program-0.anec} verbatim.
+      # The digest checks below still run against the runtime pin, so a
+      # wrong or stale wheel is refused exactly like a wrong directory.
+      local wheel="${MLX_OMARCHY_WHOLE_BUNDLE_WHEEL}"
+      if [[ ! -f "$wheel" ]]; then
+        echo "[bundle] MLX_OMARCHY_WHOLE_BUNDLE_WHEEL=${wheel} does not exist" >&2
+        exit 1
+      fi
+      local extract_dir
+      extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/whole-bundle-extract.XXXXXX")"
+      unzip -p "$wheel" 'mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole/manifest.json' > "${extract_dir}/manifest.json"
+      unzip -p "$wheel" 'mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole/program-0.anec' > "${extract_dir}/program-0.anec"
+      export MLX_OMARCHY_WHOLE_BUNDLE_DIR="$extract_dir"
+      echo "[bundle] extracted the pinned bundle from $wheel"
+    fi
     if [[ -z "${MLX_OMARCHY_WHOLE_BUNDLE_DIR:-}" ]]; then
       echo "[bundle] runtime pin declares parakeet-encoder-whole but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset; refusing to build a wheel that would silently fall back" >&2
       echo "[bundle] supply the bundle dir (manifest.json + program-0.anec) via MLX_OMARCHY_WHOLE_BUNDLE_DIR=/path/to/dir" >&2
