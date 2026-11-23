@@ -324,6 +324,11 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen35-gdn-conv-delta.py" "$VENV"
 # swiglu; prefill keeps the compiled function. Kill switch
 # MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
+# Qwen3-Next gated norm: compile norm + weight-mul + swiglu as one region so the
+# per-token bf16<->f32 casts fold into the chain dispatch (GAP-F: 198 cast launches
+# per 2B decode token on the M1 Max). Same operands and bf16 rounding; the ABBA
+# gates on ids_sha256 equality. Kill switch MLX_OMARCHY_FUSED_SWIGLU=0.
+python3 "$ROOT/scripts/patch-mlx-lm-qwen3next-fused-swiglu.py" "$VENV"
 # Qwen3 dense MLP (qwen3.py), same fold for single-token rows: 36 fewer
 # dispatches per Qwen3-4B decode token, +1.65% decode on the Apple M2 Max and
 # +1.24% on the Apple M1 Max (receipts/2026-10-24-qwen3-eager-swiglu), tokens
