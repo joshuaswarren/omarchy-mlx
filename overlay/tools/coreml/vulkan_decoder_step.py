@@ -275,6 +275,76 @@ _JOINT_WINDOW_SOURCE = f"""
     }}
 """
 
+# The single-frame joint head with an in-kernel per-threadgroup argmax
+# appended (flags = [frame, jmode, amode]; amode 0 leaves the logits-only
+# parity result). The head arithmetic is identical to _JOINT_SOURCE. Each
+# threadgroup owns 256 consecutive output lanes, so a lane-local max
+# scan in shared memory yields the group winner directly; the host then
+# takes the first max over the 33 ordered (val, idx) pairs, which is the
+# same first-max/lowest-j winner as np.argmax because group order is
+# lane order. Token lanes are [0, 8193); duration lanes are [8193, 8198)
+# and live entirely inside group 32, whose lanes 8198+ hold no lane at
+# all - both ranges use -FLT_MAX sentinels so empty groups never win.
+_JOINT_ARGMAX_SOURCE = f"""
+    uint g = threadgroup_position_in_grid.x;
+    uint t = thread_index_in_threadgroup.x;
+    uint j = g * {_JOINT_THREADS}u + t;
+    int frame = flags[0];
+    int jmode = flags[1];
+    int amode = flags[2];
+    threadgroup float16_t sh_relu[640];
+    for (uint i = t; i < 640u; i += {_JOINT_THREADS}u) {{
+        float16_t pj;
+        if (jmode == 0) {{
+            // explicit cast: see _JOINT_SOURCE
+            pj = float16_t(pj16_in[i]);
+        }} else {{
+            pj = float16_t(dec_in[i]);
+        }}
+        float16_t rlv = float16_t(encoder[uint(frame) * 640u + i]) + pj;
+        sh_relu[i] = (rlv > float16_t(0.0f)) ? rlv : float16_t(0.0f);
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float ljv = 0.0f;
+    if (j < 8198u) {{
+        precise float acc = 0.0f;
+        for (uint k = 0u; k < 640u; ++k) {{
+            acc = acc + float(sh_relu[k]) * float(joint[k * 8198u + j]);
+        }}
+        ljv = float(float16_t(acc) + joint[640u * 8198u + j]);
+        logits[j] = ljv;
+    }}
+    if (amode != 0) {{
+        threadgroup float sh_tv[{_JOINT_THREADS}];
+        threadgroup float sh_dv[{_JOINT_THREADS}];
+        sh_tv[t] = (j < 8193u) ? ljv : -3.4028234663852886e38f;
+        sh_dv[t] = (j >= 8193u && j < 8198u) ? ljv : -3.4028234663852886e38f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (t == 0u) {{
+            float bv = -3.4028234663852886e38f;
+            int bi = -1;
+            for (uint i = 0u; i < {_JOINT_THREADS}u; ++i) {{
+                if (sh_tv[i] > bv) {{
+                    bv = sh_tv[i];
+                    bi = int(i);
+                }}
+            }}
+            tok_val[g] = bv;
+            tok_idx[g] = bi < 0 ? -1 : int(g * {_JOINT_THREADS}u) + bi;
+            bv = -3.4028234663852886e38f;
+            bi = -1;
+            for (uint i = 0u; i < {_JOINT_THREADS}u; ++i) {{
+                if (sh_dv[i] > bv) {{
+                    bv = sh_dv[i];
+                    bi = int(i);
+                }}
+            }}
+            dur_val[g] = bv;
+            dur_idx[g] = bi < 0 ? -1 : int(g * {_JOINT_THREADS}u) + bi;
+        }}
+    }}
+"""
+
 
 @cache
 
@@ -366,6 +436,19 @@ def _joint_window_kernel():
         output_names=["window_out"],
         header="",
         source=_JOINT_WINDOW_SOURCE,
+        compile_options={"math_mode": "safe"},
+    )
+
+
+@cache
+def _joint_argmax_kernel():
+    mx = _mx()
+    return mx.fast.metal_kernel(
+        name="parakeet_tdt_decoder_joint_argmax",
+        input_names=["pj16_in", "dec_in", "encoder", "flags", "joint"],
+        output_names=["logits", "tok_val", "tok_idx", "dur_val", "dur_idx"],
+        header="",
+        source=_JOINT_ARGMAX_SOURCE,
         compile_options={"math_mode": "safe"},
     )
 
@@ -543,21 +626,42 @@ def run_step(
     else:
         state_out = lstm_in
         dbg = None
-    flagsj = mx.array(np.array([int(frame), int(mode == 1)], np.int32))
-    (logits,) = _joint_kernel()(
-        inputs=[
-            dec16src,
-            dec16src,
-            encoder.reshape(-1),
-            flagsj,
-            packed.joint,
-        ],
-        output_shapes=[(_JOINT_OUT,)],
-        output_dtypes=[mx.float32],
-        grid=(33 * _JOINT_THREADS, 1, 1),
-        threadgroup=(_JOINT_THREADS, 1, 1),
-        stream=mx.gpu,
+    amode = int(bool(__import__('os').environ.get('MLX_OMARCHY_JOINT_ARGMAX')))
+    flagsj = mx.array(
+        np.array([int(frame), int(mode == 1), amode], np.int32)
     )
+    if amode:
+        logits, tok_val, tok_idx, dur_val, dur_idx = _joint_argmax_kernel()(
+            inputs=[
+                dec16src,
+                dec16src,
+                encoder.reshape(-1),
+                flagsj,
+                packed.joint,
+            ],
+            output_shapes=[(_JOINT_OUT,), (33,), (33,), (33,), (33,)],
+            output_dtypes=[
+                mx.float32, mx.float32, mx.int32, mx.float32, mx.int32,
+            ],
+            grid=(33 * _JOINT_THREADS, 1, 1),
+            threadgroup=(_JOINT_THREADS, 1, 1),
+            stream=mx.gpu,
+        )
+    else:
+        (logits,) = _joint_kernel()(
+            inputs=[
+                dec16src,
+                dec16src,
+                encoder.reshape(-1),
+                flagsj,
+                packed.joint,
+            ],
+            output_shapes=[(_JOINT_OUT,)],
+            output_dtypes=[mx.float32],
+            grid=(33 * _JOINT_THREADS, 1, 1),
+            threadgroup=(_JOINT_THREADS, 1, 1),
+            stream=mx.gpu,
+        )
     window = None
     if spec_frames > 0:
         flags_w = mx.array(
@@ -580,9 +684,17 @@ def run_step(
             stream=mx.gpu,
         )
         mx.eval(state_out, logits, window)
+    elif amode:
+        mx.eval(state_out, logits, tok_val, tok_idx, dur_val, dur_idx)
     else:
         mx.eval(state_out, logits)
     lg = np.asarray(logits[:_JOINT_OUT])
-    token = int(np.argmax(lg[:_VOCAB]))
-    duration = int(np.argmax(lg[_VOCAB:_JOINT_OUT]))
+    if amode:
+        tv = np.asarray(tok_val)
+        token = int(np.asarray(tok_idx)[int(np.argmax(tv))])
+        dv = np.asarray(dur_val)
+        duration = int(np.asarray(dur_idx)[int(np.argmax(dv))]) - _VOCAB
+    else:
+        token = int(np.argmax(lg[:_VOCAB]))
+        duration = int(np.argmax(lg[_VOCAB:_JOINT_OUT]))
     return state_out, token, duration, logits, dbg, window
