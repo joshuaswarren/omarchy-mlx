@@ -30,6 +30,7 @@ struct DeviceExtInput {
   bool external_memory_host{false};
   bool calibrated_timestamps{false};
   bool queue_global_priority{false};
+  bool push_descriptor{false};
 };
 
 // The exact enabledExtensionNames list for one device. |low_queue| is

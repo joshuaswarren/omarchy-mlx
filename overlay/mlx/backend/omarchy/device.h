@@ -177,6 +177,10 @@ struct CapabilityReport {
   // VK_EXT_calibrated_timestamps advertised. Enabled only under
   // MLX_OMARCHY_TRACE_DISPATCH, as lily gates it on trace::on().
   bool calibrated_timestamps{false};
+  // VK_KHR_push_descriptor advertised. Lets a dispatch push its
+  // descriptors into the command buffer instead of allocating a pool
+  // set, calling vkUpdateDescriptorSets and binding it.
+  bool push_descriptor{false};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};

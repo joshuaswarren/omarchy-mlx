@@ -2270,8 +2270,21 @@ ComputeRuntime::ComputeRuntime(
     bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
 
+  // VK_KHR_push_descriptor resolved puts the whole runtime in push mode:
+  // the descriptor layout carries PUSH_DESCRIPTOR_BIT, so no set may be
+  // allocated from it and every dispatch pushes its descriptors inline.
+  // MLX_OMARCHY_PUSH_DESCRIPTORS=0 stays on the classic pool-allocated
+  // path; the bit is all-or-nothing for the layout.
+  const char* push_env = std::getenv("MLX_OMARCHY_PUSH_DESCRIPTORS");
+  push_descriptors_ = !(push_env != nullptr && push_env[0] == '0') &&
+      dt.CmdPushDescriptorSetKHR != nullptr;
+
   VkDescriptorSetLayoutCreateInfo descriptor_info{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  if (push_descriptors_) {
+    descriptor_info.flags =
+        VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+  }
   descriptor_info.bindingCount = binding_limit_;
   descriptor_info.pBindings = bindings.data();
   VKX_CHECK(dt.CreateDescriptorSetLayout(
@@ -2296,6 +2309,17 @@ ComputeRuntime::ComputeRuntime(
   pipeline_info.pSetLayouts = &descriptor_layout_;
   pipeline_info.pushConstantRangeCount = 1;
   pipeline_info.pPushConstantRanges = &push_range;
+  // The pipeline layout must carry PUSH_DESCRIPTOR_BIT for
+  // vkCmdPushDescriptorSetKHR. In push mode bound sets are gone anyway:
+  // the descriptor layout itself refuses allocation, so every dispatch
+  // on this runtime pushes. The constant is missing from older Vulkan
+  // headers; its spec value is fixed at 0x00000001.
+#ifndef VK_PIPELINE_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR
+#define VK_PIPELINE_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR 0x00000001
+#endif
+  if (push_descriptors_) {
+    pipeline_info.flags |= VK_PIPELINE_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+  }
   try {
     VKX_CHECK(dt.CreatePipelineLayout(
         device_, &pipeline_info, nullptr, &pipeline_layout_));

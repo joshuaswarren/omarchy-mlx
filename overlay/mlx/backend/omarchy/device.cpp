@@ -664,6 +664,9 @@ CapabilityReport collect_capabilities(
             std::strcmp(
                 e.extensionName, "VK_EXT_calibrated_timestamps") == 0) {
           caps.calibrated_timestamps = true;
+        } else if (
+            std::strcmp(e.extensionName, "VK_KHR_push_descriptor") == 0) {
+          caps.push_descriptor = true;
 #ifdef OMARCHY_BF16_CMAT
         } else if (
             std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
@@ -1613,6 +1616,7 @@ Device::Device(uint32_t physical_device_index) {
   ext_in.external_memory_host = hw.external_memory_host;
   ext_in.calibrated_timestamps = hw.calibrated_timestamps;
   ext_in.queue_global_priority = hw.queue_global_priority;
+  ext_in.push_descriptor = hw.push_descriptor;
   std::vector<const char*> device_exts = device_extension_names(
       ext_in,
       qci.pNext != nullptr,
@@ -1735,6 +1739,14 @@ Device::Device(uint32_t physical_device_index) {
       InvalidateMappedMemoryRanges, vkInvalidateMappedMemoryRanges)
 
 #undef VKX_LOAD_DEVICE_FN
+
+  // VK_KHR_push_descriptor is optional: resolve it only when the extension
+  // was enabled, and leave the pointer null elsewhere.
+  if (hw.push_descriptor) {
+    dt.CmdPushDescriptorSetKHR =
+        reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
+            dt.GetDeviceProcAddr(device_, "vkCmdPushDescriptorSetKHR"));
+  }
 
   dt.GetDeviceQueue(device_, caps_.queue_family_index, 0, &queue_);
   // The live binding budget: what the backend wants, clamped by what this

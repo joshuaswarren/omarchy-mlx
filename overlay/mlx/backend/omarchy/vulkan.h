@@ -146,6 +146,8 @@ struct DeviceTable {
   PFN_vkCmdBindPipeline CmdBindPipeline{nullptr};
   PFN_vkCmdBindDescriptorSets CmdBindDescriptorSets{nullptr};
   PFN_vkCmdPushConstants CmdPushConstants{nullptr};
+  // VK_KHR_push_descriptor; nullptr when the extension is not enabled.
+  PFN_vkCmdPushDescriptorSetKHR CmdPushDescriptorSetKHR{nullptr};
   PFN_vkCmdDispatch CmdDispatch{nullptr};
   PFN_vkCmdPipelineBarrier CmdPipelineBarrier{nullptr};
   PFN_vkCreateEvent CreateEvent{nullptr};

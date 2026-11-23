@@ -31,6 +31,9 @@ std::vector<const char*> device_extension_names(
   if (trace_timestamps && in.calibrated_timestamps) {
     names.push_back("VK_EXT_calibrated_timestamps");
   }
+  if (in.push_descriptor) {
+    names.push_back("VK_KHR_push_descriptor");
+  }
   return names;
 }
 
