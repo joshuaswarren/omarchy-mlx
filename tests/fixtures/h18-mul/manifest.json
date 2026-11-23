@@ -1,0 +1,200 @@
+{
+  "artifactFormat": "hwx",
+  "bytes": 49152,
+  "constantBytes": 16384,
+  "constantInputs": {
+  },
+  "constantOffset": 320,
+  "dispatchPlan": [
+    0
+  ],
+  "encoder": "h18-oracle-parity",
+  "file": "program-0.hwx",
+  "firstTaskBytes": 300,
+  "inputs": [
+    {
+      "allocationBytes": 32768,
+      "dtype": "float16",
+      "index": 5,
+      "logicalBytes": 1024,
+      "name": "a",
+      "nchw": [
+        1,
+        512,
+        1,
+        1,
+        64,
+        64
+      ],
+      "shape": [
+        1,
+        512,
+        1,
+        1
+      ]
+    },
+    {
+      "allocationBytes": 32768,
+      "dtype": "float16",
+      "index": 6,
+      "logicalBytes": 1024,
+      "name": "b",
+      "nchw": [
+        1,
+        512,
+        1,
+        1,
+        64,
+        64
+      ],
+      "shape": [
+        1,
+        512,
+        1,
+        1
+      ]
+    }
+  ],
+  "intermediates": [
+  ],
+  "operation": "mul",
+  "outputs": [
+    {
+      "allocationBytes": 32768,
+      "dtype": "float16",
+      "index": 4,
+      "logicalBytes": 1024,
+      "name": "y",
+      "nchw": [
+        1,
+        512,
+        1,
+        1,
+        64,
+        64
+      ],
+      "shape": [
+        1,
+        512,
+        1,
+        1
+      ]
+    }
+  ],
+  "programs": [
+    {
+      "bytes": 49152,
+      "constantBytes": 16384,
+      "constantInputs": {
+      },
+      "constantOffset": 320,
+      "encoder": "h18-oracle-parity",
+      "file": "program-0.hwx",
+      "firstTaskBytes": 300,
+      "inputs": [
+        {
+          "allocationBytes": 32768,
+          "dtype": "float16",
+          "index": 5,
+          "logicalBytes": 1024,
+          "name": "a",
+          "nchw": [
+            1,
+            512,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            512,
+            1,
+            1
+          ]
+        },
+        {
+          "allocationBytes": 32768,
+          "dtype": "float16",
+          "index": 6,
+          "logicalBytes": 1024,
+          "name": "b",
+          "nchw": [
+            1,
+            512,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            512,
+            1,
+            1
+          ]
+        }
+      ],
+      "operation": "mul",
+      "outputs": [
+        {
+          "allocationBytes": 32768,
+          "dtype": "float16",
+          "index": 4,
+          "logicalBytes": 1024,
+          "name": "y",
+          "nchw": [
+            1,
+            512,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            512,
+            1,
+            1
+          ]
+        }
+      ],
+      "taskDescriptors": 1
+    }
+  ],
+  "schema": "mil-hwxc.h18-anec-package.v1",
+  "target": "H18",
+  "taskDescriptors": 1,
+  "tensors": {
+    "a": {
+      "logicalBytes": 1024,
+      "role": "input",
+      "shape": [
+        1,
+        512,
+        1,
+        1
+      ]
+    },
+    "b": {
+      "logicalBytes": 1024,
+      "role": "input",
+      "shape": [
+        1,
+        512,
+        1,
+        1
+      ]
+    },
+    "y": {
+      "logicalBytes": 1024,
+      "role": "output",
+      "shape": [
+        1,
+        512,
+        1,
+        1
+      ]
+    }
+  }
+}

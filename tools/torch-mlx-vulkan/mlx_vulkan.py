@@ -384,6 +384,15 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
 
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
+    """native_layer_norm with real mean/rstd.
+
+    aot_autograd saves the returned mean and rstd and feeds them to
+    aten.native_layer_norm_backward; dummies (the old lowering) make that
+    backward divide by rstd = 0 and every gradient upstream of the norm
+    turns NaN at the first training step (PT-T1 bisect). The stats reduce
+    over the trailing len(normalized_shape) axes and keep them singleton,
+    matching aten's saved shapes for any normalized_shape.
+    """
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
     axes = tuple(range(a.ndim - len(tuple(normalized_shape)), a.ndim))
@@ -394,7 +403,7 @@ def _ln_native(a, normalized_shape, weight, bias, eps):
     if w is not None:
         out = out * w
     if b is not None:
-        out = out + b
+        out = out + b (torch-mlx-vulkan: order-agnostic embedding lowering + guarded bwd lowering block)
     return (out, mu, rstd)
 
 def _expand(a, *s, **k):
@@ -948,6 +957,24 @@ def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_ma
 
 # torch-level function objects -> lowering. Built lazily below so missing
 # attributes on any given torch build can't break the import.
+def _embedding_any(a, b, *a_, **k_):
+    """Order-agnostic embedding: the weight is the float 2-D tensor, the
+    indices are the integer tensor - F.embedding and aten.embedding name
+    them in opposite orders, so take them by dtype."""
+    wa, wb = _mx(a), _mx(b)
+    idx_is_a = wa.dtype in (mx.int32, mx.int64, mx.uint32)
+    w = wb if idx_is_a else wa
+    idx = wa if idx_is_a else wb
+    return w[idx.astype(mx.int32)]
+
+def _embedding(weight, idx):
+    """aten.embedding(weight, indices) order."""
+    return _mx(weight)[_mx(idx).astype(mx.int32)]
+
+def _embedding_f(input, weight, *a_, **k_):
+    """F.embedding(input, weight) order."""
+    return _embedding(weight, input)
+
 def _coerce_index(v):
     # fx graphs under dynamic shapes carry torch.SymInt/SymBool indices;
     # mx slicing needs concrete python scalars. Coerce recursively through
@@ -964,6 +991,7 @@ def _coerce_index(v):
     if isinstance(v, (tuple, list)):
         return type(v)(_coerce_index(x) for x in v)
     return v
+
 
 
 _FUNC_SPECS = {
@@ -1115,7 +1143,7 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": _embedding,
+    "embedding": _embedding_any, (torch-mlx-vulkan: order-agnostic embedding lowering + guarded bwd lowering block)
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
@@ -1165,7 +1193,7 @@ def _build_func_table():
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
         ("torch.nn.functional.batch_norm", lambda x, rm, rv, w=None, b=None, training=False, momentum=0.1, eps=1e-5: _bn3(x, w, b, rm, rv, training, momentum, eps)[0]),
         ("torch.batch_norm", _FUNC_SPECS["batch_norm"]),
-        ("torch.nn.functional.embedding", _embedding),
+        ("torch.nn.functional.embedding", _embedding_any), (torch-mlx-vulkan: order-agnostic embedding lowering + guarded bwd lowering block)
         ("torch.embedding", _embedding),
         ("operator.getitem", lambda t, i: t[i]),
         ("operator.matmul", mx.matmul),
@@ -1216,6 +1244,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
+# aten.embedding is (weight, indices): F.embedding is (input, weight).
+ATEN_TABLE["embedding"] = _embedding_any
 
 # zero-kernel bookkeeping targets: run on python values, logged GLUE
 GLUE_FNS = {len, tuple, list, dict, int, float, str, bool, slice, range, zip, torch.finfo, torch.iinfo,
@@ -1428,22 +1458,41 @@ def make_executor(gm):
     return run, stats
 
 
-def _eager_run(gm):
+def _eager_run(gm, return_all_outputs=False):
     run, stats = make_executor(gm)
     run._mlx_stats = stats
     return run
 
 
+def _boxed(runner):
+    """aot_autograd's runtime passes the inputs flat (some paths boxed as
+    one list). Normalize to *args for the executor, which consumes one
+    positional per placeholder."""
+    def call(*inputs):
+        flat = inputs
+        if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
+                and not isinstance(inputs[0], mx.array)
+                and all(isinstance(i, (torch.Tensor, mx.array))
+                        for i in inputs[0])):
+            flat = tuple(inputs[0])
+        return runner(*flat)
+
+    call._boxed_call = True
+    return call
+
+
 @torch._dynamo.register_backend(name="mlx_vulkan")
-def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
+def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None,
+                       return_all_outputs=False):
     if os.environ.get("MLX_VK_EAGER"):
         return _eager_run(gm)
     _record_artifact(gm)
     try:
-        run_c = make_compiled_executor(gm, dt=_dt)
+        run_c = make_compiled_executor(gm, dt=_dt,
+                                       return_all_outputs=return_all_outputs)
     except Exception as e:
         log.warning("compiled executor setup failed: %s", e)
-        return _eager_run(gm)
+        return _eager_run(gm, return_all_outputs)
     holder = {"run": None}
 
     def guarded(*args):
@@ -1460,6 +1509,7 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
         return holder["run"](*args)
 
     guarded._mlx_stats = run_c._mlx_stats
+    guarded.return_all_outputs = return_all_outputs
     return guarded
 
 
@@ -1646,7 +1696,7 @@ def _fuse_rmsnorm(nodes):
     return skip, final
 
 
-def make_compiled_executor(gm, dt=None):
+def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
     skip, fused = _fuse_rmsnorm(nodes)
@@ -1691,6 +1741,16 @@ def make_compiled_executor(gm, dt=None):
 
         def res(a):
             if isinstance(a, torch.fx.Node):
+                if a not in env:
+                    order = []
+                    for n2 in nodes:
+                        order.append("%s/%s" % (n2.op, str(n2.target)[:20]))
+                        if n2 is a:
+                            break
+                    raise KeyError("node %s (%s) target=%s not in env; the "
+                                   "graph order up to it: %s"
+                                   % (a, a.op, str(a.target)[:40],
+                                      order[-8:]))
                 return env[a]
             if isinstance(a, (tuple, list)):
                 return type(a)(res(x) for x in a)
@@ -1771,6 +1831,71 @@ def make_compiled_executor(gm, dt=None):
             if name == "add_":
                 env[n.args[0]] = env[n.args[0]] + args[1]
                 env[n] = env[n.args[0]]
+                continue
+            # The aot backward graph: these ops must stay on mx or the whole
+            # training step crosses to torch per node (PT-T1 speed gate).
+            # Any lowering failure falls through to the generic torch path
+            # for this node (counted), so the step still completes.
+            _v2_lowered = False
+            try:
+                if name == "t" and n.op == "call_function":
+                    env[n] = mx.swapaxes(args[0], -1, -2)
+                    continue
+                if name in ("transpose", "transpose.int") and n.op == "call_function":
+                    a0 = args[0]
+                    d0, d1 = int(args[1]), int(args[2])
+                    env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
+                    continue
+                if name in ("t", "transpose", "transpose.int", "view",
+                            "_unsafe_view", "detach", "gelu_backward",
+                            "native_layer_norm_backward", "split") \
+                        and n.op == "call_function":
+                    shape = args[1]
+                    if isinstance(shape, torch.fx.Node):
+                        shape = env[shape]
+                    if isinstance(shape, int):
+                        shape = (shape,)
+                    env[n] = mx.reshape(args[0], tuple(int(s) for s in shape))
+                    continue
+                if name == "detach" and n.op == "call_function":
+                    env[n] = args[0]
+                    continue
+                if name == "gelu_backward" and n.op == "call_function":
+                    go, x = _cast(args[0]), _cast(args[1])
+                    approx = args[2] if len(args) > 2 else "none"
+                    if approx == "tanh":
+                        inner = math.sqrt(2.0 / math.pi) * (x + 0.044715 * x * x * x)
+                        phi = 0.5 * (1.0 + mx.tanh(inner))
+                        dphi = math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * x * x) \
+                            * (1.0 - mx.tanh(inner) * mx.tanh(inner))
+                        env[n] = go * (phi + x * dphi)
+                    else:
+                        env[n] = go * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
+                                       + x * mx.exp(-(x * x) / 2.0)
+                                       / math.sqrt(2.0 * math.pi))
+                    continue
+                if name == "native_layer_norm_backward" and n.op == "call_function":
+                    go, inp = _cast(args[0]), _cast(args[1])
+                    nshape = args[2]
+                    mean, rstd, weight = _cast(args[3]), _cast(args[4]), args[5]
+                    out_mask = args[7] if len(args) > 7 else [True, True, True]
+                    w = _cast(weight) if weight is not None else None
+                    inp_nd = inp.ndim
+                    red = tuple(range(inp_nd - len(nshape), inp_nd))
+                    xhat = (inp - mean) * rstd
+                    dw = (go * xhat).sum(axis=red) if 1 in out_mask else None
+                    db = go.sum(axis=red) if 2 in out_mask else None
+                    dx = rstd * (go - go.mean(axis=red, keepdims=True)
+                                 - xhat * (go * xhat).mean(axis=red,
+                                                           keepdims=True))
+                    if w is not None:
+                        dx = dx * w
+                    env[n] = (dx, dw, db)
+                    continue
+                _v2_lowered = True
+            except Exception as exc:
+                log.info("V2-LOWER-FAIL\t%s\t%s", name, exc)
+            if _v2_lowered:
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
@@ -1905,6 +2030,8 @@ def make_compiled_executor(gm, dt=None):
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
             if _acc["n"] % 10 == 0:
                 print(f"MV_PROF n={_acc['n']} prep={_acc['prep']/_acc['n']*1e3:.1f}ms cfn={_acc['cfn']/_acc['n']*1e3:.1f}ms conv={_acc['conv']/_acc['n']*1e3:.1f}ms", flush=True)
+        if return_all_outputs:
+            return tuple(_torch(t) for t in outs)
         return out
 
     run._mlx_stats = stats
