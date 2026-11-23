@@ -1088,6 +1088,11 @@ void CommandEncoder::dispatch_compute_pipeline(
   VkPipelineLayout pipeline_layout = compute.pipeline_layout();
   dt.CmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
   if (push_desc) {
+    timeline::ScopedEvent tl_push_write(
+        timeline::Kind::DescUpdate,
+        timeline::SubKind::DescWrite,
+        encoder_id_,
+        static_cast<uint64_t>(bindings.size()));
     dt.CmdPushDescriptorSetKHR(
         cmd_,
         VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -1298,6 +1303,11 @@ void CommandEncoder::emit_pending() {
             writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[b].pBufferInfo = &buffer_info[b];
           }
+          timeline::ScopedEvent tl_push_write(
+              timeline::Kind::DescUpdate,
+              timeline::SubKind::DescWrite,
+              encoder_id_,
+              static_cast<uint64_t>(node.binding_count));
           dt.CmdPushDescriptorSetKHR(
               cmd_,
               VK_PIPELINE_BIND_POINT_COMPUTE,
