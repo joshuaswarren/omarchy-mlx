@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +16,7 @@ from unittest.mock import patch
 import qualify
 from qualify import ane_result, benchmark_result, counts
 
-from scripts import bench_decode
+from scripts import bench_decode, mlx_provenance
 
 
 class ReceiptTest(unittest.TestCase):
@@ -316,6 +318,41 @@ class QualificationRunTest(unittest.TestCase):
     def test_interrupted_probe_still_aborts(self):
         with self.assertRaisesRegex(RuntimeError, 'gpu_correctness_failed'):
             self.run_qualification([[0.0, 0.0], [0.0, 0.0]], probe_exit=124)
+
+
+class ProvenanceTest(unittest.TestCase):
+    def test_unhashed_binary_does_not_clear_an_earlier_record_mismatch(self):
+        core_rel = 'mlx/core/core.cpython-311-x86_64-linux-gnu.so'
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp) / 'site'
+            (site / 'mlx' / 'lib').mkdir(parents=True)
+            (site / 'mlx' / 'core').mkdir()
+            (site / core_rel).write_bytes(b'core')
+            (site / 'mlx' / 'lib' / 'libmlx.so').write_bytes(b'lib')
+            wheel = Path(tmp) / 'claimed.whl'
+            with zipfile.ZipFile(wheel, 'w') as zf:
+                zf.writestr(core_rel, b'core')
+                zf.writestr('mlx/lib/libmlx.so', b'lib')
+            # The extension's RECORD hash is stale; libmlx.so has no entry.
+            records = {core_rel: hashlib.sha256(b'stale-core').hexdigest()}
+            mlx = SimpleNamespace(core=SimpleNamespace(__version__='1.0'))
+            dist = SimpleNamespace(version='1.0', locate_file=lambda rel: site / rel)
+            for argv in ([], ['--expect-wheel', str(wheel)]):
+                out = io.StringIO()
+                with (self.subTest(argv=argv),
+                      patch.dict(sys.modules, {'mlx': mlx, 'mlx.core': mlx.core}),
+                      patch.object(mlx_provenance.importlib.metadata, 'distribution',
+                                   return_value=dist),
+                      patch.object(mlx_provenance, '_record_hashes', return_value=records),
+                      patch.object(sys, 'argv', ['mlx_provenance.py', *argv]),
+                      contextlib.redirect_stdout(out)):
+                    with self.assertRaises(SystemExit) as exit_:
+                        mlx_provenance.main()
+                    self.assertEqual(exit_.exception.code, 3)
+                    report = json.loads(out.getvalue())
+                    self.assertEqual([f['match'] for f in report['files']], [False, None])
+                    self.assertEqual(report['verified'], 'mismatch')
+                    self.assertIn('RECORD says', report['mismatch'])
 
 
 class PackagedIcdTest(unittest.TestCase):
