@@ -1176,6 +1176,7 @@ enum class ComputeKernel : uint16_t {
   FusedChainF32L128,
   FusedChainF16L128,
   FusedChainBF16L128,
+  QmmVecQ4MultiSubgroupBF16R2S16W2,
   Count,
 };
 
