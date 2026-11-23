@@ -593,6 +593,7 @@ def _boxed(runner):
             flat = tuple(inputs[0])
         return runner(*flat)
 
+    call._boxed_call = True
     return call
 
 
