@@ -12,7 +12,7 @@ identity, on-device pruning fraction, and qualification are in section 6.
 ## 1. The bounds from the brief prune nothing on this model
 
 Numbers come from 310 real decode hidden states (10 corpus prompts x 31 steps,
-mlx-lm 0.31.3 on CPU, `receipts-work/vocab-prune/collect.py`), with exact
+mlx-lm 0.31.3 on CPU, `receipts/2026-09-23-vocab-prune/collect.py`), with exact
 logits from the dequantized head (`analyze*.py`):
 
 | certificate | rows pruned (median token) |

@@ -19,7 +19,7 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SKIP_TOP_DIRS = frozenset({"receipts", "receipts-work"})
+SKIP_TOP_DIRS = frozenset({"receipts"})
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 
