@@ -18,7 +18,7 @@ fi
 
 status=0
 matched=()
-while IFS= read -r line; do
+while IFS= read -r line || [[ -n $line ]]; do
   [[ -n $line ]] || continue
   case "$line" in
     '#'*) continue ;;
