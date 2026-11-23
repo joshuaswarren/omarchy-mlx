@@ -89,8 +89,15 @@ def voiced_seconds(xp, audio) -> float:
 
 
 def _fast_tdt_enabled() -> bool:
-    """Runtime kill switch for the batched TDT decoder (default on)."""
-    return os.environ.get("MLX_OMARCHY_GPU_STT_FAST_TDT", "").strip().lower() != "off"
+    """Opt-in switch for the batched TDT decoder (default off).
+
+    The matched 350-clip FLEURS ABBA on a 14-inch M2 Max measured the batched
+    walk at -17 percent decode across all five blocks versus the reference
+    loop, with per-file transcript divergence at bf16 (52 of 350 files) and
+    unchanged corpus WER, so the fast path ships opt-in per deployment until
+    a variant without the tail recompute cost lands.
+    """
+    return os.environ.get("MLX_OMARCHY_GPU_STT_FAST_TDT", "").strip().lower() == "on"
 
 
 def decode_with_retry(generate, xp, audio, noise) -> str:
