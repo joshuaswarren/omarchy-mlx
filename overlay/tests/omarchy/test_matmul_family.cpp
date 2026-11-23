@@ -8453,7 +8453,7 @@ TEST_CASE("single-row matvec sums 1..32 exactly through the subgroup reduction")
     values[i] = float(i + 1);
   }
   auto got = readback_f32(stream, matmul(
-      array(std::vector<float>{1.0f}, Shape{1, 1}),
+      array({1.0f}, Shape{1, 1}),
       array(values.begin(), Shape{1, 32}, float32), stream));
   REQUIRE_EQ(got.size(), 1u);
   CHECK_EQ(got[0], 528.0f);
