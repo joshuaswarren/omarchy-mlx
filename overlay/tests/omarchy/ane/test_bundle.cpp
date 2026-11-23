@@ -1742,7 +1742,7 @@ TEST_CASE("missing aux_outputs rejects the extra destination") {
   fixture.write();
   check_error(
       [&] { load_bundle(fixture.dir.path()); },
-      "unaddressed destination channels");
+      "not fully bound for role 'output'");
 }
 
 TEST_CASE("aux output without bar_slot fails the port table contract") {
@@ -1769,7 +1769,7 @@ TEST_CASE("aux output on the wrong channel is rejected") {
   fixture.write();
   check_error(
       [&] { load_bundle(fixture.dir.path()); },
-      "channel does not match ANEC binding order");
+      "duplicates another surface binding");
 }
 
 TEST_CASE("buffer_id defaults to the binding channel") {

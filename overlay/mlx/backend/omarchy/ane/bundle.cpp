@@ -1235,46 +1235,85 @@ void validate_program_contract(
   if (program.outputs.size() != header.destination_count) {
     throw bundle_error(prefix + " output count does not match ANEC destination_count");
   }
-  if (channel_size_bytes(header, 3, tile_alignment) != program.scratch_bytes) {
+  const uint64_t header_scratch = channel_size_bytes(header, 3, tile_alignment);
+  // ABI-2 containers allocate the scratch BO through the port table, so
+  // their headers carry no channel-3 tiles entry at all; scratch_bytes is
+  // then the port's own declared allocation. Embedded scratch (H13-style)
+  // still has to match the header exactly.
+  if (program.scratch_bytes != header_scratch &&
+      !(header_scratch == 0 && !program.aux_outputs.empty())) {
     throw bundle_error(prefix + " scratch_bytes does not match ANEC channel 3 allocation");
   }
-  ChannelCacheEntry channels;
-  if (!derived_role_channels(header, anec_path, channels)) {
-    throw bundle_error(
-        prefix +
-        " task stream does not name every surface; channel map is positional");
-  }
-  const std::vector<uint32_t>& src = channels.src;
-  const std::vector<uint32_t>& dst = channels.dst;
-  for (uint32_t i = 0; i < program.outputs.size(); ++i) {
-    validate_binding(
-        prefix + " output " + program.outputs[i].tensor,
-        program.outputs[i],
-        header,
-        dst[i],
-        tile_alignment);
-  }
-  for (uint32_t i = 0; i < program.inputs.size(); ++i) {
-    validate_binding(
-        prefix + " input " + program.inputs[i].tensor,
-        program.inputs[i],
-        header,
-        src[i],
-        tile_alignment);
-  }
-  const size_t derived_extra = dst.size() - header.destination_count;
-  if (program.aux_outputs.size() != derived_extra) {
-    throw bundle_error(
-        prefix + " aux_outputs does not cover the ANEC's unaddressed "
-        "destination channels");
-  }
-  for (uint32_t i = 0; i < program.aux_outputs.size(); ++i) {
-    validate_binding(
-        prefix + " aux output " + program.aux_outputs[i].tensor,
-        program.aux_outputs[i],
-        header,
-        dst[header.destination_count + i],
-        tile_alignment);
+  if (program.aux_outputs.empty()) {
+    // Positional ABI (H13): the task stream's selector registers name the
+    // surface channels, so the manifest's binding order must match the
+    // stream-derived map exactly.
+    ChannelCacheEntry channels;
+    if (!derived_role_channels(header, anec_path, channels)) {
+      throw bundle_error(
+          prefix +
+          " task stream does not name every surface; channel map is positional");
+    }
+    const std::vector<uint32_t>& src = channels.src;
+    const std::vector<uint32_t>& dst = channels.dst;
+    if (dst.size() != header.destination_count) {
+      throw bundle_error(
+          prefix +
+          " task stream leaves unaddressed destination channels; declare "
+          "them as aux_outputs");
+    }
+    for (uint32_t i = 0; i < program.outputs.size(); ++i) {
+      validate_binding(
+          prefix + " output " + program.outputs[i].tensor,
+          program.outputs[i],
+          header,
+          dst[i],
+          tile_alignment);
+    }
+    for (uint32_t i = 0; i < program.inputs.size(); ++i) {
+      validate_binding(
+          prefix + " input " + program.inputs[i].tensor,
+          program.inputs[i],
+          header,
+          src[i],
+          tile_alignment);
+    }
+  } else {
+    // ABI-2 port-table bundle: the H13 selector walk does not decode this
+    // stream's descriptors, so the manifest carries the channel map
+    // itself. ane_m2_init_ports proves the map at device load; here each
+    // binding must name an allocated, unique surface channel and carry
+    // the channel id as its buffer id.
+    std::set<uint32_t> seen_channels;
+    const auto validate_port = [&](const char* role,
+                                   const AneProgramBinding& binding) {
+      const std::string label =
+          prefix + " " + role + " " + binding.tensor;
+      if (binding.channel >= kAnecTileCount ||
+          header.tiles[binding.channel] == 0) {
+        throw bundle_error(
+            label + " channel is not an allocated ANEC surface");
+      }
+      if (!seen_channels.insert(binding.channel).second) {
+        throw bundle_error(
+            label + " channel duplicates another surface binding");
+      }
+      if (binding.buffer_id != binding.channel) {
+        throw bundle_error(
+            label + " buffer_id does not equal the surface channel");
+      }
+      validate_binding(
+          label, binding, header, binding.channel, tile_alignment);
+    };
+    for (const auto& binding : program.inputs) {
+      validate_port("input", binding);
+    }
+    for (const auto& binding : program.outputs) {
+      validate_port("output", binding);
+    }
+    for (const auto& binding : program.aux_outputs) {
+      validate_port("aux output", binding);
+    }
   }
   if (!program.aux_outputs.empty()) {
     // The ABI-2 port table binds every surface through a BAR slot; slots

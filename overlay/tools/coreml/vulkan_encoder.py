@@ -548,12 +548,20 @@ class AneIsland:
                 raise EncoderRunError(f"resident session close failed: {error}") from error
 
     def _session_bundles(self) -> dict:
-        """The resident bundle set this session registers, name -> path."""
-        bundles = {
-            name: Path(self.bundles) / name
-            for name in sorted(self.resident_bundles)
-        }
-        if self.whole_bundle is not None:
+        """The resident bundle set this session registers, name -> path.
+
+        A discoverable whole-encoder bundle carries every encoder submit,
+        so its session registers only that bundle: the split islands would
+        sit unused, and on T6021 their H13 task frames cannot even init
+        through the M2 builder, which would refuse the whole session.
+        """
+        bundles = {}
+        if self.whole_bundle is None:
+            bundles = {
+                name: Path(self.bundles) / name
+                for name in sorted(self.resident_bundles)
+            }
+        else:
             manifest = json.loads(
                 (self.whole_bundle / "manifest.json").read_text()
             )

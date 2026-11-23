@@ -594,6 +594,11 @@ void validate_bindings(AneManifest& manifest) {
       validate(program.outputs[i], true,
                "programs[" + std::to_string(p) + "].outputs[" + std::to_string(i) + "]");
     }
+    for (size_t i = 0; i < program.aux_outputs.size(); ++i) {
+      validate(program.aux_outputs[i], true,
+               "programs[" + std::to_string(p) + "].aux_outputs[" +
+                   std::to_string(i) + "]");
+    }
   }
   if (total_descriptors != manifest.task_descriptors) {
     throw manifest_error("field 'task_descriptors' does not equal the program total");
@@ -654,6 +659,12 @@ void validate_bindings(AneManifest& manifest) {
       }
     }
     for (const auto& binding : program.outputs) {
+      add_range(
+          binding.tensor,
+          binding.element_offset,
+          binding.element_offset + binding.element_count);
+    }
+    for (const auto& binding : program.aux_outputs) {
       add_range(
           binding.tensor,
           binding.element_offset,
