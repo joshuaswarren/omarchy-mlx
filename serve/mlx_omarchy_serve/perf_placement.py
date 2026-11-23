@@ -16,7 +16,8 @@ Apple Silicon hosts); any failure (EPERM, old kernel, seccomp) falls
 back silently — serving continues at the stock clamp.
 
 MLX_OMARCHY_UCLAMP_MIN: unset or 1024 -> clamp to 1024 (on);
-0 -> off; any other integer -> that clamp value.
+0 -> off; any other integer in 1..1024 -> that clamp value; anything
+else (negative, above 1024, not an integer) -> off.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import sys
 
 UCLAMP_ENV = "MLX_OMARCHY_UCLAMP_MIN"
 DEFAULT_UCLAMP_MIN = 1024
+UCLAMP_MAX = 1024  # kernel SCHED_CAPACITY_SCALE; util_min/util_max range
 
 SCHED_FLAG_KEEP_POLICY = 0x08
 SCHED_FLAG_UTIL_CLAMP_MIN = 0x20
@@ -55,7 +57,7 @@ def _clamp_from_env(env=None):
         value = int(raw)
     except ValueError:
         return None
-    return value if value > 0 else None
+    return value if 0 < value <= UCLAMP_MAX else None
 
 
 def apply_uclamp_min(value, *, syscall=None, log=None):
@@ -66,6 +68,8 @@ def apply_uclamp_min(value, *, syscall=None, log=None):
     callable(nr, pid, bytes) -> int (0 ok, -1 error with errno set by
     the fake via ctypes-style).
     """
+    if type(value) is not int or not 0 < value <= UCLAMP_MAX:
+        return False, f"uclamp_min {value!r} not an integer in 1..{UCLAMP_MAX}"
     nr = _SCHED_SETATTR.get(sys.platform if sys.platform != "linux" else os.uname().machine)
     if nr is None:
         return False, f"unsupported architecture {os.uname().machine}"
@@ -78,7 +82,7 @@ def apply_uclamp_min(value, *, syscall=None, log=None):
 
     attr = _SCHED_ATTR.pack(
         _SCHED_ATTR.size, 0, SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_UTIL_CLAMP_MIN,
-        0, 0, 0, 0, 0, int(value), 1024)
+        0, 0, 0, 0, 0, value, UCLAMP_MAX)
     ctypes.set_errno(0)
     rc = syscall(nr, 0, attr, 0)
     if rc != 0:

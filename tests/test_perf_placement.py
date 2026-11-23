@@ -13,6 +13,10 @@ sys.path.insert(0, "serve")
 from mlx_omarchy_serve import perf_placement as pp
 
 
+def no_syscall(*args):
+    raise AssertionError("syscall reached with an invalid clamp")
+
+
 class ClampFromEnvTest(unittest.TestCase):
     def test_default_is_1024(self):
         self.assertEqual(pp._clamp_from_env({}), 1024)
@@ -25,6 +29,13 @@ class ClampFromEnvTest(unittest.TestCase):
 
     def test_garbage_disables(self):
         self.assertIsNone(pp._clamp_from_env({pp.UCLAMP_ENV: "banana"}))
+
+    def test_only_kernel_range_1_to_1024_enables(self):
+        self.assertEqual(pp._clamp_from_env({pp.UCLAMP_ENV: "1"}), 1)
+        self.assertEqual(pp._clamp_from_env({pp.UCLAMP_ENV: "1024"}), 1024)
+        for raw in ("-1", "1025", "2048", "4294967295", "5000000000"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(pp._clamp_from_env({pp.UCLAMP_ENV: raw}))
 
 
 class ApplyUclampTest(unittest.TestCase):
@@ -62,6 +73,24 @@ class ApplyUclampTest(unittest.TestCase):
             ok, detail = pp.apply_uclamp_min(1024, syscall=lambda *a: 0)
         self.assertFalse(ok)
         self.assertIn("unsupported", detail)
+
+    def test_value_must_be_int_in_range(self):
+        for value in (1, 1024):
+            with self.subTest(value=value):
+                ok, _ = pp.apply_uclamp_min(value, syscall=lambda *a: 0)
+                self.assertTrue(ok)
+        for value in (0, -1, 1025, 2**32, True, 512.0, "512", None):
+            with self.subTest(value=value):
+                ok, detail = pp.apply_uclamp_min(value, syscall=no_syscall)
+                self.assertFalse(ok)
+                self.assertIn("1..1024", detail)
+
+    def test_apply_from_env_out_of_range_refuses_without_syscall(self):
+        for raw in ("2048", "5000000000"):
+            with self.subTest(raw=raw):
+                ok, detail = pp.apply_from_env({pp.UCLAMP_ENV: raw}, syscall=no_syscall)
+                self.assertFalse(ok)
+                self.assertIn("invalid", detail)
 
     def test_apply_from_env_off(self):
         seen = []

@@ -250,9 +250,10 @@ P-cluster boost hint under the stock `schedutil` governor. First-token
 latency recovers most of the performance-governor gain. No governor is
 touched, and root is not needed. Mechanism: the submit thread otherwise
 lands on the E cluster. It pays the frequency ramp at request start (see
-`receipts/2026-10-02-perf-hold`). `MLX_OMARCHY_UCLAMP_MIN=0` disables. Any
-other value sets the clamp. Some kernels refuse the call
-(`EPERM`/`EINVAL`, for example hosts without uclamp support). The serve
+`receipts/2026-10-02-perf-hold`). `MLX_OMARCHY_UCLAMP_MIN=0` disables. A
+value from 1 to 1024 sets the clamp; any other value disables it. Some
+kernels refuse the call (`EPERM`/`EINVAL`, for example hosts without
+uclamp support). The serve
 then logs one stderr line and serves unchanged. Measured A/B on both Macs
 with the published v0.7.14 wheel. Prefill gained +1.0 to 2.3 % by route.
 First-token rate gained +0.3 to 2.7 %.
