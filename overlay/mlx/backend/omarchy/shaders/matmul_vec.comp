@@ -11,6 +11,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 #define STORAGE_TYPE uint16_t
 #define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
 uint16_t bf16_store(float value) {
@@ -138,17 +139,16 @@ void main() {
       accumulator3 = fma(weight3.w, x.w, accumulator3);
     }
 
-#define REDUCE_ROWS(OFFSET) \
-    accumulator0 += subgroupShuffleDown(accumulator0, OFFSET); \
-    accumulator1 += subgroupShuffleDown(accumulator1, OFFSET); \
-    accumulator2 += subgroupShuffleDown(accumulator2, OFFSET); \
-    accumulator3 += subgroupShuffleDown(accumulator3, OFFSET)
-    REDUCE_ROWS(16u);
-    REDUCE_ROWS(8u);
-    REDUCE_ROWS(4u);
-    REDUCE_ROWS(2u);
-    REDUCE_ROWS(1u);
-#undef REDUCE_ROWS
+  // Constant-mask ShuffleDown butterflies are the general-shuffle cost on
+  // Honeykrisp (four read_invocation selects per step, qmm_vec.comp's measured
+  // pairing) while subgroupAdd is the unlowered hardware reduction. The
+  // full 32-lane butterfly is exactly that reduction: every lane ends holding
+  // the total, so this is an assignment - `acc += subgroupAdd(acc)` would
+  // count the lane's own value twice (w86, PR review).
+  accumulator0 = subgroupAdd(accumulator0);
+  accumulator1 = subgroupAdd(accumulator1);
+  accumulator2 = subgroupAdd(accumulator2);
+  accumulator3 = subgroupAdd(accumulator3);
 
     if (gl_SubgroupInvocationID == 0u) {
       uint output_index = batch_index * params.matrix_n + row;

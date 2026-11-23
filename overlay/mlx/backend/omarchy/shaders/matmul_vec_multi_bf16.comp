@@ -4,6 +4,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 
 layout(local_size_x = 32) in;
 
@@ -64,6 +65,12 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
+// Constant-mask ShuffleDown butterflies are the general-shuffle cost on
+// Honeykrisp (four read_invocation selects per step, qmm_vec.comp's measured
+// pairing) while subgroupAdd is the unlowered hardware reduction. The
+// full 32-lane butterfly is exactly that reduction: every lane ends holding
+// the total, so this is an assignment - `acc += subgroupAdd(acc)` would
+// count the lane's own value twice (w86, PR review).
 #define DENSE_GEMV(B, O, B_OFFSET, ROW_GROUP, MI) { \
   uint row = (ROW_GROUP) * 4u; \
   uint lane_k = gl_SubgroupInvocationID * 4u; \
@@ -98,26 +105,10 @@ uint16_t bf16_store(float value) {
     accumulator3 = fma(weight3.z, x.z, accumulator3); \
     accumulator3 = fma(weight3.w, x.w, accumulator3); \
   } \
-  accumulator0 += subgroupShuffleDown(accumulator0, 16u); \
-  accumulator1 += subgroupShuffleDown(accumulator1, 16u); \
-  accumulator2 += subgroupShuffleDown(accumulator2, 16u); \
-  accumulator3 += subgroupShuffleDown(accumulator3, 16u); \
-  accumulator0 += subgroupShuffleDown(accumulator0, 8u); \
-  accumulator1 += subgroupShuffleDown(accumulator1, 8u); \
-  accumulator2 += subgroupShuffleDown(accumulator2, 8u); \
-  accumulator3 += subgroupShuffleDown(accumulator3, 8u); \
-  accumulator0 += subgroupShuffleDown(accumulator0, 4u); \
-  accumulator1 += subgroupShuffleDown(accumulator1, 4u); \
-  accumulator2 += subgroupShuffleDown(accumulator2, 4u); \
-  accumulator3 += subgroupShuffleDown(accumulator3, 4u); \
-  accumulator0 += subgroupShuffleDown(accumulator0, 2u); \
-  accumulator1 += subgroupShuffleDown(accumulator1, 2u); \
-  accumulator2 += subgroupShuffleDown(accumulator2, 2u); \
-  accumulator3 += subgroupShuffleDown(accumulator3, 2u); \
-  accumulator0 += subgroupShuffleDown(accumulator0, 1u); \
-  accumulator1 += subgroupShuffleDown(accumulator1, 1u); \
-  accumulator2 += subgroupShuffleDown(accumulator2, 1u); \
-  accumulator3 += subgroupShuffleDown(accumulator3, 1u); \
+  accumulator0 = subgroupAdd(accumulator0); \
+  accumulator1 = subgroupAdd(accumulator1); \
+  accumulator2 = subgroupAdd(accumulator2); \
+  accumulator3 = subgroupAdd(accumulator3); \
   if (gl_SubgroupInvocationID == 0u) { \
     if ((params.flags & (4096u << MI)) != 0u) { \
       uint base = params.out_strides[MI]; \
