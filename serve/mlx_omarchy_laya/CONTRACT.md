@@ -294,7 +294,7 @@ model hashes, exact command, dispatch trace).
    ANE region (large stable matmuls, fixed shapes after padding buckets), with the
    decision head and act head left on the GPU; per-layer-type RoPE and ±64 sliding
    window masks are the two features the ANE exporter must support first, and both
-   wait on the standing MIL/`libane` gates in the roadmap. Nothing in the GPU serving
+   wait on the standing MIL/`libane` gates. Nothing in the GPU serving
    path waits on this.
 
 ## Verification environments used by the tests

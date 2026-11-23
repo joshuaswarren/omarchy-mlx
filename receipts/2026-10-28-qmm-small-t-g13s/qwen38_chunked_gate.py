@@ -4,7 +4,7 @@
 docs/parity-contract.md pins SiddhJagani/Qwen3.8-2B-mlx-4Bit@0867d98b; docs/numerics-gate.md
 judges a route change against an independent reference (an fp32 CPU forward of the same weights
 and text), not against the kernel it replaces. The prompts are the ten contract prompts, taken as
-token ids from receipts-work/vocab-prune/out/contract-ctl-r1.json (pass 0).
+token ids from receipts/2026-09-23-vocab-prune/out/contract-ctl-r1.json (pass 0).
 
 The short-pass route only runs on passes of 2..T rows, and a one-pass prefill never has one, so
 every arm reads the teacher-forced text in fixed chunks (--chunk). Records use the
