@@ -429,7 +429,7 @@ class DictationTranscriber:
         self._reference = lock
         fixture = cli._fixture_path(cli._cache_dir(lock))
         if fixture.is_file():
-            pcm, _rate, _decoder = cli._decode_audio(fixture)
+            pcm, _rate, _decoder, _timing = cli._decode_audio(fixture)
             self._fixture_samples_sha = _samples_sha256(
                 np.asarray(pcm, dtype=np.float32) / 32768.0)
         self._np = np

@@ -286,7 +286,7 @@ class ResamplerTest(unittest.TestCase):
         except ImportError:
             raise unittest.SkipTest("mlx is not importable on this host")
 
-    peak_frequency_hz = PeakFrequencyEstimatorTest.peak_frequency_hz
+    peak_frequency_hz = staticmethod(PeakFrequencyEstimatorTest.peak_frequency_hz)
 
     def resample(self, samples, rate):
         return pd.resample_to_16k(samples, rate)
@@ -353,7 +353,7 @@ class HardwareDictationTest(unittest.TestCase):
         cli = pd.load_cli_module()
         lock = cli.ReferenceLock.load()
         fixture = cli._fixture_path(cli._cache_dir(lock))
-        pcm, rate, _decoder = cli._decode_audio(fixture)
+        pcm, rate, _decoder, _timing = cli._decode_audio(fixture)
         waveform = np.asarray(pcm, dtype=np.float32) / 32768.0
         return waveform, rate
 
