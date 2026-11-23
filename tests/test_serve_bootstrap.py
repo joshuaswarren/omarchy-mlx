@@ -76,6 +76,12 @@ CURL_SHIM = """curl() {
       *) url="$1"; shift ;;
     esac
   done
+  case "$url" in
+    */git/trees/*)
+      cat "$MLX_OMARCHY_TEST_TAGTREE" 2>/dev/null \
+        || { echo "curl: tree listing unavailable" >&2; return 7; }
+      return 0 ;;
+  esac
   local rel="${url#*/"$VERSION"/}"
   local src="$MLX_OMARCHY_TEST_TREE/$rel"
   [[ -f "$src" ]] || { echo "curl: release tag has no $rel" >&2; return 22; }
@@ -83,6 +89,22 @@ CURL_SHIM = """curl() {
   cp "$src" "$out"
 }
 """
+
+
+def tagtree_manifest(exclude=frozenset()):
+    """Synthetic git-trees listing for this checkout: one "path" entry per
+    file under serve/, closed with the untruncated marker the installer
+    requires. Written once per run so a test that deletes a file still
+    lists it (the listing is the tag's view, not the live tree's)."""
+    root = REPO_ROOT / "serve"
+    lines = [
+        f'{{"path":"{p.relative_to(REPO_ROOT).as_posix()}"}}'
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+        and p.relative_to(REPO_ROOT).as_posix() not in exclude
+    ]
+    lines.append('{"truncated":false}')
+    return "\n".join(lines)
 
 
 def bootstrap_script(prefix, bin_dir, apps_dir, start=SECTION_START, with_python_shim=False):
@@ -136,6 +158,8 @@ class BootstrapTests(unittest.TestCase):
         # must replace it, not pile up next to it.
         apps_dir.mkdir(parents=True)
         (apps_dir / "mlx-omarchy-demo.desktop").write_text("[Desktop Entry]\n")
+        cls.tagtree = Path(cls.tmp.name) / "tagtree.json"
+        cls.tagtree.write_text(tagtree_manifest())
         script = bootstrap_script(prefix, bin_dir, apps_dir, with_python_shim=True)
         result = subprocess.run(
             ["bash", "-c", script],
@@ -164,6 +188,7 @@ class BootstrapTests(unittest.TestCase):
                 "PATH": f"{home / '.local/bin/fake-omarchy-bin'}:{os.environ['PATH']}",
                 "MLX_OMARCHY_HOME": str(prefix),
                 "MLX_OMARCHY_TEST_TREE": str(REPO_ROOT),
+                "MLX_OMARCHY_TEST_TAGTREE": str(cls.tagtree),
                 "REPO": "local.test/does-not-matter",
                 "VERSION": "test"}
 
@@ -244,6 +269,40 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("curl: release tag has no serve/mlx_omarchy_assistant/pairs.py",
                       result.stdout + result.stderr)
+
+    def test_post_tag_file_skips_when_absent_from_tag_tree(self):
+        """A listed file absent from the tag's tree listing is skipped.
+
+        The install list can name a file merged on main after the tag was
+        cut; the tree membership check must skip it with a note instead
+        of aborting, and must not stage it.
+        """
+        source = assistant_source_dir()
+        if not source.is_dir():
+            self.skipTest("assistant package not merged into this checkout yet")
+        tagtree = Path(self.tmp.name) / "tagtree-no-newfile.json"
+        tagtree.write_text(tagtree_manifest(
+            exclude={"serve/mlx_omarchy_assistant/gpu_stt_tdt.py"}))
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td) / "p"
+            bin_dir = Path(td) / "b"
+            apps_dir = Path(td) / "a"
+            for d in (prefix, bin_dir, apps_dir):
+                d.mkdir(parents=True)
+            env = self.install_env(self.home, prefix)
+            env["MLX_OMARCHY_TEST_TAGTREE"] = str(tagtree)
+            result = subprocess.run(
+                ["bash", "-c",
+                 bootstrap_script(prefix, bin_dir, apps_dir,
+                                  start=PACKAGES_ONLY_START)],
+                env=env, capture_output=True, text=True, timeout=120,
+                check=False)
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("gpu_stt_tdt.py not in test (added after the tag); skipped",
+                             result.stdout)
+            self.assertFalse(
+                (prefix / "mlx_omarchy_assistant" / "gpu_stt_tdt.py").exists())
 
     def test_installed_assistant_launcher_help_needs_no_mlx(self):
         if not self.assistant_merged:

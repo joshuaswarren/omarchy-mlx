@@ -644,6 +644,20 @@ fi
 #     approve-first download gate. The package ships from the same release
 #     tag as the wheel, so an install is internally consistent.
 say "Installing serve CLI"
+# The resolved tag's git tree, fetched once. A per-file list on main can
+# name a file merged after the tag was cut; absent-from-the-tree means
+# "added after the tag" and skips with a note. A listed file that IS in
+# the tree still dies on any fetch failure, and an empty, truncated or
+# unparseable listing dies here — a real outage must never look like a
+# post-tag file.
+TAG_LISTING="$(curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$VERSION?recursive=1")" \
+  || die "could not fetch the $VERSION tree listing; cannot tell a post-tag file from a failed fetch"
+TAG_LISTING="$(printf '%s' "$TAG_LISTING" | tr -d ' \n')"
+printf '%s' "$TAG_LISTING" | grep -qF '"truncated":false' \
+  || die "the $VERSION tree listing is empty, truncated or unparseable; cannot tell a post-tag file from a failed fetch"
+printf '%s' "$TAG_LISTING" | grep -qF '"path":"serve/mlx_omarchy_assistant/__init__.py"' \
+  || die "$VERSION does not contain serve/mlx_omarchy_assistant; this installer requires the assistant package at the resolved tag"
+in_tag_tree() { printf '%s' "$TAG_LISTING" | grep -qF "\"path\":\"$1\""; }
 # Shared name module first: venv discovery and the install name table,
 # imported by the serve CLI, the assistant, and the retire tooling.
 curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_paths.py" \
@@ -651,24 +665,39 @@ curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_p
 SERVE_PKG="$PREFIX/mlx_omarchy_serve"
 mkdir -p "$SERVE_PKG"
 for serve_file in __init__.py catalog.py budget.py perf_placement.py export_fit_table.py __main__.py _mlxlm_server.py catalog.json; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_serve/$serve_file" \
-    -o "$SERVE_PKG/$serve_file"
+  if in_tag_tree "serve/mlx_omarchy_serve/$serve_file"; then
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_serve/$serve_file" \
+      -o "$SERVE_PKG/$serve_file"
+  else
+    rm -f "$SERVE_PKG/$serve_file"
+    say "note: serve/mlx_omarchy_serve/$serve_file not in $VERSION (added after the tag); skipped"
+  fi
 done
 # Laya typed-decisions server (serve/mlx_omarchy_laya/), same release tag;
 # its catalog entries route to it via serve.backend == "module".
 LAYA_PKG="$PREFIX/mlx_omarchy_laya"
 mkdir -p "$LAYA_PKG"
 for laya_file in __init__.py model.py sequence.py api.py server.py convert.py qualify.py; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_laya/$laya_file" \
-    -o "$LAYA_PKG/$laya_file"
+  if in_tag_tree "serve/mlx_omarchy_laya/$laya_file"; then
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_laya/$laya_file" \
+      -o "$LAYA_PKG/$laya_file"
+  else
+    rm -f "$LAYA_PKG/$laya_file"
+    say "note: serve/mlx_omarchy_laya/$laya_file not in $VERSION (added after the tag); skipped"
+  fi
 done
 # Bonsai2 packed-runtime server (serve/mlx_omarchy_bonsai2/), same release
 # tag; catalog entries route to it via serve.backend == "module".
 BONSAI2_PKG="$PREFIX/mlx_omarchy_bonsai2"
 mkdir -p "$BONSAI2_PKG"
 for bonsai2_file in __init__.py packed.py loader.py server.py; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_bonsai2/$bonsai2_file" \
-    -o "$BONSAI2_PKG/$bonsai2_file"
+  if in_tag_tree "serve/mlx_omarchy_bonsai2/$bonsai2_file"; then
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_bonsai2/$bonsai2_file" \
+      -o "$BONSAI2_PKG/$bonsai2_file"
+  else
+    rm -f "$BONSAI2_PKG/$bonsai2_file"
+    say "note: serve/mlx_omarchy_bonsai2/$bonsai2_file not in $VERSION (added after the tag); skipped"
+  fi
 done
 cat >"$BIN/mlx-omarchy-serve" <<EOF
 #!/usr/bin/env bash
@@ -724,8 +753,13 @@ say "Installing MLX Chat"
 ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
 mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
 for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_tdt.py gpu_stt_worker.py wake_word.py wake_eval.py vad.py voice_loop.py prefetch.py; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
-    -o "$ASSISTANT_PKG/$assistant_file"
+  if in_tag_tree "serve/mlx_omarchy_assistant/$assistant_file"; then
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
+      -o "$ASSISTANT_PKG/$assistant_file"
+  else
+    rm -f "$ASSISTANT_PKG/$assistant_file"
+    say "note: $assistant_file not in $VERSION (added after the tag); skipped"
+  fi
 done
 
 # Silero VAD model: the voice loop's default speech decision. Pinned
@@ -750,8 +784,13 @@ if ! vad_model_ok "$VAD_MODEL"; then
   fi
 fi
 for assistant_static in index.html css/app.css js/api.js js/app.js js/chat.js js/composer.js js/dom.js js/genui.js js/markdown.js js/setup.js js/theme.js js/transfer.js js/util.js js/voice.js js/worklet/capture-worklet.js; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/static/$assistant_static" \
-    -o "$ASSISTANT_PKG/static/$assistant_static"
+  if in_tag_tree "serve/mlx_omarchy_assistant/static/$assistant_static"; then
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/static/$assistant_static" \
+      -o "$ASSISTANT_PKG/static/$assistant_static"
+  else
+    rm -f "$ASSISTANT_PKG/static/$assistant_static"
+    say "note: static/$assistant_static not in $VERSION (added after the tag); skipped"
+  fi
 done
 
 # Desktop entry: MLX Chat opens the same loopback web application the
