@@ -37,5 +37,8 @@ Recipe-side consumers: `pkgbuilds/omarchy-mac-ml/` in omacom/omarchy-pkgs
 shellcheck omarchy-voice omarchy-voice-setup        # clean (2026-11-22)
 systemd-analyze verify <staged>/usr/lib/systemd/user/omarchy-voice.service
 # clean on systemd 262 with ExecStart resolved against the staged
-# /usr/bin/omarchy-voice (verify checks that ExecStart exists)
+# /usr/bin/omarchy-voice (verify checks that ExecStart exists).
+# LogNamespace=omarchy-voice also makes verify resolve
+# systemd-journald-varlink@.socket — present on any real system; under a
+# minimal SYSTEMD_UNIT_PATH copy the journald@ templates alongside.
 ```
