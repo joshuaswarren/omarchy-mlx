@@ -64,6 +64,7 @@ import sys
 import tempfile
 import uuid
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -379,9 +380,12 @@ def stage_runtime(
 
     def run(cmd: list[str], what: str) -> subprocess.CompletedProcess:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                                  timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             raise TransferError(f"{what} timed out after {timeout}s") from exc
+        except (OSError, ValueError) as exc:  # NUL byte or oversized bundle-derived argv
+            raise TransferError(f"{what} could not start: {exc}") from exc
         if proc.returncode != 0:
             raise TransferError(
                 f"{what} failed (rc={proc.returncode}): {_tail(proc.stderr or proc.stdout)}"
@@ -824,7 +828,8 @@ def _validate_lock(lock: dict) -> None:
     pair_id = lock.get("pair_id")
     need(isinstance(pair_id, str) and _safe_name(pair_id),
          f"pair_id {pair_id!r} is not a safe name")
-    arch = (lock.get("chip") or {}).get("arch")
+    chip = lock.get("chip")
+    arch = chip.get("arch") if isinstance(chip, dict) else None
     need(isinstance(arch, list) and arch and all(isinstance(a, str) and a for a in arch),
          "chip.arch must be a non-empty list")
     licenses = lock.get("licenses")
@@ -845,15 +850,20 @@ def _validate_lock(lock: dict) -> None:
              f"license listed for unknown model {model_id!r}")
 
 
-def _safe_name(name: str) -> bool:
-    return bool(name) and "/" not in name and name not in (".", "..") \
+def _safe_name(name: object) -> bool:
+    return isinstance(name, str) and bool(name) and "/" not in name and name not in (".", "..") \
         and not name.startswith(".") and "\\" not in name
 
 
 def _check_rel(rel: str) -> None:
-    p = PurePosixPath(rel)
-    if p.is_absolute() or rel.startswith("/") or "\\" in rel or ".." in p.parts \
-            or not p.parts or any(part in ("", ".") for part in p.parts):
+    # Raw parts, not PurePosixPath's: it folds "a//b" and "a/./b" into "a/b".
+    # Path.mkdir(parents=True) recurses once per level, and no path may exceed
+    # PATH_MAX, so depth and total length are capped too.
+    parts = rel.split("/")
+    if "\\" in rel or len(parts) > 64 \
+            or len(rel.encode(errors="surrogatepass")) > 2048 or any(
+                part in ("", ".", "..") or len(part.encode(errors="surrogatepass")) > 255
+                for part in parts):
         raise UnsafeArchive(f"unsafe payload path: {rel!r}")
 
 
@@ -1146,10 +1156,7 @@ def _iso_now() -> str:
 
 def inspect_bundle(bundle_path: Path, *, max_total_bytes: int = MAX_TOTAL_BYTES_DEFAULT) -> dict:
     """Validate structure and return the manifest summary without extracting."""
-    bundle_path = Path(bundle_path)
-    if not bundle_path.is_file():
-        raise TransferError(f"no bundle file at {bundle_path}")
-    with zipfile.ZipFile(bundle_path) as zf:
+    with _open_bundle(bundle_path) as zf:
         _safe_members(zf)
         manifest = _read_manifest(zf, max_total_bytes)
         _check_member_set(zf, manifest)
@@ -1193,10 +1200,7 @@ def _bundle_required_licenses(zf: zipfile.ZipFile, manifest: dict) -> set[str]:
         lock_rel = f"{pair_id}/lock.json"
         if lock_rel not in manifest["files"]:
             raise UnsafeArchive(f"pair {pair_id} has no lock payload")
-        try:
-            lock = json.loads(zf.read(lock_rel))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise UnsafeArchive(f"pair {pair_id} lock unreadable: {exc}") from exc
+        lock = _json_member(zf, lock_rel, f"pair {pair_id} lock")
         _validate_lock(lock)
         if lock.get("pair_id") != pair_id:
             raise TransferError(
@@ -1221,11 +1225,11 @@ def _bundle_required_licenses(zf: zipfile.ZipFile, manifest: dict) -> set[str]:
         if not license_id:
             raise TransferError(f"voice pack {pack_id} has no license")
         receipt_rel = f"voice/{pack_id}/manifest.json"
-        try:
-            receipt = json.loads(zf.read(receipt_rel))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise UnsafeArchive(
-                f"voice pack {pack_id} receipt unreadable: {exc}") from exc
+        if receipt_rel not in manifest["files"]:
+            raise UnsafeArchive(f"voice pack {pack_id} has no receipt payload")
+        receipt = _json_member(zf, receipt_rel, f"voice pack {pack_id} receipt")
+        if not isinstance(receipt, dict):
+            raise UnsafeArchive(f"voice pack {pack_id} receipt is not a JSON object")
         if receipt.get("pack_id") != pack_id:
             raise TransferError(
                 f"voice receipt pack_id {receipt.get('pack_id')!r} does not match "
@@ -1265,7 +1269,7 @@ def stage_import(
     home = Path(home)
     target = dict(platform_info) if platform_info else local_platform()
     approved = set(approved_licenses)
-    with zipfile.ZipFile(bundle_path) as zf:
+    with _open_bundle(bundle_path) as zf:
         _safe_members(zf)
         manifest = _read_manifest(zf, max_total_bytes)
         _check_member_set(zf, manifest)
@@ -1306,8 +1310,8 @@ def stage_import(
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 h = hashlib.sha256()
                 size = 0
-                with zf.open(rel) as src, dest.open("wb") as out:
-                    while chunk := src.read(_CHUNK):
+                with dest.open("wb") as out:
+                    for chunk in _member_chunks(zf, rel):
                         h.update(chunk)
                         out.write(chunk)
                         size += len(chunk)
@@ -1529,7 +1533,7 @@ def _materialize_pair(staging: Path, imports: Path, pair: dict, manifest: dict) 
     pair_id = pair["pair_id"]
     pair_dir = staging / pair_id
     final_dir = imports / pair_id
-    lock = json.loads((pair_dir / "lock.json").read_text())
+    lock = json.loads((pair_dir / "lock.json").read_bytes())  # same parse as the check
     for role, model in lock["models"].items():
         model["path"] = str(final_dir / role)
     (pair_dir / "transfer-lock.json").write_text(
@@ -1556,6 +1560,54 @@ def _materialize_pair(staging: Path, imports: Path, pair: dict, manifest: dict) 
 # ------------------------------------------------------- archive validation
 
 
+# What zipfile raises for damaged archive data (stored and deflated members only).
+_ZIP_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError,
+               UnicodeDecodeError)
+
+
+def _open_bundle(bundle_path: Path) -> zipfile.ZipFile:
+    bundle_path = Path(bundle_path)
+    if not bundle_path.is_file():
+        raise TransferError(f"no bundle file at {bundle_path}")
+    try:
+        return zipfile.ZipFile(bundle_path)
+    except _ZIP_ERRORS as exc:
+        raise UnsafeArchive(f"bundle archive unreadable: {exc}") from exc
+
+
+def _member_chunks(zf: zipfile.ZipFile, name: str):
+    """Yield a member's bytes; damaged data raises UnsafeArchive, caller errors do not."""
+    try:
+        with zf.open(name) as src:
+            while chunk := src.read(_CHUNK):
+                yield chunk
+    except _ZIP_ERRORS as exc:
+        raise UnsafeArchive(f"bundle member {name} unreadable: {exc}") from exc
+
+
+# Bundle JSON nests a few levels. json.loads can accept far deeper input than
+# json.dumps or repr can later walk (Python 3.12+), so cap the depth up front.
+_JSON_MAX_DEPTH = 32
+
+
+def _json_member(zf: zipfile.ZipFile, name: str, what: str) -> object:
+    data = b"".join(_member_chunks(zf, name))
+    try:
+        value = json.loads(data)
+    except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting
+        raise UnsafeArchive(f"{what} unreadable: {exc}") from exc
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (dict, list)):
+            if depth > _JSON_MAX_DEPTH:
+                raise UnsafeArchive(f"{what} nests deeper than {_JSON_MAX_DEPTH} levels")
+            children = item.values() if isinstance(item, dict) else item
+            stack.extend((child, depth + 1) for child in children
+                         if isinstance(child, (dict, list)))
+    return value
+
+
 def _safe_members(zf: zipfile.ZipFile) -> list[str]:
     names = zf.namelist()
     if len(set(names)) != len(names):
@@ -1566,6 +1618,12 @@ def _safe_members(zf: zipfile.ZipFile) -> list[str]:
         _check_rel(name)
         if info.is_dir():
             raise UnsafeArchive(f"directory entry not allowed: {name}")
+        if info.flag_bits & 0x1:
+            raise UnsafeArchive(f"encrypted member not allowed: {name}")
+        if not 0 <= info.header_offset < zf.start_dir:
+            raise UnsafeArchive(f"member offset outside the archive: {name}")
+        if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            raise UnsafeArchive(f"unsupported compression in member: {name}")
         mode = info.external_attr >> 16
         if mode and stat.S_ISLNK(mode):
             raise UnsafeArchive(f"symlink member not allowed: {name}")
@@ -1575,13 +1633,15 @@ def _safe_members(zf: zipfile.ZipFile) -> list[str]:
 
 
 def _read_manifest(zf: zipfile.ZipFile, max_total_bytes: int) -> dict:
-    info = zf.getinfo(MANIFEST_NAME)
+    try:
+        info = zf.getinfo(MANIFEST_NAME)
+    except KeyError:
+        raise UnsafeArchive(f"bundle has no {MANIFEST_NAME}") from None
     if info.file_size > 64 << 20:
         raise UnsafeArchive("manifest too large")
-    try:
-        manifest = json.loads(zf.read(info))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise UnsafeArchive(f"manifest is not valid JSON: {exc}") from exc
+    manifest = _json_member(zf, MANIFEST_NAME, "manifest")
+    if not isinstance(manifest, dict):
+        raise UnsafeArchive("manifest is not a JSON object")
 
     def need(cond: bool, what: str) -> None:
         if not cond:
@@ -1592,6 +1652,7 @@ def _read_manifest(zf: zipfile.ZipFile, max_total_bytes: int) -> dict:
     bundle_id = manifest.get("bundle_id")
     need(isinstance(bundle_id, str) and len(bundle_id) == 12
          and all(c in "0123456789abcdef" for c in bundle_id), "bundle_id malformed")
+    need(isinstance(manifest.get("created_at"), str), "created_at must be a string")
     plat = manifest.get("platform")
     need(isinstance(plat, dict)
          and all(isinstance(plat.get(k), str) for k in ("system", "machine", "python")),
@@ -1600,19 +1661,23 @@ def _read_manifest(zf: zipfile.ZipFile, max_total_bytes: int) -> dict:
     need(isinstance(manifest.get("wheels"), list), "wheels must be a list")
     for wheel in manifest["wheels"]:
         need(isinstance(wheel, dict) and isinstance(wheel.get("name"), str)
-             and len(wheel.get("sha256", "")) == 64 and isinstance(wheel.get("size"), int),
+             and _is_sha256(wheel.get("sha256")) and type(wheel.get("size")) is int,
              "wheel entry malformed")
     pairs = manifest.get("pairs")
     need(isinstance(pairs, list) and pairs, "pairs must be a non-empty list")
     for pair in pairs:
-        need(isinstance(pair, dict) and _safe_name(str(pair.get("pair_id")))
+        need(isinstance(pair, dict) and _safe_name(pair.get("pair_id"))
              and isinstance(pair.get("arch"), list)
-             and isinstance(pair.get("licenses"), list), "pair summary malformed")
+             and isinstance(pair.get("licenses"), list)
+             and all(isinstance(lic, str) for lic in pair["licenses"]),
+             "pair summary malformed")
+    need(len({pair["pair_id"] for pair in pairs}) == len(pairs), "duplicate pair_id")
     voice = manifest.get("voice")
     need(isinstance(voice, list), "voice must be a list")
     for pack in voice:
-        need(isinstance(pack, dict) and _safe_name(str(pack.get("pack_id")))
+        need(isinstance(pack, dict) and _safe_name(pack.get("pack_id"))
              and isinstance(pack.get("license"), str), "voice summary malformed")
+    need(len({pack["pack_id"] for pack in voice}) == len(voice), "duplicate pack_id")
     requirements = manifest.get("requirements")
     need(isinstance(requirements, dict)
          and all(isinstance(k, str) and isinstance(v, str)
@@ -1622,25 +1687,36 @@ def _read_manifest(zf: zipfile.ZipFile, max_total_bytes: int) -> dict:
     need(isinstance(manifest.get("licenses"), dict), "licenses must be an object")
     files = manifest.get("files")
     need(isinstance(files, dict) and files, "files must be a non-empty object")
+    if len(files) > MAX_FILES:
+        raise UnsafeArchive(f"bundle exceeds {MAX_FILES} files")
     total = 0
     for rel, entry in files.items():
         if rel == MANIFEST_NAME:
             raise TransferError("manifest.json cannot be a payload file")
         _check_rel(rel)
-        need(isinstance(entry, dict) and len(entry.get("sha256", "")) == 64
-             and isinstance(entry.get("size"), int) and entry["size"] >= 0,
+        need(isinstance(entry, dict) and _is_sha256(entry.get("sha256"))
+             and type(entry.get("size")) is int and entry["size"] >= 0,
              f"file entry malformed: {rel}")
         if entry["size"] > MAX_FILE_BYTES:
             raise UnsafeArchive(f"declared file too large: {rel}")
+        if "/" not in rel:
+            raise UnsafeArchive(f"payload file outside a payload directory: {rel}")
         total += entry["size"]
+    # Extraction writes each pair's transfer-lock.json and transfer-receipt.json too,
+    # so no payload path may be one of them or a directory above another path.
+    generated = {f"{pair['pair_id']}/transfer-{kind}.json"
+                 for pair in pairs for kind in ("lock", "receipt")}
+    names = generated | files.keys()
+    clash = (generated & files.keys()) | {
+        rel[:i] for rel in files for i, ch in enumerate(rel) if ch == "/" and rel[:i] in names}
+    if clash:
+        raise UnsafeArchive(f"payload path collides with another file: {min(clash)}")
     declared = manifest.get("total_bytes")
-    need(isinstance(declared, int) and declared == total, "total_bytes inconsistent")
+    need(type(declared) is int and declared == total, "total_bytes inconsistent")
     if total > max_total_bytes:
         raise UnsafeArchive(
             f"bundle exceeds {max_total_bytes} bytes (declared {total})"
         )
-    if len(files) > MAX_FILES:
-        raise UnsafeArchive(f"bundle exceeds {MAX_FILES} files")
     if manifest["wheels_complete"]:
         need(manifest["wheels"], "wheels_complete with no wheels")
         need(requirements, "wheels_complete with empty requirements")
@@ -1657,6 +1733,10 @@ def _read_manifest(zf: zipfile.ZipFile, max_total_bytes: int) -> dict:
         need(set(requirements) == canon_names,
              "requirements do not match the bundle wheel set")
     return manifest
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64
 
 
 def _check_member_set(zf: zipfile.ZipFile, manifest: dict) -> None:

@@ -11,6 +11,7 @@ import os
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -391,6 +392,199 @@ class UnsafeArchives(Base):
         self.export()
         with self.assertRaises(transfer.UnsafeArchive):
             self.import_(max_total_bytes=1024)
+
+
+class MalformedBundles(Base):
+    """Damaged or hostile bundles end in a named TransferError, never a raw exception."""
+
+    def _members(self) -> dict:
+        with zipfile.ZipFile(self.bundle_path()) as zf:
+            return {n: zf.read(n) for n in zf.namelist()}
+
+    def _with_payload(self, out: str, members: dict, changes: dict) -> None:
+        """Write members with changes applied and the manifest hashes kept consistent."""
+        members = {**members, **changes}
+        manifest = json.loads(members[transfer.MANIFEST_NAME])
+        for rel, data in changes.items():
+            manifest["files"][rel] = {"sha256": hashlib.sha256(data).hexdigest(),
+                                      "size": len(data)}
+        manifest["total_bytes"] = sum(e["size"] for e in manifest["files"].values())
+        members[transfer.MANIFEST_NAME] = json.dumps(manifest).encode()
+        self.raw_zip(self.bundle_path(out), sorted(members.items()))
+
+    def _refused(self, name: str, exc=transfer.TransferError, *, inspect=True) -> None:
+        if inspect:
+            with self.assertRaises(exc):
+                transfer.inspect_bundle(self.bundle_path(name))
+        with self.assertRaises(exc):
+            self.import_(bundle=name)
+        self.assertFalse((self.dst_home / "assistant").exists())
+
+    def test_unreadable_archive_refused(self) -> None:
+        self.export()
+        raw = self.bundle_path().read_bytes()
+        self.bundle_path("notzip.zip").write_bytes(b"not a zip archive\n" * 4)
+        self.bundle_path("trunc.zip").write_bytes(raw[: len(raw) // 2])
+        crc = bytearray(raw)
+        crc[raw.index(b"Q" * 64)] ^= 0xFF  # payload byte changes; stored CRC does not
+        self.bundle_path("crc.zip").write_bytes(bytes(crc))
+        enc = bytearray(raw)
+        enc[raw.index(b"PK\x01\x02") + 8] |= 0x1  # central-directory encryption flag
+        self.bundle_path("enc.zip").write_bytes(bytes(enc))
+        name_flag = bytearray(raw)
+        cd = raw.index(b"PK\x01\x02")
+        name_flag[cd + 9] |= 0x08  # UTF-8 name flag on a name that is not UTF-8
+        name_flag[cd + 46] = 0xFF
+        self.bundle_path("utf8.zip").write_bytes(bytes(name_flag))
+        offset = bytearray(raw)
+        eocd = raw.rindex(b"PK\x05\x06")
+        cd_start = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
+        offset[eocd + 16:eocd + 20] = (cd_start + 10_000).to_bytes(4, "little")
+        self.bundle_path("offset.zip").write_bytes(bytes(offset))
+        zip64 = bytearray(raw)  # manifest entry: offset in a ZIP64 extra field, past the end
+        name_len, extra_len = struct.unpack_from("<HH", raw, cd + 28)
+        struct.pack_into("<I", zip64, cd + 42, 0xFFFFFFFF)
+        zip64[cd + 46 + name_len + extra_len:cd + 46 + name_len + extra_len] = \
+            struct.pack("<HHQ", 0x0001, 8, 2**63)
+        struct.pack_into("<H", zip64, cd + 30, extra_len + 12)
+        eocd64 = zip64.rindex(b"PK\x05\x06")
+        struct.pack_into("<I", zip64, eocd64 + 12,
+                         struct.unpack_from("<I", zip64, eocd64 + 12)[0] + 12)
+        self.bundle_path("zip64.zip").write_bytes(bytes(zip64))
+        with zipfile.ZipFile(self.bundle_path("bz2.zip"), "w") as zf:
+            for name, data in sorted(self._members().items()):
+                zf.writestr(name, data, compress_type=zipfile.ZIP_BZIP2)
+        for name, inspect in (("notzip.zip", True), ("trunc.zip", True),
+                              ("crc.zip", False), ("enc.zip", True), ("utf8.zip", True),
+                              ("bz2.zip", True), ("offset.zip", True), ("zip64.zip", True)):
+            with self.subTest(name):
+                self._refused(name, transfer.UnsafeArchive, inspect=inspect)
+
+    def test_missing_or_unparseable_manifest_refused(self) -> None:
+        self.export()
+        members = self._members()
+        manifest = json.loads(members[transfer.MANIFEST_NAME])
+        deep = b'{"a":' * 40_000 + b"1" + b"}" * 40_000  # loads on 3.14; dumps overflows
+        manifest["licenses"]["apache-2.0"] = "@@DEEP@@"
+        deep_license = json.dumps(manifest).encode().replace(b'"@@DEEP@@"', deep)
+        variants = {
+            "absent": None, "list": b"[]", "null": b"null", "string": b'"x"',
+            "nested": b"[" * 100_000 + b"]" * 100_000,
+            "digits": b'{"x": ' + b"9" * 5000 + b"}",
+            "deep-license": deep_license,
+        }
+        for label, body in variants.items():
+            with self.subTest(label):
+                m = {k: v for k, v in members.items() if k != transfer.MANIFEST_NAME}
+                if body is not None:
+                    m[transfer.MANIFEST_NAME] = body
+                self.raw_zip(self.bundle_path(f"{label}.zip"), sorted(m.items()))
+                self._refused(f"{label}.zip", transfer.UnsafeArchive)
+
+    def test_wrong_typed_manifest_fields_refused(self) -> None:
+        self.export()
+        members = self._members()
+        manifest = json.loads(members[transfer.MANIFEST_NAME])
+        wheel_rel = f"{transfer.WHEELS_TOP}/{WHEEL}"
+        edits = {
+            "created_at": lambda m: m.pop("created_at"),
+            "wheel_sha256": lambda m: m["wheels"][0].update(sha256=7),
+            "file_sha256": lambda m: m["files"][wheel_rel].update(sha256=7),
+            "pair_licenses": lambda m: m["pairs"][0].update(licenses=[{}]),
+            "pair_id": lambda m: m["pairs"][0].update(pair_id=["everyday"]),
+            "pack_id": lambda m: m["voice"].append({"pack_id": ["v"], "license": "x"}),
+            "duplicate-pair": lambda m: m["pairs"].append(dict(m["pairs"][0])),
+        }
+        for label, edit in edits.items():
+            with self.subTest(label):
+                m = json.loads(json.dumps(manifest))
+                edit(m)
+                self.raw_zip(self.bundle_path(f"{label}.zip"), sorted(
+                    {**members, transfer.MANIFEST_NAME: json.dumps(m).encode()}.items()))
+                self._refused(f"{label}.zip")
+
+    def test_boolean_sizes_refused(self) -> None:
+        self.export()
+        members = self._members()
+        manifest = json.loads(members[transfer.MANIFEST_NAME])
+        wheel_rel = f"{transfer.WHEELS_TOP}/{WHEEL}"
+        members[wheel_rel] = b"w"  # one byte, so true == 1 would pass a bare int check
+        digest = hashlib.sha256(b"w").hexdigest()
+        manifest["files"][wheel_rel] = {"sha256": digest, "size": True}
+        manifest["wheels"][0].update(sha256=digest, size=True)
+        manifest["total_bytes"] = sum(e["size"] for e in manifest["files"].values())
+        members[transfer.MANIFEST_NAME] = json.dumps(manifest).encode()
+        self.raw_zip(self.bundle_path("bool.zip"), sorted(members.items()))
+        with self.assertRaisesRegex(transfer.TransferError, "malformed"):
+            transfer.inspect_bundle(self.bundle_path("bool.zip"))
+
+    def test_wrong_typed_lock_and_missing_voice_receipt_refused(self) -> None:
+        self.export(voice=[self._voice_dir()])
+        members = self._members()
+        manifest = json.loads(members[transfer.MANIFEST_NAME])
+        lock = json.loads(members["everyday/lock.json"])
+        lock["chip"] = True
+        self._with_payload("chip.zip", members, {"everyday/lock.json": json.dumps(lock).encode()})
+        with self.assertRaisesRegex(transfer.TransferError, "chip.arch"):
+            self.import_(bundle="chip.zip")
+        manifest["voice"].append({"pack_id": "ghost", "license": "apache-2.0"})
+        self.raw_zip(self.bundle_path("ghost.zip"), sorted(
+            {**members, transfer.MANIFEST_NAME: json.dumps(manifest).encode()}.items()))
+        with self.assertRaisesRegex(transfer.UnsafeArchive, "ghost has no receipt"):
+            self.import_(bundle="ghost.zip")
+        self.assertFalse((self.dst_home / "assistant").exists())
+
+    def test_payload_path_collisions_refused(self) -> None:
+        self.export()
+        members = self._members()
+        for label, rel in (("file-and-dir", "everyday/chat"),
+                           ("receipt-dir", "everyday/transfer-receipt.json/x"),
+                           ("generated-lock", "everyday/transfer-lock.json"),
+                           ("top-level-file", "voice"),
+                           ("double-slash", "everyday//chat"),
+                           ("dot-part", "everyday/./chat"),
+                           ("lock-alias", "everyday/lock.json/."),
+                           ("long-part", "everyday/" + "a" * 300),
+                           ("deep-path", "everyday/" + "a/" * 1200 + "f"),
+                           ("long-path", "everyday/" + ("a" * 200 + "/") * 25 + "f")):
+            with self.subTest(label):
+                self._with_payload(f"{label}.zip", members, {rel: b"x"})
+                self._refused(f"{label}.zip", transfer.UnsafeArchive)
+
+    def test_lock_parsed_the_same_before_and_after_extraction(self) -> None:
+        self.export()
+        members = self._members()
+        bom_lock = b"\xef\xbb\xbf" + members["everyday/lock.json"]
+        self._with_payload("bom.zip", members, {"everyday/lock.json": bom_lock})
+        self.import_(bundle="bom.zip")
+        localized = json.loads((self.dst_home / "assistant" / "imports" / "everyday"
+                                / "transfer-lock.json").read_text())
+        self.assertEqual(localized["licenses"], self.lock["licenses"])
+
+    def test_runtime_argv_from_the_bundle_cannot_crash_staging(self) -> None:
+        # `true` stands in for venv creation, so the bundle's pins reach the pip spawn.
+        with self.assertRaisesRegex(transfer.TransferError,
+                                    "offline pip install could not start:.*null"):
+            transfer.stage_runtime(self.root / "venv", self.wh,
+                                   requirements={"mlx-core": "1.0\x00"},
+                                   python=shutil.which("true"))
+        self.assertEqual(list(self.root.glob("venv.gen-*")), [])
+        fails = self.root / "fails"
+        fails.write_text("#!/bin/sh\nprintf 'bad \\377 byte' >&2\nexit 3\n")
+        fails.chmod(0o755)
+        with self.assertRaisesRegex(transfer.TransferError, r"failed \(rc=3\).*bad"):
+            transfer.stage_runtime(self.root / "venv", self.wh,
+                                   requirements={"mlx-core": "1.0"}, python=str(fails))
+
+    def test_caller_errors_are_not_reported_as_archive_damage(self) -> None:
+        self.export()
+
+        def progress(done, total, rel):
+            raise NotImplementedError("caller bug")
+
+        with self.assertRaisesRegex(NotImplementedError, "caller bug"):
+            self.import_(progress=progress)
+        self.assertFalse((self.dst_home / "transfer" / "staging").exists())
 
 
 class PlatformAndLicense(Base):
@@ -1381,6 +1575,22 @@ class CliMain(Base):
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
             rc = transfer.main(["inspect", "--bundle", str(self.root / "gone.zip")])
         self.assertEqual(rc, 1)
+
+    def test_cli_malformed_bundle_exits_one_without_traceback(self) -> None:
+        import contextlib
+        import io
+        bad = self.root / "bad.zip"
+        bad.write_bytes(b"not a zip archive\n")
+        for argv in (["inspect", "--bundle", str(bad)],
+                     ["install", "--home", str(self.dst_home), "--bundle", str(bad),
+                      "--approve-license", "apache-2.0"]):
+            with self.subTest(argv[0]):
+                buf, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                    rc = transfer.main(argv)
+                self.assertEqual(rc, 1)
+                self.assertTrue(err.getvalue().startswith("transfer: bundle archive"))
+                self.assertEqual(buf.getvalue(), "")
 
     def test_cli_prepare_requires_explicit_approval(self) -> None:
         import contextlib
