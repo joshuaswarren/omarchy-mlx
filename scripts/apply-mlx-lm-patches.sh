@@ -357,7 +357,13 @@ apply mlx-lm-spec-split-rows.patch
 # inter-submission gaps overlap GPU execution. M2 prod P22 ABBA (HOST-3):
 # N=16 7.10 ms/tok vs 8.10 stock, greedy ids identical; N=4 is net-negative.
 # EOS is checked at chunk boundaries, so a late EOS trims extra tokens.
-apply mlx-lm-readback-chunk.patch
+# 0.31.3 series only; the 0.32 line keeps upstream behavior until ported
+# and measured.
+if [[ "$SERIES" == "patches" ]]; then
+  apply mlx-lm-readback-chunk.patch
+else
+  echo "readback-chunk: 0.31.3 series only; skipped on $SERIES"
+fi
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
