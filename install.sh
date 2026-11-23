@@ -723,21 +723,21 @@ fi
 say "Installing MLX Chat"
 ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
 mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
-for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_worker.py wake_word.py wake_eval.py vad.py voice_loop.py prefetch.py; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
-    -o "$ASSISTANT_PKG/$assistant_file"
-done
-
-# Assistant files merged on main after the resolved tag. Absence at the
-# tag is expected, not a failed fetch: drop any partial file and skip
-# instead of aborting. Move an entry back to the required loop once a
-# pinned tag ships it.
-for assistant_file in gpu_stt_tdt.py; do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
-    -o "$ASSISTANT_PKG/$assistant_file" || {
-      rm -f "$ASSISTANT_PKG/$assistant_file"
-      say "note: $assistant_file not in $VERSION (added after the tag); skipped"
-    }
+for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_tdt.py gpu_stt_worker.py wake_word.py wake_eval.py vad.py voice_loop.py prefetch.py; do
+  case "$assistant_file" in
+    # Merged on main after the resolved tag: absence at the tag is
+    # expected, not a failed fetch. Drop any partial file and skip
+    # instead of aborting; move the entry to *) once a tag ships it.
+    gpu_stt_tdt.py)
+      curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
+        -o "$ASSISTANT_PKG/$assistant_file" || {
+          rm -f "$ASSISTANT_PKG/$assistant_file"
+          say "note: $assistant_file not in $VERSION (added after the tag); skipped"
+        } ;;
+    *)
+      curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
+        -o "$ASSISTANT_PKG/$assistant_file" ;;
+  esac
 done
 
 # Silero VAD model: the voice loop's default speech decision. Pinned
