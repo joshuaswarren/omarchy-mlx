@@ -7,12 +7,11 @@ from pathlib import Path
 
 import pytest
 
-torch = pytest.importorskip("torch")
-mx = pytest.importorskip("mlx.core")
-
 
 @pytest.fixture(scope="session")
 def mlx_vulkan():
+    torch = pytest.importorskip("torch")
+    mx = pytest.importorskip("mlx.core")
     path = (Path(__file__).resolve().parents[1] / "tools"
             / "torch-mlx-vulkan" / "mlx_vulkan.py")
     spec = importlib.util.spec_from_file_location("mlx_vulkan_under_test",
