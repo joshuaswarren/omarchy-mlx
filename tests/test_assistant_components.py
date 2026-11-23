@@ -172,6 +172,13 @@ class EnvelopeBoundTests(unittest.TestCase):
         with self.assertRaises(ComponentError):
             validate_components(bad)
 
+    def test_ids_reject_trailing_newline(self):
+        # `$` also matches before a final "\n"; the id anchor is \Z.
+        bad = decision_envelope()
+        bad["components"][0]["options"].append({"id": "opt-3\n", "label": "X"})
+        with self.assertRaises(ComponentError):
+            validate_components(bad)
+
 
 class MalformedInputTests(unittest.TestCase):
     """These inputs once raised exceptions such as RecursionError that the

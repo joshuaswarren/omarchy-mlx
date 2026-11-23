@@ -41,7 +41,7 @@ MAX_DATA_VALUES = 1000
 
 ACTIONS = ("edit", "sort", "filter", "select", "expand", "submit")
 
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
 class ComponentError(ValueError):
