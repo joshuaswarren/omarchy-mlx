@@ -19,6 +19,7 @@ maintainer-side refresher contract).
 from __future__ import annotations
 
 import json
+import math
 import mlx_omarchy_paths
 import os
 import re
@@ -41,6 +42,7 @@ DEFAULT_CATALOG_URL = (
     "serve/mlx_omarchy_serve/catalog.json"
 )
 DEFAULT_TTL_HOURS = 24.0
+TTL_ENV = "MLX_OMARCHY_CATALOG_TTL_HOURS"
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 APPROVED_CATALOG_HOSTS = frozenset({"raw.githubusercontent.com"})
@@ -402,6 +404,24 @@ def _is_fresh(path: Path, ttl_hours: float, now: float | None) -> bool:
     return age_hours < ttl_hours
 
 
+def _ttl_hours(ttl_hours: float | None) -> float:
+    """Return the catalog TTL. A finite env value overrides; a typo or nan/inf
+    warns and keeps the default instead of crashing or freezing the cache."""
+    default = DEFAULT_TTL_HOURS if ttl_hours is None else ttl_hours
+    raw = os.environ.get(TTL_ENV)
+    if raw is None:
+        return default
+    try:
+        ttl = float(raw)
+    except ValueError:
+        ttl = math.nan
+    if math.isfinite(ttl):
+        return ttl
+    print(f"warning: ignoring {TTL_ENV}={raw!r}, not a finite number of hours; "
+          f"using {default:g}h", file=sys.stderr)
+    return default
+
+
 def _is_valid(path: Path) -> bool:
     try:
         validate_file(path)
@@ -488,13 +508,13 @@ def refresh(
     dest = cache_path(home)
     url = url or os.environ.get("MLX_OMARCHY_CATALOG_URL") or DEFAULT_CATALOG_URL
     validate_catalog_url(url)
-    ttl = float(os.environ["MLX_OMARCHY_CATALOG_TTL_HOURS"]) if "MLX_OMARCHY_CATALOG_TTL_HOURS" in os.environ else (DEFAULT_TTL_HOURS if ttl_hours is None else ttl_hours)
     timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
     if offline is None:
         offline = env_offline()
 
     if offline:
         return {"status": "skipped", "path": str(dest), "detail": "offline opt-out honored"}
+    ttl = _ttl_hours(ttl_hours)
     # A missing or damaged cache is never fresh and never revalidated with
     # the stored ETag: a 304 would leave it damaged until upstream changes.
     cache_ok = _is_valid(dest)
