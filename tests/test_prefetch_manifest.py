@@ -65,6 +65,32 @@ class PrefetchManifestTest(unittest.TestCase):
         code = prefetch.main(["--home", str(home), "--manifest-only"])
         self.assertEqual(code, 0)
 
+    def test_pair_weights_hash_without_lock(self):
+        # A fetched-but-never-served pair has no pair lock (only start()
+        # writes one); the setup result's model_paths still identify the
+        # pair's weight directories for the manifest.
+        home = stage_home()
+        chat = home / "models" / "chat-model"
+        decision = home / "models" / "decision-model"
+        chat.mkdir(parents=True)
+        decision.mkdir(parents=True)
+        (chat / "weights.safetensors").write_bytes(b"chat" * 200)
+        (decision / "weights.safetensors").write_bytes(b"dec" * 100)
+        manifest = prefetch.build_manifest(
+            home, "everyday",
+            model_paths={"chat": chat, "decision": decision},
+            model_ids={"chat": "chat-model", "decision": "decision-model"})
+        by_role = {a["role"]: a for a in manifest["artifacts"] if "role" in a}
+        self.assertEqual(set(by_role), {"chat", "decision"})
+        self.assertEqual(by_role["chat"]["root"], "models/chat-model")
+        self.assertEqual(by_role["chat"]["model_id"], "chat-model")
+        self.assertEqual(manifest["file_count"], 6)
+
+    def test_pair_without_lock_or_paths_fails(self):
+        home = stage_home()
+        with self.assertRaises(Exception):
+            prefetch.build_manifest(home, "everyday")
+
 
 if __name__ == "__main__":
     unittest.main()

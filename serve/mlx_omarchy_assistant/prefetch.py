@@ -42,11 +42,18 @@ def _artifact_roots(home: Path) -> list[tuple[str, Path]]:
     return roots
 
 
-def build_manifest(home: Path, pair_id: str | None) -> dict:
+def build_manifest(home: Path, pair_id: str | None,
+                   model_paths: dict | None = None,
+                   model_ids: dict | None = None) -> dict:
     """sha256 manifest of every staged artifact. Deterministic: roots and
     file entries are sorted, paths are relative to the artifact root, and
     pair-model paths are recorded relative to home when they live inside
-    it."""
+    it.
+
+    The pair lock supplies model identity when it exists, but it is only
+    written by PairManager.start — prefetch never starts workers, so a
+    fetched-but-never-served pair has no lock. In that case the paths
+    setup() itself prepared identify the pair's weight directories."""
     home = Path(home)
     artifacts = []
     for label, directory in _artifact_roots(home):
@@ -56,22 +63,42 @@ def build_manifest(home: Path, pair_id: str | None) -> dict:
         })
     if pair_id is not None:
         lock = load_pair_lock(home, pair_id)
-        if lock is None:
-            raise pairs.PairError(f"no pair lock for {pair_id!r}; run the pair setup first")
-        for model_manifest in artifact_manifests(lock):
-            path = Path(model_manifest["path"])
+        if lock is not None:
+            entries = []
+            for model_manifest in artifact_manifests(lock):
+                entries.append({
+                    "path": model_manifest["path"],
+                    "role": model_manifest["role"],
+                    "model_id": model_manifest["model_id"],
+                    "repo": model_manifest["repo"],
+                    "revision": model_manifest["revision"],
+                    "files": model_manifest["files"],
+                })
+        elif model_paths:
+            entries = [{
+                "path": raw,
+                "role": role,
+                "model_id": (model_ids or {}).get(role),
+                "files": artifact_files(Path(raw)),
+            } for role, raw in sorted(model_paths.items())]
+        else:
+            raise pairs.PairError(
+                f"no pair lock for {pair_id!r}; run the pair setup first")
+        for entry in entries:
+            path = Path(entry["path"])
             try:
                 rel = path.relative_to(home).as_posix()
             except ValueError:
                 rel = str(path)
-            artifacts.append({
+            artifact = {
                 "root": rel,
-                "role": model_manifest["role"],
-                "model_id": model_manifest["model_id"],
-                "repo": model_manifest["repo"],
-                "revision": model_manifest["revision"],
-                "files": model_manifest["files"],
-            })
+                "role": entry["role"],
+                "files": entry["files"],
+            }
+            for key in ("model_id", "repo", "revision"):
+                if entry.get(key) is not None:
+                    artifact[key] = entry[key]
+            artifacts.append(artifact)
     artifacts.sort(key=lambda a: (a["root"], a.get("role") or ""))
     total = sum(f["bytes"] for a in artifacts for f in a["files"])
     return {
@@ -130,7 +157,10 @@ def prefetch(home: Path, pair_id: str, *, wake: str | None = None,
         progress(f"wake word: {wake_word.prepare(home, wake)}")
     progress(f"vad: {vad.prepare(home)}")
 
-    manifest = build_manifest(home, pair_id)
+    model_ids = {d["role"]: d["model_id"] for d in result.get("downloads", [])}
+    manifest = build_manifest(home, pair_id,
+                              model_paths=result.get("model_paths"),
+                              model_ids=model_ids)
     manifest_path = write_manifest(home, manifest)
     progress(f"manifest: {manifest_path} "
              f"({manifest['file_count']} files, {manifest['total_bytes']} bytes)")
