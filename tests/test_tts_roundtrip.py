@@ -76,6 +76,21 @@ def test_load_hypotheses_missing_index_fails():
         rt.score_sentences(["a", "b", "c"], bad, {})
 
 
+def test_duplicate_hypothesis_index_fails():
+    dup = [{"index": 1, "text": "a"}, {"index": 2, "text": "b"},
+           {"index": 1, "text": "wrong"}]
+    with pytest.raises(ValueError, match="duplicate hypothesis for index 1"):
+        rt.score_sentences(["a", "b"], dup, {})
+
+
+@pytest.mark.parametrize("index", [0, -1, 3, True, 1.0, "1"])
+def test_hypothesis_index_outside_1_to_n_fails(index):
+    rows = [{"index": 1, "text": "a"}, {"index": 2, "text": "b"},
+            {"index": index, "text": "x"}]
+    with pytest.raises(ValueError, match=r"is not an integer in 1\.\.2"):
+        rt.score_sentences(["a", "b"], rows, {})
+
+
 def test_per_sentence_wer_and_cer():
     result = _load()
     assert [r["index"] for r in result["rows"]] == [1, 2, 3, 4, 5]
@@ -153,6 +168,23 @@ def test_cli_hypotheses_mode_writes_json(tmp_path):
     rows = [json.loads(l) for l in (out / "per-sentence.jsonl").read_text().splitlines()]
     assert len(rows) == 5
     assert rows[4]["empty"] is True
+
+
+def test_cli_hypotheses_mode_rejects_duplicate_index(tmp_path):
+    sentences = tmp_path / "sentences.txt"
+    sentences.write_text("alpha\nbeta\n")
+    hyps = tmp_path / "hyps.jsonl"
+    hyps.write_text('{"index": 1, "text": "alpha"}\n{"index": 2, "text": "beta"}\n'
+                    '{"index": 1, "text": "wrong"}\n')
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "tts_roundtrip.py"),
+         "--sentences", str(sentences), "--hypotheses", str(hyps),
+         "--out", str(out)],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "duplicate hypothesis for index 1" in proc.stderr
+    assert not out.exists()
 
 
 def _write_wav(path: Path, frames: int = 1600, rate: int = 16000):
