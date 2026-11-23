@@ -35,7 +35,9 @@ namespace mlx::core::omarchy::ane {
 struct AneDevice {
   virtual ~AneDevice() = default;
   virtual std::string describe() const = 0;
-  virtual void load(const AneValidatedProgram& program) = 0;
+  virtual void load(
+      const AneValidatedProgram& program,
+      const AneProgram& manifest_program) = 0;
   virtual void send(
       size_t manifest_index,
       uint32_t channel,

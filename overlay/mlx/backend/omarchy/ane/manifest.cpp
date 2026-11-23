@@ -80,6 +80,13 @@ uint64_t require_positive(const nlohmann::json& object, const char* field) {
   return value;
 }
 
+uint64_t optional_unsigned(const nlohmann::json& object, const char* field) {
+  if (!object.contains(field)) {
+    return 0;
+  }
+  return require_unsigned(object, field);
+}
+
 bool is_lower_hex(const std::string& value, size_t length) {
   if (value.size() != length) {
     return false;
@@ -314,7 +321,7 @@ AneProgramBinding parse_binding(
       value,
       {"tensor", "channel", "dtype", "shape", "nchw", "logical_bytes",
        "allocation_bytes", "element_offset", "element_count", "physical_elements",
-       "raw"});
+       "raw", "bar_slot", "buffer_id"});
 
   // Raw staging (whole-program containers): the task stream addresses the
   // surface through selector registers, not NCHW tile placement, so the
@@ -344,6 +351,11 @@ AneProgramBinding parse_binding(
           where + " logical_bytes must be a multiple of the dtype size");
     }
     binding.element_count = binding.logical_bytes / size;
+    binding.bar_slot = optional_unsigned(value, "bar_slot");
+    binding.buffer_id = optional_unsigned(value, "buffer_id");
+    if (binding.buffer_id == 0) {
+      binding.buffer_id = binding.channel;
+    }
     return binding;
   }
 
@@ -404,6 +416,11 @@ AneProgramBinding parse_binding(
   if (physical_bytes > binding.allocation_bytes) {
     throw manifest_error(where + " NCHW physical bytes exceed allocation_bytes");
   }
+  binding.bar_slot = optional_unsigned(value, "bar_slot");
+  binding.buffer_id = optional_unsigned(value, "buffer_id");
+  if (binding.buffer_id == 0) {
+    binding.buffer_id = binding.channel;
+  }
   return binding;
 }
 
@@ -443,7 +460,7 @@ AneProgram parse_program(
   reject_unknown_fields(
       value,
       {"payload", "operation", "encoder", "task_descriptors", "scratch_bytes",
-       "inputs", "outputs"});
+       "inputs", "outputs", "aux_outputs"});
   AneProgram program;
   program.payload = require_non_empty_string(value, "payload");
   program.operation = require_non_empty_string(value, "operation");
@@ -453,6 +470,10 @@ AneProgram parse_program(
   program.inputs = parse_bindings(value, "inputs", tile_alignment, index, false);
   program.outputs =
       parse_bindings(value, "outputs", tile_alignment, index, true);
+  if (value.contains("aux_outputs")) {
+    program.aux_outputs =
+        parse_bindings(value, "aux_outputs", tile_alignment, index, false);
+  }
   return program;
 }
 

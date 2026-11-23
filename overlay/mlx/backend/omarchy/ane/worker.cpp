@@ -125,12 +125,18 @@ void execute_plan(
                   binding, found->second.data(), found->second.size());
     }
     device.exec(validated.manifest_index);
-    for (size_t position = 0; position < program.outputs.size(); ++position) {
-      const auto& binding = program.outputs[position];
+    const auto read_out = [&](size_t position, const AneProgramBinding& binding) {
       AneWorker::Buffer buffer(binding.logical_bytes);
       device.read(validated.manifest_index, static_cast<uint32_t>(position),
                   binding, buffer.data(), buffer.size());
       values[binding.tensor] = std::move(buffer);
+    };
+    for (size_t position = 0; position < program.outputs.size(); ++position) {
+      read_out(position, program.outputs[position]);
+    }
+    for (size_t position = 0; position < program.aux_outputs.size(); ++position) {
+      read_out(
+          program.outputs.size() + position, program.aux_outputs[position]);
     }
   }
   for (const auto& tensor : bundle.manifest.outputs) {
@@ -419,8 +425,8 @@ AneWorkerReport AneWorker::run(
     int code = 0;
     try {
       std::unique_ptr<AneDevice> device = factory_();
-      for (const auto& program : bundle.programs) {
-        device->load(program);
+      for (size_t i = 0; i < bundle.programs.size(); ++i) {
+        device->load(bundle.programs[i], bundle.manifest.programs[i]);
       }
       write_all(fds[1], kTokenLoaded, std::strlen(kTokenLoaded));
       for (int iteration = 0; iteration < options_.iterations; ++iteration) {
@@ -889,14 +895,14 @@ AneWorkerReport AneWorker::open(
       }
       size_t loaded = 0;
       for (const auto& bundle : resident) {
-        for (const auto& program : bundle.programs) {
+        for (size_t i = 0; i < bundle.programs.size(); ++i) {
           const auto load_started = std::chrono::steady_clock::now();
-          device->load(program);
+          device->load(bundle.programs[i], bundle.manifest.programs[i]);
           if (timing) {
             std::fprintf(
                 stderr,
                 "[omarchy-ane] child load program %zu (%s) %.1f ms\n",
-                loaded, program.anec.filename().string().c_str(),
+                loaded, bundle.programs[i].anec.filename().string().c_str(),
                 stall(load_started));
           }
           ++loaded;
