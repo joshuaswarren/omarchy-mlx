@@ -2866,8 +2866,9 @@ void dispatch_reduce_general(
       params.out_strides[index] = reduced[index].stride;
     }
   } else {
-    if (collapsed_rank > static_cast<size_t>(std::numeric_limits<int>::max()) /
-            2) {
+    // reduce_general.comp stages the 2 * rank metadata words in a
+    // 512-word shared array, so the packed rank is capped at 256.
+    if (collapsed_rank > 256) {
       omarchy::unsupported(operation_name + " rank", out);
     }
     std::vector<uint32_t> words;
