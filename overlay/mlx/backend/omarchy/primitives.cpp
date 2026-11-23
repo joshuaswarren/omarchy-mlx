@@ -3624,9 +3624,10 @@ void dispatch_gather_qmm(
     // and untested layouts must not ride an unproven kernel). Counts
     // above 65535 workgroups (large-batch routed decode) are handled by
     // the kernel's x/z grid split, not by this gate.
-    const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& sub_caps = encoder.device().capabilities();
-    use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
+    // gather_qmm_sub_default_part reads MLX_OMARCHY_GATHER_QMM_SUB and
+    // defaults the route off on G18G (mesa#737 uniform-load defect).
+    use_sub = omarchy::gather_qmm_sub_default_part(sub_caps.device_name) &&
         transpose &&
         ((bits == 4u && group_size == 64u) ||
          // 2-bit codes never straddle a word, so the generic decode of the subgroup
@@ -3641,24 +3642,24 @@ void dispatch_gather_qmm(
   // 3-bit decode (the Muse routed-expert layout): the direct 8-output subgroup kernel with the
   // bit-stream decode (BITS3 variant of gather_qmm_sub.comp). f16, transposed, biases present,
   // group 64, N a multiple of 8, m == 1. Everything else at 3 bits stays on the scalar kernel.
+  const auto& q3_caps = encoder.device().capabilities();
   const bool use_sub_q3 = bits == 3 && transpose && !fp_mode && m == 1 &&
       group_size == 64 && !no_bias && out.dtype() == float16 && (n % 8) == 0 &&
-      (std::getenv("MLX_OMARCHY_GATHER_QMM_SUB") == nullptr ||
-       std::getenv("MLX_OMARCHY_GATHER_QMM_SUB")[0] != '0') &&
-      encoder.device().capabilities().subgroup_size == 32u &&
-      (encoder.device().capabilities().subgroup_operations &
+      omarchy::gather_qmm_sub_default_part(q3_caps.device_name) &&
+      q3_caps.subgroup_size == 32u &&
+      (q3_caps.subgroup_operations &
        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
-      encoder.device().capabilities().storage_buffer_16bit_access;
+      q3_caps.storage_buffer_16bit_access;
   // mxfp4 subgroup decode (gather_qmm_sub.comp -DFP_MODE): the routed experts of gpt-oss-20b are mxfp4
   // (bits 4, group 32, e8m0 scale byte, e2m1 nibbles, transposed, no output global scale). Until this route they
   // took only the scalar one-thread-per-output kernel. Same gate class as the affine subgroup kernel above;
   // MLX_OMARCHY_GATHER_QMM_SUB=0 turns it off too. nvfp4 (group 16) and mxfp8 (bits 8) stay scalar.
   bool use_sub_fp = false;
   if (fp_mode && m == 1 && transpose && bits == 4u && group_size == 32u && !out_global_scale) {
-    const char* sub_fp_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& fp_caps = encoder.device().capabilities();
     const auto& fp_hw = encoder.device().hardware_capabilities();
-    use_sub_fp = (sub_fp_env == nullptr || sub_fp_env[0] != '0') &&
+    use_sub_fp = omarchy::gather_qmm_sub_fp_default_part(
+            fp_caps.device_name) &&
         fp_caps.subgroup_size == 32u &&
         (fp_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         fp_caps.storage_buffer_16bit_access;

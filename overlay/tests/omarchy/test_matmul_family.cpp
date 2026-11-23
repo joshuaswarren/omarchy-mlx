@@ -6207,6 +6207,27 @@ TEST_CASE("qmm coopmat output is bit-identical across x offset alignment") {
 
 namespace {
 
+// Saves and restores one environment variable so a test can pin an
+// unset state without leaking it (pattern: EnvGuard in test_runtime.cpp).
+struct EnvGuard {
+  const char* name;
+  bool had_value = false;
+  std::string value;
+  explicit EnvGuard(const char* n) : name(n) {
+    if (const char* current = std::getenv(name)) {
+      had_value = true;
+      value = current;
+    }
+  }
+  ~EnvGuard() {
+    if (had_value) {
+      setenv(name, value.c_str(), 1);
+    } else {
+      unsetenv(name);
+    }
+  }
+};
+
 uint64_t alpha1_fnv1a64(const void* data, size_t bytes) {
   const uint8_t* p = (const uint8_t*)data;
   uint64_t h = 0xcbf29ce484222325ull;
@@ -6230,6 +6251,41 @@ std::vector<float> alpha1_pattern(size_t count, uint32_t seed) {
 }
 
 }  // namespace
+
+TEST_CASE("gather_qmm fp subgroup decode defaults off on G18G") {
+  // omarchy-mlx#655: gather_qmm_sub.comp -DFP_MODE reads the e8m0 scale
+  // byte wrong on G18G (outputs ~2^-125 low); the scalar kernel is right.
+  EnvGuard guard("MLX_OMARCHY_GATHER_QMM_SUB");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "1", 1);
+  CHECK(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_fp_default_part("Apple M6 (G18G B1)"));
+}
+
+TEST_CASE("gather_qmm affine and q3 subgroup decodes default off on G18G") {
+  // mesa#737: every gather_qmm_sub.comp route runs a 256-lane workgroup
+  // whose subgroup-uniform SSBO reads return 0 from lanes 128-255 on
+  // G18G. The fp route's wrong output is measured (#655); the affine
+  // (use_sub) and 3-bit (use_sub_q3) gates share the kernel mechanism,
+  // so the same default applies.
+  EnvGuard guard("MLX_OMARCHY_GATHER_QMM_SUB");
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GATHER_QMM_SUB", "1", 1);
+  CHECK(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+  unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+  CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+}
 
 TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain") {
   if (!compute_available()) {
@@ -6709,10 +6765,19 @@ TEST_CASE("gather_qmm mxfp4 decode: the subgroup kernel matches the scalar kerne
   }
   Stream stream = gpu_stream();
   const auto& caps = omarchy::device(0).capabilities();
-  // The scalar kernel is checked against the host reference on every device. The subgroup kernel only where the route exists.
-  const bool has_sub = caps.subgroup_size == 32u &&
-      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
-      caps.storage_buffer_16bit_access;
+  // The scalar kernel is checked against the host reference on every device. The subgroup kernel only where the route exists and the unset default enables it (G18G defaults the route off, omarchy-mlx#655/#656).
+  bool has_sub;
+  {
+    // Evaluate the gate's unset default: an ambient
+    // MLX_OMARCHY_GATHER_QMM_SUB=1 would otherwise mark G18G as has_sub
+    // while run(nullptr) still dispatches the scalar kernel.
+    EnvGuard sub_env("MLX_OMARCHY_GATHER_QMM_SUB");
+    unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    has_sub = caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+        caps.storage_buffer_16bit_access &&
+        omarchy::gather_qmm_sub_fp_default_part(caps.device_name);
+  }
   std::mt19937 gen(91);
   std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
   std::uniform_int_distribution<uint32_t> word_dist(0u, 0xFFFFFFFFu);
@@ -6795,7 +6860,12 @@ TEST_CASE("gather_qmm mxfp4 decode: the subgroup kernel matches the scalar kerne
         };
         INFO("dtype=" << c.dtype << " k=" << k << " n=" << n);
         const std::vector<float> scalar = run("0", static_cast<int64_t>(c.scalar_kernel));
-        const std::vector<float> sub = has_sub ? run(nullptr, static_cast<int64_t>(c.sub_kernel)) : scalar;
+        // With the route on, the unset default dispatches the subgroup kernel;
+        // where the gate defaults it off (G18G) the same unset default must
+        // dispatch the scalar kernel, so run(nullptr) is checked either way.
+        const std::vector<float> sub = has_sub
+            ? run(nullptr, static_cast<int64_t>(c.sub_kernel))
+            : run(nullptr, static_cast<int64_t>(c.scalar_kernel));
         REQUIRE_EQ(sub.size(), reference.size());
         REQUIRE_EQ(scalar.size(), reference.size());
         const double tolerance = c.relative_tolerance * scale_of_output;

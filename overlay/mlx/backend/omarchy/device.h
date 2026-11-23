@@ -805,6 +805,28 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
   return device_name.find("G16S") != std::string::npos;
 }
+
+// gather_qmm_sub.comp subgroup routes — affine (bits 4/2, group 64/128),
+// 3-bit (group 64), and mxfp4 (-DFP_MODE, group 32) — share one kernel
+// template: a 256-lane workgroup whose subgroup-uniform SSBO reads
+// (SCALE_WORD/BIAS_WORD) return 0 from lanes 128-255 on G18G (Apple M6;
+// mesa#737). The fp route's wrong output is measured (omarchy-mlx#655:
+// every output ~2^-125 low); the affine/q3 routes ride the same mechanism
+// and stay off with it. Measured wrong on m6, correct on M1 (jwm1) with
+// the same kernel dispatched. MLX_OMARCHY_GATHER_QMM_SUB=1 forces the
+// route on for bisection; =0 forces it off everywhere, as before. Pure.
+inline bool gather_qmm_sub_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G18G") == std::string::npos;
+}
+// mxfp4 fp-mode subgroup gather decode (gather_qmm_sub.comp -DFP_MODE):
+// the route measured wrong in omarchy-mlx#655. Named alias of the shared
+// gate, kept for readability at the fp call site. Pure.
+inline bool gather_qmm_sub_fp_default_part(const std::string& device_name) {
+  return gather_qmm_sub_default_part(device_name);
+}
 // Row rule of the two-pass route: the dequantize pass costs one weight read and one bf16 write per call, which enough rows amortize.
 // G16S, milliseconds per call, single-kernel against two-pass (best of three runs of six calls):
 //   N x K 4096x4096: 256 rows 1.76 against 3.03, 512 rows 3.34 against 3.06, 2048 rows 12.65 against 10.66
