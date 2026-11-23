@@ -141,6 +141,18 @@ for t in sysinit.target basic.target sound.target default.target \
          local-fs.target sockets.target swap.target slices.target shutdown.target; do
   printf '[Unit]\nDescription=vxp4 stub\n' > "$unitpath/$t"
 done
+# LogNamespace derives a journal socket unit. That template must live in
+# this path, or verify follows the host and two hosts can disagree.
+for name in systemd-journald@.socket systemd-journald-varlink@.socket; do
+  if [[ -f /usr/lib/systemd/user/$name ]]; then
+    cp "/usr/lib/systemd/user/$name" "$unitpath/"
+  elif [[ -f /usr/lib/systemd/system/$name ]]; then
+    cp "/usr/lib/systemd/system/$name" "$unitpath/"
+  else
+    printf '%s\n' '[Unit]' 'Description=stub journal socket' '[Socket]' \
+      'ListenStream=/run/systemd/journal.%i/io.systemd.journal' > "$unitpath/$name"
+  fi
+done
 if SYSTEMD_UNIT_PATH="$unitpath" timeout 15 systemd-analyze verify "$unitpath/omarchy-voice.service" >/dev/null 2>&1; then
   pass "unit.verify"
 else
