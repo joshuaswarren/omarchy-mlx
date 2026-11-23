@@ -13,6 +13,7 @@ embed the measured numbers verbatim.
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -27,26 +28,42 @@ def delta_frac(kit_tps, packaged_tps):
     return abs(kit_tps - packaged_tps) / packaged_tps
 
 
+def finite(value):
+    """float(value) when it is a finite number, else None. A bool is not a
+    number here, and NaN or an infinity cannot be compared."""
+    if isinstance(value, bool):
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def verdict(kit_tps, packaged_tps, max_delta=MAX_DELTA,
             kit_ids=None, packaged_ids=None):
-    """Compare two decode tok/s rates. Refuse above max_delta, or when a
-    rate is missing or non-positive — a gate that cannot read both sides
-    must not pass. When both generated-token digests are present they must
-    be equal: matching speeds over different output is not a pass."""
+    """Compare two decode tok/s rates. Refuse above max_delta, when a rate
+    is missing, non-finite or non-positive, or when max_delta is not a
+    finite non-negative number — a gate that cannot read both sides must
+    not pass. When both generated-token digests are present they must be
+    equal: matching speeds over different output is not a pass."""
     if kit_ids and packaged_ids and kit_ids != packaged_ids:
         return {'verdict': 'refuse', 'reason': 'ids_divergence',
                 'delta_frac': None}
-    try:
-        kit = float(kit_tps)
-        pkg = float(packaged_tps)
-    except (TypeError, ValueError):
+    kit = finite(kit_tps)
+    pkg = finite(packaged_tps)
+    if kit is None or pkg is None:
         return {'verdict': 'refuse', 'reason': 'unreadable_rate',
                 'delta_frac': None}
     if kit <= 0 or pkg <= 0:
         return {'verdict': 'refuse', 'reason': 'missing_rate',
                 'delta_frac': None}
+    limit = finite(max_delta)
+    if limit is None or limit < 0:
+        return {'verdict': 'refuse', 'reason': 'invalid_max_delta',
+                'delta_frac': None}
     d = delta_frac(kit, pkg)
-    if d > max_delta:
+    if not d <= limit:
         return {'verdict': 'refuse', 'reason': 'rate_divergence',
                 'delta_frac': d}
     return {'verdict': 'pass', 'reason': 'within_delta', 'delta_frac': d}
@@ -82,7 +99,11 @@ def main(argv=None):
         'max_delta_frac': args.max_delta,
         **v,
     }
-    Path(args.out).write_text(json.dumps(rec, indent=2) + '\n')
+    # JSON has no NaN or infinity: write a non-finite number as null.
+    rec = {k: (None if isinstance(x, float) and not math.isfinite(x) else x)
+           for k, x in rec.items()}
+    Path(args.out).write_text(json.dumps(rec, indent=2, allow_nan=False)
+                              + '\n')
     print(f"decode-pair {rec['verdict']}: kit {args.kit_tps} vs packaged "
           f"{args.packaged_tps} tok/s (delta {v['delta_frac']}, "
           f"max {args.max_delta})")

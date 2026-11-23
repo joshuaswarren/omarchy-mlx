@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -48,6 +49,54 @@ class DecodePairGate(unittest.TestCase):
         for kit, pkg in ((0.0, 100.0), (100.0, 0.0), (None, 100.0)):
             v = self.gate.verdict(kit, pkg)
             self.assertEqual(v['verdict'], 'refuse', (kit, pkg))
+
+    def test_non_finite_rate_refuses(self):
+        nan, inf = math.nan, math.inf
+        for kit, pkg in ((nan, 10.0), (10.0, nan), (inf, 10.0),
+                         (10.0, inf), (-inf, 10.0), (inf, inf),
+                         ('nan', '10'), (True, True), (10**400, 10.0)):
+            v = self.gate.verdict(kit, pkg)
+            self.assertEqual(v['verdict'], 'refuse', (kit, pkg))
+            self.assertEqual(v['reason'], 'unreadable_rate', (kit, pkg))
+
+    def test_invalid_max_delta_refuses(self):
+        for max_delta in (math.nan, math.inf, -math.inf, -0.01, True,
+                          10**400):
+            v = self.gate.verdict(1.0, 1000.0, max_delta)
+            self.assertEqual(v['verdict'], 'refuse', max_delta)
+            self.assertEqual(v['reason'], 'invalid_max_delta', max_delta)
+
+    def test_cli_non_finite_refuses_with_strict_json(self):
+        cases = (
+            (['--kit-tps', 'nan', '--packaged-tps', '10'],
+             'unreadable_rate'),
+            (['--kit-tps', 'inf', '--packaged-tps', 'inf'],
+             'unreadable_rate'),
+            (['--kit-tps=-inf', '--packaged-tps', '10'],
+             'unreadable_rate'),
+            (['--kit-tps', '10', '--packaged-tps', 'inf'],
+             'unreadable_rate'),
+            (['--kit-tps', '1', '--packaged-tps', '1000',
+              '--max-delta', 'nan'], 'invalid_max_delta'),
+            (['--kit-tps', '1', '--packaged-tps', '1000',
+              '--max-delta', 'inf'], 'invalid_max_delta'),
+            (['--kit-tps', '1', '--packaged-tps', '1000',
+              '--max-delta=-0.01'], 'invalid_max_delta'),
+        )
+
+        def reject(constant):
+            raise ValueError(f'non-JSON constant {constant}')
+
+        for args, reason in cases:
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / 'pair.json'
+                rc = self.gate.main(args + [
+                    '--model', 'model-x', '--tokens', '64',
+                    '--tag', 'qualification-r8', '--out', str(out)])
+                self.assertEqual(rc, 2, args)
+                rec = json.loads(out.read_text(), parse_constant=reject)
+                self.assertEqual(rec['verdict'], 'refuse', args)
+                self.assertEqual(rec['reason'], reason, args)
 
     def test_receipt_carries_the_pair(self):
         with tempfile.TemporaryDirectory() as td:
