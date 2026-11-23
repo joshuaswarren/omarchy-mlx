@@ -159,6 +159,44 @@ class VendorToolingTest(unittest.TestCase):
         self.assertIn("verified 2", result.stdout)
         self.assertIn(f"{extra.name} is vendored but not in the lock", result.stderr)
 
+    def _strip_final_newline(self):
+        """Drop the lock's trailing newline; return the wheel its last line pins."""
+        text = self.lock.read_text()
+        self.assertTrue(text.endswith("\n"))
+        self.lock.write_text(text.rstrip("\n"))
+        last = self.lock.read_text().splitlines()[-1]
+        name = last.split("==", 1)[0].replace("-", "_")
+        return next(self.vendor.glob(f"{name}-*.whl"))
+
+    def test_verify_checks_final_line_without_newline(self):
+        wheel = self._strip_final_newline()
+        result = self._verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("verified 2", result.stdout)
+        self.assertNotIn(f"{wheel.name} is vendored but not in the lock", result.stderr)
+
+    def test_verify_rejects_missing_wheel_on_final_line_without_newline(self):
+        wheel = self._strip_final_newline()
+        wheel.unlink()
+        result = self._verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no wheel provides it", result.stderr)
+
+    def test_verify_rejects_tampered_wheel_on_final_line_without_newline(self):
+        wheel = self._strip_final_newline()
+        wheel.write_bytes(wheel.read_bytes() + b"\0")
+        result = self._verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"hash mismatch for {wheel.name}", result.stderr)
+
+    def test_verify_rejects_malformed_final_line_without_newline(self):
+        with self.lock.open("a") as lock:
+            lock.write("fakelib==1.0")
+        result = self._verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lock line is not name==version --hash=sha256:...: fakelib==1.0",
+                      result.stderr)
+
 
 class BuildVenvTest(unittest.TestCase):
     """build-venv.sh: offline, hash-checked, interpreter-tag-checked."""
