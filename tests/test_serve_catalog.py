@@ -7,6 +7,7 @@ touches the network.
 import contextlib
 import unittest.mock
 import http.server
+import io
 import json
 import os
 import sys
@@ -396,6 +397,49 @@ class RefreshTests(unittest.TestCase):
         result = self.refresh(ttl_hours=0, offline=True)
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(self.store["requests"], 0)
+
+    def _refresh_with_ttl_env(self, value, **kw):
+        stderr = io.StringIO()
+        env = {"MLX_OMARCHY_CATALOG_TTL_HOURS": value}
+        with unittest.mock.patch.dict(os.environ, env), contextlib.redirect_stderr(stderr):
+            return self.refresh(**kw), stderr.getvalue()
+
+    def test_bad_ttl_env_does_not_break_offline_refresh(self):
+        for value in ("1h", "", "nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                result, err = self._refresh_with_ttl_env(value, offline=True)
+                self.assertEqual(result["status"], "skipped")
+                self.assertNotIn("MLX_OMARCHY_CATALOG_TTL_HOURS", err)  # never parsed
+        self.assertEqual(self.store["requests"], 0)
+
+    def test_bad_ttl_env_warns_and_keeps_default_ttl(self):
+        self.assertEqual(self.refresh(ttl_hours=0)["status"], "updated")
+        cache = catalog.cache_path(self.home)
+        for value in ("1h", "", "nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                os.utime(cache)
+                result, err = self._refresh_with_ttl_env(value)
+                self.assertEqual(result["status"], "fresh")  # younger than 24h
+                expired = cache.stat().st_mtime - 48 * 3600
+                os.utime(cache, (expired, expired))
+                result, _ = self._refresh_with_ttl_env(value)
+                self.assertEqual(result["status"], "not-modified")  # older than 24h
+                self.assertIn(f"ignoring MLX_OMARCHY_CATALOG_TTL_HOURS={value!r}", err)
+                os.utime(cache)
+                result, _ = self._refresh_with_ttl_env(value, ttl_hours=0)
+                self.assertEqual(result["status"], "not-modified")  # the caller's TTL
+
+    def test_finite_ttl_env_still_overrides(self):
+        self.assertEqual(self.refresh(ttl_hours=0)["status"], "updated")
+        result, err = self._refresh_with_ttl_env("0", ttl_hours=24)
+        self.assertEqual(result["status"], "not-modified")  # 0 forces a refetch
+        self.assertNotIn("MLX_OMARCHY_CATALOG_TTL_HOURS", err)
+        cache = catalog.cache_path(self.home)
+        aged = cache.stat().st_mtime - 30 * 3600
+        os.utime(cache, (aged, aged))
+        result, err = self._refresh_with_ttl_env("48")
+        self.assertEqual(result["status"], "fresh")
+        self.assertNotIn("MLX_OMARCHY_CATALOG_TTL_HOURS", err)
 
     def test_deeply_nested_body_rejected(self):
         self.store["body"] = DEEPLY_NESTED
