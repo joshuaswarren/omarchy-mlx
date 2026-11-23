@@ -164,6 +164,19 @@ def build_parser():
     return parser
 
 
+def validate_args(parser, args):
+    if not 0 <= args.port <= 65535:
+        parser.error("port must be between 0 and 65535")
+    if args.once and not args.prompt:
+        parser.error("--once requires --prompt")
+    if args.yes and not args.pair:
+        parser.error("--yes requires an explicit --pair")
+    if args.resume and args.pair:
+        parser.error("--resume uses the saved pair; do not pass --pair")
+    if not 0.0 < args.wake_threshold < 1.0:
+        parser.error("--wake-threshold must be between 0 and 1")
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -177,16 +190,7 @@ def main(argv=None):
         import faulthandler
 
         faulthandler.register(signal.SIGUSR1, file=sys.stderr)
-    if not 0 <= args.port <= 65535:
-        parser.error("port must be between 0 and 65535")
-    if args.once and not args.prompt:
-        parser.error("--once requires --prompt")
-    if args.yes and not args.pair:
-        parser.error("--yes requires an explicit --pair")
-    if args.resume and args.pair:
-        parser.error("--resume uses the saved pair; do not pass --pair")
-    if not 0.0 < args.wake_threshold < 1.0:
-        parser.error("--wake-threshold must be between 0 and 1")
+    validate_args(parser, args)
     directory = args.home / "assistant"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = (directory / "application.lock").open("a")
