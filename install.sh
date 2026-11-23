@@ -63,10 +63,14 @@ fetch_patch_assets() {
     -o "$PREFIX/apply-mlx-lm-patches.sh"
   mkdir -p "$PREFIX/patches" "$PREFIX/patches/mlx-lm-0.32" "$PREFIX/scripts"
   local p s
+  # Each patch lives at exactly one of the two paths; probing both 404s by
+  # design. -s without -S keeps the probe quiet (a missing file is the
+  # expected outcome, handled by || rm -f) — every other curl in this
+  # script stays -S so real failures still print.
   for p in $(grep -oE 'mlx-lm-[a-z0-9-]+\.patch' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
-    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p" ||
+    curl -fsL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p" ||
       rm -f "$PREFIX/patches/$p"
-    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/mlx-lm-0.32/$p" \
+    curl -fsL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/mlx-lm-0.32/$p" \
       -o "$PREFIX/patches/mlx-lm-0.32/$p" || rm -f "$PREFIX/patches/mlx-lm-0.32/$p"
   done
   # The optional mlx-audio series patch (same grep, wider pattern; the audio
