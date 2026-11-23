@@ -3,7 +3,8 @@
 Compares the served/GPU envelopes against the committed CPU reference
 fixture (tests/fixtures/laya/laya_reference.json) and prints a
 receipt-ready block: provenance line, device identity, per-case deltas,
-latency, and a PASS/FAIL verdict against the documented gates.
+latency, and a PASS/FAIL verdict against the documented gates. It exits 3
+before running a case when the loaded mlx binary is not the installed wheel.
 
 Run on the qualification host (t6001-test-host/m1-test-host) AFTER Main opens the hardware
 window, with the mlx-omarchy wheel (Vulkan GPU backend) active:
@@ -39,7 +40,12 @@ ACT_GATE = 5e-2
 
 
 def _provenance(repo_root: Path) -> str:
-    """The scripts/mlx_provenance.py one-line summary for this interpreter."""
+    """The scripts/mlx_provenance.py one-line summary for this interpreter.
+
+    Exits 3 when the loaded mlx binary is not the wheel the environment
+    claims (verified=mismatch): no qualification number may travel with a
+    false identity. Source and editable builds (unverified, no-metadata) pass.
+    """
     script = repo_root / "scripts" / "mlx_provenance.py"
     if not script.is_file():
         return "provenance: script not present"
@@ -47,9 +53,18 @@ def _provenance(repo_root: Path) -> str:
         spec = importlib.util.spec_from_file_location("mlx_provenance", script)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod.provenance_line(mod.installed_provenance())
+        prov = mod.installed_provenance()
     except Exception as exc:
         return "provenance: unavailable: %s: %s" % (type(exc).__name__, exc)
+    try:
+        line = mod.provenance_line(prov)
+    except Exception as exc:  # e.g. harness_commit's git status timing out
+        line = "provenance: unavailable: %s: %s" % (type(exc).__name__, exc)
+    if prov.get("verified") == "mismatch":
+        print(line, file=sys.stderr)
+        print("REFUSING TO EMIT NUMBERS: %s" % prov.get("mismatch"), file=sys.stderr)
+        raise SystemExit(3)
+    return line
 
 
 def _run_case_direct(model, state, questions, require_gpu):
@@ -113,6 +128,8 @@ def main(argv=None):
         raise SystemExit("qualify: default device is %s, not mx.gpu; run on Apple-silicon hardware with the "
                          "mlx-omarchy wheel (or pass --allow-cpu for a CPU self-check, which is NOT "
                          "a hardware qualification)" % device)
+    # Before any case runs: a lying environment refuses instead of measuring.
+    provenance = _provenance(repo_root)
 
     results = []
     fail = []
@@ -151,7 +168,7 @@ def main(argv=None):
 
     print("=" * 72)
     print("laya hardware qualification")
-    print(_provenance(repo_root))
+    print(provenance)
     print("mlx: %s | device: %s | mode: %s" % (
         mx.__version__, device, "server %s" % args.url if args.url else "direct engine"))
     manifest = Path(args.model) / "manifest.json"

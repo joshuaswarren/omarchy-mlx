@@ -511,9 +511,34 @@ class ManagedCoServingTests(unittest.TestCase):
         self.assertNotIn("managed co-serving", (out + err).lower())
 
 
+class _RecordFile(str):
+    """A RECORD entry: importlib.metadata's PackagePath carries .hash."""
+
+
+def _fake_omarchy_dist(root, recorded, version):
+    """An installed mlx-omarchy under root whose mlx/lib/libmlx.so holds
+    b"libmlx" and whose RECORD pins sha256(recorded); recorded=None leaves
+    the binary without a RECORD entry (a source build)."""
+    import base64
+    import hashlib
+    import types
+
+    lib = Path(root) / "mlx" / "lib" / "libmlx.so"
+    lib.parent.mkdir(parents=True, exist_ok=True)
+    lib.write_bytes(b"libmlx")
+    files = []
+    if recorded is not None:
+        entry = _RecordFile("mlx/lib/libmlx.so")
+        entry.hash = types.SimpleNamespace(mode="sha256", value=base64.urlsafe_b64encode(
+            hashlib.sha256(recorded).digest()).decode().rstrip("="))
+        files.append(entry)
+    return types.SimpleNamespace(version=version, files=files, locate_file=lambda rel: Path(root) / rel)
+
+
 class QualifyDeviceGuardTests(unittest.TestCase):
-    """qualify refuses a non-GPU default device unless --allow-cpu, in both
-    direct and --url modes. mlx.core is stubbed so the guard runs without mlx;
+    """qualify refuses a non-GPU default device unless --allow-cpu, and a
+    verified=mismatch provenance even with --allow-cpu, in both direct and
+    --url modes. mlx.core is stubbed so the guards run without mlx;
     str(mx.default_device()) is "Device(cpu, 0)", never "cpu"."""
 
     @classmethod
@@ -551,8 +576,12 @@ class QualifyDeviceGuardTests(unittest.TestCase):
     def setUp(self):
         del self.posts[:]
 
-    def _qualify(self, default, *argv):
+    def _qualify(self, default, *argv, dist=None):
+        """Run qualify.main against stubbed mlx. dist is the installed
+        mlx-omarchy distribution; None means no metadata (an editable build).
+        stdout and stderr stay on self.out and self.err when main exits."""
         import contextlib
+        import importlib.metadata
         import io
         import types
         import unittest.mock as mock
@@ -577,11 +606,16 @@ class QualifyDeviceGuardTests(unittest.TestCase):
         pkg.core = core
         from mlx_omarchy_laya import qualify
 
-        stdout = io.StringIO()
-        with mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), \
-                contextlib.redirect_stdout(stdout):
+        if dist is None:
+            installed = mock.patch("importlib.metadata.distribution",
+                                   side_effect=importlib.metadata.PackageNotFoundError("mlx-omarchy"))
+        else:
+            installed = mock.patch("importlib.metadata.distribution", return_value=dist)
+        self.out, self.err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), installed, \
+                contextlib.redirect_stdout(self.out), contextlib.redirect_stderr(self.err):
             rc = qualify.main(["--model", str(REPO / "no-such-checkpoint"), *argv])
-        return rc, stdout.getvalue()
+        return rc, self.out.getvalue()
 
     def test_cpu_default_refuses_url_mode_without_allow_cpu(self):
         with self.assertRaises(SystemExit) as cm:
@@ -615,46 +649,133 @@ class QualifyDeviceGuardTests(unittest.TestCase):
         line, = [ln for ln in out.splitlines() if ln.startswith("provenance")]
         self.assertTrue(line.startswith("provenance: mlx-omarchy "), line)
         self.assertIn(" mx=stub ", line)  # the mlx this interpreter loaded
-        self.assertIn(" verified=", line)
+        self.assertIn(" verified=no-metadata ", line)
         self.assertIn(" harness=", line)
+
+    def _assert_refused(self, *argv, dist, default="gpu"):
+        with self.assertRaises(SystemExit) as cm:
+            self._qualify(default, *argv, dist=dist)
+        self.assertEqual(cm.exception.code, 3)
+        self.assertEqual(self.posts, [], "no case may be sent to the server before the refusal")
+        err = self.err.getvalue()
+        self.assertEqual(self.out.getvalue(), "", "a refused run prints no receipt")
+        self.assertIn(" verified=mismatch ", err)
+        self.assertIn("REFUSING TO EMIT NUMBERS: ", err)
+        return err
+
+    def test_record_mismatch_refuses_before_any_case(self):
+        import tempfile
+
+        for mode in (("--url", self.url), ()):  # () = direct engine, never loaded
+            with self.subTest(mode=mode or "direct"), tempfile.TemporaryDirectory() as tmp:
+                err = self._assert_refused(*mode, dist=_fake_omarchy_dist(tmp, b"stale", "stub"))
+                self.assertIn("RECORD says", err)
+
+    def test_version_mismatch_refuses(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            err = self._assert_refused("--url", self.url, dist=_fake_omarchy_dist(tmp, b"libmlx", "1.0"))
+        self.assertIn("compiled mx.__version__ 'stub' != installed distribution version '1.0'", err)
+
+    def test_allow_cpu_does_not_waive_the_refusal(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._assert_refused("--url", self.url, "--allow-cpu", default="cpu",
+                                 dist=_fake_omarchy_dist(tmp, b"stale", "stub"))
+
+    def test_only_a_mismatch_refuses(self):
+        import tempfile
+
+        for recorded, verdict in ((b"libmlx", "match"), (None, "unverified"), (b"stale", "mismatch")):
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as tmp:
+                del self.posts[:]
+                dist = _fake_omarchy_dist(tmp, recorded, "stub")
+                if verdict == "mismatch":
+                    self._assert_refused("--url", self.url, dist=dist)
+                    continue
+                rc, out = self._qualify("gpu", "--url", self.url, dist=dist)
+                self.assertEqual(rc, 0)
+                self.assertEqual(len(self.posts), 6)
+                self.assertIn(" verified=%s " % verdict, out)
+                self.assertIn("VERDICT: PASS", out)
 
 
 class QualifyProvenanceTests(unittest.TestCase):
-    def test_provenance_reports_record_match_and_mismatch(self):
-        # mlx_provenance.py exits 3 on a RECORD mismatch; the receipt must
-        # still name the verdict and the loaded hash, not "}" or an error.
-        import base64
+    def test_provenance_reports_record_match_and_refuses_mismatch(self):
+        # A match returns the receipt line naming the verdict and the loaded
+        # hash; a RECORD mismatch prints that line to stderr and exits 3, the
+        # scripts/mlx_provenance.py refusal contract.
+        import contextlib
         import hashlib
+        import io
         import tempfile
         import types
         import unittest.mock as mock
 
         from mlx_omarchy_laya import qualify
 
-        class RecordFile(str):
-            pass
-
-        with tempfile.TemporaryDirectory() as tmp:
-            lib = Path(tmp) / "mlx" / "lib" / "libmlx.so"
-            lib.parent.mkdir(parents=True)
-            lib.write_bytes(b"libmlx")
-            core = types.ModuleType("mlx.core")
-            core.__version__ = "1.0"
-            pkg = types.ModuleType("mlx")
-            pkg.core = core
-            for recorded, verdict in ((b"libmlx", "match"), (b"stale", "mismatch")):
-                entry = RecordFile("mlx/lib/libmlx.so")
-                entry.hash = types.SimpleNamespace(mode="sha256", value=base64.urlsafe_b64encode(
-                    hashlib.sha256(recorded).digest()).decode().rstrip("="))
-                dist = types.SimpleNamespace(version="1.0", files=[entry], locate_file=lambda rel: Path(tmp) / rel)
-                with self.subTest(verdict=verdict), \
-                        mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), \
-                        mock.patch("importlib.metadata.distribution", return_value=dist):
+        core = types.ModuleType("mlx.core")
+        core.__version__ = "1.0"
+        pkg = types.ModuleType("mlx")
+        pkg.core = core
+        loaded = " libmlx.so=sha256:" + hashlib.sha256(b"libmlx").hexdigest()[:16]
+        for recorded, verdict in ((b"libmlx", "match"), (b"stale", "mismatch")):
+            err = io.StringIO()
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), \
+                    mock.patch("importlib.metadata.distribution",
+                               return_value=_fake_omarchy_dist(tmp, recorded, "1.0")), \
+                    contextlib.redirect_stderr(err):
+                prefix = "provenance: mlx-omarchy 1.0 mx=1.0 verified=%s harness=" % verdict
+                if verdict == "match":
                     line = qualify._provenance(REPO)
-                    self.assertTrue(line.startswith("provenance: mlx-omarchy 1.0 mx=1.0 verified=%s harness=" % verdict),
-                                    line)
-                    self.assertTrue(line.endswith(" libmlx.so=sha256:" + hashlib.sha256(b"libmlx").hexdigest()[:16]),
-                                    line)
+                    self.assertTrue(line.startswith(prefix), line)
+                    self.assertTrue(line.endswith(loaded), line)
+                    self.assertEqual(err.getvalue(), "")
+                else:
+                    with self.assertRaises(SystemExit) as cm:
+                        qualify._provenance(REPO)
+                    self.assertEqual(cm.exception.code, 3)
+                    line, refusal = err.getvalue().splitlines()
+                    self.assertTrue(line.startswith(prefix), line)
+                    self.assertTrue(line.endswith(loaded), line)
+                    self.assertTrue(refusal.startswith("REFUSING TO EMIT NUMBERS: mlx/lib/libmlx.so at "), refusal)
+
+    def test_mismatch_refuses_when_the_line_cannot_be_formatted(self):
+        # provenance_line() runs git with a 5 s timeout; a slow tree must not
+        # turn a detected mismatch into "provenance: unavailable" and a PASS.
+        import contextlib
+        import io
+        import subprocess
+        import tempfile
+        import types
+        import unittest.mock as mock
+
+        from mlx_omarchy_laya import qualify
+
+        def slow_git(cmd, *a, **kw):  # rev-parse answers; the status call times out
+            if "status" in cmd:
+                raise subprocess.TimeoutExpired(cmd, 5)
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc1234\n", stderr="")
+
+        core = types.ModuleType("mlx.core")
+        core.__version__ = "1.0"
+        pkg = types.ModuleType("mlx")
+        pkg.core = core
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), \
+                mock.patch("importlib.metadata.distribution", return_value=_fake_omarchy_dist(tmp, b"stale", "1.0")), \
+                mock.patch("subprocess.run", side_effect=slow_git), \
+                contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                qualify._provenance(REPO)
+        self.assertEqual(cm.exception.code, 3)
+        line, refusal = err.getvalue().splitlines()
+        self.assertTrue(line.startswith("provenance: unavailable: TimeoutExpired: "), line)
+        self.assertTrue(refusal.startswith("REFUSING TO EMIT NUMBERS: mlx/lib/libmlx.so at "), refusal)
 
     def test_provenance_reports_no_mlx(self):
         import unittest.mock as mock
