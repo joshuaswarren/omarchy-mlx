@@ -211,6 +211,122 @@ uint rhs_index_for(uint index) {
 #define IS_LOBIT(a) (((a) & VALUE_TYPE(1)) != VALUE_TYPE(0))
 #endif
 
+#if defined(USE_I64) || defined(USE_U64)
+// 64-bit div/mod on uint32 word pairs. The driver's nir_lower_int64
+// expansion of GLSL / and % on 64-bit ints emits an AGX extr bitfield
+// extract that the AGX3 binary packer cannot encode on G18G
+// (aurora-silicon/mesa#739 packer family; G626 battery 2026-11-23:
+// vkCreateComputePipelines VK_ERROR_UNKNOWN, agx3_pack_binary.c:19234
+// "no grounded AGX3 encoding for extr"), so the div-mod math runs
+// entirely on the uint32 halves. Words are little-endian: element
+// value = x + (y << 32). packUint2x32 round trips are bit
+// reinterprets, not 64-bit ALU. Words are read from IS_* where the
+// sign matters; the unsigned build never negates a magnitude.
+uvec2 UWS64(VALUE_TYPE v) {
+  return unpackUint2x32(uint64_t(v));
+}
+
+VALUE_TYPE FROM_UWS64(uvec2 w) {
+  return VALUE_TYPE(int64_t(packUint2x32(w)));
+}
+
+uvec2 U64_ADD(uvec2 a, uvec2 b) {
+  uint lo = a.x + b.x;
+  return uvec2(lo, a.y + b.y + (lo < a.x ? 1u : 0u));
+}
+
+uvec2 U64_NEG(uvec2 a) {
+  uint lo = ~a.x + 1u;
+  return uvec2(lo, ~a.y + (lo == 0u ? 1u : 0u));
+}
+
+bool U64_LT(uvec2 a, uvec2 b) {
+  return a.y != b.y ? a.y < b.y : a.x < b.x;
+}
+
+uint U64_BIT(uvec2 a, int i) {
+  return i < 32 ? (a.x >> uint(i)) & 1u : (a.y >> uint(i - 32)) & 1u;
+}
+
+// Unsigned magnitude divmod by shift-subtract over the set bits of the
+// dividend. A zero divisor leaves q = r = 0 (the callers guard first,
+// matching the zero-divisor contracts of the ops below).
+void U64_DIVMOD(uvec2 a, uvec2 b, out uvec2 q, out uvec2 r) {
+  q = uvec2(0u, 0u);
+  r = uvec2(0u, 0u);
+  if (b.x == 0u && b.y == 0u) {
+    return;
+  }
+  if (U64_LT(a, b)) {
+    r = a;  // quotient 0
+    return;
+  }
+  int msb = a.y != 0u ? findMSB(a.y) + 32 : findMSB(a.x);
+  for (int i = msb; i >= 0; --i) {
+    r = uvec2((r.x << 1) | U64_BIT(a, i), (r.y << 1) | (r.x >> 31));
+    if (!U64_LT(r, b)) {
+      r = U64_ADD(r, U64_NEG(b));
+      if (i < 32) {
+        q.x |= 1u << uint(i);
+      } else {
+        q.y |= 1u << uint(i - 32);
+      }
+    }
+  }
+}
+
+VALUE_TYPE I64_DIV_TRUNC(VALUE_TYPE a, VALUE_TYPE b) {
+  if (!IS_NZ(b)) {
+    return VALUE_TYPE(0);
+  }
+  uvec2 wa = UWS64(a);
+  uvec2 wb = UWS64(b);
+  uvec2 ua = wa;
+  uvec2 ub = wb;
+#ifndef USE_U64
+  bool aneg = IS_NEG(a);
+  bool bneg = IS_NEG(b);
+  ua = aneg ? U64_NEG(wa) : wa;
+  ub = bneg ? U64_NEG(wb) : wb;
+  uvec2 q;
+  uvec2 r;
+  U64_DIVMOD(ua, ub, q, r);
+  uvec2 qq = (aneg != bneg) ? U64_NEG(q) : q;
+  return FROM_UWS64(qq);
+#else
+  uvec2 q;
+  uvec2 r;
+  U64_DIVMOD(ua, ub, q, r);
+  return FROM_UWS64(q);
+#endif
+}
+
+VALUE_TYPE I64_REM(VALUE_TYPE a, VALUE_TYPE b) {
+  if (!IS_NZ(b)) {
+    return VALUE_TYPE(0);
+  }
+  uvec2 wa = UWS64(a);
+  uvec2 wb = UWS64(b);
+  uvec2 ua = wa;
+  uvec2 ub = wb;
+#ifndef USE_U64
+  bool aneg = IS_NEG(a);
+  bool bneg = IS_NEG(b);
+  ua = aneg ? U64_NEG(wa) : wa;
+  ub = bneg ? U64_NEG(wb) : wb;
+#endif
+  uvec2 q;
+  uvec2 r;
+  U64_DIVMOD(ua, ub, q, r);
+#ifdef USE_U64
+  return FROM_UWS64(r);
+#else
+  uvec2 rr = aneg ? U64_NEG(r) : r;
+  return FROM_UWS64(rr);
+#endif
+}
+#endif  // 64-bit helper block
+
 // Python-style floor division. The C++ quotient adjusted so the
 // remainder takes the divisor's sign (upstream DivMod integral_op).
 // Uses only SDiv (truncating, sign-of-dividend) plus signs of a and b:
@@ -223,8 +339,13 @@ uint rhs_index_for(uint index) {
 // (aurora-silicon/mesa#739, omarchy-mlx#662). uint(bool) selects in 32
 // bits, and VALUE_TYPE(uint) widens with a convert, never a select.
 VALUE_TYPE floor_quotient(VALUE_TYPE a, VALUE_TYPE b) {
+#if defined(USE_I64) || defined(USE_U64)
+  VALUE_TYPE q = I64_DIV_TRUNC(a, b);
+  VALUE_TYPE r = I64_REM(a, b);
+#else
   VALUE_TYPE q = a / b;
   VALUE_TYPE r = a - q * b;
+#endif
   q -= VALUE_TYPE(uint(IS_NZ(r) && IS_NEG(a) != IS_NEG(b)));
   return q;
 }
@@ -245,7 +366,11 @@ VALUE_TYPE floor_divide_int(VALUE_TYPE a, VALUE_TYPE b) {
 // raw remainder, which is already the upstream unsigned result.
 // Same 32-bit-select form as floor_quotient (mesa#739).
 VALUE_TYPE python_modulo(VALUE_TYPE a, VALUE_TYPE b) {
+#if defined(USE_I64) || defined(USE_U64)
+  VALUE_TYPE r = I64_REM(a, b);
+#else
   VALUE_TYPE r = a % b;
+#endif
   r += b & -VALUE_TYPE(uint(IS_NZ(r) && IS_NEG(r) != IS_NEG(b)));
   return r;
 }
