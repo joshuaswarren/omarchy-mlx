@@ -28,6 +28,17 @@ newrepo(){
 }
 g(){ PRIVACY_REPO="$R" PRIVACY_PATTERNS_NAME=".private-patterns" python3 "$CHECKER" "$@"; }
 
+# Real-hook clones: the hook also runs the compute-kernel wiring gate and
+# the kernel-inventory doc gate before privacy_check. Both resolve outside
+# a bare test clone ($HERE/../check_compute_kernel_wiring.py is missing,
+# and $HERE/../../tools/ escapes the clone to $T). Stub both so only the
+# privacy path is under test.
+stubgates(){
+  printf 'pass\n' > "$1/hooks/check_compute_kernel_wiring.py"
+  mkdir -p "$T/tools/kernel_recheck"
+  printf 'pass\n' > "$T/tools/kernel_recheck/check_doc_table.py"
+}
+
 # 1 clean actual commit
 R="$T/c1"; newrepo "$R"; echo harmless > "$R/x.txt"; git -C "$R" add .; git -C "$R" commit -qm clean
 g vbase..main >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL1 clean rc=$rc"; FAILS=$((FAILS+1)); }
@@ -93,7 +104,7 @@ g vbase..main >/dev/null 2>&1; rc=$?; [ $rc -eq 1 ] || { echo "FAIL12 rename-bin
 BR="$T/remote.git"; mkdir -p "$BR"; git init -q --bare "$BR"
 C="$T/clone"; git clone -q "$BR" "$C" 2>/dev/null; git -C "$C" checkout -q -b main
 mkdir -p "$C/hooks"; cp "$CHECKER" "$C/hooks/privacy_check.py"; cp "$HOOK" "$C/hooks/pre-push"
-chmod +x "$C/hooks/pre-push" "$C/hooks/privacy_check.py"
+chmod +x "$C/hooks/pre-push" "$C/hooks/privacy_check.py"; stubgates "$C"
 printf '%s|%s|%s\n' "$H1" "$SEC" "$UPATH" > "$C/.private-patterns"
 git -C "$C" config user.email "$ID"; git -C "$C" config user.name "t"; git -C "$C" config core.hooksPath hooks
 printf 'token=%s\n' "$SEC" > "$C/leak.txt"; git -C "$C" add .; git -C "$C" commit -qm leak
@@ -103,7 +114,7 @@ git -C "$C" push origin HEAD:main >/dev/null 2>&1; rc=$?; [ $rc -eq 1 ] || { ech
 BR2="$T/remote2.git"; mkdir -p "$BR2"; git init -q --bare "$BR2"
 C2="$T/clone2"; git clone -q "$BR2" "$C2" 2>/dev/null; git -C "$C2" checkout -q -b main
 mkdir -p "$C2/hooks"; cp "$CHECKER" "$C2/hooks/privacy_check.py"; cp "$HOOK" "$C2/hooks/pre-push"
-chmod +x "$C2/hooks/pre-push" "$C2/hooks/privacy_check.py"
+chmod +x "$C2/hooks/pre-push" "$C2/hooks/privacy_check.py"; stubgates "$C2"
 git -C "$C2" config user.email "$ID"; git -C "$C2" config user.name "t"; git -C "$C2" config core.hooksPath hooks
 printf '.private-patterns\n' > "$C2/.gitignore"
 echo ok > "$C2/f.txt"; git -C "$C2" add .; git -C "$C2" commit -qm ok
@@ -133,6 +144,35 @@ printf '%s fixture.txt\n' "$(git -C "$R" rev-parse HEAD:fixture.txt)" >> "$R/.pr
 g main >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL17 pinned rc=$rc"; FAILS=$((FAILS+1)); }
 printf 'path=%s\n' "$UPATH" >> "$R/fixture.txt"; git -C "$R" add .; git -C "$R" commit -qm fixture2
 g main >/dev/null 2>&1; rc=$?; [ $rc -eq 1 ] || { echo "FAIL17 edited rc=$rc"; FAILS=$((FAILS+1)); }
+
+# 18 REAL HOOK existing ref rebased over a published flagged blob pushes
+# clean; a NEW commit adding a flagged pattern is still refused.
+BR3="$T/remote3.git"; mkdir -p "$BR3"; git init -q --bare "$BR3"
+C3="$T/clone3"; git clone -q "$BR3" "$C3" 2>/dev/null; git -C "$C3" checkout -q -b main
+mkdir -p "$C3/hooks"; cp "$CHECKER" "$C3/hooks/privacy_check.py"; cp "$HOOK" "$C3/hooks/pre-push"
+chmod +x "$C3/hooks/pre-push" "$C3/hooks/privacy_check.py"; stubgates "$C3"
+git -C "$C3" config user.email "$ID"; git -C "$C3" config user.name "t"; git -C "$C3" config core.hooksPath hooks
+printf '.private-patterns\n' > "$C3/.gitignore"
+echo ok > "$C3/f.txt"; git -C "$C3" add .; git -C "$C3" commit -qm ok
+printf '%s|%s|%s\n' "$H1" "$SEC" "$UPATH" > "$C3/.private-patterns"
+git -C "$C3" push -q origin main >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL18 main-push rc=$rc"; FAILS=$((FAILS+1)); }
+git -C "$C3" checkout -q -b feat
+echo work > "$C3/w.txt"; git -C "$C3" add .; git -C "$C3" commit -qm featwork
+git -C "$C3" push -q origin feat >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL18 feat-push rc=$rc"; FAILS=$((FAILS+1)); }
+# publisher clone WITHOUT the hook lands a flagged blob on main
+CP3="$T/pub3"; git clone -q "$BR3" "$CP3" 2>/dev/null
+git -C "$CP3" config user.email "$ID"; git -C "$CP3" config user.name "t"
+git -C "$CP3" checkout -q main
+printf 'dir=%s\n' "$UPATH" > "$CP3/pub.sh"; git -C "$CP3" add .; git -C "$CP3" commit -qm published
+git -C "$CP3" push -q origin main >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL18 publish rc=$rc"; FAILS=$((FAILS+1)); }
+# guarded clone fetches, rebases feat past the flagged main commit,
+# force-pushes: published history is not re-blocked
+git -C "$C3" fetch -q origin
+git -C "$C3" rebase -q origin/main feat
+git -C "$C3" push -q --force-with-lease origin feat >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL18 rebase-push rc=$rc"; FAILS=$((FAILS+1)); }
+# a NEW commit introducing a flagged pattern is still refused
+printf 'dir=%s\n' "$UPATH" > "$C3/new.sh"; git -C "$C3" add .; git -C "$C3" commit -qm leak2
+git -C "$C3" push -q origin feat >/dev/null 2>&1; rc=$?; [ $rc -eq 1 ] || { echo "FAIL18 new-flag rc=$rc"; FAILS=$((FAILS+1)); }
 
 rm -rf "$T" "$SITE"
 if [ $FAILS -eq 0 ]; then echo ALL_GUARD_V5_TESTS_PASS; else echo "FAILURES=$FAILS"; exit 1; fi
