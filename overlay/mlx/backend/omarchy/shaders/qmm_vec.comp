@@ -134,6 +134,17 @@ uint16_t bf16_store(float value) {
 #else
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
+#ifdef QMM_W2
+// uvec2 weight words: the fast tile's adjacent w/w+1 pair rides one load.
+#define WVEC_T uvec2
+#define WLOAD(W, I) (W.values[(I) >> 1u][(I) & 1u])
+#define WLOAD_PAIR(W, I, A, B) { \
+  uvec2 wv_ = W.values[(I) / 2u]; (A) = wv_.x; (B) = wv_.y; }
+#else
+#define WVEC_T uint
+#define WLOAD(W, I) W.values[I]
+#define WLOAD_PAIR(W, I, A, B) { (A) = WLOAD(W, I); (B) = WLOAD(W, (I) + 1u); }
+#endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
 
@@ -168,7 +179,7 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // in_strides[i] the row gap, matrix_m the head dim.
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
-  uint values[]; \
+  WVEC_T values[]; \
 } input_w##I; \
 layout(set = 0, binding = B + 1, std430) readonly buffer Scales##I { \
   STORAGE_TYPE values[]; \
@@ -517,15 +528,15 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
          w += LANES * 2u) { \
       precise float dot = 0.0; \
       precise float input_sum = 0.0; \
-      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
-      Q4_WORD(W.values[w_base + w + 1u], x_row + w * 8u + 8u) \
+      Q4_WORD(WLOAD(W, w_base + w), x_row + w * 8u) \
+      Q4_WORD(WLOAD(W, w_base + w + 1u), x_row + w * 8u + 8u) \
       Q4_BLOCK_FINISH(w, S, B) \
     } \
   } else { \
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
       precise float dot = 0.0; \
       precise float input_sum = 0.0; \
-      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
+      Q4_WORD(WLOAD(W, w_base + w), x_row + w * 8u) \
       Q4_BLOCK_FINISH(w, S, B) \
     } \
   } \
@@ -629,8 +640,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     input_sum += x6; \
     input_sum += x7; \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-      uint lo = W.values[w_base + row_base[r] * row_words + 2u * w]; \
-      uint hi = W.values[w_base + row_base[r] * row_words + 2u * w + 1u]; \
+      uint lo = WLOAD(W, w_base + row_base[r] * row_words + 2u * w); \
+      uint hi = WLOAD(W, w_base + row_base[r] * row_words + 2u * w + 1u); \
       dot[r] = fma(x7, Q8_BYTE(hi, 24u), fma(x6, Q8_BYTE(hi, 16u), \
           fma(x5, Q8_BYTE(hi, 8u), fma(x4, Q8_BYTE(hi, 0u), \
           fma(x3, Q8_BYTE(lo, 24u), fma(x2, Q8_BYTE(lo, 16u), \
@@ -654,8 +665,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       uint wb[ROWS_PER_SLOT]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
         dot[r] = 0.0; \
-        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
-        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+        WLOAD_PAIR( \
+            W, w_base + row_base[r] * words_per_row + w, wa[r], wb[r]) \
       } \
       float scale_r[ROWS_PER_SLOT]; \
       float bias_r[ROWS_PER_SLOT]; \
@@ -683,7 +694,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       uint wa[ROWS_PER_SLOT]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
         dot[r] = 0.0; \
-        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
       } \
       uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
@@ -721,9 +732,9 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   uint wa[ROWS_PER_SLOT]; \
   uint wb[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+    wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
     if ((words_this_step) == 2u) { \
-      wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      wb[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w + 1u); \
     } \
   } \
   precise float dot_t[ROWS_PER_SLOT][M_TOKENS]; \
@@ -1750,8 +1761,8 @@ void main() {
       float na[ROWS_PER_SLOT][8]; \
       float nb[ROWS_PER_SLOT][8]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint wa = W.values[w_base + row_base[r] * words_per_row + w]; \
-        uint wb = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+        uint wa = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+        uint wb = WLOAD(W, w_base + row_base[r] * words_per_row + w + 1u); \
         Q4_NIB_WORD(wa, na[r]) \
         Q4_NIB_WORD(wb, nb[r]) \
       } \
@@ -1772,7 +1783,7 @@ void main() {
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
       float na[ROWS_PER_SLOT][8]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint wa = W.values[w_base + row_base[r] * words_per_row + w]; \
+        uint wa = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
         Q4_NIB_WORD(wa, na[r]) \
       } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
@@ -1850,8 +1861,8 @@ void main() {
       uint wa[ROWS_PER_SLOT]; \
       uint wb[ROWS_PER_SLOT]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
-        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+        WLOAD_PAIR( \
+            W, w_base + row_base[r] * words_per_row + w, wa[r], wb[r]) \
       } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
       for (uint rt = 0u; rt < uint(QMM_VEC_ROWS); ++rt) { \
@@ -1870,7 +1881,7 @@ void main() {
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
       uint wa[ROWS_PER_SLOT]; \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
       } \
       Q4_ROWS_BATCH_PARAMS(w, S, B) \
       for (uint rt = 0u; rt < uint(QMM_VEC_ROWS); ++rt) { \
