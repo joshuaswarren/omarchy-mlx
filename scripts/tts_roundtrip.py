@@ -80,7 +80,15 @@ def resolve_wavs(wav_dir, n_sentences: int) -> list:
 def score_sentences(sentences: list, hypotheses: list, british_map: dict) -> dict:
     """Score hypotheses rows {index, text} against sentences. Every
     sentence index 1..N must appear exactly once."""
-    by_index = {r["index"]: r["text"] for r in hypotheses}
+    n = len(sentences)
+    by_index = {}
+    for r in hypotheses:
+        i = r["index"]
+        if type(i) is not int or not 1 <= i <= n:
+            raise ValueError(f"hypothesis index {i!r} is not an integer in 1..{n}")
+        if i in by_index:
+            raise ValueError(f"duplicate hypothesis for index {i}")
+        by_index[i] = r["text"]
     rows = []
     total_we = total_ce = total_rw = total_rc = scored = empty = 0
     for i, ref in enumerate(sentences, 1):
