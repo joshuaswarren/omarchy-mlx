@@ -328,6 +328,12 @@ std::vector<LoadedProgram> load_programs(
   std::vector<LoadedProgram> loaded;
   loaded.reserve(bundle.programs.size());
   for (const auto& program : bundle.programs) {
+    if (!program.ports.empty()) {
+      throw runtime_error(
+          "program " + std::to_string(program.manifest_index) +
+          " is an ABI-2 (T6021) port-table bundle; the statically linked "
+          "ABI-1 libane in this worker cannot bind it");
+    }
     errno = 0;
     std::unique_ptr<ane_nn, AneHandleDeleter> handle(
         __ane_init(program.anec.c_str(), 0));

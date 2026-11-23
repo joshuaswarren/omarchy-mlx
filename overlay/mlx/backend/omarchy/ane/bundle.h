@@ -45,11 +45,27 @@ struct AneBundleNotFound : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+// One ABI-2 (T6021) io port: what the worker passes to
+// ane_m2_init_ports() after validating it against the manifest and the
+// ANEC tile table. dir: 0=input, 1=output, 2=scratch.
+struct AneIoPort {
+  std::string name;
+  uint32_t dir{0};
+  uint32_t buffer_id{0};
+  uint32_t bar_slot{0};
+  uint64_t tile_bytes{0};
+};
+
 struct AneValidatedProgram {
   size_t manifest_index{0};
   AneAnecHeader anec_header;
   std::filesystem::path anec;
   uint64_t tile_shift{kAneTileShiftDefault};
+  // ABI-2 programs carry the explicit port table the worker hands to
+  // ane_m2_init_ports(): inputs in manifest order, then outputs then
+  // aux_outputs in declaration order, then the scratch port when the
+  // program declares scratch. Empty for ABI-1 programs.
+  std::vector<AneIoPort> ports;
 };
 
 struct AneBundle {
@@ -92,9 +108,16 @@ struct AneSealedFile {
 #endif
 };
 
+// ABI-2 (T6021) scratch port: the driver binds the program's __DATA
+// region at BAR slot 3 under a fixed buffer id rather than an ANEC io
+// channel.
+constexpr uint32_t kAneScratchBufferId = 0x40;
+constexpr uint32_t kAneScratchBarSlot = 3;
+
 MLX_API AneAnecHeader parse_anec_header(
     const std::filesystem::path& path,
-    uint64_t tile_shift = kAneTileShiftDefault);
+    uint64_t tile_shift = kAneTileShiftDefault,
+    uint64_t driver_abi_major = kAneDriverAbiMajor);
 MLX_API AneBundle load_bundle(const std::filesystem::path& dir);
 MLX_API AneBundle load_bundle_snapshot(
     const std::filesystem::path& manifest,

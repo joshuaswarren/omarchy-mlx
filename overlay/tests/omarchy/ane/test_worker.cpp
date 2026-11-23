@@ -39,6 +39,10 @@ struct FakeDevice : AneDevice {
     // that one load served all of them and that each submit's inputs
     // really crossed the channel.
     ReportState,
+    // Every output byte is its read index: proves an auxiliary output
+    // is read at the port position after the positional destinations,
+    // not at its raw channel id.
+    ReportChannel,
   };
   static Behavior behavior;
   static inline const char* kFailReason = "fake device refused exec";
@@ -94,10 +98,14 @@ struct FakeDevice : AneDevice {
 
   void read(
       size_t /*manifest_index*/,
-      uint32_t /*channel*/,
+      uint32_t channel,
       const AneProgramBinding& binding,
       uint8_t* out,
       size_t size) override {
+    if (behavior == Behavior::ReportChannel) {
+      std::memset(out, static_cast<int>(channel), size);
+      return;
+    }
     // Deterministic payload: fill with the tensor name's bytes so the
     // parent can prove output bytes really crossed the pipe.
     for (size_t i = 0; i < size; ++i) {
@@ -725,4 +733,47 @@ TEST_CASE("session names drive the wire, not manifest names") {
   }
   auto closed = worker.close();
   REQUIRE(closed.status == AneWorkerStatus::Completed);
+}
+
+TEST_CASE("auxiliary outputs are read after positional destinations") {
+  FakeDevice::behavior = FakeDevice::Behavior::ReportChannel;
+  AneBundle bundle = toy_bundle();
+  // ABI-2 shape: one positional destination (y) plus a task-stream DMA
+  // surface (mask). The read index is the port position, not the channel.
+  AneTensor mask;
+  mask.name = "mask";
+  mask.dtype = "fp16";
+  mask.shape = {1, 8, 1, 1};
+  mask.byte_size = 16;
+  bundle.manifest.outputs.push_back(mask);
+  AneProgramBinding aux;
+  aux.tensor = "mask";
+  aux.channel = 7;
+  aux.bar_slot = 7;
+  aux.has_bar_slot = true;
+  aux.logical_bytes = 16;
+  aux.allocation_bytes = 16;
+  aux.raw = true;
+  bundle.manifest.programs[0].aux_outputs = {aux};
+  bundle.manifest.driver_abi_major = 2;
+
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(4000);
+  AneWorker worker([] { return std::unique_ptr<AneDevice>(new FakeDevice); },
+                   options);
+  std::map<std::string, AneWorker::Buffer> inputs;
+  inputs["a"] = input_bytes(0x11);
+  inputs["b"] = input_bytes(0x22);
+  std::map<std::string, AneWorker::Buffer> outputs;
+  auto report = worker.run(bundle, inputs, &outputs);
+
+  REQUIRE(report.status == AneWorkerStatus::Completed);
+  REQUIRE(outputs.count("y") == 1);
+  REQUIRE(outputs.count("mask") == 1);
+  // Positional destination read at index 0; the aux surface at index 1,
+  // matching the dir=1 port order, never the raw channel id.
+  std::string zeros(128, '\0');
+  std::string ones(16, '\x01');
+  CHECK(std::memcmp(outputs["y"].data(), zeros.data(), 128) == 0);
+  CHECK(std::memcmp(outputs["mask"].data(), ones.data(), 16) == 0);
 }

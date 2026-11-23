@@ -50,6 +50,10 @@ struct AneLogicalResult {
 struct AneProgramBinding {
   std::string tensor;
   uint64_t channel{0};
+  // BAR slot the ABI-2 (T6021) port record binds this surface to. Required
+  // on every io binding of a driver_abi_major 2 program; absent elsewhere.
+  bool has_bar_slot{false};
+  uint64_t bar_slot{0};
   // Raw staging: selector-addressed surface; staged bytes move to and from
   // the channel verbatim (no dense<->tile placement). Whole-program
   // containers only; island containers never set it.
@@ -72,6 +76,11 @@ struct AneProgram {
   uint64_t scratch_bytes{0};
   std::vector<AneProgramBinding> inputs;
   std::vector<AneProgramBinding> outputs;
+  // Task-stream DMA destinations not counted in the ANEC header's
+  // destination_count (ABI 2 containers declare one positional output but
+  // may write more surfaces, e.g. the whole-encoder mask on channel 7).
+  // Read after `outputs`, in port order. ABI 1 programs must leave it empty.
+  std::vector<AneProgramBinding> aux_outputs;
 };
 
 struct AnePayload {

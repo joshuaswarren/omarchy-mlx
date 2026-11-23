@@ -303,9 +303,119 @@ void check_error(Function&& function, const std::string& expected) {
     function();
     FAIL("expected exception");
   } catch (const std::exception& error) {
+    INFO("thrown: ", error.what());
     CHECK(std::string(error.what()).find(expected) != std::string::npos);
   }
 }
+
+// ABI-2 (T6021) whole-program fixture: the anec's executable payload is a
+// multi-buffer container, so payload_size legitimately exceeds the channel
+// 0 tile allocation (the kernel travels as a sibling section, not inside
+// the command BO), and the header records one positional destination
+// while a task-stream DMA writes an extra surface on an allocated channel.
+std::string abi2_anec_bytes(char seed) {
+  std::string bytes(kAnecPayloadOffset + 0x8000, '\0');
+  for (uint64_t i = 0; i < 0x8000; ++i) {
+    bytes[kAnecPayloadOffset + i] = static_cast<char>(seed + (i % 7));
+  }
+  write_le<uint64_t>(bytes, 0, 0x8000);
+  write_le<uint32_t>(bytes, 8, 64);
+  write_le<uint32_t>(bytes, 12, 1);
+  write_le<uint64_t>(bytes, 16, 0x1f8);
+  write_le<uint64_t>(bytes, 24, 0x400);
+  write_le<uint32_t>(bytes, 32, 2);
+  write_le<uint32_t>(bytes, 36, 1);
+  // tiles[] units are 16 KiB at the default shift: channel 0 covers only
+  // the task stream (16 KiB < 32 KiB payload), io surfaces get one tile
+  // each on channels 4..7.
+  write_le<uint32_t>(bytes, 40, 1);
+  for (uint32_t channel : {4u, 5u, 6u, 7u}) {
+    write_le<uint32_t>(bytes, 40 + channel * sizeof(uint32_t), 1);
+    write_nchw(bytes, channel);
+  }
+  return bytes;
+}
+
+nlohmann::json abi2_binding(
+    const std::string& name,
+    uint64_t channel,
+    uint64_t bar_slot) {
+  return {
+      {"tensor", name},
+      {"channel", channel},
+      {"bar_slot", bar_slot},
+      {"dtype", "float16"},
+      {"logical_bytes", 128},
+      {"allocation_bytes", kAllocationBytes},
+      {"raw", true},
+  };
+}
+
+struct Abi2Fixture {
+  TempDir dir;
+  std::string payload_bytes = abi2_anec_bytes('h');
+  nlohmann::json manifest;
+
+  Abi2Fixture() {
+    manifest = {
+        {"manifest_version", 4},
+        {"tile_shift", kAneTileShiftDefault},
+        {"name", "h14-whole-encoder"},
+        {"graph_hash", hex(64, '2')},
+        {"task_descriptors", 1},
+        {"inputs",
+         {tensor("attention_mask", 0), tensor("input_features", 1)}},
+        {"outputs", {tensor("encoder_hidden", 0), tensor("output_mask", 1)}},
+        {"logical_results",
+         {logical_result("encoder_hidden", "encoder_hidden"),
+          logical_result("output_mask", "output_mask")}},
+        {"state", nlohmann::json::array()},
+        {"intermediates", nlohmann::json::array()},
+        {"programs",
+         {{{"payload", "program-0.anec"},
+           {"operation", "whole-encoder"},
+           {"encoder", "apple-whole-encoder-hwxv2"},
+           {"task_descriptors", 1},
+           {"scratch_bytes", 0},
+           {"inputs",
+            {abi2_binding("attention_mask", 5, 4),
+             abi2_binding("input_features", 6, 5)}},
+           {"outputs", {abi2_binding("encoder_hidden", 4, 6)}},
+           {"aux_outputs", {abi2_binding("output_mask", 7, 7)}}}}},
+        {"dispatch_plan", {0}},
+        {"payloads",
+         {{{"role", "anec"},
+           {"path", "program-0.anec"},
+           {"sha256", digest()},
+           {"byte_size", payload_bytes.size()}}}},
+        {"compiler",
+         {{"host_build", "Linux test host"},
+          {"toolchain", "mil-hwxc test source"},
+          {"target", "h14"}}},
+        {"driver_abi_major", 2},
+        {"provenance",
+         {{"source_repo", "joshuaswarren/omarchy-mlx"},
+          {"source_commit", hex(40, 'd')},
+          {"exported_at", "2026-11-23"}}},
+        {"release_asset",
+         {{"model", "h14-whole-encoder"},
+          {"model_sha256", ""}}},
+    };
+    manifest["release_asset"]["model_sha256"] =
+        payload_collection_identity(manifest["payloads"]);
+  }
+
+  std::string digest() const {
+    return sha256_hex(
+        reinterpret_cast<const uint8_t*>(payload_bytes.data()),
+        payload_bytes.size());
+  }
+
+  void write() const {
+    write_file(dir.path() / "program-0.anec", payload_bytes);
+    write_file(dir.path() / "manifest.json", manifest.dump(2) + "\n");
+  }
+};
 
 } // namespace
 
@@ -576,6 +686,15 @@ TEST_CASE("compiler target accepts h13 and h14 only") {
     Fixture fixture;
     fixture.manifest["compiler"]["target"] = "h14";
     fixture.manifest["driver_abi_major"] = 2;
+    // ABI-2 bindings carry explicit BAR slots for the M2 port table.
+    int slot = 0;
+    for (auto& program : fixture.manifest["programs"]) {
+      for (auto& section : {"inputs", "outputs"}) {
+        for (auto& binding : program[section]) {
+          binding["bar_slot"] = slot++;
+        }
+      }
+    }
     fixture.write();
     load_bundle(fixture.dir.path()); // does not throw
   }
@@ -1601,4 +1720,146 @@ TEST_CASE("root-owned read-only chain takes the source-fd fast path") {
   for (const AneSealedFile& image : sealed) {
     CHECK_FALSE(fd_is_sealed_memfd(image.fd));
   }
+}
+
+TEST_CASE("ABI-2 whole-program bundle binds the auxiliary DMA output") {
+  Abi2Fixture fixture;
+  fixture.write();
+  AneBundle bundle = load_bundle(fixture.dir.path());
+  REQUIRE(bundle.programs.size() == 1);
+  const AneValidatedProgram& program = bundle.programs[0];
+  CHECK(program.anec_header.source_count == 2);
+  CHECK(program.anec_header.destination_count == 1);
+  // Port table: inputs first, then outputs then aux_outputs, each in
+  // declaration order; the io index libane sees is the position here.
+  REQUIRE(program.ports.size() == 4);
+  CHECK(program.ports[0].name == "attention_mask");
+  CHECK(program.ports[0].dir == 0);
+  CHECK(program.ports[0].buffer_id == 5);
+  CHECK(program.ports[0].bar_slot == 4);
+  CHECK(program.ports[0].tile_bytes == kAllocationBytes);
+  CHECK(program.ports[1].name == "input_features");
+  CHECK(program.ports[1].dir == 0);
+  CHECK(program.ports[1].buffer_id == 6);
+  CHECK(program.ports[2].name == "encoder_hidden");
+  CHECK(program.ports[2].dir == 1);
+  CHECK(program.ports[2].buffer_id == 4);
+  CHECK(program.ports[2].bar_slot == 6);
+  CHECK(program.ports[3].name == "output_mask");
+  CHECK(program.ports[3].dir == 1);
+  CHECK(program.ports[3].buffer_id == 7);
+  CHECK(program.ports[3].bar_slot == 7);
+}
+
+TEST_CASE("ABI-2 payload exceeding channel zero stays malformed under ABI 1") {
+  Abi2Fixture fixture;
+  fixture.manifest["driver_abi_major"] = 1;
+  fixture.manifest["compiler"]["target"] = "h13";
+  // Keep every declared output bound: move the mask into the positional
+  // outputs list so manifest validation passes and the envelope check is
+  // what fires.
+  fixture.manifest["programs"][0]["outputs"].push_back(
+      abi2_binding("output_mask", 7, 7));
+  fixture.manifest["programs"][0].erase("aux_outputs");
+  for (auto& section : {"inputs", "outputs"}) {
+    for (auto& binding : fixture.manifest["programs"][0][section]) {
+      binding.erase("bar_slot");
+    }
+  }
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "exceeds command channel allocation");
+}
+
+TEST_CASE("ABI-2 bindings require an explicit BAR slot") {
+  Abi2Fixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0].erase("bar_slot");
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "requires 'bar_slot' for driver_abi_major 2");
+}
+
+TEST_CASE("aux_outputs is refused under ABI 1, not ignored") {
+  Abi2Fixture fixture;
+  fixture.manifest["driver_abi_major"] = 1;
+  fixture.manifest["compiler"]["target"] = "h13";
+  for (auto& section : {"inputs", "outputs", "aux_outputs"}) {
+    for (auto& binding : fixture.manifest["programs"][0][section]) {
+      binding.erase("bar_slot");
+    }
+  }
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "aux_outputs requires driver_abi_major 2");
+}
+
+TEST_CASE("bar_slot on an ABI-1 binding is refused") {
+  Fixture fixture;
+  fixture.manifest["programs"][0]["outputs"][0]["bar_slot"] = 6;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "only valid for driver_abi_major 2");
+}
+
+TEST_CASE("ABI-2 auxiliary channel must be an allocated ANEC surface") {
+  Abi2Fixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0]["channel"] = 8;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "is not an allocated ANEC surface");
+}
+
+TEST_CASE("ABI-2 auxiliary allocation must match the ANEC tile table") {
+  Abi2Fixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0]["allocation_bytes"] =
+      2 * kAllocationBytes;
+  fixture.manifest["outputs"][1]["stride"] = 2 * kAllocationBytes;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "allocation_bytes does not match ANEC channel allocation");
+}
+
+TEST_CASE("ABI-2 destination count still guards the positional outputs") {
+  Abi2Fixture fixture;
+  fixture.manifest["programs"][0]["outputs"].push_back(
+      abi2_binding("output_mask", 7, 7));
+  fixture.manifest["programs"][0].erase("aux_outputs");
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "output count does not match ANEC destination_count");
+}
+
+TEST_CASE("ABI-2 BAR slots must be unique across the port table") {
+  Abi2Fixture fixture;
+  fixture.manifest["programs"][0]["aux_outputs"][0]["bar_slot"] = 6;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "duplicates a BAR slot");
+}
+
+TEST_CASE("ABI-2 io binding cannot claim the scratch BAR slot") {
+  Abi2Fixture fixture;
+  // Give the program a one-tile scratch surface on channel 3, then let an
+  // io binding claim the reserved slot.
+  write_le<uint32_t>(
+      fixture.payload_bytes, 40 + 3 * sizeof(uint32_t), 1);
+  fixture.manifest["programs"][0]["scratch_bytes"] = kAllocationBytes;
+  fixture.manifest["programs"][0]["inputs"][0]["bar_slot"] = 3;
+  fixture.manifest["payloads"][0]["sha256"] = fixture.digest();
+  fixture.manifest["payloads"][0]["byte_size"] =
+      fixture.payload_bytes.size();
+  fixture.manifest["release_asset"]["model_sha256"] =
+      payload_collection_identity(fixture.manifest["payloads"]);
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "claims the scratch BAR slot");
 }

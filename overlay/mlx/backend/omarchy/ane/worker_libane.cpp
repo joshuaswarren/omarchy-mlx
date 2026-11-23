@@ -27,6 +27,18 @@ namespace mlx::core::omarchy::ane {
 
 namespace {
 
+// ABI-2 (T6021) io port record, mirrored from omarchy-ane
+// libane/ane_m2.h: the vendored pinned ane.h predates the symbol, so the
+// worker declares the plain-POD record itself rather than revendoring
+// the whole header for one struct.
+struct ane_m2_port_spec {
+  const char* name;
+  uint32_t dir;
+  uint32_t buffer_id;
+  uint32_t bar_slot;
+  uint64_t tile_bytes;
+};
+
 struct LibaneApi {
   struct ane_nn* (*init)(const char* path, int dev_id);
   // Tile-shift-aware load (omarchy-ane agent/encoder-whole-program and
@@ -39,6 +51,11 @@ struct LibaneApi {
   uint64_t (*dst_size)(struct ane_nn* nn, uint32_t idx);
   void (*send)(struct ane_nn* nn, void* from, uint32_t idx);
   void (*read)(struct ane_nn* nn, void* to, uint32_t idx);
+  // ABI-2 explicit-port load (omarchy-ane 8b010938 and later). Optional:
+  // absent, ABI-2 programs are refused in load() with a named reason.
+  struct ane_nn* (*init_ports)(
+      const char* path, const struct ane_m2_port_spec* ports,
+      uint32_t port_count, int dev_id);
   bool ok() const {
     return init && free && exec && src_size && dst_size && send && read;
   }
@@ -58,6 +75,8 @@ LibaneApi load_api(void* handle) {
       dlsym(handle, "__ane_dst_size"));
   api.send = reinterpret_cast<decltype(api.send)>(dlsym(handle, "__ane_send"));
   api.read = reinterpret_cast<decltype(api.read)>(dlsym(handle, "__ane_read"));
+  api.init_ports = reinterpret_cast<decltype(api.init_ports)>(
+      dlsym(handle, "ane_m2_init_ports"));
   return api;
 }
 
@@ -95,9 +114,34 @@ class LibaneDevice : public AneDevice {
     if (networks_.count(program.manifest_index)) {
       throw AneDeviceError("program already loaded");
     }
-    struct ane_nn* nn = api_.init_shift
-        ? api_.init_shift(program.anec.c_str(), 0, program.tile_shift)
-        : api_.init(program.anec.c_str(), 0);
+    struct ane_nn* nn = nullptr;
+    if (!program.ports.empty()) {
+      // ABI 2 (T6021): the header's positional channel map does not name
+      // every surface (the whole-encoder mask rides a task-stream DMA
+      // destination), so the validated port table binds the surfaces
+      // explicitly. The send/read indices below stay positional within
+      // the input and output port lists, which is what ane_m2_send and
+      // ane_m2_read index.
+      if (!api_.init_ports) {
+        throw AneDeviceError(
+            "libane has no ane_m2_init_ports; an ABI-2 libane build is "
+            "required for " + program.anec.string());
+      }
+      std::vector<struct ane_m2_port_spec> specs;
+      specs.reserve(program.ports.size());
+      for (const auto& port : program.ports) {
+        specs.push_back(
+            {port.name.c_str(), port.dir, port.buffer_id, port.bar_slot,
+             port.tile_bytes});
+      }
+      nn = api_.init_ports(
+          program.anec.c_str(), specs.data(),
+          static_cast<uint32_t>(specs.size()), 0);
+    } else {
+      nn = api_.init_shift
+          ? api_.init_shift(program.anec.c_str(), 0, program.tile_shift)
+          : api_.init(program.anec.c_str(), 0);
+    }
     if (!nn) {
       throw AneDeviceError(
           "ane_init failed for " + program.anec.string());

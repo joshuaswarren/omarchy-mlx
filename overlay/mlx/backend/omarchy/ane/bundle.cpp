@@ -24,6 +24,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -1218,7 +1219,8 @@ void validate_program_contract(
     const AneAnecHeader& header,
     const std::filesystem::path& anec_path,
     size_t program_index,
-    uint64_t tile_alignment) {
+    uint64_t tile_alignment,
+    uint64_t driver_abi_major) {
   const std::string prefix = "program " + std::to_string(program_index);
   if (program.task_descriptors != header.task_descriptor_count) {
     throw bundle_error(prefix + " task_descriptors does not match ANEC header");
@@ -1231,6 +1233,48 @@ void validate_program_contract(
   }
   if (channel_size_bytes(header, 3, tile_alignment) != program.scratch_bytes) {
     throw bundle_error(prefix + " scratch_bytes does not match ANEC channel 3 allocation");
+  }
+  if (driver_abi_major == kAneDriverAbiMajorAbl) {
+    // ABI 2 (T6021): the header records one positional destination while
+    // the port table binds more surfaces, and the task stream does not
+    // carry the M1 positional channel map. Bindings validate directly
+    // against the tile table: every io channel must be an allocated
+    // surface, its allocation must match the staged bytes, and BAR slots
+    // must be unique across the port table.
+    std::set<uint64_t> bar_slots;
+    auto validate_port = [&](const AneProgramBinding& binding,
+                             const char* role) {
+      const std::string label =
+          prefix + " " + role + " " + binding.tensor;
+      if (binding.channel < kBindFirstSurface ||
+          binding.channel >= kAnecTileCount ||
+          header.tiles[binding.channel] == 0) {
+        throw bundle_error(
+            label + " channel is not an allocated ANEC surface");
+      }
+      validate_binding(
+          label, binding, header, binding.channel, tile_alignment);
+      if (!bar_slots.insert(binding.bar_slot).second) {
+        throw bundle_error(label + " duplicates a BAR slot in the port table");
+      }
+    };
+    for (const auto& binding : program.outputs) {
+      validate_port(binding, "output");
+    }
+    for (const auto& binding : program.aux_outputs) {
+      validate_port(binding, "auxiliary output");
+    }
+    for (const auto& binding : program.inputs) {
+      validate_port(binding, "input");
+    }
+    // BAR slot 3 is the scratch slot in the M2 operation record: when the
+    // program emits a scratch port, no io binding may claim it.
+    if (program.scratch_bytes != 0 && bar_slots.count(kAneScratchBarSlot)) {
+      throw bundle_error(
+          prefix + " io binding claims the scratch BAR slot " +
+          std::to_string(kAneScratchBarSlot));
+    }
+    return;
   }
   ChannelCacheEntry channels;
   if (!derived_role_channels(header, anec_path, channels)) {
@@ -1262,7 +1306,8 @@ void validate_program_contract(
 
 AneAnecHeader parse_anec_header(
     const std::filesystem::path& path,
-    uint64_t tile_shift) {
+    uint64_t tile_shift,
+    uint64_t driver_abi_major) {
   const uint64_t tile_alignment = uint64_t{1} << tile_shift;
   const auto file_size = file_size_checked(path);
   if (file_size < kAnecHeaderSize) {
@@ -1335,7 +1380,13 @@ AneAnecHeader parse_anec_header(
 
   const uint64_t command_channel_size =
       channel_size_bytes(header, 0, tile_alignment);
-  if (header.payload_size > command_channel_size) {
+  // ABI 1 (T8103/T6001) payloads live inside one command-channel buffer
+  // object, so the payload can never exceed its allocation. ABI 2
+  // (T6021) payloads are multi-buffer containers: channel 0 holds only
+  // the task stream while the kernel travels as a sibling section, so a
+  // payload larger than channel 0 is the normal whole-program shape.
+  if (driver_abi_major != kAneDriverAbiMajorAbl &&
+      header.payload_size > command_channel_size) {
     throw bundle_error("ANEC executable payload exceeds command channel allocation");
   }
   if (header.task_descriptor_size > header.payload_size) {
@@ -1666,12 +1717,49 @@ AneBundle load_bundle_snapshot(
     if (path.empty()) {
       throw bundle_error("program payload mapping disappeared after manifest validation");
     }
-    AneAnecHeader header =
-        parse_anec_header(path, bundle.manifest.tile_shift);
+    AneAnecHeader header = parse_anec_header(
+        path, bundle.manifest.tile_shift, bundle.manifest.driver_abi_major);
     validate_program_contract(
-        program, header, path, p, uint64_t{1} << bundle.manifest.tile_shift);
+        program,
+        header,
+        path,
+        p,
+        uint64_t{1} << bundle.manifest.tile_shift,
+        bundle.manifest.driver_abi_major);
     bundle.programs.push_back(
-        {p, std::move(header), std::move(path), bundle.manifest.tile_shift});
+        {p, std::move(header), std::move(path), bundle.manifest.tile_shift, {}});
+    if (bundle.manifest.driver_abi_major == kAneDriverAbiMajorAbl) {
+      // The port table the worker hands to ane_m2_init_ports(): inputs in
+      // manifest order, outputs then aux_outputs in declaration order
+      // (read index = position in this combined list), then the scratch
+      // port. buffer_id is the ANEC channel id for io ports.
+      std::vector<AneIoPort>& ports = bundle.programs.back().ports;
+      auto push_port = [](const AneProgramBinding& binding, uint32_t dir) {
+        return AneIoPort{
+            binding.tensor,
+            dir,
+            static_cast<uint32_t>(binding.channel),
+            static_cast<uint32_t>(binding.bar_slot),
+            binding.allocation_bytes};
+      };
+      for (const auto& binding : program.inputs) {
+        ports.push_back(push_port(binding, 0));
+      }
+      for (const auto& binding : program.outputs) {
+        ports.push_back(push_port(binding, 1));
+      }
+      for (const auto& binding : program.aux_outputs) {
+        ports.push_back(push_port(binding, 1));
+      }
+      if (program.scratch_bytes != 0) {
+        ports.push_back(AneIoPort{
+            "scratch",
+            2,
+            kAneScratchBufferId,
+            kAneScratchBarSlot,
+            program.scratch_bytes});
+      }
+    }
   }
   return bundle;
 }

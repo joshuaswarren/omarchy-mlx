@@ -125,8 +125,15 @@ void execute_plan(
                   binding, found->second.data(), found->second.size());
     }
     device.exec(validated.manifest_index);
-    for (size_t position = 0; position < program.outputs.size(); ++position) {
-      const auto& binding = program.outputs[position];
+    // Output read order matches the port table: positional destinations
+    // first, then the ABI-2 auxiliary surfaces, so read index equals the
+    // port's position among dir=1 entries.
+    const size_t read_count =
+        program.outputs.size() + program.aux_outputs.size();
+    for (size_t position = 0; position < read_count; ++position) {
+      const auto& binding = position < program.outputs.size()
+          ? program.outputs[position]
+          : program.aux_outputs[position - program.outputs.size()];
       AneWorker::Buffer buffer(binding.logical_bytes);
       device.read(validated.manifest_index, static_cast<uint32_t>(position),
                   binding, buffer.data(), buffer.size());

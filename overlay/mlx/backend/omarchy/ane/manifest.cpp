@@ -314,7 +314,7 @@ AneProgramBinding parse_binding(
       value,
       {"tensor", "channel", "dtype", "shape", "nchw", "logical_bytes",
        "allocation_bytes", "element_offset", "element_count", "physical_elements",
-       "raw"});
+       "raw", "bar_slot"});
 
   // Raw staging (whole-program containers): the task stream addresses the
   // surface through selector registers, not NCHW tile placement, so the
@@ -329,6 +329,10 @@ AneProgramBinding parse_binding(
     binding.dtype = require_non_empty_string(value, "dtype");
     binding.logical_bytes = require_positive(value, "logical_bytes");
     binding.allocation_bytes = require_positive(value, "allocation_bytes");
+    if (value.contains("bar_slot")) {
+      binding.has_bar_slot = true;
+      binding.bar_slot = require_unsigned(value, "bar_slot");
+    }
     if (binding.dtype != "float16" && binding.dtype != "bfloat16" &&
         binding.dtype != "bool") {
       throw manifest_error(where + " requires a 16-bit or 1-byte bool dtype");
@@ -367,6 +371,10 @@ AneProgramBinding parse_binding(
   binding.element_offset = require_unsigned(value, "element_offset");
   binding.element_count = require_positive(value, "element_count");
   binding.physical_elements = require_positive(value, "physical_elements");
+  if (value.contains("bar_slot")) {
+    binding.has_bar_slot = true;
+    binding.bar_slot = require_unsigned(value, "bar_slot");
+  }
 
   uint64_t size = dtype_size(binding.dtype);
   if (size == 0) {
@@ -443,7 +451,7 @@ AneProgram parse_program(
   reject_unknown_fields(
       value,
       {"payload", "operation", "encoder", "task_descriptors", "scratch_bytes",
-       "inputs", "outputs"});
+       "inputs", "outputs", "aux_outputs"});
   AneProgram program;
   program.payload = require_non_empty_string(value, "payload");
   program.operation = require_non_empty_string(value, "operation");
@@ -453,6 +461,21 @@ AneProgram parse_program(
   program.inputs = parse_bindings(value, "inputs", tile_alignment, index, false);
   program.outputs =
       parse_bindings(value, "outputs", tile_alignment, index, true);
+  if (value.contains("aux_outputs")) {
+    program.aux_outputs =
+        parse_bindings(value, "aux_outputs", tile_alignment, index, false);
+    std::set<uint64_t> output_channels;
+    for (const auto& binding : program.outputs) {
+      output_channels.insert(binding.channel);
+    }
+    for (size_t i = 0; i < program.aux_outputs.size(); ++i) {
+      if (!output_channels.insert(program.aux_outputs[i].channel).second) {
+        throw manifest_error(
+            where + ".aux_outputs[" + std::to_string(i) +
+            "] duplicates an output channel");
+      }
+    }
+  }
   return program;
 }
 
@@ -573,6 +596,41 @@ void validate_bindings(AneManifest& manifest) {
       validate(program.outputs[i], true,
                "programs[" + std::to_string(p) + "].outputs[" + std::to_string(i) + "]");
     }
+    for (size_t i = 0; i < program.aux_outputs.size(); ++i) {
+      validate(program.aux_outputs[i], true,
+               "programs[" + std::to_string(p) + "].aux_outputs[" +
+                   std::to_string(i) + "]");
+    }
+    // ABI 2 (T6021) io binds through an explicit port table, so every io
+    // binding must carry its BAR slot. ABI 1 binds positionally and has no
+    // aux destinations: both fields are malformed there, not ignored.
+    const bool abi2 = manifest.driver_abi_major == kAneDriverAbiMajorAbl;
+    auto check_abi = [&](const std::vector<AneProgramBinding>& bindings,
+                         const char* field) {
+      for (size_t i = 0; i < bindings.size(); ++i) {
+        std::string where = "programs[" + std::to_string(p) + "]." + field +
+                            "[" + std::to_string(i) + "]";
+        if (abi2 && !bindings[i].has_bar_slot) {
+          throw manifest_error(
+              where + " requires 'bar_slot' for driver_abi_major " +
+              std::to_string(kAneDriverAbiMajorAbl));
+        }
+        if (!abi2 && bindings[i].has_bar_slot) {
+          throw manifest_error(
+              where + " field 'bar_slot' is only valid for driver_abi_major " +
+              std::to_string(kAneDriverAbiMajorAbl));
+        }
+      }
+    };
+    check_abi(program.inputs, "inputs");
+    check_abi(program.outputs, "outputs");
+    check_abi(program.aux_outputs, "aux_outputs");
+    if (!abi2 && !program.aux_outputs.empty()) {
+      throw manifest_error(
+          "programs[" + std::to_string(p) +
+          "].aux_outputs requires driver_abi_major " +
+          std::to_string(kAneDriverAbiMajorAbl));
+    }
   }
   if (total_descriptors != manifest.task_descriptors) {
     throw manifest_error("field 'task_descriptors' does not equal the program total");
@@ -633,6 +691,12 @@ void validate_bindings(AneManifest& manifest) {
       }
     }
     for (const auto& binding : program.outputs) {
+      add_range(
+          binding.tensor,
+          binding.element_offset,
+          binding.element_offset + binding.element_count);
+    }
+    for (const auto& binding : program.aux_outputs) {
       add_range(
           binding.tensor,
           binding.element_offset,
