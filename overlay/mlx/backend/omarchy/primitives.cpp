@@ -15253,6 +15253,10 @@ void RMSNorm::eval_gpu(
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
       kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+      // flags&1: one-barrier reduction variant (MLX_OMARCHY_NORM_SYNC_CUT).
+      if (omarchy::env_flag("MLX_OMARCHY_NORM_SYNC_CUT")) {
+        params.flags = 1u;
+      }
     }
   }
   encoder.dispatch_compute(
