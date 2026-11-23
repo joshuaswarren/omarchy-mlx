@@ -191,12 +191,16 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     started = time.monotonic()
-    if args.manifest_only:
-        manifest = build_manifest(args.home, args.pair)
-    else:
-        if not args.pair:
-            parser.error("--pair is required unless --manifest-only")
-        manifest = prefetch(args.home, args.pair, wake=args.wake_word)
+    if not args.manifest_only and not args.pair:
+        parser.error("--pair is required unless --manifest-only")
+    try:
+        if args.manifest_only:
+            manifest = build_manifest(args.home, args.pair)
+        else:
+            manifest = prefetch(args.home, args.pair, wake=args.wake_word)
+    except pairs.PairError as exc:
+        print(f"prefetch: {exc}", file=sys.stderr)
+        return 1
     if args.manifest_out:
         args.manifest_out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(json.dumps({k: manifest[k] for k in
