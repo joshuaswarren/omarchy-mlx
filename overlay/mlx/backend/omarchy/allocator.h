@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -228,6 +229,16 @@ class VulkanAllocator : public allocator::Allocator {
     std::unique_lock lk(mutex_);
     if (buf) {
       buf->completion = kPendingCompletion;
+    }
+  }
+
+  // note_batch_buffer for a whole binding set under one lock.
+  void note_batch_buffers(std::span<VulkanBuffer* const> bufs) {
+    std::unique_lock lk(mutex_);
+    for (auto* buf : bufs) {
+      if (buf) {
+        buf->completion = kPendingCompletion;
+      }
     }
   }
 

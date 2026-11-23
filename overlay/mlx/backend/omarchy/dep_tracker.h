@@ -6,18 +6,26 @@
 // CommandEncoder asks it whether a new node must wait on earlier work.
 //
 // The question is "does any tracked range overlap this one", answered per
-// buffer in O(log n) from a set of merged intervals, so a batch of N
-// independent dispatches costs O(N log N) and not the O(N^2) of scanning
-// every tracked range per dispatch.
+// buffer in O(log n) from a sorted vector of merged intervals, so a batch
+// of N independent dispatches costs O(N log n) and not the O(N^2) of
+// scanning every tracked range per dispatch.
+//
+// Buffers index by SLOT, not by hash node: an open-addressed table assigns
+// each VkBuffer a dense slot on first sight and lookups probe one flat
+// array, so neither the probe nor the per-buffer entry touches the heap
+// (the previous unordered_map did both per range). The tracked structures
+// keep their storage across clear() - the per-batch arena - so steady-state
+// decode records hazards with no allocation at all.
 #pragma once
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <iterator>
-#include <map>
-#include <set>
 #include <span>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace mlx::core::omarchy {
 
@@ -31,21 +39,115 @@ struct TrackedRange {
   VkDeviceSize end;
 };
 
+// Open-addressed buffer -> dense slot index. Insert-only, linear probe,
+// bulk clear: the table is a flat array of entries (no per-entry node, no
+// bucket walk through pointers), so find() costs one cache line walk. Slot
+// numbers count up 0..count-1 so a parallel vector holds the per-buffer
+// value. VK_NULL_HANDLE is the empty key; a null buffer therefore cannot
+// be tracked (a dispatch always binds real buffers).
+class BufferSlots {
+ public:
+  // The slot for |buffer|, assigning the next free index on first sight.
+  uint32_t slot_of(VkBuffer buffer) {
+    if (count_ * 4 >= table_.size() * 3) {
+      grow();
+    }
+    size_t i = mix(buffer) & (table_.size() - 1);
+    while (table_[i].buffer != VK_NULL_HANDLE && table_[i].buffer != buffer) {
+      i = (i + 1) & (table_.size() - 1);
+    }
+    if (table_[i].buffer == buffer) {
+      return table_[i].slot;
+    }
+    table_[i] = {buffer, count_};
+    return count_++;
+  }
+
+  // The slot for |buffer|, or UINT32_MAX when the buffer is not tracked.
+  uint32_t find(VkBuffer buffer) const {
+    size_t i = mix(buffer) & (table_.size() - 1);
+    while (table_[i].buffer != VK_NULL_HANDLE) {
+      if (table_[i].buffer == buffer) {
+        return table_[i].slot;
+      }
+      i = (i + 1) & (table_.size() - 1);
+    }
+    return UINT32_MAX;
+  }
+
+  // Forget every key. The table keeps its capacity; callers clear the
+  // parallel value array themselves (its storage also persists).
+  void clear() {
+    for (auto& e : table_) {
+      e.buffer = VK_NULL_HANDLE;
+    }
+    count_ = 0;
+  }
+
+  // Table slot count (capacity), for tests of the release rule.
+  size_t capacity() const {
+    return table_.size();
+  }
+
+  uint32_t count() const {
+    return count_;
+  }
+
+ private:
+  struct Entry {
+    VkBuffer buffer{VK_NULL_HANDLE};
+    uint32_t slot{0};
+  };
+
+  static size_t mix(VkBuffer b) {
+    uintptr_t v = reinterpret_cast<uintptr_t>(b);
+    v ^= v >> 33;
+    v *= static_cast<uintptr_t>(0xff51afd7ed558ccdULL);
+    v ^= v >> 33;
+    return static_cast<size_t>(v);
+  }
+
+  void grow() {
+    std::vector<Entry> next(table_.size() * 2);
+    const size_t mask = next.size() - 1;
+    for (auto& e : table_) {
+      if (e.buffer == VK_NULL_HANDLE) {
+        continue;
+      }
+      size_t i = mix(e.buffer) & mask;
+      while (next[i].buffer != VK_NULL_HANDLE) {
+        i = (i + 1) & mask;
+      }
+      next[i] = e;
+    }
+    table_.swap(next);
+  }
+
+  std::vector<Entry> table_{kInitialSlots};
+  uint32_t count_{0};
+  static constexpr size_t kInitialSlots = 64;
+};
+
 // Union of byte ranges of one buffer for the overlap predicate above.
 // Non-empty ranges that overlap merge into one interval, so the stored
 // intervals are pairwise non-overlapping and sorted by both start and
-// end; the last interval that starts before a query ends has the
-// largest end of all of them and alone decides the query. Empty ranges
-// are kept apart as points.
+// end; the last interval that starts before a query ends has the largest
+// end of all of them and alone decides the query. Empty ranges are kept
+// apart as points. Both lists are flat sorted vectors (the previous
+// std::map/std::set paid a tree-node allocation per inserted range).
 class RangeSet {
  public:
   bool overlaps(VkDeviceSize offset, VkDeviceSize end) const {
-    auto next = intervals_.lower_bound(end);
+    auto next = std::lower_bound(
+        intervals_.begin(),
+        intervals_.end(),
+        end,
+        [](const Interval& iv, VkDeviceSize e) { return iv.first < e; });
     if (next != intervals_.begin() && std::prev(next)->second > offset) {
       return true;
     }
     if (offset < end) {
-      auto p = points_.upper_bound(offset);
+      auto p = std::upper_bound(points_.begin(), points_.end(), offset);
       return p != points_.end() && *p < end;
     }
     return false;
@@ -53,28 +155,47 @@ class RangeSet {
 
   void add(VkDeviceSize offset, VkDeviceSize end) {
     if (offset >= end) {
-      points_.insert(offset);
+      auto p = std::lower_bound(points_.begin(), points_.end(), offset);
+      if (p == points_.end() || *p != offset) {
+        points_.insert(p, offset);
+      }
       return;
     }
-    auto it = intervals_.lower_bound(offset);
-    if (it != intervals_.begin() && std::prev(it)->second > offset) {
-      --it;
+    auto it = std::lower_bound(
+        intervals_.begin(),
+        intervals_.end(),
+        offset,
+        [](const Interval& iv, VkDeviceSize o) { return iv.first < o; });
+    size_t pos = static_cast<size_t>(it - intervals_.begin());
+    if (pos > 0 && intervals_[pos - 1].second > offset) {
+      --pos;
     }
-    while (it != intervals_.end() && it->first < end) {
-      if (it->first < offset) {
-        offset = it->first;
+    size_t erase_end = pos;
+    while (erase_end < intervals_.size() &&
+           intervals_[erase_end].first < end) {
+      if (intervals_[erase_end].first < offset) {
+        offset = intervals_[erase_end].first;
       }
-      if (it->second > end) {
-        end = it->second;
+      if (intervals_[erase_end].second > end) {
+        end = intervals_[erase_end].second;
       }
-      it = intervals_.erase(it);
+      ++erase_end;
     }
-    intervals_.emplace_hint(it, offset, end);
+    intervals_.erase(
+        intervals_.begin() + pos, intervals_.begin() + erase_end);
+    intervals_.insert(intervals_.begin() + pos, {offset, end});
+  }
+
+  // Forget the ranges. The vectors keep their storage.
+  void clear() {
+    intervals_.clear();
+    points_.clear();
   }
 
  private:
-  std::map<VkDeviceSize, VkDeviceSize> intervals_;
-  std::set<VkDeviceSize> points_;
+  using Interval = std::pair<VkDeviceSize, VkDeviceSize>;
+  std::vector<Interval> intervals_;
+  std::vector<VkDeviceSize> points_;
 };
 
 class DependencyTracker {
@@ -99,27 +220,41 @@ class DependencyTracker {
   }
 
   void add_read(const TrackedRange& r) {
-    sets_[r.buffer].reads.add(r.offset, r.end);
+    uint32_t s = slots_.slot_of(r.buffer);
+    if (s == sets_.size()) {
+      sets_.emplace_back();
+    }
+    sets_[s].reads.add(r.offset, r.end);
   }
 
   void add_write(const TrackedRange& w) {
-    sets_[w.buffer].writes.add(w.offset, w.end);
+    uint32_t s = slots_.slot_of(w.buffer);
+    if (s == sets_.size()) {
+      sets_.emplace_back();
+    }
+    sets_[s].writes.add(w.offset, w.end);
   }
 
-  // Forget everything: a full barrier orders all earlier work. A table that
-  // a long batch grew is released, so a later short batch does not pay to
-  // reset its buckets.
+  // Forget everything: a full barrier orders all earlier work. A table
+  // that a long batch grew is released, so a later short batch does not
+  // pay to reset it; below the bound the table and per-buffer lists keep
+  // their storage and the next segment allocates nothing.
   void clear() {
-    if (sets_.bucket_count() > kKeepBuckets) {
+    if (slots_.capacity() > kKeepBuckets) {
+      slots_ = decltype(slots_){};
       sets_ = decltype(sets_){};
     } else {
-      sets_.clear();
+      slots_.clear();
+      for (auto& s : sets_) {
+        s.reads.clear();
+        s.writes.clear();
+      }
     }
   }
 
-  // Bucket count of the buffer table, for tests of the release rule.
+  // Slot-table capacity, for tests of the release rule.
   size_t bucket_count() const {
-    return sets_.bucket_count();
+    return slots_.capacity();
   }
 
  private:
@@ -131,11 +266,101 @@ class DependencyTracker {
   };
 
   bool hit(const TrackedRange& q, RangeSet Sets::* which) const {
-    auto it = sets_.find(q.buffer);
-    return it != sets_.end() && (it->second.*which).overlaps(q.offset, q.end);
+    uint32_t s = slots_.find(q.buffer);
+    return s != UINT32_MAX && (sets_[s].*which).overlaps(q.offset, q.end);
   }
 
-  std::unordered_map<VkBuffer, Sets> sets_;
+  BufferSlots slots_;
+  std::vector<Sets> sets_;
 };
+
+// One buffered node's access sets for wave scheduling: the byte ranges a
+// node reads and writes (SPIR-V reflected readonly/writeonly split).
+// Moved here from encoder.h: the schedule indexes these ranges with the
+// same slot machinery as the barrier tracker.
+struct WaveNode {
+  std::span<const TrackedRange> reads;
+  std::span<const TrackedRange> writes;
+};
+
+// Per-buffer exact-range -> deepest wave index, for wave_levels: earlier
+// accesses of one buffer keyed by their exact byte range so a node can
+// find the deepest hazard source in O(log n + overlaps). Flat sorted
+// vector for the same reason as RangeSet.
+struct WaveRangeLevels {
+  int64_t max_overlap(const TrackedRange& q) const {
+    int64_t best = -1;
+    auto it = std::lower_bound(
+        ranges.begin(),
+        ranges.end(),
+        std::pair{q.end, VkDeviceSize{0}},
+        [](const Entry& e, const Key& k) { return e.first < k; });
+    for (; it != ranges.begin();) {
+      --it;
+      const auto [offset, end] = it->first;
+      if (offset <= q.offset && q.offset - offset >= max_len) {
+        break;
+      }
+      if (q.offset < end) {
+        best = std::max<int64_t>(best, it->second);
+      }
+    }
+    return best;
+  }
+
+  void add(const TrackedRange& r, uint32_t level) {
+    Key key{r.offset, r.end};
+    auto it = std::lower_bound(
+        ranges.begin(),
+        ranges.end(),
+        key,
+        [](const Entry& e, const Key& k) { return e.first < k; });
+    if (it != ranges.end() && it->first == key) {
+      it->second = std::max(it->second, level);
+    } else {
+      ranges.insert(it, {key, level});
+    }
+    max_len = std::max(max_len, r.end - r.offset);
+  }
+
+  void clear() {
+    ranges.clear();
+    max_len = 0;
+  }
+
+  using Key = std::pair<VkDeviceSize, VkDeviceSize>;
+  using Entry = std::pair<Key, uint32_t>;
+  std::vector<Entry> ranges;
+  VkDeviceSize max_len = 0;
+};
+
+// Reusable wave-index state: the buffer->slot table plus the writer and
+// reader indexes, one WaveRangeLevels per slot. Held by the encoder so a
+// submission's scheduling pass allocates nothing after warmup.
+struct WaveIndex {
+  BufferSlots slots;
+  std::vector<WaveRangeLevels> writers;
+  std::vector<WaveRangeLevels> readers;
+
+  void reset() {
+    slots.clear();
+    for (auto& w : writers) {
+      w.clear();
+    }
+    for (auto& r : readers) {
+      r.clear();
+    }
+  }
+};
+
+// Greedy earliest-wave schedule into |levels| (resized to nodes.size()):
+// level[i] is the smallest wave index such that every earlier tape node
+// that node i hazards sits in a strictly smaller wave. Reuses |index|
+// storage; callers that cannot share state use the allocating wave_levels
+// wrapper in encoder.h.
+void wave_levels_into(
+    std::span<const WaveNode> nodes,
+    WaveIndex& index,
+    std::vector<uint32_t>& levels);
 
 } // namespace mlx::core::omarchy
