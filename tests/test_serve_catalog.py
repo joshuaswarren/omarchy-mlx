@@ -73,6 +73,15 @@ VALID = catalog_of(entry())
 DEEPLY_NESTED = b"[" * 100_000 + b"]" * 100_000  # RecursionError in json.loads
 
 
+def pair_catalog(pair_id="everyday"):
+    pair = {"id": pair_id, "label": "Everyday", "chat_model": "test-model",
+            "decision_model": "test-decisions", "priority": 1, "max_questions": 4,
+            "routing_policy": "v1",
+            "qualification": {"status": "untested", "receipt": None, "date": None}}
+    return catalog_of(entry(), entry(id="test-decisions", kind="decisions"),
+                      pairs=[pair])
+
+
 class ValidateTests(unittest.TestCase):
     def test_bundled_seed_is_valid(self):
         obj = bundled_catalog()
@@ -144,6 +153,34 @@ class ValidateTests(unittest.TestCase):
         for name, obj in cases.items():
             with self.subTest(name):
                 with self.assertRaises(catalog.CatalogError):
+                    catalog.validate_catalog(obj)
+
+    def test_patterns_reject_trailing_newline(self):
+        # `$` also matches before a final "\n". Revision, date and SHA-256
+        # fields hit their exact length caps first, so pin each pattern here.
+        cases = (
+            (catalog.ID_PATTERN, "test-model"),
+            (catalog.REPO_PATTERN, "mlx-community/Test-Model"),
+            (catalog.REVISION_PATTERN, "a" * 40),
+            (catalog.DATE_PATTERN, "2026-09-20"),
+            (catalog.SHA256_PATTERN, "b" * 64),
+        )
+        for pattern, good in cases:
+            with self.subTest(pattern.pattern):
+                self.assertIsNotNone(pattern.match(good))
+                self.assertIsNone(pattern.match(good + "\n"))
+
+    def test_ids_and_repo_reject_trailing_newline(self):
+        catalog.validate_catalog(pair_catalog())
+        cases = {
+            "model id": catalog_of(entry(id="test-model\n")),
+            "model repo": catalog_of(entry(repo="mlx-community/Test-Model\n")),
+            "pair id": pair_catalog(pair_id="everyday\n"),
+        }
+        for name, obj in cases.items():
+            with self.subTest(name):
+                with self.assertRaisesRegex(catalog.CatalogError,
+                                            "does not match required format"):
                     catalog.validate_catalog(obj)
 
     def test_version_bool_rejected(self):

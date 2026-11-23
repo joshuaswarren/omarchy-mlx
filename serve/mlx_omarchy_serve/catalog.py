@@ -50,10 +50,11 @@ APPROVED_CATALOG_PREFIX = "/joshuaswarren/omarchy-mlx/"
 DEV_URL_OVERRIDE_ENV = "MLX_OMARCHY_CATALOG_ALLOW_ANY_URL"
 
 
-REPO_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
-ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
-DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# End anchors are \Z: `$` also matches before a trailing newline.
+REPO_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
+REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}\Z")
+ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}\Z")
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")
 
 KINDS = ("chat", "base", "decisions", "embed", "other")
 QUANT_BITS = (2, 3, 4, 5, 6, 8)
@@ -92,7 +93,7 @@ SELECTION_EVIDENCE_FIELDS = ("arch", "backend", "chat_revision",
 # The exact runtime the measurements are bound to: same RECORD-hash identity
 # the voice qualification uses for the mlx.core extension + loaded libmlx.so.
 RUNTIME_IDENTITY_FIELDS = ("mlx_version", "extension_sha256", "libmlx_sha256")
-SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}\Z")
 
 
 class CatalogError(ValueError):

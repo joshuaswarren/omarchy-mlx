@@ -43,7 +43,7 @@ DISK_SLACK_FRACTION = 0.05  # headroom over the download size for partial files
 # ONLY catalog-controlled download filter; they are validated here so a
 # vetted entry can narrow a multi-variant repo to its own variant without
 # any pattern able to escape the snapshot directory.
-PATTERN_RE = re.compile(r"^[A-Za-z0-9 ._/*\[\]-]{1,128}$")
+PATTERN_RE = re.compile(r"^[A-Za-z0-9 ._/*\[\]-]{1,128}\Z")
 
 
 def download_patterns_for(entry: dict | None) -> list[str] | None:
@@ -66,7 +66,7 @@ def download_patterns_for(entry: dict | None) -> list[str] | None:
             )
     return [str(pat) for pat in patterns]
 
-REPO_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$")
+REPO_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+\Z")
 
 # Catalog data must never choose executable code. A module backend is only
 # routed if its module name is on this audited allowlist (ships in-repo);
