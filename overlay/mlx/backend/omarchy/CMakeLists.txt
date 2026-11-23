@@ -734,6 +734,9 @@ omarchy_shader(conv_bf16 shaders/conv.comp -DUSE_BF16=1)
 omarchy_shader(conv_dw1d_f32 shaders/conv_dw1d.comp)
 omarchy_shader(conv_dw1d_f16 shaders/conv_dw1d.comp -DUSE_FP16=1)
 omarchy_shader(conv_dw1d_bf16 shaders/conv_dw1d.comp -DUSE_BF16=1)
+omarchy_shader(conv_dw2d_f32 shaders/conv_dw2d.comp)
+omarchy_shader(conv_dw2d_f16 shaders/conv_dw2d.comp -DUSE_FP16=1)
+omarchy_shader(conv_dw2d_bf16 shaders/conv_dw2d.comp -DUSE_BF16=1)
 
 # Wave 5 (indexing and scatter). The u32 variants carry bitwise word
 # storage, so float32, int32, and uint32 share them.
