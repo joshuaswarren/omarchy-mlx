@@ -8,7 +8,8 @@
 # for that host's platform and writes DIR/requirements-lock.txt. A
 # PKGBUILD never runs this: it consumes DIR + the lock offline through
 # build-venv.sh. Wheels only: a package with no wheel for this host fails
-# the download. requirements-nodeps.in is fetched without dependencies.
+# the download, so requirements-buildwheel.in builds them with pip wheel
+# instead. requirements-nodeps.in is fetched without dependencies.
 set -euo pipefail
 
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,6 +36,7 @@ mkdir -p "$out"
 echo "==> resolving requirements-lock.in for $(uname -m) $py"
 "$py" -m pip download --only-binary=:all: -r "$self_dir/requirements-lock.in" -d "$out"
 "$py" -m pip download --only-binary=:all: --no-deps -r "$self_dir/requirements-nodeps.in" -d "$out"
+"$py" -m pip wheel --no-deps -r "$self_dir/requirements-buildwheel.in" -w "$out"
 if [[ -n $wheel ]]; then
   cp "$wheel" "$out/"
 fi

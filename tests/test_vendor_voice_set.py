@@ -145,7 +145,7 @@ class NodepsClosureCheckTest(unittest.TestCase):
 
     def test_the_real_nodeps_file_declares_its_exemptions(self):
         text = NODEPS_IN.read_text()
-        for name in ("mlx", "tflite-runtime", "docopt"):
+        for name in ("mlx", "tflite-runtime"):
             self.assertRegex(text, rf"(?m)^# not-vendored: {re.escape(name)}\s+\S")
 
     def test_vendor_wheels_runs_the_check_on_the_real_lock(self):
@@ -188,3 +188,94 @@ class BuildVenvClosureTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BUILDWHEEL_IN = PACKAGING / "requirements-buildwheel.in"
+SPLIT = PACKAGING / "split-vendor-lock.py"
+
+
+class BuildWheelInputTest(unittest.TestCase):
+    """docopt ships no wheel upstream; vendor-wheels.sh builds one from the sdist."""
+
+    def test_docopt_is_in_the_buildwheel_input(self):
+        # Without docopt the vendored set fails pip --require-hashes
+        # resolution: num2words declares docopt>=0.6.2.
+        pins = [p.replace(" ", "") for p in requirement_lines(BUILDWHEEL_IN)] if BUILDWHEEL_IN.exists() else []
+        self.assertIn("docopt==0.6.2", pins)
+        self.assertNotIn("not-vendored: docopt", NODEPS_IN.read_text())
+
+    def test_vendor_script_builds_the_buildwheel_set(self):
+        script = (PACKAGING / "vendor-wheels.sh").read_text()
+        lines = [l for l in script.splitlines() if "pip wheel" in l and not l.lstrip().startswith("#")]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("--no-deps", lines[0])
+        self.assertIn("requirements-buildwheel.in", lines[0])
+
+
+class SplitVendorLockTest(unittest.TestCase):
+    """split-vendor-lock.py: only wheels with an unvendored dep stay --no-deps."""
+
+    HASH = "0" * 64
+
+    def run_split(self, wheels_spec, nodeps_text, lock_lines):
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            wheels = tmp / "wheels"
+            wheels.mkdir()
+            for name, version, reqs in wheels_spec:
+                make_wheel(wheels, name, version, requires=reqs)
+            nodeps = tmp / "nodeps.in"
+            nodeps.write_text(nodeps_text)
+            lock = tmp / "lock.txt"
+            lock.write_text("\n".join(lock_lines) + "\n")
+            resolvable = tmp / "resolvable.txt"
+            nodeps_only = tmp / "nodeps.txt"
+            result = subprocess.run([sys.executable, str(SPLIT), "--nodeps", str(nodeps),
+                                     "--wheels", str(wheels), "--lock", str(lock),
+                                     "--resolvable", str(resolvable), "--nodeps-only", str(nodeps_only)],
+                                    capture_output=True, text=True)
+            return result, (resolvable.read_text() if resolvable.exists() else "",
+                            nodeps_only.read_text() if nodeps_only.exists() else "")
+
+    def test_only_packages_with_exempt_dependencies_stay_nodeps(self):
+        # voicepkg declares a vendored dep and must resolve; legacy declares a
+        # not-vendored dep and cannot.
+        result, (resolvable, nodeps) = self.run_split(
+            [("voicepkg", "1.0", ["docopt>=0.6"]),
+             ("legacy", "1.0", ["ghostpkg"]),
+             ("docopt", "0.6.2", [])],
+            "voicepkg==1.0\nlegacy==1.0\n# not-vendored: ghostpkg  no wheel for the target\n",
+            [f"voicepkg==1.0 --hash=sha256:{self.HASH}",
+             f"legacy==1.0 --hash=sha256:{self.HASH}",
+             f"docopt==0.6.2 --hash=sha256:{self.HASH}"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(resolvable.splitlines()),
+                         sorted([f"voicepkg==1.0 --hash=sha256:{self.HASH}",
+                                 f"docopt==0.6.2 --hash=sha256:{self.HASH}"]))
+        self.assertEqual(nodeps.strip(), f"legacy==1.0 --hash=sha256:{self.HASH}")
+
+    def test_pip_resolves_the_resolvable_side_and_fails_on_a_missing_dep(self):
+        # The mechanism the release gate exercises: pip --require-hashes
+        # resolution over the resolvable lines aborts by name when a declared
+        # dependency is absent from the vendored set.
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            wheels = tmp / "wheels"
+            wheels.mkdir()
+            make_wheel(wheels, "voicepkg", "1.0", requires=["docopt>=0.6"])
+            make_wheel(wheels, "docopt", "0.6.2")
+            target = tmp / "target"
+            lock = tmp / "lock.txt"
+            lock.write_text("\n".join(
+                f"{w.name.split('-', 1)[0]}=={w.name.split('-', 2)[1]} "
+                f"--hash=sha256:{hashlib.sha256(w.read_bytes()).hexdigest()}"
+                for w in sorted(wheels.iterdir())) + "\n")
+            base = [sys.executable, "-m", "pip", "install", "--no-index",
+                    "--find-links", str(wheels), "--require-hashes", "--target", str(target)]
+            ok = subprocess.run(base + ["-r", str(lock)], capture_output=True, text=True)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            lock.write_text("\n".join(l for l in lock.read_text().splitlines()
+                                      if "docopt" not in l) + "\n")
+            bad = subprocess.run(base + ["-r", str(lock)], capture_output=True, text=True)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn("docopt", bad.stderr)
