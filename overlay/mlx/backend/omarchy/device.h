@@ -757,9 +757,12 @@ inline bool wave_sched_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_WAVE_SCHED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // G16S and measured G14C default on; initial G17C keeps off pending M5 calibration.
+  // G16S and measured G14C default on; G17C (Apple M5 Max, Borealis):
+  // Qwen3.8-2B decode wave off vs on 38.76 -> 40.23 tok/s (+3.8%), ids
+  // digest identical (w7C M5-04, receipts/2026-11-23-*).
   return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
+      device_name.find("G14C") != std::string::npos ||
+      device_name.find("G17C") != std::string::npos;
 }
 
 // Two-pass block count for the fused f16 decode SDPA kernel (0 = one pass).
