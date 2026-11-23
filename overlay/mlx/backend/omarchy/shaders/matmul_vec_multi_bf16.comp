@@ -65,6 +65,12 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
+// Constant-mask ShuffleDown butterflies are the general-shuffle cost on
+// Honeykrisp (four read_invocation selects per step, qmm_vec.comp's measured
+// pairing) while subgroupAdd is the unlowered hardware reduction. The
+// full 32-lane butterfly is exactly that reduction: every lane ends holding
+// the total, so this is an assignment - `acc += subgroupAdd(acc)` would
+// count the lane's own value twice (w86, PR review).
 #define DENSE_GEMV(B, O, B_OFFSET, ROW_GROUP, MI) { \
   uint row = (ROW_GROUP) * 4u; \
   uint lane_k = gl_SubgroupInvocationID * 4u; \
@@ -99,12 +105,6 @@ uint16_t bf16_store(float value) {
     accumulator3 = fma(weight3.z, x.z, accumulator3); \
     accumulator3 = fma(weight3.w, x.w, accumulator3); \
   } \
-  // Constant-mask ShuffleDown butterflies are the general-shuffle cost on \
-  // Honeykrisp (four read_invocation selects per step, qmm_vec.comp's measured \
-  // pairing) while subgroupAdd is the unlowered hardware reduction. The \
-  // full 32-lane butterfly is exactly that reduction: every lane ends holding \
-  // the total, so this is an assignment - `acc += subgroupAdd(acc)` would \
-  // count the lane's own value twice (w86, PR review). \
   accumulator0 = subgroupAdd(accumulator0); \
   accumulator1 = subgroupAdd(accumulator1); \
   accumulator2 = subgroupAdd(accumulator2); \
