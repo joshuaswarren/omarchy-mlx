@@ -74,7 +74,8 @@ else
 fi
 
 # --- artifact file inventory (fixed sort: no unexpected payloads) ---------
-mapfile -t staged < <(cd "$work/stage" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
+# Count symlinks as payloads too: a .wants link is enablement, not a file.
+mapfile -t staged < <(cd "$work/stage" && find . \( -type f -o -type l \) | sed 's#^\./##' | LC_ALL=C sort)
 unexpected=()
 for f in "${staged[@]}"; do
   [[ -n ${WANT_MODE[$f]:-} ]] || unexpected+=("$f")
@@ -83,6 +84,24 @@ if (( ${#unexpected[@]} )); then
   fail "files.only-expected" "unexpected: ${unexpected[*]}"
 else
   pass "files.only-expected"
+fi
+
+# --- first-boot list ------------------------------------------------------
+# What the artifact alone would activate on the next boot or user session:
+# nothing. The package is opt-in — only the user's own
+# `systemctl --user enable` may switch the unit on — so the artifact's
+# first-boot list must be empty: no *.wants/*.requires links, no preset
+# files, no user or system generators, no tmpfiles/sysusers entries, no
+# dbus activation services, in any form (file, link or directory).
+mapfile -t enable_list < <(cd "$work/stage" && find . \( -type f -o -type l -o -type d \) \
+  \( -name "*.wants" -o -name "*.requires" -o -name "*.preset" \
+    -o -name "*-preset" -o -name "*generators*" -o -name "tmpfiles.d" \
+    -o -name "sysusers.d" -o -name "system-services" \) \
+  | sed 's#^\./##' | LC_ALL=C sort)
+if (( ${#enable_list[@]} )); then
+  fail "firstboot.enable-list-empty" "artifact would activate at boot: ${enable_list[*]}"
+else
+  pass "firstboot.enable-list-empty"
 fi
 
 # --- stub the omarchy-mlx package's venv python ---------------------------
@@ -136,6 +155,11 @@ unit=/usr/lib/systemd/user/omarchy-voice.service
 unitpath=/run/voice-unit-path
 mkdir -p "$unitpath"
 cp "$unit" "$unitpath/"
+# journald namespace units: LogNamespace pulls systemd-journald-varlink@<ns>
+# plus the journald@ template chain; copy the real templates, not stubs.
+for f in /usr/lib/systemd/system/*journald* /lib/systemd/system/*journald*; do
+  [[ -f $f ]] && cp "$f" "$unitpath/"
+done
 for t in sysinit.target basic.target sound.target default.target \
          local-fs.target sockets.target swap.target slices.target shutdown.target; do
   printf '[Unit]\nDescription=vxp4 stub\n' > "$unitpath/$t"
