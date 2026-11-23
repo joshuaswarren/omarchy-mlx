@@ -151,6 +151,21 @@ streams the answer from the Apple GPU.
 
 See [docs/USAGE.md](docs/USAGE.md).
 
+## torch.compile backend
+
+The wheel ships the `mlx_vulkan` dynamo backend. After the wheel
+install, two lines run a torch module on the GPU through mlx:
+
+```python
+import mlx.omarchy_torch  # registers the backend
+compiled = torch.compile(model, backend="mlx_vulkan")
+```
+
+The pre-wheel flow (`PYTHONPATH=tools/torch-mlx-vulkan` plus
+`import mlx_vulkan`) keeps working through a shim in
+[tools/torch-mlx-vulkan](tools/torch-mlx-vulkan/README.md); the module
+itself lives in the wheel.
+
 ## Other Vulkan GPUs (development)
 
 Not a supported target. With `MLX_OMARCHY_ALLOW_NON_APPLE=1` the
