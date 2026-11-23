@@ -34,6 +34,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+import math
 import os
 import sys
 import threading
@@ -402,6 +403,7 @@ YIELD_SECRET_HEADER = "X-MLX-Yield-Secret"
 _ACTIVE_GATE: "YieldGate | None" = None
 YIELD_HOLD_MAX_SECONDS = 600.0
 YIELD_ACK_MAX_SECONDS = 30.0
+YIELD_BODY_MAX_BYTES = 1 << 20
 EXPECTED_NEXT_SIGNATURE = ("self",)
 EXPECTED_RUN_SIGNATURE = ("host", "port", "response_generator", "server_class",
                           "handler_class")
@@ -459,10 +461,21 @@ class YieldGate:
             if not isinstance(secret, str) or secret != self._secret:
                 return 403, {"error": "yield secret mismatch"}
             if action == "hold":
+                # Validate before raising desire: a raise here would leave the
+                # next step parked, and NaN would make the ack wait spin.
+                ack_seconds = math.nan
+                if (isinstance(ack_timeout, (int, float))
+                        and not isinstance(ack_timeout, bool)):
+                    try:
+                        ack_seconds = float(ack_timeout)
+                    except OverflowError:  # int beyond float range
+                        pass
+                if not math.isfinite(ack_seconds):
+                    return 400, {"error": "ack_timeout must be a finite number"}
                 self._desire = True
                 if self._in_step or self._parked:
                     deadline = time.monotonic() + min(
-                        max(float(ack_timeout), 0.1), YIELD_ACK_MAX_SECONDS)
+                        max(ack_seconds, 0.1), YIELD_ACK_MAX_SECONDS)
                     while not self._parked and not self._closed:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
@@ -656,10 +669,14 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
             def _handle_yield_control(self):
                 try:
                     length = int(self.headers.get("Content-Length", 0))
+                    # read(-1) blocks until EOF; a huge length raises or
+                    # allocates it.
+                    if not 0 <= length <= YIELD_BODY_MAX_BYTES:
+                        raise ValueError("Content-Length out of range")
                     body = json.loads(self.rfile.read(length) or b"{}")
                     if not isinstance(body, dict):
                         raise ValueError("body must be a JSON object")
-                except (ValueError, OSError):
+                except (ValueError, OSError, RecursionError):
                     self._yield_json(400, {"error": "invalid control body"})
                     return
                 status, payload = gate.control(

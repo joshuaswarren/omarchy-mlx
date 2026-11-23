@@ -9,7 +9,11 @@ model. The route must report the LOADED model, and only it.
 """
 
 import io
+import json
 import sys
+import threading
+import time
+import types
 import unittest
 from pathlib import Path
 
@@ -587,3 +591,142 @@ class OutputPreservationTests(unittest.TestCase):
         self.assertEqual([d[0] for d in delivered], ["p", "g"])
         self.assertEqual(delivered[0], ("p", "pre", 0, None, None))
         self.assertEqual(delivered[1], ("g", "tok", 1, "lp1", None))
+
+
+class YieldControlValidationTests(unittest.TestCase):
+    """A hold must validate ack_timeout before it raises desire. A bad
+    value used to be held while idle, raised after desire was set while
+    a step ran (parking the next decode step until the crash net), or,
+    as NaN, spun the ack wait until a step parked."""
+
+    BAD = (None, "abc", "30", [], {}, True, False, 10**400,
+           float("nan"), float("inf"), float("-inf"))
+
+    def _gate(self):
+        gate = shim.YieldGate(hold_max_seconds=1.0)
+        self.addCleanup(gate.close)  # frees any thread a failure strands
+        gate.control("probe", "s", None)
+        return gate
+
+    def _hold(self, gate, ack_timeout):
+        out = {}
+
+        def run():
+            try:
+                out["r"] = gate.control("hold", "s", ack_timeout)
+            except BaseException as exc:  # surfaced in the test thread
+                out["err"] = exc
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(2.0)
+        self.assertFalse(worker.is_alive(),
+                         f"hold({ack_timeout!r:.20}) did not return")
+        if "err" in out:
+            raise out["err"]
+        return out["r"]
+
+    def _assert_next_step_runs(self, gate):
+        start = time.monotonic()
+        gate._before_step()
+        gate._after_step()
+        self.assertLess(time.monotonic() - start, 0.5)
+
+    def test_bad_ack_timeout_rejected_while_idle(self):
+        for bad in self.BAD:
+            with self.subTest(ack_timeout=repr(bad)[:20]):
+                gate = self._gate()
+                self.assertEqual(self._hold(gate, bad), (
+                    400, {"error": "ack_timeout must be a finite number"}))
+                self.assertFalse(gate._desire)
+                self._assert_next_step_runs(gate)
+
+    def test_bad_ack_timeout_rejected_mid_step(self):
+        for bad in self.BAD:
+            with self.subTest(ack_timeout=repr(bad)[:20]):
+                gate = self._gate()
+                gate._before_step()
+                self.assertEqual(self._hold(gate, bad)[0], 400)
+                self.assertFalse(gate._desire)
+                gate._after_step()
+                self._assert_next_step_runs(gate)
+                self.assertEqual(gate.holds_granted, 0)
+
+    def test_numeric_ack_timeout_still_bounds_the_ack_wait(self):
+        gate = self._gate()
+        gate._before_step()  # a step that never parks
+        self.assertEqual(self._hold(gate, 0),
+                         (409, {"held": False, "reason": "park-ack-timeout"}))
+        self.assertFalse(gate._desire)
+        self.assertEqual(gate.hold_timeouts, 1)
+        gate._after_step()
+        self.assertEqual(self._hold(gate, 2.5), (200, {"held": True}))
+        self.assertTrue(gate._desire)
+
+
+class YieldControlBodyTests(unittest.TestCase):
+    """The control route answers every bad body with a 400 reply instead
+    of dropping the connection or blocking on the read."""
+
+    def setUp(self):
+        self.gate = shim.YieldGate()
+        self.addCleanup(self.gate.close)
+        captured = {}
+
+        class APIHandler:
+            def do_POST(self):
+                self.status = 501
+
+        def inner(host, port, response_generator, server_class=None,
+                  handler_class=None):
+            captured["handler"] = handler_class
+
+        server = types.SimpleNamespace(
+            APIHandler=APIHandler, ThreadingHTTPServer=object,
+            BatchGenerator=type("BG", (), {"next": lambda self: None}),
+            _run_http_server=inner)
+        shim.install_yield_gate(server, self.gate)
+        server._run_http_server(1, 2, None)
+        self.handler_cls = captured["handler"]
+
+    def _post(self, raw, length=None):
+        h = self.handler_cls.__new__(self.handler_cls)
+        h.send_response = lambda code, *a: setattr(h, "status", code)
+        h.send_header = lambda k, v: None
+        h.end_headers = lambda: None
+        h.path = "/v1/internal/yield"
+        h.headers = {"Content-Length": str(len(raw) if length is None
+                                           else length)}
+        h.rfile = io.BytesIO(raw)
+        h.wfile = io.BytesIO()
+        h.do_POST()
+        return h.status, json.loads(h.wfile.getvalue())
+
+    def test_out_of_range_content_length_is_rejected(self):
+        for length in (-1, 10**20):
+            with self.subTest(length=length):
+                self.assertEqual(
+                    self._post(b'{"action": "probe"}', length=length),
+                    (400, {"error": "invalid control body"}))
+
+    def test_deeply_nested_body_is_rejected(self):
+        self.assertEqual(self._post(b"[" * 200000),
+                         (400, {"error": "invalid control body"}))
+
+    def test_ack_timeout_over_http(self):
+        self.assertEqual(
+            self._post(b'{"action": "probe", "secret": "s"}')[0], 200)
+        self.assertEqual(
+            self._post(b'{"action": "hold", "secret": "s", '
+                       b'"ack_timeout": null}'),
+            (400, {"error": "ack_timeout must be a finite number"}))
+        self.assertFalse(self.gate._desire)
+        # Omitted, it defaults to the 30 s cap; release ignores it.
+        self.assertEqual(
+            self._post(b'{"action": "hold", "secret": "s"}'),
+            (200, {"held": True}))
+        self.assertEqual(
+            self._post(b'{"action": "release", "secret": "s", '
+                       b'"ack_timeout": null}'),
+            (200, {"released": True}))
+        self.assertFalse(self.gate._desire)
