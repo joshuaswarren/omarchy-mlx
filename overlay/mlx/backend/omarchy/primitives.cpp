@@ -195,7 +195,7 @@ const QmmGeometry& qmm_geometry() {
         // the Apple path.
         if (caps.device_name.find("BMG") != std::string::npos) {
           return QmmGeometry{
-              32u, 32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+              32u, K::QmmVecQ4WordSubgroupBF16R2S16,
               K::QmmVecQ4MultiSubgroupBF16R2S16W2, "2x16w2"};
         }
         return QmmGeometry{
@@ -211,13 +211,13 @@ const QmmGeometry& qmm_geometry() {
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
     }
-if (v == "2x16w2") {
+    if (v == "2x16w2") {
       // Experimental: uvec2 weight loads in the R2S16 fast tile.
       return QmmGeometry{
-          32u, 32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+          32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16W2, "2x16w2"};
     }
-        if (v == "2x4") {
+    if (v == "2x4") {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
