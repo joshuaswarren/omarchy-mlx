@@ -46,6 +46,17 @@ inline uint32_t apple_gpu_cores(const std::string& device_name) {
   if (device_name == "Apple M2 Max (G14C B1)") {
     return 38u;
   }
+  if (device_name == "Apple M4 Pro (G16S B1)") {
+    // M4 Pro J616s/T6040, 20-core GPU (docs/m4-linux.md; the G401 audit
+    // names its small-M prefill arm). The name does not distinguish the
+    // binned 16-core part; a smaller real part clears the floor sooner
+    // than a 20-core guess assumes, so the step-down fires less often
+    // than ideal, never more - the conservative direction this table
+    // already accepts for G14C. Without a count here the G16S grid
+    // never compares against the floor at all: the small-M arm of the
+    // route was unreachable and the 64-row fill gate was vacuous.
+    return 20u;
+  }
   if (device_name.find("G17C") != std::string::npos) {
     // M5 Max: initial value matching G14C (same Max class) pending calibration on M5
     return 38u;
