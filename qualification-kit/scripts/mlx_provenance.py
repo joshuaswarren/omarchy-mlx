@@ -133,7 +133,7 @@ def verify_paths(package_dir, record_hashes, expect_wheel=None,
                 f"with pip --force-reinstall, then re-run "
                 f"scripts/mlx_provenance.py."
             )
-        elif expected is None:
+        elif expected is None and result["verified"] == "match":
             result["verified"] = "unverified"
     if result["version_match"] is False:
         result["verified"] = "mismatch"
@@ -480,7 +480,17 @@ def _self_test():
         assert wrong["verified"] == "mismatch", wrong
         assert "claimed wheel" in wrong["mismatch"]
 
-    print("self-test: OK (5 checks)")
+        # 6. A RECORD mismatch survives a later binary with no RECORD
+        # entry, even when the claimed wheel matches what is on disk.
+        (pkg / "lib" / "libmlx.so").write_bytes(lib_bytes)
+        stale_core = {"mlx/core/core.cpython-311-x86_64-linux-gnu.so":
+                      hashlib.sha256(b"stale-core").hexdigest()}
+        for claim in (None, wheel):
+            kept = verify_paths(pkg, stale_core, expect_wheel=claim)
+            assert kept["verified"] == "mismatch", kept
+            assert "mlx.core extension" in kept["mismatch"], kept
+
+    print("self-test: OK (6 checks)")
 
 
 def main():
