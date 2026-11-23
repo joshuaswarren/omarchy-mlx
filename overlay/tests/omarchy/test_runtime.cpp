@@ -877,9 +877,10 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 100000);
 
   // The G18G row (M6) resolves to its own calibrated budget, not the
-  // 5000 fallback: without the row the M6 split every decode step into
-  // 12 (2B) and 20 (4B) submissions, against 2 and 3 with the row.
-  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") == 40000);
+  // 5000 fallback. The budget is uncapped (UINT64_MAX): on the 4096e
+  // module the former 40000 row mid-token submit boundary cost ~10% of
+  // 2B decode (receipts/2026-11-23-g621-batch-budget-submits).
+  CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") == UINT64_MAX);
   CHECK(omarchy::calibrated_batch_work("Apple M6 (G18G B1)") !=
         omarchy::batch_work_fallback());
 

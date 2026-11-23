@@ -143,6 +143,7 @@ inline int batch_node_budget() {
 // receipts/2026-10-12-submission-cap-calibration (G13C),
 // receipts/2026-11-21-g13g-batch-work-20000 (G13G, tail rule),
 // receipts/2026-11-13-g18g-batch-work (G18G),
+// receipts/2026-11-23-g621-batch-budget-submits (G18G),
 // receipts/2026-11-15-m4-pro-g16s-batch-work (G16S, 5000 floor),
 // receipts/2026-11-22-m3-pro-g15s-batch-work (G15S, 5000 floor) and
 // receipts/2026-11-13-g14c-batch-work (G14C 100000: GPU time per
@@ -179,7 +180,7 @@ inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G16S", 15000},  // M4 Pro, Borealis Mesa 05ddb00f5c, 2x4 decode Qmm geometry: decode +13.1% (Qwen3-4B), +7.7% (Qwen3-8B), +17.7% (granite-4.0-1b) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B p50 2.5 ms decode, p99 27.8 ms and max 28.5 ms over all submissions (5000: 27.2 / 28.0), Qwen3-8B max 54.7 ms (5000: 54.2); 30000 reached 94.6 ms (receipts/2026-11-15-m4-pro-g16s-batch-work)
     {"G17C", 100000},  // M5 Max, Borealis Mesa: initial value matching G14C (same Max class) pending calibration on M5
     {"G17P", 5000},  // A18 Pro (MacBook Neo, 8 GB, 5 GPU cores), Borealis Mesa c208afc352: equals the fallback. Qwen3-4B submission p50 4.35 ms, p99 24.8 ms, max 47.2 ms; 8000 would raise the p99 to 48.9 ms (same receipt)
-    {"G18G", 40000},  // M6, chosen by decode rate (no per-submission timestamps on this board): +29.2% (Qwen3.8-2B) and +48.6% (Qwen3-4B) against 5000, outputs identical (receipts/2026-11-13-g18g-batch-work)
+    {"G18G", UINT64_MAX},  // M6, uncapped: one submit per decode token. On the 4096e module the 40000 row mid-token submit boundary cost ~10% of 2B decode (6.49 -> 7.21 tok/s at one submit, ids identical; receipts/2026-11-23-g621-batch-budget-submits). The board runs headless, so the #19 stutter cap does not bind; node and byte budgets still bound large graphs.
     {"RTX 5060 Ti", 40000},  // NVIDIA RTX 5060 Ti 16 GB, driver 615.78.08, opt-in VRAM activations, no display attached: one command buffer per Qwen3-4B decode token, decode +5.8% at 256 tokens (+8.2% from token 6) against 5000, ids identical; decode buffer 9.68 ms p50, load/prefill p99 unchanged at 17.4 ms (receipts/2026-11-21-rtx-5060ti-batch-work)
 };
 inline constexpr uint64_t kBatchWorkBudget = 40000;
