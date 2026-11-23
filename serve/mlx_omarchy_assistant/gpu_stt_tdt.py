@@ -41,11 +41,15 @@ def supports(model: object) -> bool:
     )
 
 
-def fast_tdt_decode(model, mel) -> object:
+def fast_tdt_decode(model, mel, window: int = 32) -> object:
     """Greedy TDT decode of one mel, exact-equivalent to ParakeetTDT.decode.
 
     ``mel`` is ``[T, mel_dim]`` or ``[1, T, mel_dim]``; the result is the
-    single ``AlignedResult`` for batch entry 0.
+    single ``AlignedResult`` for batch entry 0. ``window`` is the number of
+    tail frames batched per joint call: 0 batches the whole remaining tail
+    (fewest syncs, most recomputed frames), 1 degenerates to the reference's
+    per-frame batching. The visited frames and the output are identical for
+    every window size.
     """
     import mlx.core as mx
 
@@ -55,6 +59,10 @@ def fast_tdt_decode(model, mel) -> object:
         tokens_to_sentences,
     )
     from mlx_audio.stt.models.parakeet import tokenizer
+
+    window = int(window)
+    if window < 1:
+        raise ValueError("window must be a positive frame count")
 
     batch_size = mel.shape[0]
     if len(mel.shape) == 2:
@@ -97,43 +105,47 @@ def fast_tdt_decode(model, mel) -> object:
         cell_out = cell_out.astype(features.dtype)
         mx.eval(decoder_output, hidden_out, cell_out)
 
-        segment_start = time
-        logits = model.joint(features[:, segment_start:max_length, :], decoder_output)
-        pred_ids = mx.argmax(logits[0, :, 0, : blank_id + 1], axis=-1)
-        decisions = mx.argmax(logits[0, :, 0, blank_id + 1 :], axis=-1)
-        mx.eval(pred_ids, decisions)
-        pred_host = np.asarray(pred_ids).tolist()
-        decision_host = np.asarray(decisions).tolist()
-
         adopted = False
         # The reference loop consults exactly the frames the duration walk
         # lands on: after a blank frame with duration d it re-enters at
-        # time + d, never at the skipped frames in between. Index the
-        # precomputed tail by absolute frame, not by walk order, so the
-        # visited frames and timestamps match the reference exactly.
-        while time < max_length:
-            local = time - segment_start
-            duration_i = durations[decision_host[local]]
-            if pred_host[local] != blank_id:
-                last_token = pred_host[local]
-                dec_state = (hidden_out, cell_out)
-                if not tokenizer.is_special_token(last_token, vocabulary):
-                    hypothesis.append(AlignedToken(
-                        last_token,
-                        start=time * subsampling / sample_rate * hop_length,
-                        duration=duration_i * subsampling / sample_rate
-                        * hop_length,
-                        text=tokenizer.decode([last_token], vocabulary),
-                    ))
-                adopted = True
-            time += duration_i
-            new_symbols += 1
-            if duration_i != 0:
-                new_symbols = 0
-            elif max_symbols is not None and max_symbols <= new_symbols:
-                time += 1
-                new_symbols = 0
-            if adopted:
-                break
+        # time + d, never at the skipped frames in between. The joint runs
+        # over ``window``-frame slices of that walk with the segment's fixed
+        # decoder state, so the visited positions, timestamps and output
+        # match the reference exactly while the per-frame syncs collapse
+        # into one per window.
+        while time < max_length and not adopted:
+            win_end = min(time + window, max_length)
+            logits = model.joint(features[:, time:win_end, :], decoder_output)
+            pred_ids = mx.argmax(logits[0, :, 0, : blank_id + 1], axis=-1)
+            decisions = mx.argmax(logits[0, :, 0, blank_id + 1 :], axis=-1)
+            mx.eval(pred_ids, decisions)
+            pred_host = np.asarray(pred_ids).tolist()
+            decision_host = np.asarray(decisions).tolist()
+
+            win_start = time
+            while time < win_end:
+                local = time - win_start
+                duration_i = durations[decision_host[local]]
+                if pred_host[local] != blank_id:
+                    last_token = pred_host[local]
+                    dec_state = (hidden_out, cell_out)
+                    if not tokenizer.is_special_token(last_token, vocabulary):
+                        hypothesis.append(AlignedToken(
+                            last_token,
+                            start=time * subsampling / sample_rate * hop_length,
+                            duration=duration_i * subsampling / sample_rate
+                            * hop_length,
+                            text=tokenizer.decode([last_token], vocabulary),
+                        ))
+                    adopted = True
+                time += duration_i
+                new_symbols += 1
+                if duration_i != 0:
+                    new_symbols = 0
+                elif max_symbols is not None and max_symbols <= new_symbols:
+                    time += 1
+                    new_symbols = 0
+                if adopted:
+                    break
 
     return sentences_to_result(tokens_to_sentences(hypothesis))

@@ -190,9 +190,8 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
                 new_symbols = 0
         return hypothesis
 
-    def _check_equal(self, model, mel):
+    def _check_equal(self, model, mel, windows=(32,)):
         reference = model.decode(mel)[0]
-        fast = self.tdt.fast_tdt_decode(model, mel)
         # Independent walk of the reference loop: ids and visited positions.
         ref_walk = [t[0] for t in self._reference_tokens(model, mel)]
         # Full assembly-level comparison on both sides' results, timestamps
@@ -203,46 +202,49 @@ class FastTdtDecodeEqualityTest(unittest.TestCase):
             for s in reference.sentences
             for t in s.tokens
         ]
-        fast_tokens = [
-            (t.id, round(t.start, 6), round(t.duration, 6))
-            for s in fast.sentences
-            for t in s.tokens
-        ]
-        self.assertEqual([t[0] for t in fast_tokens], ref_walk)
-        self.assertEqual(fast_tokens, ref_tokens)
-        self.assertEqual(fast.text, reference.text)
+        for window in windows:
+            fast = self.tdt.fast_tdt_decode(model, mel, window)
+            fast_tokens = [
+                (t.id, round(t.start, 6), round(t.duration, 6))
+                for s in fast.sentences
+                for t in s.tokens
+            ]
+            self.assertEqual([t[0] for t in fast_tokens], ref_walk)
+            self.assertEqual(fast_tokens, ref_tokens)
+            self.assertEqual(fast.text, reference.text)
 
     def test_equals_reference_loop(self):
         for seed in (11, 12, 13):
             model = self._model(blank_bias=0.05)
             mel = self._mel(seconds=2, seed=seed)
-            self._check_equal(model, mel)
+            self._check_equal(model, mel, windows=(1, 2, 8, 32))
 
     def test_equals_reference_loop_blank_heavy(self):
         """Blank-favored arms walk the skip path: after a blank with duration
         d the reference re-enters at time + d, so the tail must be indexed by
         absolute frame. Timestamps are asserted per token. Duration indices
-        1, 2, 3 map to durations 1, 2, 4 in the test's durations list."""
+        1, 2, 3 map to durations 1, 2, 4 in the test's durations list; every
+        window size must produce identical output."""
         for blank_bias in (0.05, 0.3, 1.0):
             for favor in (1, 2, 3):
                 model = self._model(blank_bias=blank_bias,
                                     favor_duration_index=favor)
                 mel = self._mel(seconds=2, seed=21)
-                self._check_equal(model, mel)
+                self._check_equal(model, mel, windows=(1, 2, 8, 32))
 
     def test_equals_reference_loop_with_max_symbols(self):
         model = self._model(max_symbols=3, favor_duration_index=0)
         mel = self._mel(seconds=2, seed=14)
-        self._check_equal(model, mel)
+        self._check_equal(model, mel, windows=(1, 8, 32))
 
     def test_equals_reference_loop_with_max_symbols_blank_heavy(self):
         """Duration-0 blanks under the cap: the walk must stay in bounds and
-        match the reference frame-for-frame."""
+        match the reference frame-for-frame at every window size."""
         for blank_bias in (0.3, 1.0):
             model = self._model(max_symbols=3, favor_duration_index=0,
                                 blank_bias=blank_bias)
             mel = self._mel(seconds=2, seed=15)
-            self._check_equal(model, mel)
+            self._check_equal(model, mel, windows=(1, 8, 32))
 
     def test_supports_rejects_non_tdt_models(self):
         class NotTDT:

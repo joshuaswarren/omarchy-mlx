@@ -124,7 +124,10 @@ def generate_with_model(model, audio) -> str:
             from mlx_audio.stt.models.parakeet.audio import log_mel_spectrogram
 
             mel = log_mel_spectrogram(audio, model.preprocessor_config)
-            return str(gpu_stt_tdt.fast_tdt_decode(model, mel).text or "")
+            window = int(os.environ.get(
+                "MLX_OMARCHY_GPU_STT_FAST_TDT_WINDOW", "32") or 32)
+            return str(
+                gpu_stt_tdt.fast_tdt_decode(model, mel, window).text or "")
         except Exception as exc:  # pragma: no cover - safety fallback
             print(f"fast tdt decode fell back: {exc}", file=sys.stderr, flush=True)
     return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
