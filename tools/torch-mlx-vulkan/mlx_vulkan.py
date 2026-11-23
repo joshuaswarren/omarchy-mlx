@@ -494,8 +494,264 @@ def make_executor(gm):
     return run, stats
 
 
+def _eager_run(gm):
+    run, stats = make_executor(gm)
+    run._mlx_stats = stats
+    return run
+
+
 @torch._dynamo.register_backend(name="mlx_vulkan")
 def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
-    run, stats = make_executor(gm)
+    try:
+        run_c = make_compiled_executor(gm)
+    except Exception as e:
+        log.warning("compiled executor setup failed: %s", e)
+        return _eager_run(gm)
+    holder = {"run": None}
+
+    def guarded(*args):
+        if holder["run"] is None:
+            try:
+                out = run_c(*args)
+            except Exception as e:
+                log.warning("compiled executor failed (%s); falling back to eager", e)
+                holder["run"] = _eager_run(gm)
+            else:
+                holder["run"] = run_c
+                return out
+        return holder["run"](*args)
+
+    guarded._mlx_stats = run_c._mlx_stats
+    return guarded
+
+
+# ================= compiled executor (v2) =================
+# Whole-graph lazy lowering wrapped in mx.compile. Cache mutations
+# (index_copy_/add_ on StaticCache buffers) are modeled functionally: updated
+# tensors become extra outputs fed back as inputs next call, so HF's buffers
+# only seed state once. RMSNorm chains fuse to mx.fast.rms_norm; the sdpa FX
+# node maps to mx.fast.scaled_dot_product_attention; GEMM/sdpa inputs run bf16
+# while the residual/elementwise spine stays fp32 -> ids match CPU fp32.
+
+_DT = mx.bfloat16
+
+
+def _fuse_rmsnorm(nodes):
+    """x -> [to] -> pow(2) -> mean -> add(eps) -> rsqrt -> mul(x, r) -> [to] -> mul(w)"""
+    fused = {}
+    skip = set()
+    consumers = {}
+    nm = {}
+    for n in nodes:
+        nm[n] = getattr(n.target, "__name__", None) or _opname(n)
+        for a in n.args:
+            if isinstance(a, torch.fx.Node):
+                consumers.setdefault(a, []).append(n)
+    for r in nodes:
+        if nm[r] != "rsqrt":
+            continue
+        a = r.args[0]
+        if not (isinstance(a, torch.fx.Node) and nm[a] == "add" and len(a.args) == 2):
+            continue
+        eps = a.args[1]
+        if not isinstance(eps, (int, float)):
+            continue
+        m, p = a.args[0], None
+        if not (isinstance(m, torch.fx.Node) and nm[m] == "mean"):
+            continue
+        p = m.args[0]
+        if not (isinstance(p, torch.fx.Node) and nm[p] == "pow"):
+            continue
+        x_c = p.args[0]
+        mm = next((c for c in consumers.get(r, [])
+                   if nm[c] == "mul" and c.args[0] is x_c), None)
+        if mm is None:
+            continue
+        tail = mm
+        cand = consumers.get(tail, [])
+        if len(cand) == 1 and nm[cand[0]] == "to":
+            tail = cand[0]
+            cand = consumers.get(tail, [])
+        out = next((c for c in cand if nm[c] == "mul"), None)
+        if out is None:
+            continue
+        w_node = out.args[1] if out.args[0] is tail else out.args[0]
+        fused[out] = (x_c, w_node, float(eps), {r, a, m, p, mm, tail})
+    inputs_used = set()
+    for x_c, w_node, _, _c in fused.values():
+        inputs_used.update({x_c, w_node})
+    final = {}
+    for out, (x_c, w_node, eps, chain) in fused.items():
+        # skip a member only if every consumer stays inside the fused set and
+        # it is not an input to another fused chain
+        ok = all(c in chain or c in fused
+                 for x in chain - inputs_used
+                 for c in consumers.get(x, []))
+        if ok:
+            final[out] = (x_c, w_node, eps)
+            skip.update(chain - inputs_used)
+    return skip, final
+
+
+def make_compiled_executor(gm):
+    nodes = list(gm.graph.nodes)
+    phs = [n for n in nodes if n.op == "placeholder"]
+    skip, fused = _fuse_rmsnorm(nodes)
+    fp32_params = {str(w.target) for _, w, _ in fused.values()}
+    state_names = {str(n.target) for n in phs if "_cache_layers_" in str(n.target)}
+    static_names = {str(n.target) for n in phs if str(n.target).startswith("G_")}
+    mutated = [n for n in phs if str(n.target) in state_names]
+    conv_static = {}
+    state = {}
+    holder = {"ar": None}
+
+    def _cast(x, dt=_DT):
+        return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
+
+    def build(*flat):
+        env = {n: v for n, v in zip(phs, flat)}
+
+        def res(a):
+            if isinstance(a, torch.fx.Node):
+                return env[a]
+            if isinstance(a, (tuple, list)):
+                return type(a)(res(x) for x in a)
+            return a
+
+        for n in nodes:
+            if n.op == "placeholder" or n in skip:
+                continue
+            name = getattr(n.target, "__name__", None) or _opname(n)
+            if n.op == "output":
+                out = res(n.args[0])
+                tail = [env[m] for m in mutated]
+                return (*out, *tail) if isinstance(out, (tuple, list)) else (out, *tail)
+            if n.op == "get_attr":
+                t = gm
+                for part in str(n.target).split("."):
+                    t = getattr(t, part)
+                env[n] = _mx(t)
+                continue
+            if n in fused:
+                xn, wn, eps = fused[n]
+                env[n] = mx.fast.rms_norm(env[xn], env[wn], eps)
+                continue
+            args = tuple(res(a) for a in n.args)
+            kwargs = {k: res(v) for k, v in n.kwargs.items()}
+            if name == "index_copy_":
+                t, dim, idx, src = args[0], args[1], args[2], args[3]
+                smax = t.shape[dim]
+                if holder["ar"] is None or holder["ar"].shape[0] != smax:
+                    holder["ar"] = mx.arange(smax)
+                ar = holder["ar"]
+                inrange = ((ar >= idx.min()) & (ar <= idx.max())).reshape(
+                    [1] * dim + [smax] + [1] * (t.ndim - dim - 1))
+                shift = mx.clip(ar - idx.min(), 0, max(0, int(src.shape[dim]) - 1))
+                upd = mx.where(inrange, mx.take(_cast(src), shift, axis=dim), t)
+                env[n.args[0]] = upd      # model in-place mutation
+                env[n] = upd
+                continue
+            if name == "add_":
+                env[n.args[0]] = env[n.args[0]] + args[1]
+                env[n] = env[n.args[0]]
+                continue
+            if name == "scaled_dot_product_attention":
+                # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
+                # mx.fast sdpa broadcasts fewer kv heads natively -> look through.
+                def _unexpand(narg):
+                    if getattr(narg, "op", None) == "call_method" and _opname(narg) in ("reshape", "view"):
+                        narg = narg.args[0]
+                    if getattr(narg, "op", None) == "call_method" and _opname(narg) == "expand":
+                        return env.get(narg.args[0])
+                    return None
+                uk, uv = _unexpand(n.args[1]), _unexpand(n.args[2])
+                if uk is not None and uk.ndim == 5 and uk.shape[2] == 1:
+                    uk = uk[:, :, 0]
+                if uv is not None and uv.ndim == 5 and uv.shape[2] == 1:
+                    uv = uv[:, :, 0]
+                q = _cast(args[0])
+                k = _cast(uk) if uk is not None else _cast(args[1])
+                v = _cast(uv) if uv is not None else _cast(args[2])
+                mask = kwargs.get("attn_mask")
+                env[n] = mx.fast.scaled_dot_product_attention(
+                    q, k, v, scale=kwargs.get("scale"),
+                    mask=_cast(mask) if isinstance(mask, mx.array) else mask).astype(mx.float32)
+                continue
+            if name in ("matmul", "mm", "bmm") and n.op == "call_function":
+                env[n] = mx.matmul(_cast(args[0]), _cast(args[1])).astype(mx.float32)
+                continue
+            if name == "linear" and n.op == "call_function":
+                y = mx.matmul(_cast(args[0]), mx.transpose(_cast(args[1]), axes=(-1, -2)))
+                if len(args) > 2 and args[2] is not None:
+                    y = y + _cast(args[2])
+                env[n] = y.astype(mx.float32)
+                continue
+            if n.op == "call_method":
+                val, on_mx = _run_method(args[0], name, args[1:], kwargs)
+                if on_mx:
+                    env[n] = val
+                    continue
+                env[n] = getattr(args[0], name)(*args[1:], **kwargs)
+                continue
+            if n.target is operator.getitem:
+                env[n] = args[0][args[1]]
+                continue
+            if n.op == "call_function":
+                low = (FUNC_TABLE.get(n.target)
+                       or FUNC_TABLE_BY_NAME.get(getattr(n.target, "__name__", ""))
+                       or ATEN_TABLE.get(name))
+                if low is not None:
+                    kw2 = {k: v for k, v in kwargs.items() if k != "device"}
+                    env[n] = low(*args, **kw2)
+                    continue
+                if n.target in GLUE_FNS:
+                    env[n] = n.target(*args, **kwargs)
+                    continue
+            raise RuntimeError(f"unlowerable node {name} {n.target}")
+        raise RuntimeError("no output node")
+
+    cfn = mx.compile(build)
+    stats = {"fused_rms": len(fused), "state": len(state_names)}
+
+    import os, time as _t
+    _profile = os.environ.get("MV_PROF")
+    _acc = {"prep": 0.0, "cfn": 0.0, "conv": 0.0, "n": 0}
+
+    def run(*runtime_inputs):
+        t0 = _t.perf_counter()
+        flat = []
+        for n, v in zip(phs, runtime_inputs):
+            name = str(n.target)
+            if name in state:
+                flat.append(state[name])
+            elif name in conv_static:
+                flat.append(conv_static[name])
+            elif name in state_names:
+                arr = _mx(v)
+                if arr.ndim >= 2:
+                    arr = _cast(arr)
+                state[name] = arr
+                flat.append(arr)
+            else:
+                arr = _mx(v)
+                if name in static_names:
+                    arr = arr if name in fp32_params else _cast(arr)
+                    conv_static[name] = arr
+                flat.append(arr)
+        t1 = _t.perf_counter()
+        outs = cfn(*flat)
+        mx.eval(*outs)
+        t2 = _t.perf_counter()
+        logits, extra = outs[0], outs[1:]
+        for m, arr in zip(mutated, extra):
+            state[str(m.target)] = arr
+        out = _torch(logits)
+        t3 = _t.perf_counter()
+        if _profile:
+            _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
+            if _acc["n"] % 10 == 0:
+                print(f"MV_PROF n={_acc['n']} prep={_acc['prep']/_acc['n']*1e3:.1f}ms cfn={_acc['cfn']/_acc['n']*1e3:.1f}ms conv={_acc['conv']/_acc['n']*1e3:.1f}ms", flush=True)
+        return out
+
     run._mlx_stats = stats
     return run
