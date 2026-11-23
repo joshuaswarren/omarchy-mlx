@@ -1206,6 +1206,29 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     return;
   }
 
+  // Prescan gate: every pass below needs an anchor primitive
+  // (QuantizedMatmul or Matmul for GEMV groups, SliceUpdate for cache
+  // pairs, Sigmoid for swiglu/out-gate plans, fast::RoPE for trio
+  // plans). Tapes with none of these can fire no plan, so skip the
+  // node/use maps and all pattern passes. Set
+  // MLX_OMARCHY_NO_FUSION_GATE to restore the unconditional scan.
+  if (std::getenv("MLX_OMARCHY_NO_FUSION_GATE") == nullptr) {
+    bool anchor = false;
+    for (const auto& node : tape) {
+      if (is_op(&node, typeid(QuantizedMatmul)) ||
+          is_op(&node, typeid(Matmul)) ||
+          is_op(&node, typeid(SliceUpdate)) ||
+          is_op(&node, typeid(Sigmoid)) ||
+          is_op(&node, typeid(fast::RoPE))) {
+        anchor = true;
+        break;
+      }
+    }
+    if (!anchor) {
+      return;
+    }
+  }
+
   auto* state = new EagerFusionState;
   eager_state = state;
   std::unordered_map<std::uintptr_t, const array*> nodes;
