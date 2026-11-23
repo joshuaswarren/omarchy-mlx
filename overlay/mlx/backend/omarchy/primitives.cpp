@@ -15414,6 +15414,29 @@ void GreedyQuantizedArgmax::eval_gpu(
       binding(survivors),
       binding(row_values),
       binding(stats)};
+  // MLX_OMARCHY_GREEDY_FUSE=1: the eight stages collapse to three
+  // dispatches (qmm_vec.comp stages 8-10: prologue+bounds+candidates,
+  // prune+exact+select, flagged full). Cross-stage state is zeroed by a
+  // fill so the same-dispatch atomics start deterministic; each merged
+  // stage's last workgroup runs the single-workgroup epilogue inline.
+  static const bool fused_stages =
+      omarchy::env_flag("MLX_OMARCHY_GREEDY_FUSE");
+  if (fused_stages) {
+    encoder.fill_buffer(binding(state).buffer, 0u, state.nbytes(), 0);
+    const std::array<uint32_t, 3> fused_groups{
+        (n + 127u) / 128u, (n + 255u) / 256u, 256u};
+    for (uint32_t i = 0; i < fused_groups.size(); ++i) {
+      params.operation = 8u + i;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecGreedyBF16,
+          bindings,
+          params,
+          fused_groups[i],
+          1u,
+          1u);
+    }
+    return;
+  }
   // Stage group counts: prologue 1; bounds 128 rows per workgroup;
   // candidates and survivors 64 x 8 columns in flight; compact 256 rows
   // per workgroup; select 1; full rows 256 x 8 in flight (flagged tokens
