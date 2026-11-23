@@ -640,6 +640,10 @@ class MLX_API CommandEncoder {
   std::array<Slot, kInFlightCommandBuffers> slots_{};
   int current_slot_{0};
   VkCommandBuffer cmd_{VK_NULL_HANDLE};
+  // Compute pipeline bound on cmd_ this recording. Reset at command
+  // buffer begin; lets emit skip a redundant CmdBindPipeline when a run
+  // of dispatches reuses one pipeline.
+  VkPipeline bound_pipeline_{VK_NULL_HANDLE};
   bool recording_{false};
   int node_count_{0};
   uint64_t batch_work_{0};
