@@ -59,6 +59,52 @@ class ElementwiseGpuParity(unittest.TestCase):
                 cpu, gpu = [mx.ceil(a, stream=d).tolist() for d in (mx.cpu, mx.gpu)]
                 self.check_values(cpu, gpu)
 
+    def test_sign(self):
+        # G18G regression (issue 544, G626 battery 2026-11-23): with the sign
+        # case inside the elementwise switch, the AGX3 packer aliased it with
+        # the remainder case and every nonzero lane read 0.0 (253 of 256
+        # lanes wrong on the M6). Upstream Sign compares against zero, so NaN
+        # maps to 0 on both streams; everything else must match the CPU.
+        samples = [-6.0, -1.0, -0.25, -0.0, 0.0, 0.25, 1.0, 6.0,
+                   1024.0, -1024.0, math.inf, -math.inf, math.nan]
+        for dtype in (mx.float32, mx.float16, mx.bfloat16):
+            with self.subTest(dtype=dtype):
+                gpu = mx.sign(mx.array(samples, dtype=dtype), stream=mx.gpu)
+                cpu = mx.sign(mx.array(samples, dtype=dtype), stream=mx.cpu)
+                for want, got in zip(cpu.tolist(), gpu.tolist(), strict=True):
+                    if math.isnan(want):
+                        continue  # NaN may quiet to 0 on the GPU path
+                    with self.subTest(want=want, got=got):
+                        self.assertEqual(got, want)
+                        if want != 0.0:
+                            self.assertEqual(math.copysign(1.0, got),
+                                             math.copysign(1.0, want))
+        # Wide lane sweep: every nonzero lane must read ±1 on the GPU.
+        rng_samples = [x / 7.0 for x in range(-253, 254) if x != 0]
+        gpu = mx.sign(mx.array(rng_samples, dtype=mx.float32), stream=mx.gpu)
+        self.assertEqual(sorted(set(gpu.tolist())), [-1.0, 1.0])
+
+    def test_int64_divmod_compiles(self):
+        # G18G regression (G626 battery 2026-11-23): the int64 div/mod
+        # lowering emits an AGX `extr` bitfield extract that the AGX3 binary
+        # packer cannot encode (agx3_pack_binary.c:19234, "no grounded AGX3
+        # encoding for extr"), so pipeline creation fails. This test holds
+        # the Mesa fix in place: the pipelines must create and the div-mod
+        # identity must hold on the GPU.
+        an = [x for x in range(-97, 98)]
+        bn = [y for y in range(1, 97)]
+        a = mx.array([an[i % len(an)] for i in range(256)], dtype=mx.int64)
+        b = mx.array([bn[i % len(bn)] for i in range(256)], dtype=mx.int64)
+        gpu_q = mx.floor_divide(a, b, stream=mx.gpu)
+        gpu_r = mx.remainder(a, b, stream=mx.gpu)
+        cpu_q = mx.floor_divide(a, b, stream=mx.cpu)
+        cpu_r = mx.remainder(a, b, stream=mx.cpu)
+        self.assertEqual(gpu_q.tolist(), cpu_q.tolist())
+        self.assertEqual(gpu_r.tolist(), cpu_r.tolist())
+        identity = [(q * bi + r) for q, bi, r in
+                    zip(gpu_q.tolist(), b.tolist(), gpu_r.tolist(), strict=True)]
+        self.assertEqual(identity, a.tolist())
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
