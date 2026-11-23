@@ -17588,15 +17588,17 @@ void ScaledDotProductAttention::eval_gpu(
     const auto& cf_caps = encoder.device().capabilities();
     const bool cf_is_g16s =
         cf_caps.device_name.find("G16S") != std::string::npos;
-    // G13-class parts (M1) dispatch the same causal flash kernel and measure
+    // G13G (13-inch M1) dispatches the same causal flash kernel and measures
     // +7.1% prefill at ctx2048 / +1.1% at ctx512 with identical outputs on
-    // the 4B (jwm1 ABBA, receipts 2026-11-23); default ON for them too.
-    const bool cf_is_g13 =
-        cf_caps.device_name.find("G13") != std::string::npos;
+    // the 4B (jwm1 ABBA, receipts 2026-11-23). Repo convention: only the
+    // measured part flips; G13C/G13S keep the composed default until they
+    // have their own ABBA rows.
+    const bool cf_is_g13g =
+        cf_caps.device_name.find("G13G") != std::string::npos;
     const bool cf_forced_on = cf_env != nullptr && cf_env[0] == '1';
     const bool cf_forced_off = cf_env != nullptr && cf_env[0] == '0';
     const bool cf_on = cf_forced_on ||
-        ((cf_is_g16s || cf_is_g13) && !cf_forced_off);
+        ((cf_is_g16s || cf_is_g13g) && !cf_forced_off);
     if (cf_on &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
