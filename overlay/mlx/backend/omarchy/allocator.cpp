@@ -798,13 +798,17 @@ Buffer VulkanAllocator::malloc(size_t size) {
 Buffer VulkanAllocator::malloc_weight(size_t size) {
   auto buf = std::make_unique<VulkanBuffer>();
   // Snapshot the live total before building the buffer: reading it inside
-  // make_weight_buffer would race concurrent weight frees.
-  std::unique_lock lk(mutex_);
-  const size_t live_weight_bytes = weight_memory_;
-  lk.unlock();
+  // make_weight_buffer would race concurrent weight frees. The scoped
+  // guard releases the mutex before the Vulkan calls, and the relock
+  // below is exception-safe if make_weight_buffer throws.
+  size_t live_weight_bytes = 0;
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+    live_weight_bytes = weight_memory_;
+  }
   *buf = make_weight_buffer(
       device(), (size + 3) & ~size_t{3}, false, live_weight_bytes);
-  lk.lock();
+  std::unique_lock lk(mutex_);
   try {
     live_by_handle_.emplace(buf->buffer, buf.get());
   } catch (...) {

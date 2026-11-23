@@ -45,14 +45,11 @@ namespace mlx::core::omarchy {
 // widened window keeps results bit-exact.
 inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
-
-  // Bind the full allocation. A window computed from this array's own
-  // offset and item size can fall short when a later dispatch writes
-  // past it (the concatenate's second copy writes the upper half of a
-  // buffer whose first-half view declared the range), and conformant
-  // drivers drop out-of-range writes. Allocations are page-rounded, so
-  // the full size stays inside the backing memory.
-
+  // Bind the full allocation. The range must cover every byte a dispatch
+  // might write: the concatenate's second copy writes the upper half of a
+  // buffer whose first-half view would declare a shorter range, and
+  // conformant drivers drop writes outside the descriptor range. The
+  // full-allocation range removes that class entirely.
   return {
       buffer->buffer,
       0,

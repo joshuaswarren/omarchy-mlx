@@ -102,17 +102,19 @@ int run_child_scenario(const std::string& mode) {
     }
     Stream s = new_stream(Device::gpu);
     auto& enc = omarchy::get_command_encoder(s);
-    array filled(Shape{1024}, uint32, nullptr, {});
-    filled.set_data(omarchy::allocator().malloc(4096));
-    omarchy::fill_words(s, filled, 0x2a);
+    auto buf = omarchy::allocator().malloc(4096);
+    auto* p = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+    enc.fill_buffer(p->buffer, 0x2a, 4096);
     enc.commit();
     enc.synchronize();
-    const auto* words = filled.data<uint32_t>();
-    for (size_t i = 0; i < 1024; ++i) {
+    auto* words = static_cast<uint32_t*>(p->data);
+    for (size_t i = 0; i < 4096 / sizeof(uint32_t); ++i) {
       if (words[i] != 0x2a) {
+        omarchy::allocator().free(buf);
         return 2;
       }
     }
+    omarchy::allocator().free(buf);
     std::cout << "[child/reopen] fresh process device reopen ok\n";
     return 0;
   }
