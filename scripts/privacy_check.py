@@ -6,8 +6,9 @@ Generic patterns only; site inventory via optional untracked
 tracked .privacy-allow (exact "<blob-sha> <path>" pins; content scan
 only — messages and filenames are never exempted). Scans EVERY commit in range
 (merges via -m, root via --root): added lines, new filenames, commit
-message. Single rev = full history (conservative). A new push ref scans
-commits not already reachable from a remote, so published history is not
+message. Single rev = full history (conservative). Pushes scan only
+commits not already reachable from a remote-tracking ref, so published
+history — including main commits a rebase replays past — is not
 re-blocked.
 
 Usage:
@@ -152,19 +153,18 @@ def main():
             local_ref, local_sha, remote_ref, remote_sha = parts
             if local_sha == ZERO:
                 continue  # deletion
-            if remote_sha == ZERO:
-                ranges = ["--not-remotes", local_sha]
-            else:
-                ranges = ["%s..%s" % (remote_sha, local_sha)]
-            for i in range(0, len(ranges), 1 if ranges[0] != "--not-remotes" else 2):
-                cmd = [sys.executable, os.path.abspath(__file__)] + (
-                    ranges[i:i + 2] if ranges[0] == "--not-remotes" else [ranges[i]])
-                p = subprocess.run(cmd,
-                                   env={**os.environ,
-                                        "PRIVACY_REPO": toplevel},
-                                   stdout=subprocess.DEVNULL)
-                if p.returncode != 0:
-                    blocked = True
+            # Scan only commits on no remote-tracking ref. A
+            # remote_sha..local_sha range would re-scan published main
+            # commits after a rebase (the old remote head is no ancestor
+            # of the rewritten branch) and re-block their blobs.
+            cmd = [sys.executable, os.path.abspath(__file__),
+                   "--not-remotes", local_sha]
+            p = subprocess.run(cmd,
+                               env={**os.environ,
+                                    "PRIVACY_REPO": toplevel},
+                               stdout=subprocess.DEVNULL)
+            if p.returncode != 0:
+                blocked = True
         sys.exit(1 if blocked else 0)
 
     repo = os.environ.get("PRIVACY_REPO")
