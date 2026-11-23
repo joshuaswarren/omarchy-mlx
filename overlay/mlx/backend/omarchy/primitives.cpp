@@ -5207,6 +5207,15 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto pad_lo_axis = [&](int axis) {
     return axis_or_one(padding_lo_, axis);
   };
+  // MLX_OMARCHY_CONV_DIRECT_MM=1 gates the faster conv routes in this
+  // function: the unit-window implicit GEMM rides the cooperative-matrix
+  // direct matmul kernel dispatch_matmul picks for the identical
+  // A @ B^T shape (instead of the 16x16 one-output-per-thread tile), and
+  // symmetric-pad depthwise 1-D convs run the straight-line ConvDw1d
+  // kernel over a zero-padded copy. Flag-unset paths are byte-identical
+  // (VS-3).
+  static const bool conv_direct_mm =
+      omarchy::env_flag("MLX_OMARCHY_CONV_DIRECT_MM");
   bool unit_window = !flip_ && groups_ == 1;
   for (int axis = 0; axis < spatial; ++axis) {
     if (kern_ext[axis] != 1 || in_ext[axis] != out.shape(1 + axis) ||
@@ -5246,12 +5255,66 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
         omarchy::ComputeKernel::MatmulF32,
         omarchy::ComputeKernel::MatmulF16,
         omarchy::ComputeKernel::MatmulBF16);
+    uint32_t gemm_tile_n = 16u;
+    uint32_t gemm_tile_m = 16u;
+    if (conv_direct_mm) {
+      static const bool coopmat_disabled =
+          omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+      const auto& caps = encoder.device().capabilities();
+      const bool direct_aligned =
+          ((gemm.lhs_offset | gemm.rhs_offset | gemm.output_offset |
+            gemm.lhs_gap | gemm.rhs_gap) &
+           1u) == 0u;
+      const Dtype direct_dtype = out.dtype() == float16
+          ? float16
+          : out.dtype() == bfloat16 ? bfloat16 : float32;
+      const bool direct_shape = direct_dtype == float16
+          ? caps.cooperative_matrix_f16_8
+          : direct_dtype == bfloat16 ? caps.cooperative_matrix_bf16_8
+                                     : true;
+      const bool direct = caps.cooperative_matrix_f32_8 &&
+          caps.subgroup_size == 32u && !coopmat_disabled &&
+          matrix_m >= 32u && matrix_n >= 32u &&
+          (matrix_k % 8u) == 0u && (matrix_n & 1u) == 0u &&
+          direct_aligned && direct_shape;
+      if (direct) {
+        const omarchy::ComputeKernel pick =
+            direct_dtype == float16 ? omarchy::ComputeKernel::MatmulDirectF16Nt
+            : direct_dtype == bfloat16
+                ? omarchy::ComputeKernel::MatmulDirectBF16Nt
+                : omarchy::ComputeKernel::MatmulDirectF32Nt;
+        const omarchy::DirectMatmulRoute route =
+            omarchy::select_direct_matmul_route(
+                omarchy::kDirectMatmulRows,
+                caps.device_name,
+                direct_dtype,
+                false,
+                true,
+                matrix_m,
+                matrix_n,
+                {pick, 64u});
+        gemm_kernel = route.kernel;
+        gemm_tile_n = route.tile_n;
+        gemm_tile_m = 64u;
+        omarchy::capsim::require_backed(
+            encoder.device(),
+            caps,
+            direct,
+            "Convolution MatmulDirect",
+            direct_dtype == float16
+                ? "cooperative_matrix_fp32_8x8x8+cooperative_matrix_fp16_8x8x8"
+            : direct_dtype == bfloat16
+                ? "cooperative_matrix_fp32_8x8x8+cooperative_matrix_bf16_8x8x8"
+                : "cooperative_matrix_fp32_8x8x8",
+            encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
+      }
+    }
     encoder.dispatch_compute(
         gemm_kernel,
         bindings,
         gemm,
-        matrix_group_count(matrix_n),
-        matrix_group_count(matrix_m),
+        matrix_group_count(matrix_n, gemm_tile_n),
+        matrix_group_count(matrix_m, gemm_tile_m),
         1u);
     return;
   }
@@ -5276,6 +5339,64 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     dw.output_offset = checked_item_offset(out, out.size(), "Convolution", out);
     std::array<omarchy::ComputeBinding, 3> dw_bindings{
         binding(x), binding(w), binding(out)};
+    encoder.dispatch_compute(
+        select_float_kernel(
+            out.dtype(),
+            omarchy::ComputeKernel::ConvDw1dF32,
+            omarchy::ComputeKernel::ConvDw1dF16,
+            omarchy::ComputeKernel::ConvDw1dBF16),
+        dw_bindings,
+        dw,
+        omarchy::compute_dispatch_group_count(total));
+    return;
+  }
+
+  // Same depthwise kernel over a zero-padded copy when padding is
+  // symmetric (Parakeet conformer conv1d, k=9 pad=4): the pad taps read
+  // the zeroed region and contribute the same +0.0 terms conv.comp's
+  // index guards add, so the ascending-tap accumulator and the stored
+  // bits are identical. Batch 1 only; flagged with the unit-window
+  // direct-GEMM route above (VS-3).
+  if (conv_direct_mm && spatial == 1 && groups_ == in_channels &&
+      out_channels == in_channels && in_channels_per_group == 1 &&
+      !flip_ && batch == 1 &&
+      axis_or_one(kernel_strides_, 0) == 1u && pad_lo_axis(0) > 0u &&
+      axis_or_one(padding_hi_, 0) == pad_lo_axis(0) &&
+      axis_or_one(kernel_dilation_, 0) == 1u &&
+      axis_or_one(input_dilation_, 0) == 1u &&
+      out.shape(1) ==
+          in_ext[0] - kern_ext[0] + 1 + 2 * static_cast<int>(pad_lo_axis(0))) {
+    const uint32_t pad = pad_lo_axis(0);
+    array xpad(
+        Shape{1, in_ext[0] + 2 * static_cast<int>(pad), in_channels},
+        x.dtype(),
+        nullptr,
+        {});
+    xpad.set_data(allocate_omarchy(xpad.nbytes()));
+    encoder.add_temporary(xpad);
+    encoder.fill_buffer(binding(xpad).buffer, 0u, xpad.nbytes(), 0);
+    copy_gpu_inplace(
+        x,
+        xpad,
+        Shape{static_cast<int64_t>(in_ext[0]) * in_channels},
+        Strides{1},
+        Strides{1},
+        /*i_offset=*/0,
+        /*o_offset=*/static_cast<int64_t>(pad) * in_channels,
+        CopyType::General,
+        out.primitive().stream());
+    omarchy::ComputeParams dw;
+    dw.count = total;
+    dw.operation = checked_u32(kern_ext[0], "Convolution", out);
+    dw.lhs_size = checked_u32(in_ext[0] + 2 * pad, "Convolution", out);
+    dw.rhs_size = checked_u32(out.shape(1), "Convolution", out);
+    dw.reduce_size = checked_u32(in_channels, "Convolution", out);
+    dw.output_size = total;
+    dw.lhs_offset = checked_item_offset(xpad, xpad.size(), "Convolution", out);
+    dw.rhs_offset = checked_item_offset(w, w.size(), "Convolution", out);
+    dw.output_offset = checked_item_offset(out, out.size(), "Convolution", out);
+    std::array<omarchy::ComputeBinding, 3> dw_bindings{
+        binding(xpad), binding(w), binding(out)};
     encoder.dispatch_compute(
         select_float_kernel(
             out.dtype(),
