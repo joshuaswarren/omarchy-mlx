@@ -19,6 +19,7 @@
 #
 # Output is a fixed-order PASS/FAIL list on stdout; two runs on the same
 # artifact must produce identical output. Exit 0 iff every check passed.
+# no set -e: a failed check records FAIL and the run continues, so one report lists every failure
 set -uo pipefail
 PATH="/usr/sbin:/sbin:$PATH"
 
