@@ -211,7 +211,7 @@ class DecisionsValidationTests(unittest.TestCase):
     def _post(self, body):
         conn = http.client.HTTPConnection(*self.httpd.server_address, timeout=10)
         try:
-            conn.request("POST", "/v1/decisions", json.dumps(body))
+            conn.request("POST", "/v1/decisions", body if isinstance(body, bytes) else json.dumps(body))
             r = conn.getresponse()
             return r.status, json.loads(r.read())
         finally:
@@ -225,6 +225,18 @@ class DecisionsValidationTests(unittest.TestCase):
         for body in ([], "hi", 123, None):
             with self.subTest(body=body):
                 self.assertEqual(self._post(body), (400, {"error": "request body must be a JSON object"}))
+
+    def test_undecodable_body_is_400(self):
+        cases = [
+            ("invalid UTF-8", b'{"state": "\xff"}'),
+            ("deep nesting", b"[" * 200000),
+            ("over-long integer", b'{"state": ' + b"1" * 5000 + b"}"),
+        ]
+        for name, raw in cases:
+            with self.subTest(name):
+                code, out = self._post(raw)
+                self.assertEqual(code, 400)
+                self.assertTrue(out["error"].startswith("invalid JSON: "), out)
 
     def test_unrenderable_criteria_is_400(self):
         cases = [
