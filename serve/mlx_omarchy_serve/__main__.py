@@ -266,6 +266,8 @@ def pick_recommended(cat: dict, kind: str, context_tokens: int | None, home: Pat
     the standing approval contract. Curated priority reflects quality and
     is preserved as the ordering within the recommended tier; the same
     ordering is the `ranked` display order the CLI table uses verbatim."""
+    if context_tokens is not None:
+        budget.require_positive_context(context_tokens)
     soc = machine_soc()
     ranked = sorted(
         (e for e in cat["models"] if e["kind"] == kind),
