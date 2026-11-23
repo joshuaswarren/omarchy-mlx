@@ -350,6 +350,11 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 191));
   CHECK(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 192));
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 0);
+  // BMG G21 (Intel Arc Pro B60 eGPU): EG-1 showed the fused kernel at ~2 GB/s
+  // on a fixed 32-group grid; EG-2 measured the split route winning at 512.
+  CHECK(omarchy::sdpa_split_min_keys("Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)") == 512);
+  CHECK_FALSE(omarchy::sdpa_split_default("Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)", 511));
+  CHECK(omarchy::sdpa_split_default("Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)", 512));
   // Ultra exclusions (#418): neither Ultra part is qualified for a nonzero
   // default, so both keep the fused kernel (min_keys 0) and the default is
   // off at any key length.
