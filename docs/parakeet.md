@@ -8,7 +8,7 @@ The installed fixture command retains its pinned-input contract.
 The new source module `coreml.parakeet_dictation` accepts bounded PCM WAV recordings through the same encoder and decoder.
 It resamples through MLX GPU operations and runs under an owned, cancellable worker.
 The general-input path remains unqualified until independent accuracy, cancellation, and device-recovery tests pass on hardware.
-The [assistant design](plans/2026-09-27-offline-assistant-design.md#voice-uses-the-same-conversation) defines the remaining voice gates.
+The remaining voice gates are independent accuracy, cancellation and device-recovery tests.
 
 ## What is pinned
 

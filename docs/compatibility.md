@@ -143,8 +143,7 @@ bit-exact against eager by construction; the C++ compiled-tape battery
 pins this with raw-uint16 comparisons, including a bf16 shapeless
 trace-then-reuse case (the exact mlx-lm trigger). The in-model
 fused-bf16 corruption behind the 2026-09-18 fence was the DivLast leaf
-misindexing fixed at `da43969e`; the fence is removed (see the
-fused-chain defect entry in [known-defects.md](known-defects.md)).
+misindexing fixed at `da43969e`; the fence is removed (fixed at commit `da43969e`).
 
 ### Compiled tapes on Apple GPUs - fixed and re-enabled
 
@@ -159,10 +158,9 @@ and the `MLX_OMARCHY_ALLOW_UNSAFE_COMPILE` override were retired with
 the fix. bf16 tapes run per-node (the 2026-09-02 bf16 gate above was
 the same stale-shape defect, lifted 2026-09-18), fused bf16 chains are
 fenced separately, and the trig domain gate is now the shared in-shader
-Cody-Waite reduction (accurate to 5e5, NaN above; the 2026-10-03
-entry in known-defects.md).
+Cody-Waite reduction (accurate to 5e5, NaN above; measured 2026-10-03).
 Full record:
-[known-defects.md](known-defects.md) and
+`receipts/2026-09-03-stale-shape-tape-corruption.md` and
 `receipts/2026-09-03-stale-shape-tape-corruption.md`. Compiled-versus-
 eager speed is not measured yet (TCF-2).
 
@@ -943,7 +941,7 @@ A Supported row must link every applicable record.
   the rep=1 fd sweep now covers B=1/2, qL=1/2/5, kL=1/2/5/7, D=4/8/64,
   causal and maskless. Two value defects remain open at small shapes
   (qL=1 kL>1 all-zero dk/dv, hardware-confirmed; B=1 kL=5 zero spots,
-  llvmpipe) - see docs/known-defects.md; qL=1 is decode geometry, so
+  llvmpipe)  - hardware-confirmed; qL=1 is decode geometry, so
   backward through a single-query step loses dk/dv until fixed.
   GQA (rep > 1) stays composed: the fused dk/dv run ~0.7x short
   of host finite differences at rep=2 (GQA reduce/matmul shortfall,

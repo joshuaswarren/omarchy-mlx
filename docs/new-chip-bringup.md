@@ -52,9 +52,9 @@ this order:
    conjunction).
 3. **Arithmetic contract probes** (the driver miscompile class Honeykrisp
    shipped with): fdiv ulp, cos near pi/2, FLT_MAX division flushing,
-   log ulp, shift-then-mask, wide dynamic selectors. `docs/known-defects.md`
-   lists the exact failures seen on stock builds. A new driver build
-   that fails any probe gets a known-defects entry before anything
+   log ulp, shift-then-mask, wide dynamic selectors. These are the
+   exact failures seen on stock builds. A new driver build
+   that fails any probe gets an issue before anything
    else runs on it.
 4. **Physical subgroup sanity**: the reported `subgroup_size` must equal
    the width a trivial `subgroupAdd` reduction actually sums (one
@@ -125,7 +125,7 @@ Decide from the leg-2/3 results:
   workgroup-uniform layout) before `QmmVecSubgroup*` /
   `MatmulVecBF16` / `SdpaDecodeNative` can dispatch.
 - **Any wrong numbers inside a claimed route**: a driver arithmetic
-  defect (class: `docs/known-defects.md`). File it, gate the kernel
+  defect. File it, gate the kernel
   behind the failing probe, keep the fallback. Never widen a gate to
   make a defect disappear.
 - **CreateDevice / pipeline failures under a profile only**: the

@@ -32,7 +32,7 @@ Row policy (review fixes):
     BENCHMARKS history only.
   - Shares print one decimal (a sub-1% share shows as 0.3%, never 0%).
   - 13-inch Llama-3.1-8B / Mellum2-12B are Linux-only (no macOS share)
-    and carry the unexplained-drop flag linking to docs/KNOWN-ISSUES.md.
+    and carry the unexplained-drop flag (the 13-inch M1 governor note in BENCHMARKS.md).
   - Every table carries Driver and Wheel columns; Runs is the real run
     count from the logs.
 """
@@ -62,13 +62,7 @@ DRIVER_DISPLAY = {
 ANE_METRICS = {"ane-encoder"}
 G13G_EXCLUDED_MODELS = {"Qwen3.5-9B"}
 G13G_DROP_FLAG_MODELS = {"Llama-3.1-8B", "Mellum2-12B-A2.5B"}
-DROP_ANCHOR = (
-    "decode-on-the-13-inch-m1-changed-with-the-cpu-governor-with-no-ane-work-running"
-)
-DROP_FLAG = (
-    "decode inside the unexplained 13-inch drop, see "
-    f"[KNOWN-ISSUES](KNOWN-ISSUES.md#{DROP_ANCHOR})"
-)
+DROP_FLAG = "decode inside the unexplained 13-inch drop (governor note in BENCHMARKS.md)"
 # The PR 124 merge wheel: its interleaved control is the staged gather_qmm route on the same
 # wheel and the same installed driver, not the v3 ICD.
 STAGED_WHEEL = "18059c80"

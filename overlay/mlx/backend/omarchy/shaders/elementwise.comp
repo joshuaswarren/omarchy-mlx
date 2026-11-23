@@ -595,7 +595,7 @@ float float_power(float base, float exponent) {
 // and the rope kernels; the accuracy contract (accurate to
 // OMARCHY_TRIG_LIMIT, NaN above, built-in bit-identical below
 // OMARCHY_TRIG_BUILTIN_MAX) is documented there and in
-// docs/known-defects.md.
+// measured 2026-10-06.
 
 void main() {
   uint index = gl_GlobalInvocationID.x;

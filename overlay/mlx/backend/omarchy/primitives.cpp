@@ -3756,8 +3756,8 @@ void dispatch_gather_qmm(
     // form has no dense twin and is gated against fp64. Both are opt-in developer
     // switches, off by default, so the 8-output element kernel below stays the route:
     // MLX_OMARCHY_GATHER_QMM_WORD=1 (4-bit; its teacher-forced NLL gate gave verdict
-    // REJECT, see docs/KNOWN-ISSUES.md) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
-    // hidden-state fidelity gate gave verdict WIDER, see docs/KNOWN-ISSUES.md).
+    // numerics verdict REJECT) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
+    // hidden-state fidelity gate gave verdict WIDER).
     const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
     const char* word2_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD2");
     const bool word4 = bits == 4 && group_size == 64 &&
@@ -5660,7 +5660,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
 // magnitude above the envelope to the reduction. The previous
 // trig_argument_gate (a full GPU sync + host read per sin/cos call,
 // removed by 6cbf55d8f) stayed dead until this change deleted it; its
-// accuracy history lives in docs/known-defects.md.
+// accuracy history lives in the git history of the retired defect ledger.
 constexpr float kTrigArgumentLimit = 5.0e5f;
 
 void Cos::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -12538,7 +12538,7 @@ void Sin::eval_gpu(const std::vector<array>& inputs, array& out) {
   // handles large arguments: accurate vs float64 up to kTrigArgumentLimit
   // and NaN above it. The old trig_argument_gate (a full GPU sync +
   // host read per sin/cos call) is gone; its history and the owner's
-  // perf-tradeoff note are in docs/known-defects.md.
+  // perf-tradeoff note is dated 2026-10-03.
   dispatch_elementwise(
       name(), SinOperation, inputs, out, out.primitive().stream());
 }
@@ -15954,7 +15954,7 @@ bool RoPE::use_fallback(Stream s) {
 }
 
 // Fused RoPE absorbs the eager composition's Sin and Cos primitives, so it
-// carries their kTrigArgumentLimit gate: known-defects.md, "A correction on
+// carries their kTrigArgumentLimit gate: "A correction on
 // the record", pins that a path which runs a primitive without going
 // through its eval_gpu must carry that primitive's gates. The eager gate
 // reduced the materialized theta tensor; this path never builds one, so the

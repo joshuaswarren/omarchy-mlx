@@ -22,7 +22,7 @@
 // lanes use the receipt-proven constant-shift BYTE_AT chain and the
 // commuting atomicAnd/atomicOr lane pair from cast_int.comp
 // (Honeykrisp miscompiles data-dependent shift-then-mask extraction;
-// see docs/known-defects.md).
+// measured 2026-10-03).
 
 #ifdef USE_U32
 #define STORAGE_TYPE uint

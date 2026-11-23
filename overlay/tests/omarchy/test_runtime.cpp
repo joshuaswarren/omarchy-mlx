@@ -227,8 +227,8 @@ int run_child_scenario(const std::string& mode) {
     // llvmpipe, so the watchdog fires on real in-flight work (the same
     // misclassification a jumbo prefill hits); on fast hardware the
     // fills complete inside the first poll and the child still asserts
-    // clean teardown after a successful join. Per docs/known-defects.md
-    // a process that hit a wedge must be restarted before its output is
+    // clean teardown after a successful join. A
+    // process that hit a wedge must be restarted before its output is
     // trusted, so the contract under test is exit 0 through teardown,
     // not same-device recovery. The allocation is leaked on purpose:
     // the fill is still executing, and a cache-free would hand that
@@ -2872,8 +2872,7 @@ TEST_CASE("independent streams measure against the serialized sum") {
   // timing loss is not a correctness failure. Until NVIDIA numbers are
   // collected here the floor is asserted on every driver except NVIDIA
   // proprietary; the test still prints its ratio for every run so a
-  // per-driver floor can be set from collected numbers. See
-  // docs/KNOWN-ISSUES.md.
+  // per-driver floor can be set from collected numbers.
   // Borealis on the M4 Pro (G16S) measures 0.83-0.93 over repeated runs of
   // this case (the same binary on the M1/Honeykrisp device measures 1.0 and
   // above), with every copy byte-for-byte correct; its floor is 0.80, which a

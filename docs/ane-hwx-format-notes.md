@@ -187,8 +187,7 @@ end for what we can lift directly versus what we cannot.
   24 MiB → 96 MiB "cliff" we noted in `qwen-linux-terminal-task.log`
   looks like this same threshold crossed with three fp16 tensors resident
   at once, not a hard SRAM capacity boundary; on M1 with a smaller
-  threshold this becomes the dispatch cliff our coverage-plan already
-  flags.
+  threshold this becomes the same dispatch cliff class.
 
 ### Compute array, channels, and geometry (Part 4, "Inside the Engine" → Compute, Geometry matters)
 

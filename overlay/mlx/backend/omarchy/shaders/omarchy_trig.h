@@ -1,7 +1,7 @@
 // Shared trig range reduction for omarchy compute shaders.
 //
 // The Honeykrisp built-in sin/cos/tan lose upstream-grade accuracy above
-// ~1e3 and collapse past ~1e6 (measured, docs/known-defects.md); llvmpipe
+// ~1e3 and collapse past ~1e6 (measured 2026-10-06); llvmpipe
 // collapses above ~1e7. Every path that evaluates a trigonometric
 // function of an argument that is not bounded by construction goes
 // through this header's omarchy_trig_* wrappers instead of the raw

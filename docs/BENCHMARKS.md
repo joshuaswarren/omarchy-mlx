@@ -1,6 +1,6 @@
 # How close to macOS
 
-Back to the [README](../README.md). Output differences, withdrawn rows and models that could not run are in [KNOWN-ISSUES.md](KNOWN-ISSUES.md).
+Back to the [README](../README.md).
 
 Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Where macOS is shown, the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
 
@@ -201,7 +201,7 @@ The v3 runs of gemma-4-26B-A4B span 10.17 to 12.96 over 18 runs, with a median o
 
 ### 13-inch M1, single runs
 
-gemma-4-E4B on the newer driver: 9.02 / 111.21, 9.05 / 111.59 and 9.08 / 110.0 (decode / prefill 512), with start loads of 1.21, 1.10 and 1.50. The interleaved block above gives a decode ratio of 1.014 and a prefill ratio of 0.996. No other 13-inch M1 row is published for the newer driver. Decode on some models on this chip fell later in the day. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md).
+gemma-4-E4B on the newer driver: 9.02 / 111.21, 9.05 / 111.59 and 9.08 / 110.0 (decode / prefill 512), with start loads of 1.21, 1.10 and 1.50. The interleaved block above gives a decode ratio of 1.014 and a prefill ratio of 0.996. No other 13-inch M1 row is published for the newer driver. Decode on some models on this chip fell later in the day.
 
 ## Set the CPU governor for local AI
 

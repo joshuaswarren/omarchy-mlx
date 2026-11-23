@@ -181,7 +181,7 @@ TEST_CASE("W5 log10 pin and non-power inputs agree with numpy f32") {
 // The band 1e4 < |x| <= 5e5 is the shared Cody-Waite reduction (accurate
 // vs float64); |x| > 5e5 is NaN by contract. The old per-call host gate
 // refused instead; the NaN contract replaced it at the owner's perf
-// tradeoff (docs/known-defects.md, 2026-10-03).
+// tradeoff (measured 2026-10-03).
 TEST_CASE("trig reduction is accurate through the limit band") {
   if (!compute_available()) {
     return;
