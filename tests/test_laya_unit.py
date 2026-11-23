@@ -596,6 +596,69 @@ class QualifyDeviceGuardTests(unittest.TestCase):
         self.assertIn("device: Device(gpu, 0)", out)
         self.assertIn("VERDICT: PASS", out)
 
+    def test_receipt_prints_the_loaded_mlx_provenance_line(self):
+        # mlx_provenance.py prints indented JSON; its last line is "}".
+        rc, out = self._qualify("gpu", "--url", self.url)
+        self.assertEqual(rc, 0)
+        line, = [ln for ln in out.splitlines() if ln.startswith("provenance")]
+        self.assertTrue(line.startswith("provenance: mlx-omarchy "), line)
+        self.assertIn(" mx=stub ", line)  # the mlx this interpreter loaded
+        self.assertIn(" verified=", line)
+        self.assertIn(" harness=", line)
+
+
+class QualifyProvenanceTests(unittest.TestCase):
+    def test_provenance_reports_record_match_and_mismatch(self):
+        # mlx_provenance.py exits 3 on a RECORD mismatch; the receipt must
+        # still name the verdict and the loaded hash, not "}" or an error.
+        import base64
+        import hashlib
+        import tempfile
+        import types
+        import unittest.mock as mock
+
+        from mlx_omarchy_laya import qualify
+
+        class RecordFile(str):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp) / "mlx" / "lib" / "libmlx.so"
+            lib.parent.mkdir(parents=True)
+            lib.write_bytes(b"libmlx")
+            core = types.ModuleType("mlx.core")
+            core.__version__ = "1.0"
+            pkg = types.ModuleType("mlx")
+            pkg.core = core
+            for recorded, verdict in ((b"libmlx", "match"), (b"stale", "mismatch")):
+                entry = RecordFile("mlx/lib/libmlx.so")
+                entry.hash = types.SimpleNamespace(mode="sha256", value=base64.urlsafe_b64encode(
+                    hashlib.sha256(recorded).digest()).decode().rstrip("="))
+                dist = types.SimpleNamespace(version="1.0", files=[entry], locate_file=lambda rel: Path(tmp) / rel)
+                with self.subTest(verdict=verdict), \
+                        mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), \
+                        mock.patch("importlib.metadata.distribution", return_value=dist):
+                    line = qualify._provenance(REPO)
+                    self.assertTrue(line.startswith("provenance: mlx-omarchy 1.0 mx=1.0 verified=%s harness=" % verdict),
+                                    line)
+                    self.assertTrue(line.endswith(" libmlx.so=sha256:" + hashlib.sha256(b"libmlx").hexdigest()[:16]),
+                                    line)
+
+    def test_provenance_reports_no_mlx(self):
+        import unittest.mock as mock
+
+        from mlx_omarchy_laya import qualify
+
+        with mock.patch.dict(sys.modules, {"mlx": None, "mlx.core": None}):  # import mlx.core raises
+            line = qualify._provenance(REPO)
+        self.assertTrue(line.startswith("provenance: mlx-omarchy None mx=None verified=no-mlx harness="), line)
+        self.assertTrue(line.endswith(" files=unresolved"), line)
+
+    def test_missing_script_still_prints_a_provenance_line(self):
+        from mlx_omarchy_laya import qualify
+
+        self.assertEqual(qualify._provenance(REPO / "no-such-repo"), "provenance: script not present")
+
 
 # ---------------------------------------------------------------- helpers
 

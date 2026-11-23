@@ -24,8 +24,8 @@ records the achieved deltas either way):
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
-import subprocess
 import sys
 import time
 import urllib.request
@@ -39,14 +39,17 @@ ACT_GATE = 5e-2
 
 
 def _provenance(repo_root: Path) -> str:
+    """The scripts/mlx_provenance.py one-line summary for this interpreter."""
     script = repo_root / "scripts" / "mlx_provenance.py"
-    if script.exists():
-        try:
-            out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=120)
-            return (out.stdout or out.stderr).strip().splitlines()[-1] if (out.stdout or out.stderr) else "provenance unavailable"
-        except Exception as exc:
-            return "provenance unavailable: %s" % exc
-    return "provenance script not present"
+    if not script.is_file():
+        return "provenance: script not present"
+    try:
+        spec = importlib.util.spec_from_file_location("mlx_provenance", script)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.provenance_line(mod.installed_provenance())
+    except Exception as exc:
+        return "provenance: unavailable: %s: %s" % (type(exc).__name__, exc)
 
 
 def _run_case_direct(model, state, questions, require_gpu):
@@ -148,7 +151,7 @@ def main(argv=None):
 
     print("=" * 72)
     print("laya hardware qualification")
-    print("provenance: %s" % _provenance(repo_root))
+    print(_provenance(repo_root))
     print("mlx: %s | device: %s | mode: %s" % (
         mx.__version__, device, "server %s" % args.url if args.url else "direct engine"))
     manifest = Path(args.model) / "manifest.json"
