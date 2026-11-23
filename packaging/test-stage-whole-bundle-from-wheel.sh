@@ -36,7 +36,6 @@ with open(sys.argv[3], "w") as fh:
     json.dump(pin, fh)
 EOF
 SOURCE_THIS='source "$(dirname "$0")/stage-whole-bundle.sh"'
-HERE=$(cd "$(dirname "$0")" && pwd)
 
 # 1. extract-from-wheel staging succeeds and matches the wheel's digests
 bash -c "set -eu; unset MLX_OMARCHY_WHOLE_BUNDLE_DIR; MLX_OMARCHY_WHOLE_BUNDLE_WHEEL='$WHEEL'; $SOURCE_THIS; stage_whole_bundle '$WORK'" >/dev/null
