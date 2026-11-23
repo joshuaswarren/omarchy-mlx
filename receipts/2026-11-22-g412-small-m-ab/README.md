@@ -37,8 +37,12 @@ itself:
 
 The canary row (M=520, N=4096) proves the two arms dispatched different
 kernels: ctl keeps 32 rows there, the forced floor takes 16, and the times
-must differ by >= 5x. Smaller canary deltas = the env did not reach the
-selector = void run.
+must differ by >= 1.3x (the tile geometry predicts 1.5-2x: identical mma
+work, halved weight-tile reuse). Canary times equal within ~5% = the env
+did not reach the selector = void run. (Pre-registered bar corrected
+2026-11-23: the original 5x was miscalibrated; see
+receipts/2026-11-23-g412-small-m-jwm1/README.md, where the same canary
+measured 1.55x with ALL_MATCH digests.)
 
 ## One-paste packet
 
@@ -66,7 +70,8 @@ Pass conditions:
    pick must never move outputs). The 16-row twin keeps the per-output
    ascending-k f32 chain; identity is doctest-pinned on the M1 Max and
    M2 Max parts, and this gate closes it on G16S hardware.
-2. Canary row (M=520) times differ by >= 5x between the arms.
+2. Canary row (M=520) times differ by >= 1.3x between the arms; a tie
+   within ~5% voids the run (the env did not reach the selector).
 3. The M in 17..31 `us` columns are the decision input: they compare the
    selector's default pick (32-row at N >= 3840, 16-row below) against the
    uniform 16-row twin on the same shapes. If the default's pick is slower
