@@ -66,6 +66,30 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/conversations', {'save': False}, missing)[0], 403)
         self.assertEqual(self.request('POST', '/api/conversations', {'save': False}, headers)[0], 201)
 
+    def raw_post(self, path, raw, headers):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        self.addCleanup(conn.close)
+        conn.request('POST', path, raw, headers)
+        response = conn.getresponse()
+        return response.status, json.loads(response.read())
+
+    def test_deeply_nested_json_body_is_a_bad_request(self):
+        anonymous = {'Origin': self.origin, 'Content-Type': 'application/json'}
+        for raw in (b'[' * 200000, b'{"a":' * 100000):
+            status, body = self.raw_post('/api/session', raw, anonymous)
+            self.assertEqual((status, body), (400, {'error': 'Request JSON is nested too deeply'}))
+        headers = self.login()
+        status, body = self.raw_post('/api/conversations', b'[' * 200000, headers)
+        self.assertEqual((status, body), (400, {'error': 'Request JSON is nested too deeply'}))
+
+    def test_recursion_inside_a_handler_is_still_a_server_error(self):
+        def overflow(handler, parsed):
+            raise RecursionError('handler bug')
+        with mock.patch.dict(server_module.Handler._ROUTES, {('POST', '/api/session'): overflow}):
+            status, body = self.raw_post('/api/session', b'{}',
+                {'Origin': self.origin, 'Content-Type': 'application/json'})
+        self.assertEqual((status, body), (503, {'error': 'handler bug', 'code': 'RecursionError'}))
+
     def _open_events(self, headers, cid, after=0):
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
         self.addCleanup(conn.close)
