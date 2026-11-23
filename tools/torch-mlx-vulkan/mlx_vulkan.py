@@ -161,7 +161,7 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     if groups != 1:
         return _raise("grouped conv2d")
     x = _mx(a).transpose(0, 2, 3, 1)
-    wt = _mx(w).transpose(2, 3, 1, 0)
+    wt = _mx(w).transpose(0, 2, 3, 1)  # OIHW -> O,H,W,I (mlx conv2d weight layout)
     p = tuple(padding) if isinstance(padding, (list, tuple)) else (padding, padding)
     st = tuple(stride) if isinstance(stride, (list, tuple)) else (stride, stride)
     dl = tuple(dilation) if isinstance(dilation, (list, tuple)) else (dilation, dilation)
@@ -171,12 +171,18 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     return y.transpose(0, 3, 1, 2)
 
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
-    # torch NCHW ; mx.fast.group_norm wants channels last
-    x = _mx(a).transpose(0, 2, 3, 1)
-    y = mx.fast.group_norm(x, num_groups,
-                           _mx(w) if w is not None else None,
-                           _mx(b) if b is not None else None, eps)
-    return y.transpose(0, 3, 1, 2)
+    # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
+    x = _mx(a)
+    n, c = x.shape[0], x.shape[1]
+    xg = x.reshape(n, num_groups, -1)
+    mean = xg.mean(axis=-1, keepdims=True)
+    var = ((xg - mean) ** 2).mean(axis=-1, keepdims=True)
+    xn = ((xg - mean) / mx.sqrt(var + eps)).reshape(x.shape)
+    if w is not None:
+        xn = xn * _mx(w).reshape(1, -1, 1, 1)
+    if b is not None:
+        xn = xn + _mx(b).reshape(1, -1, 1, 1)
+    return xn
 
 def _interpolate(a, size=None, scale_factor=None, mode="nearest",
                  align_corners=None, recompute_scale_factor=None, **k):
