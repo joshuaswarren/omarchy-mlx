@@ -204,6 +204,14 @@ def _interpolate(a, size=None, scale_factor=None, mode="nearest",
 
 # torch-level function objects -> lowering. Built lazily below so missing
 # attributes on any given torch build can't break the import.
+def _embedding(weight, idx):
+    """aten.embedding(weight, indices) order."""
+    return _mx(weight)[_mx(idx).astype(mx.int32)]
+
+def _embedding_f(input, weight, *a_, **k_):
+    """F.embedding(input, weight) order."""
+    return _embedding(weight, input)
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -306,7 +314,7 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
+    "embedding": _embedding_f,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
@@ -346,7 +354,7 @@ def _build_func_table():
         ("torch.nn.functional.softmax", _FUNC_SPECS["softmax"]),
         ("torch.nn.functional.scaled_dot_product_attention", _sdpa),
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
-        ("torch.nn.functional.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
+        ("torch.nn.functional.embedding", _embedding_f),
         ("operator.getitem", lambda t, i: t[i]),
         ("operator.matmul", mx.matmul),
         ("operator.add", _FUNC_SPECS["add"]),
@@ -379,6 +387,8 @@ _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
+# aten.embedding is (weight, indices): F.embedding is (input, weight).
+ATEN_TABLE["embedding"] = _embedding
 
 # zero-kernel bookkeeping targets: run on python values, logged GLUE
 GLUE_FNS = {len, tuple, list, dict, int, float, str, bool, slice, range, zip, torch.finfo, torch.iinfo,
