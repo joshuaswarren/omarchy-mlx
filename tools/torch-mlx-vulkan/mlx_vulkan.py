@@ -110,17 +110,20 @@ def _ln_native(a, normalized_shape, weight, bias, eps):
     aot_autograd saves the returned mean and rstd and feeds them to
     aten.native_layer_norm_backward; dummies (the old lowering) make that
     backward divide by rstd = 0 and every gradient upstream of the norm
-    turns NaN at the first training step (PT-T1 bisect).
+    turns NaN at the first training step (PT-T1 bisect). The stats reduce
+    over the trailing len(normalized_shape) axes and keep them singleton,
+    matching aten's saved shapes for any normalized_shape.
     """
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
-    mu = a.mean(axis=-1, keepdims=True)
-    var = a.square().mean(axis=-1, keepdims=True) - mu.square()
-    rstd = mx.rsqrt(var + eps)
+    axes = tuple(range(a.ndim - len(normalized_shape), a.ndim))
+    mu = a.mean(axis=axes, keepdims=True)
+    rstd = mx.rsqrt(
+        a.square().mean(axis=axes, keepdims=True) - mu.square() + eps)
     out = (a - mu) * rstd
     out = out * w if w is not None else out
     out = out + b if b is not None else out
-    return (out, mu.squeeze(-1), rstd.squeeze(-1))
+    return (out, mu, rstd)
 
 def _expand(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
@@ -564,24 +567,43 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
+            if node.op == "output":
+                return val
         return None
 
     return run, stats
 
 
-def _eager_run(gm):
+def _eager_run(gm, return_all_outputs=False):
     run, stats = make_executor(gm)
     run._mlx_stats = stats
     return run
 
 
+def _boxed(runner):
+    """aot_autograd's runtime passes the inputs flat (some paths boxed as
+    one list). Normalize to *args for the executor, which consumes one
+    positional per placeholder."""
+    def call(*inputs):
+        flat = inputs
+        if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
+                and not isinstance(inputs[0], mx.array)
+                and all(isinstance(i, (torch.Tensor, mx.array))
+                        for i in inputs[0])):
+            flat = tuple(inputs[0])
+        return runner(*flat)
+
+    return call
+
+
 @torch._dynamo.register_backend(name="mlx_vulkan")
-def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
+def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs,
+                       return_all_outputs=False):
     try:
-        run_c = make_compiled_executor(gm)
+        run_c = make_compiled_executor(gm, return_all_outputs)
     except Exception as e:
         log.warning("compiled executor setup failed: %s", e)
-        return _eager_run(gm)
+        return _eager_run(gm, return_all_outputs)
     holder = {"run": None}
 
     def guarded(*args):
@@ -589,7 +611,7 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
             try:
                 out = run_c(*args)
             except Exception as e:
-                log.warning("compiled executor failed (%s); falling back to eager", e)
+                import traceback as _tb; log.warning("compiled executor failed (%s); falling back to eager\n%s", e, _tb.format_exc())
                 holder["run"] = _eager_run(gm)
             else:
                 holder["run"] = run_c
@@ -597,6 +619,7 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
         return holder["run"](*args)
 
     guarded._mlx_stats = run_c._mlx_stats
+    guarded.return_all_outputs = return_all_outputs
     return guarded
 
 
@@ -726,7 +749,7 @@ def _fuse_rmsnorm(nodes):
     return skip, final
 
 
-def make_compiled_executor(gm):
+def make_compiled_executor(gm, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
     skip, fused = _fuse_rmsnorm(nodes)
@@ -749,6 +772,8 @@ def make_compiled_executor(gm):
 
         def res(a):
             if isinstance(a, torch.fx.Node):
+                if a not in env:
+                    raise KeyError("node %s (%s) not in env" % (a, a.op))
                 return env[a]
             if isinstance(a, (tuple, list)):
                 return type(a)(res(x) for x in a)
@@ -757,7 +782,7 @@ def make_compiled_executor(gm):
         for n in nodes:
             if n.op == "placeholder" or n in skip:
                 continue
-            name = getattr(n.target, "__name__", None) or _opname(n)
+            name = _opname(n)
             if n.op == "output":
                 out = res(n.args[0])
                 tail = [env[m] for m in mutated]
@@ -827,6 +852,62 @@ def make_compiled_executor(gm):
             if name == "add_":
                 env[n.args[0]] = env[n.args[0]] + args[1]
                 env[n] = env[n.args[0]]
+                continue
+            # The aot backward graph: these ops must stay on mx or the whole
+            # training step crosses to torch per node (PT-T1 speed gate).
+            if name == "t" and n.op == "call_function":
+                env[n] = mx.swapaxes(args[0], -1, -2)
+                continue
+            if name in ("transpose", "transpose.int") and n.op == "call_function":
+                a0 = args[0]
+                d0, d1 = int(args[1]), int(args[2])
+                env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
+                continue
+            if name in ("t", "transpose", "transpose.int", "view",
+                        "_unsafe_view", "detach", "gelu_backward",
+                        "native_layer_norm_backward", "split") \
+                    and n.op == "call_function":
+                shape = args[1]
+                if isinstance(shape, torch.fx.Node):
+                    shape = env[shape]
+                if isinstance(shape, int):
+                    shape = (shape,)
+                env[n] = mx.reshape(args[0], tuple(int(s) for s in shape))
+                continue
+            if name == "detach" and n.op == "call_function":
+                env[n] = args[0]
+                continue
+            if name == "gelu_backward" and n.op == "call_function":
+                go, x = _cast(args[0]), _cast(args[1])
+                approx = args[2] if len(args) > 2 else "none"
+                if approx == "tanh":
+                    inner = math.sqrt(2.0 / math.pi) * (x + 0.044715 * x * x * x)
+                    phi = 0.5 * (1.0 + mx.tanh(inner))
+                    dphi = math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * x * x) \
+                        * (1.0 - mx.tanh(inner) * mx.tanh(inner))
+                    env[n] = go * (phi + x * dphi)
+                else:
+                    env[n] = go * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
+                                   + x * mx.exp(-(x * x) / 2.0)
+                                   / math.sqrt(2.0 * math.pi))
+                continue
+            if name == "native_layer_norm_backward" and n.op == "call_function":
+                go, inp = _cast(args[0]), _cast(args[1])
+                nshape = args[2]
+                mean, rstd, weight = _cast(args[3]), _cast(args[4]), args[5]
+                out_mask = args[7] if len(args) > 7 else [True, True, True]
+                w = _cast(weight) if weight is not None else None
+                inp_nd = inp.ndim
+                red = tuple(range(inp_nd - len(nshape), inp_nd))
+                xhat = (inp - mean) * rstd
+                dw = (go * xhat).sum(axis=red) if 1 in out_mask else None
+                db = go.sum(axis=red) if 2 in out_mask else None
+                dx = rstd * (go - go.mean(axis=red, keepdims=True)
+                             - xhat * (go * xhat).mean(axis=red,
+                                                       keepdims=True))
+                if w is not None:
+                    dx = dx * w
+                env[n] = (dx, dw, db)
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
@@ -934,6 +1015,8 @@ def make_compiled_executor(gm):
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
             if _acc["n"] % 10 == 0:
                 print(f"MV_PROF n={_acc['n']} prep={_acc['prep']/_acc['n']*1e3:.1f}ms cfn={_acc['cfn']/_acc['n']*1e3:.1f}ms conv={_acc['conv']/_acc['n']*1e3:.1f}ms", flush=True)
+        if return_all_outputs:
+            return tuple(_torch(t) for t in outs)
         return out
 
     run._mlx_stats = stats

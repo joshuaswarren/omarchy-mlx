@@ -8,7 +8,10 @@ name produced a transposed-garbage tensor and crashed the first training run
 (G708 PT-T1, 128-vs-384 broadcast failure).
 """
 import numpy as np
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")
+mx = pytest.importorskip("mlx.core")
 
 
 def test_embedding_lowerings_agree_for_both_orders(mlx_vulkan):
