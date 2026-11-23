@@ -34,9 +34,12 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/gpu/copy.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/trace.h"
+#include "mlx/memory.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
+#include "mlx/transforms.h"
 
 using namespace mlx::core;
 
@@ -1288,6 +1291,428 @@ TEST_CASE("masked_scatter supports bool arrays (upstream #4635)") {
                        make(to_bits(ssrc)), stream),
         reference(sdst, smask, ssrc), stream);
   }
+}
+
+// Bool-output MaskedScatter beyond single-word masks. The bool route
+// (MaskedScatterBool) binds its own buffers rather than going through
+// binding(), packs four bool bytes per word, and writes each lane's byte
+// with an atomicAnd/atomicOr pair. These cases read the evaluated raw
+// storage bytes, so a stale, lost, or non-normalized byte fails even when
+// it would still read back as a truthy bool.
+
+namespace {
+
+// The flat-order masked_scatter reference: out = dst; the k-th true mask
+// position takes src[k] while the source lasts.
+std::vector<uint8_t> masked_scatter_bytes_reference(
+    std::vector<uint8_t> out,
+    const std::vector<uint8_t>& mask,
+    const std::vector<uint8_t>& src) {
+  size_t rank = 0;
+  for (size_t i = 0; i < mask.size(); ++i) {
+    if (mask[i] != 0) {
+      if (rank < src.size()) {
+        out[i] = src[rank];
+      }
+      ++rank;
+    }
+  }
+  return out;
+}
+
+std::vector<uint8_t> random_bits(size_t count, float density, uint64_t seed) {
+  std::vector<uint8_t> bits(count);
+  for (auto& bit : bits) {
+    bit = lcg(seed) < density ? 1 : 0;
+  }
+  return bits;
+}
+
+array bool_array(const std::vector<uint8_t>& bits, Shape shape) {
+  return array(bits.begin(), std::move(shape), bool_);
+}
+
+// Every raw storage byte of the evaluated array equals |expected|: each
+// byte must be exactly 0 or 1, not merely truthy.
+void check_bool_bytes(
+    array value,
+    const std::vector<uint8_t>& expected,
+    const Stream& stream) {
+  value.eval();
+  sync_gpu(stream);
+  REQUIRE_EQ(value.size(), expected.size());
+  // Row-major storage, whatever the contiguity flags claim.
+  int64_t stride = 1;
+  for (int axis = static_cast<int>(value.ndim()) - 1; axis >= 0; --axis) {
+    if (value.shape(axis) != 1) {
+      REQUIRE_EQ(value.strides(axis), stride);
+    }
+    stride *= value.shape(axis);
+  }
+  const auto* bytes = reinterpret_cast<const uint8_t*>(value.data<bool>());
+  size_t bad = 0;
+  size_t first_bad = expected.size();
+  for (size_t i = 0; i < expected.size(); ++i) {
+    if (bytes[i] != expected[i]) {
+      if (bad == 0) {
+        first_bad = i;
+      }
+      ++bad;
+    }
+  }
+  INFO("first bad byte ", first_bad, " of ", expected.size(), ": got ",
+       first_bad < expected.size() ? int(bytes[first_bad]) : -1, " want ",
+       first_bad < expected.size() ? int(expected[first_bad]) : -1);
+  CHECK(bad == 0);
+}
+
+size_t count_true(const std::vector<uint8_t>& bits) {
+  return static_cast<size_t>(std::count(bits.begin(), bits.end(), 1));
+}
+
+} // namespace
+
+TEST_CASE("masked_scatter bool writes exact bytes across packed words and rows") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  struct Case {
+    Shape shape;
+    float density;
+    int src_delta; // source length = true count + delta
+    uint64_t seed;
+  };
+  // Sizes off the four-byte word grid, multi-word masks whose true
+  // positions span several words, 2-D and 3-D rows, a sparse and a dense
+  // mask, a surplus source, and a source that runs out mid-word.
+  const std::vector<Case> cases = {
+      {{5}, 0.5f, 0, 11},
+      {{13}, 0.5f, 2, 12},
+      {{3, 7}, 0.4f, 0, 13},
+      {{2, 3, 7}, 0.6f, 1, 14},
+      {{257}, 0.25f, 0, 15},
+      {{1031}, 0.9f, -5, 16},
+      {{4, 1023}, 0.5f, 0, 17},
+  };
+  for (const auto& c : cases) {
+    size_t n = 1;
+    for (int dim : c.shape) {
+      n *= static_cast<size_t>(dim);
+    }
+    CAPTURE(n);
+    CAPTURE(c.seed);
+    auto dst = random_bits(n, 0.5f, c.seed * 3);
+    auto mask = random_bits(n, c.density, c.seed * 5);
+    const size_t trues = count_true(mask);
+    REQUIRE(static_cast<int64_t>(trues) + c.src_delta > 0);
+    auto src = random_bits(
+        static_cast<size_t>(static_cast<int64_t>(trues) + c.src_delta), 0.5f,
+        c.seed * 7);
+    array out = masked_scatter(
+        bool_array(dst, c.shape), bool_array(mask, c.shape),
+        bool_array(src, {static_cast<int>(src.size())}), stream);
+    check_bool_bytes(out, masked_scatter_bytes_reference(dst, mask, src),
+                     stream);
+  }
+
+  // A leading-row mask broadcasts over the trailing axis: each true row
+  // takes the next whole row of the source in order.
+  {
+    const Shape shape{5, 6};
+    std::vector<uint8_t> row_mask = {1, 0, 1, 1, 0};
+    auto dst = random_bits(30, 0.5f, 21);
+    auto value = random_bits(3 * 6, 0.5f, 22);
+    std::vector<uint8_t> flat_mask;
+    for (uint8_t bit : row_mask) {
+      flat_mask.insert(flat_mask.end(), 6, bit);
+    }
+    array out = masked_scatter(
+        bool_array(dst, shape), bool_array(row_mask, {5}),
+        bool_array(value, {3, 6}), stream);
+    check_bool_bytes(
+        out, masked_scatter_bytes_reference(dst, flat_mask, value), stream);
+  }
+}
+
+TEST_CASE("masked_scatter bool under vmap scatters each row from its own source") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // vmap flattens the batch into the primitive's leading axis, so the
+  // bool kernel sees one row per batch entry: each row ranks only its own
+  // trues and reads only its own source row. Source rows are narrower
+  // than mask rows, so some rows also run out of source.
+  const int batch = 3;
+  const int n = 11;
+  const int src_n = 5;
+  auto dst_bits = random_bits(batch * n, 0.5f, 61);
+  auto mask_bits = random_bits(batch * n, 0.6f, 62);
+  auto src_bits = random_bits(batch * src_n, 0.5f, 63);
+  auto scatter = vmap([&stream](const std::vector<array>& xs) {
+    return std::vector<array>{masked_scatter(xs[0], xs[1], xs[2], stream)};
+  });
+  array out = scatter({bool_array(dst_bits, {batch, n}),
+                       bool_array(mask_bits, {batch, n}),
+                       bool_array(src_bits, {batch, src_n})})[0];
+  std::vector<uint8_t> expected;
+  for (int b = 0; b < batch; ++b) {
+    auto row = [b](const std::vector<uint8_t>& bits, int width) {
+      return std::vector<uint8_t>(bits.begin() + b * width,
+                                  bits.begin() + (b + 1) * width);
+    };
+    auto scattered = masked_scatter_bytes_reference(
+        row(dst_bits, n), row(mask_bits, n), row(src_bits, src_n));
+    expected.insert(expected.end(), scattered.begin(), scattered.end());
+  }
+  check_bool_bytes(out, expected, stream);
+}
+
+TEST_CASE("masked_scatter bool honors offset views and leaves their parents intact") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // Each operand can be a row-contiguous slice that starts mid-word in a
+  // larger bool allocation. The parents carry their own patterns so a
+  // read from the wrong base or a write into the parent shows up.
+  const int n = 21;
+  const int parent_n = 64;
+  const int dst_at = 3;
+  const int mask_at = 5;
+  const int src_at = 2;
+  auto dst_parent_bits = random_bits(parent_n, 0.5f, 31);
+  auto mask_parent_bits = random_bits(parent_n, 0.5f, 32);
+  auto src_parent_bits = random_bits(parent_n, 0.5f, 33);
+
+  auto window = [](const std::vector<uint8_t>& bits, int at, int count) {
+    return std::vector<uint8_t>(bits.begin() + at, bits.begin() + at + count);
+  };
+  auto view_of = [&](array& parent, int at, int count) {
+    array view = slice(parent, {at}, {at + count}, {1}, stream);
+    view.eval();
+    sync_gpu(stream);
+    CHECK(view.offset() == at);
+    CHECK(view.buffer().ptr() == parent.buffer().ptr());
+    return view;
+  };
+
+  const auto dst_bits = window(dst_parent_bits, dst_at, n);
+  const auto mask_bits = window(mask_parent_bits, mask_at, n);
+  const size_t trues = count_true(mask_bits);
+  REQUIRE(trues > 0);
+  const auto src_bits = window(src_parent_bits, src_at, static_cast<int>(trues));
+  const auto expected =
+      masked_scatter_bytes_reference(dst_bits, mask_bits, src_bits);
+
+  // Arms: only dst a view, only the mask, only the source, then all three.
+  for (int arm = 0; arm < 4; ++arm) {
+    CAPTURE(arm);
+    array dst_parent = bool_array(dst_parent_bits, {parent_n});
+    array mask_parent = bool_array(mask_parent_bits, {parent_n});
+    array src_parent = bool_array(src_parent_bits, {parent_n});
+    for (auto* parent : {&dst_parent, &mask_parent, &src_parent}) {
+      parent->eval();
+    }
+    sync_gpu(stream);
+
+    array dst = (arm == 0 || arm == 3)
+        ? view_of(dst_parent, dst_at, n)
+        : bool_array(dst_bits, {n});
+    array mask = (arm == 1 || arm == 3)
+        ? view_of(mask_parent, mask_at, n)
+        : bool_array(mask_bits, {n});
+    array src = (arm == 2 || arm == 3)
+        ? view_of(src_parent, src_at, static_cast<int>(trues))
+        : bool_array(src_bits, {static_cast<int>(trues)});
+
+    check_bool_bytes(masked_scatter(dst, mask, src, stream), expected, stream);
+    check_bool_bytes(dst_parent, dst_parent_bits, stream);
+    check_bool_bytes(mask_parent, mask_parent_bits, stream);
+    check_bool_bytes(src_parent, src_parent_bits, stream);
+  }
+}
+
+TEST_CASE("masked_scatter bool output is exact on a recycled allocation") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // A size whose rounded allocation (five pages) no earlier case in this
+  // file frees, and whose byte count is off the word grid.
+  const int n = 5 * 4096 - 5;
+  auto dst_bits = random_bits(n, 0.5f, 41);
+  auto mask_bits = random_bits(n, 0.5f, 42);
+  auto src_bits = random_bits(count_true(mask_bits), 0.5f, 43);
+  array dst = bool_array(dst_bits, {n});
+  array mask = bool_array(mask_bits, {n});
+  array src = bool_array(src_bits, {static_cast<int>(src_bits.size())});
+  for (auto* operand : {&dst, &mask, &src}) {
+    operand->eval();
+  }
+  sync_gpu(stream);
+
+  // Empty the reuse cache, then fill an allocation of the same size class
+  // with 0xA5, release it, and drain it into the cache, so it is the only
+  // cached buffer the output can reuse. No stale 0xA5 byte may survive the
+  // dst copy and the scatter writes.
+  clear_cache();
+  const void* poisoned = nullptr;
+  {
+    array poison = full({5 * 4096}, 0xA5, uint8, stream);
+    poison.eval();
+    sync_gpu(stream);
+    poisoned = poison.buffer().ptr();
+  }
+  array drain = add(array(1), array(1), stream);
+  drain.eval();
+  sync_gpu(stream);
+
+  array out = masked_scatter(dst, mask, src, stream);
+  out.eval();
+  sync_gpu(stream);
+  CHECK_MESSAGE(out.buffer().ptr() == poisoned,
+                "the output did not land on the poisoned allocation");
+  check_bool_bytes(
+      out, masked_scatter_bytes_reference(dst_bits, mask_bits, src_bits),
+      stream);
+}
+
+TEST_CASE("masked_scatter with an empty source returns the destination") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // A nonempty mask with true bytes and a zero-element source: every true
+  // position keeps dst, and the scatter kernel is never dispatched with the
+  // empty (unbindable) source. A one-element source of the same dtype is
+  // the control that does dispatch it.
+  auto run = [&stream](array dst, array mask, array src, uint64_t& dispatches) {
+    for (auto* operand : {&dst, &mask, &src}) {
+      operand->eval();
+    }
+    sync_gpu(stream);
+    const uint64_t before =
+        omarchy::trace::counters().vk_compute_dispatches.load();
+    array out = masked_scatter(dst, mask, src, stream);
+    out.eval();
+    sync_gpu(stream);
+    dispatches = omarchy::trace::counters().vk_compute_dispatches.load() -
+        before;
+    return out;
+  };
+  uint64_t empty_dispatches = 0;
+  uint64_t control_dispatches = 0;
+
+  std::vector<uint8_t> dst_bits = {1, 0, 1, 1, 0, 1};
+  std::vector<uint8_t> mask_bits = {1, 1, 0, 1, 0, 1};
+  check_bool_bytes(
+      run(bool_array(dst_bits, {6}), bool_array(mask_bits, {6}),
+          zeros({0}, bool_, stream), empty_dispatches),
+      dst_bits, stream);
+  run(bool_array(dst_bits, {6}), bool_array(mask_bits, {6}),
+      zeros({1}, bool_, stream), control_dispatches);
+  CHECK(empty_dispatches + 1 == control_dispatches);
+
+  auto float_dst = [] { return array({1.0f, 2.0f, 3.0f}, {3}, float32); };
+  auto float_mask = [] { return array({1, 0, 1}, {3}, bool_); };
+  check_floats(
+      run(float_dst(), float_mask(), zeros({0}, float32, stream),
+          empty_dispatches),
+      {1, 2, 3}, stream);
+  run(float_dst(), float_mask(), zeros({1}, float32, stream),
+      control_dispatches);
+  CHECK(empty_dispatches + 1 == control_dispatches);
+}
+
+TEST_CASE("masked_scatter bool refuses masks past its dispatch and rank limits") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // Each refusal names its limit and records no GPU work (no compute
+  // dispatch, buffer copy or fill): one invocation per mask byte in one
+  // dispatch, and mask.size() * row_length at most 2^34 (a single row of
+  // 131072 bytes).
+  auto refusal = [&stream](int n) {
+    array dst = zeros({n}, bool_, stream);
+    array mask = zeros({n}, bool_, stream);
+    array src = ones({1}, bool_, stream);
+    for (auto* operand : {&dst, &mask, &src}) {
+      operand->eval();
+    }
+    sync_gpu(stream);
+    auto& counters = omarchy::trace::counters();
+    auto recorded = [&counters] {
+      return counters.vk_compute_dispatches.load() +
+          counters.vk_buffer_copies.load() + counters.vk_buffer_fills.load();
+    };
+    const uint64_t before = recorded();
+    std::string error =
+        evaluation_error(masked_scatter(dst, mask, src, stream));
+    sync_gpu(stream);
+    CHECK(recorded() == before);
+    return error;
+  };
+  CHECK(refusal(static_cast<int>(omarchy::kLogicalChunkElements) + 1)
+            .find("MaskedScatter bool element count") != std::string::npos);
+  CHECK(refusal(131073).find("MaskedScatter bool row length") !=
+        std::string::npos);
+}
+
+TEST_CASE("masked_scatter bool result stays exact through a concatenate") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // The scatter result feeds a concatenate along an inner axis, once with
+  // no eval in between (the scatter, its dst copy and both concatenate
+  // copies share one submission, and the second copy writes past the
+  // first half's extent) and once evaluated first as the ordered control.
+  const Shape half_shape{1, 8, 64, 16};
+  const int rows = 8;
+  const int half_row = 64 * 16;
+  const int n = rows * half_row;
+  auto dst_bits = random_bits(n, 0.5f, 51);
+  auto mask_bits = random_bits(n, 0.5f, 52);
+  auto src_bits = random_bits(count_true(mask_bits), 0.5f, 53);
+  const auto scattered_bits =
+      masked_scatter_bytes_reference(dst_bits, mask_bits, src_bits);
+  std::vector<uint8_t> expected;
+  for (int r = 0; r < rows; ++r) {
+    expected.insert(expected.end(), scattered_bits.begin() + r * half_row,
+                    scattered_bits.begin() + (r + 1) * half_row);
+    expected.insert(expected.end(), half_row, 0);
+  }
+
+  auto scattered = [&]() {
+    return reshape(
+        masked_scatter(bool_array(dst_bits, {n}), bool_array(mask_bits, {n}),
+                       bool_array(src_bits,
+                                  {static_cast<int>(src_bits.size())}),
+                       stream),
+        half_shape, stream);
+  };
+
+  array lazy =
+      concatenate({scattered(), zeros(half_shape, bool_, stream)}, 2, stream);
+  check_bool_bytes(lazy, expected, stream);
+
+  // Ordered control: the scatter evaluates first.
+  array first = scattered();
+  first.eval();
+  sync_gpu(stream);
+  array ordered =
+      concatenate({first, zeros(half_shape, bool_, stream)}, 2, stream);
+  check_bool_bytes(ordered, expected, stream);
 }
 
 TEST_CASE("masked_scatter carries the scan across chunks and rows") {

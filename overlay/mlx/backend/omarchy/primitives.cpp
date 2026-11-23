@@ -7857,9 +7857,72 @@ void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
     auto word_pad = [](size_t bytes) {
       return (bytes + 3u) & ~size_t(3u);
     };
+    // An empty mask or source leaves out == dst (an empty operand also
+    // has no buffer to bind).
+    const bool scatters = mask.size() != 0 && src.size() != 0;
+    const bool mask_dense =
+        mask.flags().row_contiguous && mask.data_size() == mask.size();
+    const bool src_dense =
+        src.flags().row_contiguous && src.data_size() == src.size();
+    // Every refusal runs before out is allocated or any work is recorded.
+    omarchy::ComputeParams params;
+    size_t out_range = 0;
+    size_t mask_range = 0;
+    size_t src_range = 0;
+    if (scatters) {
+      // One invocation per mask byte, in one dispatch.
+      if (mask.size() > omarchy::kLogicalChunkElements) {
+        omarchy::unsupported("MaskedScatter bool element count", out);
+      }
+      size_t rows = mask.ndim() == 0 ? 1 : mask.shape(0);
+      size_t row_length = mask.size() / rows;
+      // Each true byte counts the trues before it in its row, so one
+      // dispatch's rank reads grow with mask.size() * row_length. At the
+      // 2^34 bound (a single all-true 131072-byte row) the scatter takes
+      // about 80 ms on an M3 Pro; the GPU firmware stops a submission
+      // after one second.
+      constexpr uint64_t kMaxRankReads = uint64_t{1} << 34;
+      if (static_cast<uint64_t>(mask.size()) * row_length > kMaxRankReads) {
+        omarchy::unsupported("MaskedScatter bool row length", out);
+      }
+      // A dense operand binds in place, possibly as a view at a byte
+      // offset in a larger allocation; any other operand is materialized
+      // into a fresh buffer at offset 0. The kernel reads whole words, so
+      // each binding starts at its allocation and reaches the word-padded
+      // end of the operand (the allocation is page-rounded, so the tail
+      // bytes exist), which must fit one storage-buffer range.
+      const size_t range_limit =
+          encoder.device().capabilities().max_storage_buffer_range;
+      auto checked_range = [&](size_t offset, size_t bytes) {
+        size_t end = word_pad(offset + bytes);
+        if (end > range_limit) {
+          omarchy::unsupported("MaskedScatter binding range", out);
+        }
+        return end;
+      };
+      auto operand_offset = [&](const array& a, bool dense, size_t& range) {
+        if (dense) {
+          uint32_t offset =
+              checked_item_offset(a, a.size(), "MaskedScatter", out);
+          range = checked_range(offset, a.nbytes());
+          return offset;
+        }
+        if (!omarchy::compute_index_span_fits(0, a.size())) {
+          omarchy::unsupported("MaskedScatter index span", out);
+        }
+        range = checked_range(0, a.nbytes());
+        return uint32_t{0};
+      };
+      params.count = static_cast<uint32_t>(mask.size());
+      params.reduce_size = static_cast<uint32_t>(row_length);
+      params.aux_size = checked_u32(src.size() / rows, "MaskedScatter", out);
+      params.rhs_offset = operand_offset(mask, mask_dense, mask_range);
+      params.lhs_offset = operand_offset(src, src_dense, src_range);
+      params.output_offset = 0;
+      out_range = checked_range(0, out.nbytes());
+    }
+
     size_t out_bytes = word_pad(out.nbytes());
-    size_t mask_bytes = word_pad(mask.size());
-    size_t src_bytes = word_pad(src.size());
     // A fresh output carries no strides yet (empty SmallVector — the
     // SdpaVjpFix class); build the row-major strides for its shape.
     Strides out_strides(out.ndim(), 1);
@@ -7878,65 +7941,30 @@ void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
         ? CopyType::Vector
         : CopyType::General;
     copy_gpu(dst, out, copy_type, out.primitive().stream());
-    if (mask.size() == 0) {
+    if (!scatters) {
       return;
     }
-    size_t rows = mask.ndim() == 0 ? 1 : mask.shape(0);
-    size_t row_length = mask.size() / rows;
-    size_t src_length = src.size() / rows;
 
-    // Dense materialization via the battery-proven ensure_dense path,
-    // then a flat view. The kernel reads whole words, so each side
-    // buffer binds with a word-padded range (the allocation is
-    // page-rounded, so the tail bytes exist).
     std::optional<array> mask_temp;
-    array mask_d = ensure_dense(
-        mask,
-        mask.flags().row_contiguous && mask.data_size() == mask.size(),
-        mask_temp,
-        encoder,
-        out.primitive().stream());
-    array mask_flat =
-        reshape_in_eval(mask_d, {1, static_cast<int>(mask.size())},
-        out.primitive().stream());
-    encoder.add_temporary(mask_flat);
+    const array& mask_d = ensure_dense(
+        mask, mask_dense, mask_temp, encoder, out.primitive().stream());
     std::optional<array> src_temp;
-    array src_d = ensure_dense(
-        src,
-        src.flags().row_contiguous && src.data_size() == src.size(),
-        src_temp,
-        encoder,
-        out.primitive().stream());
-    array src_flat =
-        reshape_in_eval(src_d, {1, static_cast<int>(src.size())},
-        out.primitive().stream());
-    encoder.add_temporary(src_flat);
-
-    if (rows > omarchy::kMaxComputeGroupCountX) {
-      omarchy::unsupported("MaskedScatter row count", out);
-    }
-    uint32_t count = checked_u32(mask.size(), "MaskedScatter", out);
-    omarchy::ComputeParams params;
-    params.count = count;
-    params.reduce_size = checked_u32(row_length, "MaskedScatter", out);
-    params.aux_size = checked_u32(src_length, "MaskedScatter", out);
-    params.lhs_offset = 0;
-    params.rhs_offset = 0;
-    params.output_offset = 0;
-    auto extended = [](array& a, size_t bytes) {
-      auto* buf = static_cast<omarchy::VulkanBuffer*>(a.buffer().ptr());
+    const array& src_d = ensure_dense(
+        src, src_dense, src_temp, encoder, out.primitive().stream());
+    auto extended = [](const array& a, size_t range) {
+      auto* buf = static_cast<const omarchy::VulkanBuffer*>(a.buffer().ptr());
       return omarchy::ComputeBinding{buf->buffer,
           0,
-          static_cast<VkDeviceSize>(std::min(bytes, size_t(buf->size))),
+          static_cast<VkDeviceSize>(std::min(range, size_t(buf->size))),
           buf};
     };
     std::array<omarchy::ComputeBinding, 3> bindings{
-        extended(out, out_bytes),
-        extended(mask_flat, mask_bytes),
-        extended(src_flat, src_bytes)};
+        extended(out, out_range),
+        extended(mask_d, mask_range),
+        extended(src_d, src_range)};
     encoder.dispatch_compute(
         omarchy::ComputeKernel::MaskedScatterBool, bindings, params,
-        checked_u32(count, "MaskedScatter", out));
+        omarchy::compute_dispatch_group_count(params.count));
     return;
   }
   if (out.dtype() == float16 || out.dtype() == bfloat16) {
@@ -7954,7 +7982,7 @@ void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
       ? CopyType::Vector
       : CopyType::General;
   copy_gpu(dst, out, copy_type, out.primitive().stream());
-  if (mask.size() == 0) {
+  if (mask.size() == 0 || src.size() == 0) {
     return;
   }
   size_t rows = mask.shape(0);

@@ -6,11 +6,12 @@
 // each lane's byte with the commuting atomicAnd/atomicOr pair proven in
 // copy_general.comp: the AND clears only the lane's own byte, the OR
 // sets only the lane's own byte, and adjacent lanes sharing a word
-// never lose a byte. Non-selected positions idempotently rewrite their
-// own dst byte (out arrives as the dst copy).
+// never lose a byte. Non-selected positions keep their dst byte (out
+// arrives as the dst copy).
 //
 // Rank assignment: each invocation computes its own rank by summing the
-// normalized mask bytes that precede it (O(pos) per invocation). This
+// normalized mask bytes that precede it in its own row (O(row length)
+// per invocation). This
 // avoids the Scan primitive entirely: an earlier version consumed an
 // int32 exclusive scan whose output arrived ALL ZEROS inside eval_gpu
 // (both the packed-bool ScanGeneralBool route and the cast-uint32
@@ -19,9 +20,11 @@
 // small serve masks; a scan-based fast path is the follow-up once the
 // int scan defect is root-caused. Bytes are extracted with CONSTANT
 // shifts and a select chain (the Honeykrisp workaround documented in
-// the float variant). One invocation per mask element; the op-level
-// masked_scatter materializes the broadcast and always hands the
-// primitive a single batch row.
+// the float variant). One invocation per mask element. The op-level
+// masked_scatter hands the primitive a single row; vmap hands it one row
+// per batch entry (reduce_size mask bytes and aux_size source bytes
+// each). rhs_offset and lhs_offset are the mask and source views' byte
+// offsets inside their bound allocations.
 
 #version 460
 
@@ -75,25 +78,25 @@ void main() {
   if (pos >= params.count) {
     return;
   }
-  uint mask_word = mask_data.values[params.rhs_offset + (pos >> 2u)];
-  uint bit = byte_at(mask_word, pos);
-  if (bit == 0u) {
+  uint mask_pos = params.rhs_offset + pos;
+  if (byte_at(mask_data.values[mask_pos >> 2u], mask_pos) == 0u) {
     return;
   }
-  // Rank among trues: sum the normalized mask bytes before pos.
+  // Rank among the trues of pos's row: sum the normalized mask bytes from
+  // the row start up to pos, each read from its own word.
+  uint row = pos / params.reduce_size;
+  uint row_start = params.rhs_offset + row * params.reduce_size;
   uint rank = 0u;
-  for (uint j = 0u; j < pos; ++j) {
-    rank += byte_at(mask_word, j) != 0u ? 1u : 0u;
+  for (uint j = row_start; j < mask_pos; ++j) {
+    rank += byte_at(mask_data.values[j >> 2u], j) != 0u ? 1u : 0u;
   }
   if (rank >= params.aux_size) {
     // Source ran out: the position keeps dst, matching the float
     // variant and the upstream Metal kernel.
     return;
   }
-  // rows == 1 at the primitive (the op adds a single leading batch dim
-  // and materializes the broadcast), so the source segment starts at 0
-  // and the rank IS the flat source index.
-  uint src_flat = params.lhs_offset + rank;
+  // Each row consumes its own aux_size-byte source segment.
+  uint src_flat = params.lhs_offset + row * params.aux_size + rank;
   uint value_byte = byte_at(src_data.values[src_flat >> 2u], src_flat);
   value_byte = value_byte != 0u ? 1u : 0u;
   uint out_pos = params.output_offset + pos;
