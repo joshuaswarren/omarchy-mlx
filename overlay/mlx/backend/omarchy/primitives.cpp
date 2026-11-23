@@ -16711,10 +16711,11 @@ void ScaledDotProductAttention::eval_gpu(
       head_dim == 128 && v_dim == head_dim && k_len >= q_len &&
       k_len <= kDecodeBf16StreamKeys;
   // Verify rows on the split-K route (bf16, causal, batch 1, q_len 2..16, width 128 or 256): one pass-1 and pass-2 pair per row over that row's key
-  // prefix, so each row is bit-equal to the same token decoded alone on the split route. Opt-in: MLX_OMARCHY_SDPA_SPLIT_ROWS, any non-empty value
-  // other than "0". Needs the split route itself to be engaged (MLX_OMARCHY_SDPA_DECODE_SPLIT and the per-chip key threshold).
+  // prefix, so each row is bit-equal to the same token decoded alone on the split route. Default on wherever the split route itself engages
+  // (MLX_OMARCHY_SDPA_DECODE_SPLIT and the per-chip key threshold): past kDecodeBf16StreamKeys the alternative is the composed route, which
+  // costs about 10x the split pair per row at 8K keys and grows with the cache. MLX_OMARCHY_SDPA_SPLIT_ROWS=0 keeps the composed route.
   const bool split_rows_route = decode_bf16_probe && do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
-      k_len >= q_len && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_ROWS") > 0;
+      k_len >= q_len && decode_path_override("MLX_OMARCHY_SDPA_SPLIT_ROWS") != 0;
   // Batched decode (q_len 1, bf16, one-pass): workgroup z walks the batch
   // with per-row base offsets; each row runs the single-row arithmetic, so
   // B > 1 stays bit-identical to the composed route it replaces.
