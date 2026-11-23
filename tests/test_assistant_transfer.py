@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tracemalloc
 import unittest
 import zipfile
 from pathlib import Path
@@ -560,6 +561,50 @@ class MalformedBundles(Base):
         localized = json.loads((self.dst_home / "assistant" / "imports" / "everyday"
                                 / "transfer-lock.json").read_text())
         self.assertEqual(localized["licenses"], self.lock["licenses"])
+
+    def test_oversized_lock_or_receipt_stops_at_the_byte_cap(self) -> None:
+        self.export(voice=[self._voice_dir()])
+        members = self._members()
+        transfer.inspect_bundle(self.bundle_path())
+        self.import_()  # normal-sized lock and receipt stage cleanly
+        shutil.rmtree(self.dst_home)
+        receipt_rel = "voice/qwen3-tts-0.6b-customvoice-4bit/manifest.json"
+        pad = b" " * (32 << 20)  # deflates about a thousandfold
+        for rel in ("everyday/lock.json", receipt_rel):
+            with self.subTest(rel):
+                big = members[rel] + pad
+                manifest = json.loads(members[transfer.MANIFEST_NAME])
+                manifest["files"][rel] = {"sha256": hashlib.sha256(big).hexdigest(),
+                                          "size": len(big)}
+                manifest["total_bytes"] = sum(e["size"] for e in manifest["files"].values())
+                bomb = {**members, rel: big,
+                        transfer.MANIFEST_NAME: json.dumps(manifest).encode()}
+                out = self.bundle_path("big.zip")
+                with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
+                    for name, data in sorted(bomb.items()):
+                        kind = zipfile.ZIP_DEFLATED if name == rel else zipfile.ZIP_STORED
+                        zf.writestr(name, data, compress_type=kind)
+                raw = bytearray(out.read_bytes())
+                with zipfile.ZipFile(out) as zf:
+                    local = zf.getinfo(rel).header_offset
+                struct.pack_into("<I", raw, local + 22, 16)  # local header claims 16 bytes
+                out.write_bytes(bytes(raw))
+                self.assertLess(out.stat().st_size, 1 << 20)
+                transfer.inspect_bundle(out)  # inspect never reads payload JSON
+                tracing = tracemalloc.is_tracing()
+                if not tracing:
+                    tracemalloc.start()
+                tracemalloc.reset_peak()
+                before = tracemalloc.get_traced_memory()[0]
+                try:
+                    with self.assertRaisesRegex(transfer.UnsafeArchive, "exceeds"):
+                        self.import_(bundle="big.zip")
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    if not tracing:
+                        tracemalloc.stop()
+                self.assertLess(peak - before, 8 << 20)
+                self.assertFalse(self.dst_home.exists())
 
     def test_runtime_argv_from_the_bundle_cannot_crash_staging(self) -> None:
         # `true` stands in for venv creation, so the bundle's pins reach the pip spawn.

@@ -1200,7 +1200,8 @@ def _bundle_required_licenses(zf: zipfile.ZipFile, manifest: dict) -> set[str]:
         lock_rel = f"{pair_id}/lock.json"
         if lock_rel not in manifest["files"]:
             raise UnsafeArchive(f"pair {pair_id} has no lock payload")
-        lock = _json_member(zf, lock_rel, f"pair {pair_id} lock")
+        lock = _json_member(zf, lock_rel, f"pair {pair_id} lock",
+                            max_bytes=_PAYLOAD_JSON_MAX_BYTES)
         _validate_lock(lock)
         if lock.get("pair_id") != pair_id:
             raise TransferError(
@@ -1227,7 +1228,8 @@ def _bundle_required_licenses(zf: zipfile.ZipFile, manifest: dict) -> set[str]:
         receipt_rel = f"voice/{pack_id}/manifest.json"
         if receipt_rel not in manifest["files"]:
             raise UnsafeArchive(f"voice pack {pack_id} has no receipt payload")
-        receipt = _json_member(zf, receipt_rel, f"voice pack {pack_id} receipt")
+        receipt = _json_member(zf, receipt_rel, f"voice pack {pack_id} receipt",
+                               max_bytes=_PAYLOAD_JSON_MAX_BYTES)
         if not isinstance(receipt, dict):
             raise UnsafeArchive(f"voice pack {pack_id} receipt is not a JSON object")
         if receipt.get("pack_id") != pack_id:
@@ -1575,11 +1577,17 @@ def _open_bundle(bundle_path: Path) -> zipfile.ZipFile:
         raise UnsafeArchive(f"bundle archive unreadable: {exc}") from exc
 
 
-def _member_chunks(zf: zipfile.ZipFile, name: str):
-    """Yield a member's bytes; damaged data raises UnsafeArchive, caller errors do not."""
+def _member_chunks(zf: zipfile.ZipFile, name: str, limit: int | None = None):
+    """Yield a member's bytes; damaged data, or more than limit bytes, raises
+    UnsafeArchive, caller errors do not."""
     try:
         with zf.open(name) as src:
-            while chunk := src.read(_CHUNK):
+            size = 0
+            while chunk := src.read(_CHUNK if limit is None
+                                    else min(_CHUNK, limit - size + 1)):
+                size += len(chunk)
+                if limit is not None and size > limit:
+                    raise UnsafeArchive(f"bundle member {name} exceeds {limit} bytes")
                 yield chunk
     except _ZIP_ERRORS as exc:
         raise UnsafeArchive(f"bundle member {name} unreadable: {exc}") from exc
@@ -1588,10 +1596,15 @@ def _member_chunks(zf: zipfile.ZipFile, name: str):
 # Bundle JSON nests a few levels. json.loads can accept far deeper input than
 # json.dumps or repr can later walk (Python 3.12+), so cap the depth up front.
 _JSON_MAX_DEPTH = 32
+# JSON members are read whole into memory, so the read stops at a byte cap. The
+# member's declared size is no bound: zipfile reads up to it, and deflate can
+# expand a member about a thousand times.
+_MANIFEST_MAX_BYTES = 64 << 20
+_PAYLOAD_JSON_MAX_BYTES = 1 << 20  # a pair lock or voice receipt is a few KB
 
 
-def _json_member(zf: zipfile.ZipFile, name: str, what: str) -> object:
-    data = b"".join(_member_chunks(zf, name))
+def _json_member(zf: zipfile.ZipFile, name: str, what: str, *, max_bytes: int) -> object:
+    data = b"".join(_member_chunks(zf, name, max_bytes))
     try:
         value = json.loads(data)
     except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting
@@ -1637,9 +1650,9 @@ def _read_manifest(zf: zipfile.ZipFile, max_total_bytes: int) -> dict:
         info = zf.getinfo(MANIFEST_NAME)
     except KeyError:
         raise UnsafeArchive(f"bundle has no {MANIFEST_NAME}") from None
-    if info.file_size > 64 << 20:
+    if info.file_size > _MANIFEST_MAX_BYTES:
         raise UnsafeArchive("manifest too large")
-    manifest = _json_member(zf, MANIFEST_NAME, "manifest")
+    manifest = _json_member(zf, MANIFEST_NAME, "manifest", max_bytes=_MANIFEST_MAX_BYTES)
     if not isinstance(manifest, dict):
         raise UnsafeArchive("manifest is not a JSON object")
 
