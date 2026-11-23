@@ -260,7 +260,6 @@ jobs:
               "desc_update",
               "pipeline_lookup",
               "queue_submit",
-              "fence_op",
               "wait",
               "readback",
           }

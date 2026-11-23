@@ -858,8 +858,7 @@ void VulkanAllocator::free(Buffer buffer) {
   if (buf->transfer_in_flight || buf->completion != 0) {
     if (buf->transfer_in_flight ||
         buf->completion == kPendingCompletion || !runtime_alive() ||
-        buf->completion >= device().completions().drained_value() ||
-        !device().completions().execution_complete(buf->completion)) {
+        buf->completion >= device().completions().drained_value()) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
       }
@@ -905,11 +904,7 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   // a poll interval, and one behind it otherwise. The OOM retry passes the
   // requested generation after a later generation drained or the queue
   // went idle (the design's one-generation rule: observing generation N
-  // does not prove the driver's submit-final cleanup for N has run). A
-  // block also needs its execution fence to have signalled. A fence that
-  // signals after this pass is picked up by a later one - the dispatcher
-  // keeps ticking release passes while fences are outstanding or blocks are
-  // parked.
+  // does not prove the driver's submit-final cleanup for N has run).
   std::unique_lock lk(mutex_);
   if (quarantine_.empty()) {
     return;
@@ -918,9 +913,7 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   for (auto* buf : quarantine_) {
     if (buf->transfer_in_flight ||
         buf->completion > cleanup_done_through ||
-        buf->completion == kPendingCompletion ||
-        (buf->completion != 0 &&
-         !device().completions().execution_complete(buf->completion))) {
+        buf->completion == kPendingCompletion) {
       still_quarantined.push_back(buf);
       continue;
     }
@@ -957,7 +950,7 @@ bool VulkanAllocator::has_quarantined() const {
 }
 
 void VulkanAllocator::stamp_batch(
-    const std::vector<VulkanBuffer*>& bufs,
+    const std::unordered_set<VulkanBuffer*>& bufs,
     uint64_t completion) {
   std::unique_lock lk(mutex_);
   for (auto* buf : bufs) {

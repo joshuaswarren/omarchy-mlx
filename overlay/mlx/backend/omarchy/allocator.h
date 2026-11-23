@@ -10,6 +10,7 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "mlx/allocator.h"
@@ -187,23 +188,24 @@ class VulkanAllocator : public allocator::Allocator {
 
   // Cache maintenance for non-coherent mapped memory (Khronos guidance:
   // HOST_VISIBLE alone does not guarantee coherence). The encoder flushes
-  // before submission and invalidates after the fence wait. Buffers on
-  // coherent memory types are skipped.
+  // before submission and invalidates after the completion wait. Buffers
+  // on coherent memory types are skipped.
   void flush_noncoherent(VkDevice device);
   void invalidate_noncoherent(VkDevice device);
 
   // Quarantine for buffers whose last reference died while recorded GPU
   // work may still touch them. free() routes such buffers here instead of
   // the reuse cache; release_quarantine recycles entries whose generation
-  // has drained one completion earlier (|cleanup_done_through|) AND whose
-  // execution fence has signalled. Accounting (active_memory_) drops at
-  // free() time, matching upstream Metal.
+  // is at or below |cleanup_done_through|, a generation whose driver's
+  // submit-final cleanup the caller has proven (one drained generation
+  // behind the newest, or the newest once the queue settled). Accounting
+  // (active_memory_) drops at free() time, matching upstream Metal.
   void release_quarantine(uint64_t cleanup_done_through);
 
   // True while any block waits in the quarantine. The dispatcher's idle
   // tick uses this to keep release passes running after the last
-  // submission drained (a generation-gated block recycles on a later
-  // pass even once its fence retired).
+  // submission drained, so the final generation recycles once the queue
+  // has been quiet for a poll interval.
   bool has_quarantined() const;
 
   // Encoder-level transfers (copy_buffer/fill_buffer) take raw VkBuffer
@@ -245,7 +247,8 @@ class VulkanAllocator : public allocator::Allocator {
   // Stamp a submitted batch's buffers with their real completion value
   // and refresh pending_quarantine_bytes(): freed buffers of the batch
   // stop counting against the open-batch budget once they can drain.
-  void stamp_batch(const std::vector<VulkanBuffer*>& bufs, uint64_t completion);
+  void stamp_batch(
+      const std::unordered_set<VulkanBuffer*>& bufs, uint64_t completion);
 
   // Bytes of freed buffers pinned by a batch that has not yet been
   // submitted (quarantined at kPendingCompletion). Nothing can recycle
