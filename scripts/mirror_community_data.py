@@ -79,7 +79,7 @@ def fetch_index(base):
         if len(body) > MAX_INDEX_BYTES:
             return None
         index = json.loads(body.decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError, RecursionError):
         return None
     if not isinstance(index, dict):
         return None
