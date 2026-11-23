@@ -40,6 +40,7 @@ sys.exit(0 if 'parakeet-encoder-whole' in pin.get('assets', {}).get('bundles', {
       unzip -p "$wheel" 'mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole/manifest.json' > "${extract_dir}/manifest.json"
       unzip -p "$wheel" 'mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole/program-0.anec' > "${extract_dir}/program-0.anec"
       export MLX_OMARCHY_WHOLE_BUNDLE_DIR="$extract_dir"
+      _extracted=1
       echo "[bundle] extracted the pinned bundle from $wheel"
     fi
     if [[ -z "${MLX_OMARCHY_WHOLE_BUNDLE_DIR:-}" ]]; then
@@ -76,7 +77,7 @@ with open('$pin_path') as fh:
     # bundle as newer than any prior build output (the same rule
     # prepare-mlx.sh applies to the overlay).
     touch "$bundle_staging/manifest.json" "$bundle_staging/program-0.anec"
-    if [[ -n "${MLX_OMARCHY_WHOLE_BUNDLE_WHEEL:-}" ]]; then
+    if [[ -n "${_extracted:-}" ]]; then
       rm -rf "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}"
     fi
     echo "[bundle] staged $bundle_staging (manifest $actual_manifest, program $actual_program)"
