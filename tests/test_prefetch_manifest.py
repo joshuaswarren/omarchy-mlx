@@ -4,19 +4,25 @@ UNIT only, no network and no model artifacts: the manifest builder runs
 against a staged fake home. What is proven: every staged root lands in
 the manifest with per-file sha256, the build is byte-identical across
 runs (reproducibility gate for the jwm2 two-fetch check), roots and
-entries are sorted, and --manifest-only never touches the network.
+entries are sorted, --manifest-only never touches the network, and the
+CLI reports a PairError on stderr with exit 1 instead of a traceback.
 """
 
+import contextlib
+import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
-from mlx_omarchy_assistant import prefetch  # noqa: E402
+from mlx_omarchy_assistant import pairs, prefetch  # noqa: E402
 
 
 def stage_home() -> Path:
@@ -88,8 +94,37 @@ class PrefetchManifestTest(unittest.TestCase):
 
     def test_pair_without_lock_or_paths_fails(self):
         home = stage_home()
-        with self.assertRaises(Exception):
+        with self.assertRaises(pairs.PairError):
             prefetch.build_manifest(home, "everyday")
+
+    def test_cli_pair_without_lock_exits_1_without_traceback(self):
+        with tempfile.TemporaryDirectory() as home:
+            result = subprocess.run(
+                [sys.executable, "-m", "mlx_omarchy_assistant.prefetch",
+                 "--manifest-only", "--pair", "everyday", "--home", home],
+                env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "serve")},
+                capture_output=True, text=True, timeout=120, check=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stderr,
+                         "prefetch: no pair lock for 'everyday'; "
+                         "run the pair setup first\n")
+        self.assertEqual(result.stdout, "")
+
+    def test_main_reports_pair_error_from_download_path(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+
+        def refuse(*_args, **_kwargs):
+            raise pairs.PairError("setup returned a plan only")
+
+        with tempfile.TemporaryDirectory() as home, \
+                mock.patch.object(prefetch, "prefetch", refuse), \
+                contextlib.redirect_stdout(stdout), \
+                contextlib.redirect_stderr(stderr):
+            code = prefetch.main(["--home", home, "--pair", "everyday"])
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr.getvalue(),
+                         "prefetch: setup returned a plan only\n")
+        self.assertEqual(stdout.getvalue(), "")
 
 
 if __name__ == "__main__":
