@@ -985,6 +985,18 @@ class CatalogCommandTests(CliTestBase):
             code, _, err = self.run_cli(["reserve", "laya", "1", "--note", ""])
         self.assertEqual(code, 0, err)
 
+    def test_no_command_prints_usage_without_catalog(self):
+        def poisoned(*a, **k):
+            raise AssertionError("a bare invocation must not refresh the catalog")
+        with unittest.mock.patch.object(catalog, "refresh", poisoned), \
+             self.assertRaises(SystemExit) as ctx:
+            self.run_cli([])
+        self.assertEqual(ctx.exception.code, 2)
+        err = self.stderr.getvalue()
+        self.assertIn("usage:", err)
+        self.assertIn("mlx-omarchy-serve: error: the following arguments are required: command",
+                      err)
+
     def test_offline_flag_blocks_download(self):
         with unittest.mock.patch.object(serve_cli, "probe_snapshot",
                                         lambda _r, _p=None: None):
