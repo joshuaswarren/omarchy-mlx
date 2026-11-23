@@ -1,9 +1,13 @@
-"""Offline tests for scripts/mirror_community_data.py SUMMARY.md formatting."""
+"""Offline tests for scripts/mirror_community_data.py."""
 
+import io
+import json
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -11,6 +15,47 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import mirror_community_data as mirror  # noqa: E402
 
 BASE_URL = "https://example.invalid"
+
+# Balanced, so a decoder with room to spare would return a dict.
+DEEP_JSON = '{"a":' * 200_000 + "1" + "}" * 200_000
+
+
+def run_with_small_stack(fn):
+    """Return fn() run in a thread with a pinned 4 MiB stack.
+
+    Python 3.14 bounds JSON nesting by the C stack, which follows
+    ulimit -s; the pinned stack makes DEEP_JSON overflow on any host.
+    """
+    outcome = {}
+
+    def target():
+        try:
+            outcome["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            outcome["error"] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+class _Response(io.BytesIO):
+    def __init__(self, body):
+        super().__init__(body)
+        self.headers = {"Content-Length": str(len(body))}
+
+
+def _fake_urlopen(bodies):
+    def urlopen(request, timeout=None):
+        return _Response(bodies[request.full_url])
+    return urlopen
 
 
 def _sha(digit):
@@ -164,6 +209,43 @@ class MirrorSummaryArchiveLinkTests(unittest.TestCase):
         text, rows = _summary_rows([nested_quick])
         self.assertTrue(rows[sha[:12]].endswith("| 0 |"))
         self.assertNotIn(f"/v1/results/{sha}/archive", text)
+
+
+class MirrorIndexDepthTests(unittest.TestCase):
+    def setUp(self):
+        with self.assertRaises(RecursionError):
+            run_with_small_stack(lambda: json.loads(DEEP_JSON))
+        record = {"content_sha256": _sha("1"), "kind": "deep"}
+        self.bodies = {
+            f"{BASE_URL}/v1/dataset/latest.jsonl":
+                (json.dumps(record) + "\n").encode("utf-8"),
+            f"{BASE_URL}/v1/results": DEEP_JSON.encode("ascii"),
+        }
+        patcher = mock.patch.object(
+            mirror.urllib.request, "urlopen", _fake_urlopen(self.bodies))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_too_deeply_nested_index_returns_none(self):
+        self.assertIsNone(
+            run_with_small_stack(lambda: mirror.fetch_index(BASE_URL)))
+
+    def test_main_mirrors_without_index_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "snapshot"
+            with mock.patch("sys.stdout", io.StringIO()):
+                rc = run_with_small_stack(lambda: mirror.main(
+                    ["--base-url", BASE_URL, "--out-dir", str(out)]))
+            self.assertEqual(rc, 0)
+            index = json.loads((out / "index.json").read_text("utf-8"))
+            self.assertIsNone(index["generated_at"])
+            self.assertIsNone(index["schema_version"])
+            self.assertEqual(index["count"], 1)
+            self.assertEqual(
+                (out / "latest.jsonl").read_bytes(),
+                self.bodies[f"{BASE_URL}/v1/dataset/latest.jsonl"])
+            self.assertIn("dataset generated_at: -",
+                          (out / "SUMMARY.md").read_text("utf-8"))
 
 
 if __name__ == "__main__":
