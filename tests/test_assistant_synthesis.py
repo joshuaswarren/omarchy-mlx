@@ -1453,6 +1453,26 @@ class KokoroEngineTests(unittest.TestCase):
                 synthesis._kokoro_runtime("unused")
         self.assertIn("G2P runtime missing", str(ctx.exception))
 
+    def test_kokoro_g2p_drops_unused_spacy_pipes(self):
+        """The English misaki G2P only reads text/tag_/whitespace_ off the
+        spaCy doc; _g2p_reload_without_dead_pipes reloads the same model
+        without parser/ner/lemmatizer and leaves non-English G2Ps alone."""
+        import types
+
+        calls = []
+        fake_spacy = types.SimpleNamespace(
+            load=lambda name, disable: calls.append((name, disable))
+            or "reloaded")
+        nlp = types.SimpleNamespace(meta={"lang": "en",
+                                          "name": "core_web_sm"})
+        g2p = types.SimpleNamespace(nlp=nlp)
+        with mock.patch.dict(sys.modules, {"spacy": fake_spacy}):
+            synthesis._g2p_reload_without_dead_pipes(g2p)
+        self.assertEqual(
+            calls, [("en_core_web_sm", ["parser", "ner", "lemmatizer"])])
+        self.assertEqual(g2p.nlp, "reloaded")
+        synthesis._g2p_reload_without_dead_pipes(types.SimpleNamespace())
+
     def test_kokoro_trig_refusal_translates_to_upgrade_error(self):
         raw = RuntimeError("[omarchy] Sin argument magnitude 127261.73 "
                            "exceeds the built-in accuracy limit 100000")
