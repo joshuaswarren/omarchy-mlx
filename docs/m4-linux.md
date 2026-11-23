@@ -1,13 +1,15 @@
 # MLX on an M4 under Omarchy
 
 Status: beta. This is a path for M4 owners who run Linux with the
-aurora M4 integration, and it needs the M4 GPU patches below. Only one
-M4 machine has results here, and it is not the machine most readers have.
+aurora M4 integration, and it needs the M4 GPU patches below. Qualification
+rows for these machines live on
+[issue #537](https://github.com/joshuaswarren/omarchy-mlx/issues/537).
 
 | Machine | GPU id | Driver | Status |
 |---|---|---|---|
-| M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). |
-| M4 Pro (J616s, t6040), 20-core GPU | G16S | Mesa Borealis 26.3.0-devel, Linux 7.3 | Measured with the v0.7.41 release wheel. See the [M4 Pro receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md). |
+| M4 Mac mini (J773g, T8132) | G16G | out-of-tree G16G kernel driver, Honeykrisp with the Apple9 compute port | Measured. See the [M4 receipt](../receipts/2026-11-01-m4-g16g-part1/README.md). No qualification row posted yet; its machine id is unassigned. |
+| M4 Pro (J616s, t6040), 20-core GPU | G16S | Mesa Borealis 26.3.0-devel, Linux 7.3 | Measured with the v0.7.41 release wheel. See the [M4 Pro receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md). Qualification-r4 row (machine id `2adf2b644fdcac6f`): 80/80 reference failures and 81/81 skips match; the only new failure is `test_export_unique`, fixed in the r7 wheel. Qwen3-4B 4-bit decode 75.71 tok/s, prefill 69.92. ANE step `unavailable` (no `omarchy-ane-smoke` on the run's image). |
+| M4 Air (J713, T8132) | G16G | bring-up Borealis build, lab kernel 7.3.0-bj713b7+ | Qualification-r4 row (machine id `729c0299075fafa2`): the only new failure is `test_export_unique`, fixed in the r7 wheel; one reference failure (`test_sdpa_long_masked_sequence`) passes here. Qwen3-4B 4-bit decode 25.68 tok/s on the bring-up driver — not a final rate. ANE step `unavailable`. |
 
 On the M4 Pro (MacBook Pro 16-inch, 20-core GPU, 24 GB, Fedora 45) the release wheel
 runs on the system Borealis driver with no override and no symlink: the
