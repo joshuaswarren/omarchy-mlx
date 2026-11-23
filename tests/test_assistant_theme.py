@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -144,6 +145,44 @@ class OmarchyParsingTests(unittest.TestCase):
             with fake_home(home):
                 t = theme.read_theme()
         self.assertEqual(t.mode, "light")
+
+    def _write_raw(self, home: Path, name: bytes, colors: bytes | None) -> None:
+        state_dir = home / ".local" / "state" / "omarchy" / "current"
+        (state_dir / "theme").mkdir(parents=True)
+        (state_dir / "theme.name").write_bytes(name)
+        if colors is not None:
+            (state_dir / "theme" / "colors.toml").write_bytes(colors)
+
+    def test_color_with_trailing_newline_rejected(self):
+        # "$" matches before a trailing newline, so "#abc\n" used to pass the
+        # allowlist and crash the contrast math (or reach CSS unchanged).
+        self.assertIsNone(theme._sanitize("#abc\n"))
+        self.assertIsNone(theme._sanitize("#aabbcc\n"))
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            self._write_raw(home, b"evil\n", b'[colors]\nbackground = "#abc\\n"\n'
+                                             b'accent = "#aabbcc\\n"\n'
+                                             b'foreground = "#ffffff"\n')
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.css["--mlx-canvas"], theme.FALLBACK_DARK["canvas"])
+        self.assertEqual(t.css["--mlx-focus"], theme.FALLBACK_DARK["focus"])
+
+    def test_non_utf8_theme_name_falls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            self._write_raw(home, b"\xff\xfe\n", None)
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertIsNone(t.slug)
+
+    def test_non_utf8_colors_toml_falls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            self._write_raw(home, b"evil\n",
+                            b'[colors]\nbackground = "#1a1b26"\n# \xff\n')
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertIn("no readable colors.toml", t.status.lower())
 
 
 class ContrastAdjustmentTests(unittest.TestCase):
@@ -326,6 +365,17 @@ class FontTests(unittest.TestCase):
         with unittest.mock.patch("subprocess.run", fake_run):
             family = theme._fc_default("monospace")
         self.assertIsNone(family)
+
+    def test_fc_default_rejects_non_utf8_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td) / "fc-match"
+            fake.write_text(f"#!{sys.executable}\n"
+                            "import sys; sys.stdout.buffer.write(b'Bad\\xffFont')\n",
+                            encoding="utf-8")
+            fake.chmod(0o755)
+            with unittest.mock.patch.dict(os.environ,
+                                          {"PATH": f"{td}{os.pathsep}{os.environ['PATH']}"}):
+                self.assertIsNone(theme._fc_default("monospace"))
 
 
 if __name__ == "__main__":
