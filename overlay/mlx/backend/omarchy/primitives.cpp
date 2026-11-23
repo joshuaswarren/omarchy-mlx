@@ -5735,9 +5735,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
          (im2col_dtype == float16 && caps.cooperative_matrix_f16_8) ||
          (im2col_dtype == bfloat16 && caps.cooperative_matrix_bf16_8));
     const uint32_t k_eff = (kernel_products + 7u) / 8u * 8u;
-    auto run_rows = [&](const array* lhs_p,
-                        const array* rhs_p,
-                        bool use_direct) {
+    auto run_rows = [&](array* lhs_p, array* rhs_p, bool use_direct) {
       const auto base_params = params;
       for (uint32_t row_base = 0; row_base < rows; row_base += block_rows) {
         const uint32_t block = std::min(block_rows, rows - row_base);
@@ -5808,8 +5806,8 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
             copy_gpu_inplace(
                 patches,
                 *lhs_p,
-                Shape{static_cast<int64_t>(block),
-                      static_cast<int64_t>(kernel_products)},
+                Shape{static_cast<int>(block),
+                      static_cast<int>(kernel_products)},
                 Strides{static_cast<int64_t>(kernel_products), 1},
                 Strides{static_cast<int64_t>(k_eff), 1},
                 0,
@@ -5860,8 +5858,8 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
       copy_gpu_inplace(
           w,
           wpad,
-          Shape{static_cast<int64_t>(out_cols),
-                static_cast<int64_t>(kernel_products)},
+          Shape{static_cast<int>(out_cols),
+                static_cast<int>(kernel_products)},
           Strides{static_cast<int64_t>(kernel_products), 1},
           Strides{static_cast<int64_t>(k_eff), 1},
           0,
