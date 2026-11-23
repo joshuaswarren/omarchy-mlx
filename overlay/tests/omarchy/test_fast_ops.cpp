@@ -2208,7 +2208,7 @@ constexpr double f32_tolerance = 1e-6;
 // but the AGX backend compiles each shader independently and does not
 // promise the two compilations agree in the last bit - and the
 // driver's sin/cos range reduction has a documented accuracy envelope
-// (known-defects: 4.8e-3 absolute error at theta 123457). Observed on
+// (measured: 4.8e-3 absolute error at theta 123457). Observed on
 // the M1 (13-inch M1 rope-fastops.log, main 6a57c84, 2026-09-04): f32 deltas
 // <= 6.2e-4 and f16 deltas <= 2 ulp, every failing element inside
 // that envelope; no garbage-corruption class values. llvmpipe codegen
@@ -4009,8 +4009,8 @@ TEST_CASE("sdpa vjp fd parity across degenerate rep=1 shapes (dq dk dv)") {
 //    causal (1,3,5,8).
 // Standalone probes of the obvious suspects (matmul with inner dim 1,
 // General copies of the {kL,1} transposed views) are clean, so the
-// defect lives in the composition. See docs/known-defects.md "SDPA
-// backward fused VJP value defects at small rep=1 shapes".
+// defect lives in the composition (measured 2026-10-03, hardware-confirmed
+// at qL=1 kL>1 all-zero dk/dv).
 TEST_CASE("sdpa vjp fd parity at small rep=1 shapes (known defects)" *
           doctest::may_fail(true)) {
   sdpa_vjp_fd_case(1, 1, 2, 4, false);

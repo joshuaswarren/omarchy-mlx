@@ -1,6 +1,6 @@
 # Core ML package inspector
 
-Phase 2 of `docs/plans/2026-09-12-coreml-parakeet-ane-plan.md`: a
+A
 complete, public `.mlpackage` inspector for Linux. It replaces the
 hand-written wire-format parser (1126 lines of guessed message layouts
 plus a 178-line varint codec) whose dtype tables were wrong — for

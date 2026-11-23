@@ -171,7 +171,7 @@ check("GQA SDPA vs decomposition (qL=64 kL=128)", gqa_err < 1e-3,
       f"maxerr={gqa_err:.2e}")
 
 # Informational: the small-S vector path (W11, disclosed open in
-# docs/known-defects.md) still disagrees with the decomposition. This line
+# (the retired defect ledger) still disagrees with the decomposition.
 # documents the wheel matches its disclosure; it must not fail the probe.
 q16 = rng.standard_normal((B, Hq, 16, D)).astype(np.float32)
 k16 = rng.standard_normal((B, Hk, 16, D)).astype(np.float32)

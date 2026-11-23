@@ -58,7 +58,7 @@ device is a development device, not Honeykrisp.
 
 Compiled tapes run by default on Apple GPUs. The stale-shape corruption
 that closed them is root-caused and fixed
-([docs/known-defects.md](known-defects.md)). The former
+(measured 2026-10-03). The former
 `MLX_OMARCHY_ALLOW_UNSAFE_COMPILE` override was retired with the fix.
 Setting it now does nothing. To enable compilation, unset
 `MLX_DISABLE_COMPILE`. Setting it to `0` still disables compilation,
@@ -75,7 +75,7 @@ Compiled-tape elementwise chains and exact eager SwiGLU graphs
 (`gate * sigmoid(gate) * up`) fuse into one dispatch by default. The eager
 path and compiled-tape chains support f32, f16, and bf16. Rounding is per
 instruction, to the storage dtype. Results are bit-exact against the
-per-node path (see docs/known-defects.md). Set `MLX_OMARCHY_FUSED_CHAIN=0`
+per-node path (measured 2026-09-18). Set `MLX_OMARCHY_FUSED_CHAIN=0`
 to use the per-node path for every dtype.
 
 Eager single-row 4-bit/group-64 quantized projections read one x

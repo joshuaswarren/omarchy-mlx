@@ -51,7 +51,7 @@ debugging.
      `MLX_OMARCHY_ALLOW_NON_APPLE=1`.
 
 4. Compiled tapes. They run by default on every device class since the
-   stale-shape fix (docs/known-defects.md); no override is needed and
+   stale-shape fix (commit `8f4f032b`); no override is needed and
    `MLX_OMARCHY_ALLOW_UNSAFE_COMPILE` is retired (setting it does
    nothing). The former auto-eager gate and backstop were removed with
    the fix; `probe_compile_ordering.py` was retired with them. Keep

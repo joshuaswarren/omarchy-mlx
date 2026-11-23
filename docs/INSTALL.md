@@ -42,7 +42,7 @@ The runtime then uses the system Honeykrisp driver. Use Mesa 26.2.4 or
 newer. Older Mesa can return wrong results from int8 and other
 shift-heavy kernels, and the runtime prints a warning. The known
 differences from the packaged driver are in
-[docs/known-defects.md](known-defects.md). To use the private ICD,
+the shipped driver notes. To use the private ICD,
 install `omarchy-mlx-vulkan` from the `[omarchy]` repository.
 
 Prefill can be much slower on the system driver. On issue #104, a

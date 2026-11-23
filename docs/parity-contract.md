@@ -6,7 +6,7 @@ This contract defines correctness and throughput acceptance for MLX on the Apple
 
 Keep `import mlx.core as mx` and `mx.gpu` unchanged. Release inference must execute tensor operations on Vulkan, with no CPU tensor fallback. CPU scheduling, tokenization and buffer transport remain allowed. Disable ANE placement for this GPU comparison; qualifying ANE regions requires the separate crossover contract.
 
-Use this document for the engineering comparison below. It does not replace the [numerics gate](numerics-gate.md), [token identity policy](parity-id-policy.md), [compatibility release requirements](plans/2026-08-29-mlx-omarchy-ane-compatibility-plan.md#success-criteria), or the standing chip qualification batteries in [AGENTS.md](../AGENTS.md).
+Use this document for the engineering comparison below. It does not replace the [numerics gate](numerics-gate.md), the [token identity policy](parity-id-policy.md), or the standing chip qualification batteries in [AGENTS.md](../AGENTS.md).
 
 The engineering comparison requires at least five independent runs per arm and cell. The existing release procedure still requires five warmup runs and 30 measured repetitions, plus the 100-request stability gate. A five-run engineering result cannot qualify a release by itself.
 
