@@ -425,8 +425,9 @@ AneWorkerReport AneWorker::run(
     int code = 0;
     try {
       std::unique_ptr<AneDevice> device = factory_();
-      for (size_t i = 0; i < bundle.programs.size(); ++i) {
-        device->load(bundle.programs[i], bundle.manifest.programs[i]);
+      for (const auto& program : bundle.programs) {
+        device->load(
+            program, bundle.manifest.programs.at(program.manifest_index));
       }
       write_all(fds[1], kTokenLoaded, std::strlen(kTokenLoaded));
       for (int iteration = 0; iteration < options_.iterations; ++iteration) {
@@ -894,19 +895,27 @@ AneWorkerReport AneWorker::open(
             stall(factory_started));
       }
       size_t loaded = 0;
+      size_t manifest_base = 0;
       for (const auto& bundle : resident) {
-        for (size_t i = 0; i < bundle.programs.size(); ++i) {
+        // manifest_index is offset by the programs claimed by earlier
+        // resident bundles; within each bundle's own manifest the program
+        // position is manifest_index - base.
+        for (const auto& program : bundle.programs) {
           const auto load_started = std::chrono::steady_clock::now();
-          device->load(bundle.programs[i], bundle.manifest.programs[i]);
+          device->load(
+              program,
+              bundle.manifest.programs.at(
+                  program.manifest_index - manifest_base));
           if (timing) {
             std::fprintf(
                 stderr,
                 "[omarchy-ane] child load program %zu (%s) %.1f ms\n",
-                loaded, bundle.programs[i].anec.filename().string().c_str(),
+                loaded, program.anec.filename().string().c_str(),
                 stall(load_started));
           }
           ++loaded;
         }
+        manifest_base += bundle.programs.size();
       }
       if (timing) {
         std::fprintf(stderr, "[omarchy-ane] child loaded %zu programs\n",

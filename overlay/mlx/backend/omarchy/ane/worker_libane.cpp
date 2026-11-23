@@ -267,8 +267,10 @@ class LibaneDevice : public AneDevice {
     for (const auto& binding : manifest_program.aux_outputs) {
       ports.push_back(push(binding, 1));
     }
-    ports.push_back(ane_m2_port_spec{
-        "scratch", 2, 0x40u, 3u, manifest_program.scratch_bytes});
+    if (manifest_program.scratch_bytes > 0) {
+      ports.push_back(ane_m2_port_spec{
+          "scratch", 2, 0x40u, 3u, manifest_program.scratch_bytes});
+    }
     struct ane_nn* nn = api_.m2_init_ports(
         program.anec.c_str(), ports.data(),
         static_cast<uint32_t>(ports.size()), 0);

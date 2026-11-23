@@ -1779,3 +1779,28 @@ TEST_CASE("buffer_id defaults to the binding channel") {
   AneBundle bundle = load_bundle(fixture.dir.path());
   CHECK(bundle.manifest.programs[0].aux_outputs[0].buffer_id == 7);
 }
+
+TEST_CASE("aux_outputs under ABI-1 is refused at manifest validation") {
+  AuxFixture fixture;
+  fixture.manifest["driver_abi_major"] = 1;
+  fixture.manifest["compiler"]["target"] = "h13";
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "require driver_abi_major 2");
+}
+
+TEST_CASE("bar_slot on an ABI-1 binding is refused at manifest validation") {
+  AuxFixture fixture;
+  fixture.manifest["driver_abi_major"] = 1;
+  fixture.manifest["compiler"]["target"] = "h13";
+  fixture.manifest["programs"][0].erase("aux_outputs");
+  fixture.manifest["outputs"].erase(
+      fixture.manifest["outputs"].begin() + 1);
+  fixture.manifest["logical_results"].erase(
+      fixture.manifest["logical_results"].begin() + 1);
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); },
+      "require driver_abi_major 2");
+}

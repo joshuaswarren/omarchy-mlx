@@ -599,6 +599,24 @@ void validate_bindings(AneManifest& manifest) {
                "programs[" + std::to_string(p) + "].aux_outputs[" +
                    std::to_string(i) + "]");
     }
+    if (manifest.driver_abi_major != kAneDriverAbiMajorAbl) {
+      // aux_outputs and bar_slot describe the ABI-2 port table; under
+      // the ABI-1 positional contract they are meaningless, so reject
+      // them here instead of at device load.
+      const auto abi1_clean = [](const AneProgramBinding& binding) {
+        return binding.bar_slot == 0;
+      };
+      if (!program.aux_outputs.empty() ||
+          !std::all_of(
+              program.inputs.begin(), program.inputs.end(), abi1_clean) ||
+          !std::all_of(
+              program.outputs.begin(), program.outputs.end(), abi1_clean)) {
+        throw manifest_error(
+            "programs[" + std::to_string(p) +
+            "] uses aux_outputs/bar_slot, which require driver_abi_major " +
+            std::to_string(kAneDriverAbiMajorAbl));
+      }
+    }
   }
   if (total_descriptors != manifest.task_descriptors) {
     throw manifest_error("field 'task_descriptors' does not equal the program total");
