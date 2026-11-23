@@ -50,11 +50,12 @@ APPROVED_CATALOG_PREFIX = "/joshuaswarren/omarchy-mlx/"
 DEV_URL_OVERRIDE_ENV = "MLX_OMARCHY_CATALOG_ALLOW_ANY_URL"
 
 
-# End anchors are \Z: `$` also matches before a trailing newline.
+# End anchors are \Z: `$` also matches before a trailing newline. Digit
+# classes are [0-9]: str `\d` also matches non-ASCII digits such as "٢".
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}\Z")
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}\Z")
-DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")
+DATE_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 KINDS = ("chat", "base", "decisions", "embed", "other")
 QUANT_BITS = (2, 3, 4, 5, 6, 8)

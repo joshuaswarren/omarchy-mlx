@@ -170,6 +170,47 @@ class ValidateTests(unittest.TestCase):
                 self.assertIsNotNone(pattern.match(good))
                 self.assertIsNone(pattern.match(good + "\n"))
 
+    def test_dates_reject_non_ascii_digits(self):
+        # str `\d` matches any Unicode decimal digit; a catalog date is ISO ASCII.
+        qualified = {"status": "qualified", "receipt": "r", "date": "2026-09-20"}
+        untested = {"status": "untested", "receipt": None, "date": None}
+        evidence = {
+            "arch": ["t8103"], "backend": "mlx-lm", "chat_revision": "a" * 40,
+            "decision_revision": "a" * 40, "date": "2026-09-20",
+            "quality": {"task": "t", "score": 0.5, "receipt": "r"},
+            "latency": {"decode_tokens_per_sec": 1, "target_tokens_per_sec": 1,
+                        "first_visible_p95_ms": 1, "receipt": "r"},
+            "runtime": {"mlx_version": "0", "extension_sha256": "b" * 64,
+                        "libmlx_sha256": "b" * 64},
+        }
+
+        def model_date(date):
+            return catalog_of(entry(qualification={
+                "generation": {**qualified, "date": date},
+                "http": untested, "managed": untested}))
+
+        def pair_date(date):
+            obj = pair_catalog()
+            obj["pairs"][0]["qualification"] = {**qualified, "date": date}
+            return obj
+
+        def evidence_date(date):
+            obj = pair_catalog()
+            obj["pairs"][0]["extension"] = {
+                "selection_evidence": {**evidence, "date": date}}
+            return obj
+
+        for build in (model_date, pair_date, evidence_date):
+            catalog.validate_catalog(build("2026-09-20"))
+            for date in ("\u0662\u0660\u0662\u0666-\u0660\u0669-\u0662\u0660",  # Arabic-Indic
+                         "\uff12\uff10\uff12\uff16-\uff10\uff19-\uff12\uff10",  # full-width
+                         "\u0968\u0966\u0968\u096c-\u0966\u096f-\u0968\u0966",  # Devanagari
+                         "2026-09-2\u0660"):  # one stray digit
+                with self.subTest(build.__name__, date=date):
+                    with self.assertRaisesRegex(catalog.CatalogError,
+                                                "does not match required format"):
+                        catalog.validate_catalog(build(date))
+
     def test_ids_and_repo_reject_trailing_newline(self):
         catalog.validate_catalog(pair_catalog())
         cases = {
@@ -280,6 +321,22 @@ class LoadTests(unittest.TestCase):
             (cache_dir / "recommended-catalog.json").write_text(json.dumps(cached))
             obj = catalog.load_catalog(home)
             self.assertEqual(obj["models"][0]["id"], "from-cache")
+
+    def test_cache_with_non_ascii_date_falls_back_to_bundled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            cache_dir = home / "cache"
+            cache_dir.mkdir()
+            untested = {"status": "untested", "receipt": None, "date": None}
+            cached = catalog_of(entry(id="from-cache", qualification={
+                "generation": {"status": "qualified", "receipt": "r",
+                               "date": "٢٠٢٦-٠٩-٢٠"},
+                "http": untested, "managed": untested}))
+            (cache_dir / "recommended-catalog.json").write_text(
+                json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+            obj = catalog.load_catalog(home)
+            self.assertNotEqual(obj["models"][0]["id"], "from-cache")
+            self.assertEqual(obj, bundled_catalog())
 
     def test_no_usable_catalog_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
