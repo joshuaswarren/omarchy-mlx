@@ -50,14 +50,20 @@ def load_pcm(path: Path) -> bytes:
 
 
 def _resample_to_16k(path: Path) -> bytes:
+    """Return 16 kHz mono little-endian int16 PCM, channels averaged.
+
+    Read as float: soundfile returns float sources unscaled when asked
+    for int16, so 0.5 would read as 0. The clip catches resampler
+    overshoot and float peaks above full scale.
+    """
     import numpy as np
     import soundfile as sf
-    data, sr = sf.read(path, dtype="int16")
+    data, sr = sf.read(path, dtype="float64", always_2d=True)
+    data = data.mean(axis=1) * 32768.0
     if sr != SAMPLE_RATE:
         import scipy.signal as sig
-        data = sig.resample_poly(data.astype("float64"), SAMPLE_RATE, sr)
-        data = np.asarray(data, dtype="int16")
-    return np.asarray(data, dtype="int16").tobytes()
+        data = sig.resample_poly(data, SAMPLE_RATE, sr)
+    return np.clip(np.rint(data), -32768, 32767).astype("<i2").tobytes()
 
 
 def make_detector(model_path: str, threshold: float, vad_rms_floor: float):

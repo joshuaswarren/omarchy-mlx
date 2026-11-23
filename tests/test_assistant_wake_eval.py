@@ -4,11 +4,14 @@ sessions only — real openWakeWord inference is the receipt run, not CI.
 """
 
 import json
+import math
 import sys
 import tempfile
+import types
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -55,6 +58,101 @@ def write_clip(path: Path, loud_seconds=0.8, silent_seconds=1.2):
         handle.setsampwidth(2)
         handle.setframerate(rate)
         handle.writeframes(np.concatenate([loud, silent]).tobytes())
+
+
+def write_wav(path: Path, frames: np.ndarray, rate: int):
+    """Write int16 frames shaped (samples, channels) as a PCM WAV."""
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(frames.shape[1])
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(frames.astype("<i2").tobytes())
+
+
+def fake_audio_modules(overshoot=1.0, float_source=None):
+    """soundfile and scipy.signal stand-ins; CI installs neither.
+
+    read() decodes 16-bit WAV like soundfile: (samples, channels) unless
+    mono without always_2d, int16 or float scaled by 1/32768. Given
+    float_source (frames, rate), it plays a float file instead, which
+    soundfile returns unscaled when asked for int16. resample_poly
+    decimates along axis 0, scaled by `overshoot` to model the filter's
+    ringing past full scale on a loud edge.
+    """
+    def read(path, dtype="float64", always_2d=False):
+        if float_source is not None:
+            data, rate = float_source
+            channels = data.shape[1]
+            if dtype == "int16":
+                data = np.clip(np.rint(data), -32768, 32767).astype("int16")
+        else:
+            with wave.open(str(path), "rb") as handle:
+                channels, rate = handle.getnchannels(), handle.getframerate()
+                data = np.frombuffer(handle.readframes(handle.getnframes()),
+                                     dtype="<i2").reshape(-1, channels)
+            if dtype != "int16":
+                data = data / 32768.0
+        if channels == 1 and not always_2d:
+            data = data[:, 0]
+        return data, rate
+
+    def resample_poly(x, up, down, axis=0):
+        g = math.gcd(up, down)
+        assert up // g == 1 and axis == 0
+        return np.asarray(x, dtype=np.float64)[::down // g] * overshoot
+
+    signal = types.SimpleNamespace(resample_poly=resample_poly)
+    return {"soundfile": types.SimpleNamespace(read=read),
+            "scipy": types.SimpleNamespace(signal=signal),
+            "scipy.signal": signal}
+
+
+class ResampleTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def load(self, frames, rate, overshoot=1.0):
+        write_wav(self.dir / "clip.wav", frames, rate)
+        with mock.patch.dict(sys.modules, fake_audio_modules(overshoot)):
+            pcm = wake_eval.load_pcm(self.dir / "clip.wav")
+        return np.frombuffer(pcm, dtype="<i2")
+
+    def test_stereo_16k_mixes_down_to_mono(self):
+        n = int(2.5 * wake_eval.SAMPLE_RATE)
+        frames = np.stack([np.full(n, 8000), np.full(n, -2000)], axis=1)
+        out = self.load(frames, wake_eval.SAMPLE_RATE)
+        self.assertEqual(len(out), n)
+        self.assertTrue(np.all(out == 3000))
+
+    def test_stereo_48k_mixes_down_then_resamples(self):
+        n = int(2.5 * 48000)
+        frames = np.stack([np.full(n, 6000), np.full(n, 2000)], axis=1)
+        out = self.load(frames, 48000)
+        self.assertEqual(len(out), int(2.5 * wake_eval.SAMPLE_RATE))
+        self.assertTrue(np.all(out == 4000))
+
+    def test_resample_overshoot_clips_instead_of_wrapping(self):
+        n = int(2.5 * 48000)
+        mono = np.where(np.arange(n) < n // 2, 32767, -32768)[:, None]
+        out = self.load(mono, 48000, overshoot=1.09)
+        half = len(out) // 2
+        self.assertTrue(np.all(out[:half] == 32767))
+        self.assertTrue(np.all(out[half:] == -32768))
+
+    def test_float_source_is_scaled_and_clipped(self):
+        path = self.dir / "clip.flac"  # not a WAV: load_pcm hands it on
+        path.write_bytes(b"fLaC" + bytes(64))
+        n = wake_eval.SAMPLE_RATE
+        frames = np.repeat([0.5, 1.5, -1.5], n)[:, None]
+        sources = fake_audio_modules(float_source=(frames, wake_eval.SAMPLE_RATE))
+        with mock.patch.dict(sys.modules, sources):
+            out = np.frombuffer(wake_eval.load_pcm(path), dtype="<i2")
+        self.assertEqual(len(out), 3 * n)
+        self.assertTrue(np.all(out[:n] == 16384))
+        self.assertTrue(np.all(out[n:2 * n] == 32767))
+        self.assertTrue(np.all(out[2 * n:] == -32768))
 
 
 class WakeEvalTests(unittest.TestCase):
