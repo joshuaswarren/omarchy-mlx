@@ -105,11 +105,11 @@ def main(argv=None):
     repo_root = Path(__file__).resolve().parents[2]
     import mlx.core as mx
 
-    device = str(mx.default_device())
-    if device == "cpu" and not args.allow_cpu:
-        raise SystemExit("qualify: default device is cpu; run on Apple-silicon hardware with the "
+    device = mx.default_device()
+    if device != mx.gpu and not args.allow_cpu:
+        raise SystemExit("qualify: default device is %s, not mx.gpu; run on Apple-silicon hardware with the "
                          "mlx-omarchy wheel (or pass --allow-cpu for a CPU self-check, which is NOT "
-                         "a hardware qualification)")
+                         "a hardware qualification)" % device)
 
     results = []
     fail = []
