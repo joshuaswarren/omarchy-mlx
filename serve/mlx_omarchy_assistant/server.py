@@ -509,7 +509,12 @@ class Handler(BaseHTTPRequestHandler):
             return raw
         if self.headers.get_content_type() != "application/json":
             raise ValueError("Use application/json")
-        data = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Non-finite JSON value")))
+        try:
+            data = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Non-finite JSON value")))
+        except RecursionError:
+            # Only the decode is caught here, so a handler's own recursion
+            # bug still reaches _handle as a 503.
+            raise ValueError("Request JSON is nested too deeply") from None
         if not isinstance(data, dict):
             raise ValueError("Request must be a JSON object")
         return data
