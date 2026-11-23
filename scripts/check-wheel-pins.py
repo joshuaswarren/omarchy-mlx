@@ -18,6 +18,7 @@ a requirement in any form:
   mlx-omarchy>=0.3                 range pin
   mlx-omarchy @ file:///...whl     local wheel pin   (the 2026-09-03 trap)
   mlx-omarchy @ https://...whl     direct-URL pin
+  mlx-omarchy@git+https://...      direct-URL pin, any spacing around @
   https://.../mlx_omarchy-...whl   bare direct-URL line
   -f or --find-links dirs pointing at mlx_omarchy wheels are reported
 
@@ -40,6 +41,12 @@ import sys
 PACKAGE_RE = re.compile(r"(?im)^[\s\-]*[A-Za-z0-9._]*mlx[_-]omarchy[A-Za-z0-9._-]*\b")
 WHEEL_RE = re.compile(r"(?i)mlx[_-]omarchy[^/\s]*\.whl")
 NAME_NORM_RE = re.compile(r"[-_.]+")
+# A PEP 508 name ends at the first character outside its grammar, so
+# every separator after it (@ with any spacing, (, [, ;, a version
+# operator, --hash) ends the name without being listed here. A name
+# followed by a name or path character (mlx-omarchy/x.whl) is a path.
+NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+                     r"(?![A-Za-z0-9._/\\-])")
 
 
 def _normalized_names(line):
@@ -50,13 +57,10 @@ def _normalized_names(line):
         return [], stripped
     if stripped.startswith("-"):
         return [], stripped
-    # env markers keep the name before ';'; URLs come after '@' or spaces.
-    head = stripped.split(";", 1)[0]
-    head = re.split(r"\s+@\s+|\s+===|\s*==|>=|<=|~=|!=|>|<|\[", head, 1)[0]
-    name = head.strip().strip("'\"")
-    if not name:
+    match = NAME_RE.match(stripped.lstrip("'\""))
+    if not match:
         return [], stripped
-    return [NAME_NORM_RE.sub("-", name).lower()], stripped
+    return [NAME_NORM_RE.sub("-", match.group()).lower()], stripped
 
 
 def check_lines(lines, source="<input>"):
