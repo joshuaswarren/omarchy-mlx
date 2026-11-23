@@ -36,8 +36,10 @@ and prints the error; a failed submit never destroys local output.
 """
 
 import hashlib
+import http.client
 import json
 import os
+import reprlib
 import sys
 import urllib.error
 import urllib.request
@@ -61,12 +63,16 @@ def _request(urlopen, req, timeout):
     """(status, body, request_id): the request id is the server's
     cf-ray header, so a contributor report is actionable."""
     try:
-        with urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-            return resp.status, body, resp.headers.get("cf-ray")
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(), exc.headers.get("cf-ray")
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                return resp.status, body, resp.headers.get("cf-ray")
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), exc.headers.get("cf-ray")
+    # HTTPException: protocol errors, IncompleteRead included. ValueError:
+    # a redirect Location urllib cannot parse.
+    except (urllib.error.URLError, OSError, TimeoutError,
+            http.client.HTTPException, ValueError) as exc:
         raise SubmitError(f"endpoint unreachable: {exc}") from exc
 
 
@@ -120,10 +126,30 @@ def chunk_archive(data, chunk_bytes=CHUNK_BYTES):
 
 
 def _decode(body):
+    """The response object, or {} for anything that is not a JSON object."""
     try:
-        return json.loads(body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+        obj = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError):
         return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _min_difficulty(decoded):
+    """The difficulty a pow_invalid answer asks for, or None."""
+    detail = decoded.get("detail")
+    wanted = detail.get("min_difficulty") if isinstance(detail, dict) else None
+    return wanted if type(wanted) is int else None
+
+
+def _missing_chunks(decoded, chunk_count):
+    """Validated chunk indexes from an initiate answer."""
+    missing = decoded.get("missing_chunks", [])
+    if not isinstance(missing, list) or not all(
+            type(idx) is int and 0 <= idx < chunk_count for idx in missing):
+        raise SubmitError(
+            f"endpoint returned invalid missing_chunks {reprlib.repr(missing)} "
+            f"for {chunk_count} chunks")
+    return missing
 
 
 def _headers(token, extra=None):
@@ -212,8 +238,8 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
             timeout)
         decoded = _decode(body)
         if status == 403 and decoded.get("error") == "pow_invalid":
-            wanted = (decoded.get("detail") or {}).get("min_difficulty")
-            if isinstance(wanted, int) and wanted > difficulty:
+            wanted = _min_difficulty(decoded)
+            if wanted is not None and wanted > difficulty:
                 difficulty = wanted
                 continue
         break
@@ -228,7 +254,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     if decoded.get("status") == "stored":
         return _receipt(decoded, deduplicated=False, status=status)
 
-    for idx in decoded.get("missing_chunks", []):
+    for idx in _missing_chunks(decoded, len(chunks)):
         piece = chunks[idx][1]
         cstatus, cbody, request_id = _request(
             urlopen,
@@ -257,7 +283,8 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     fdecoded = _decode(fbody)
     if fstatus == 409 and fdecoded.get("error") == "incomplete":
         raise SubmitError(
-            f"server still misses chunks {fdecoded.get('missing_chunks')}: "
+            f"server still misses chunks "
+            f"{reprlib.repr(fdecoded.get('missing_chunks'))}: "
             f"{_server_note(fstatus, fbody, request_id)}; re-run to resume")
     if fstatus != 200:
         raise SubmitError(
@@ -327,8 +354,8 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
             timeout)
         decoded = _decode(raw)
         if status == 403 and decoded.get("error") == "pow_invalid":
-            wanted = (decoded.get("detail") or {}).get("min_difficulty")
-            if isinstance(wanted, int) and wanted > difficulty:
+            wanted = _min_difficulty(decoded)
+            if wanted is not None and wanted > difficulty:
                 difficulty = wanted
                 continue
         break
@@ -344,7 +371,9 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
 
 def _receipt(body, deduplicated, status):
     url = body.get("receipt_url")
-    if not url:
+    # isprintable: the caller prints the URL, and a surrogate, newline or
+    # terminal escape must not crash or rewrite that line.
+    if not isinstance(url, str) or not url or not url.isprintable():
         raise SubmitError("endpoint returned no receipt URL")
     return {"url": url, "deduplicated": deduplicated, "status": status}
 

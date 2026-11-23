@@ -377,6 +377,8 @@ class SubmitProtocol(unittest.TestCase):
             self.headers = headers or {}
 
         def read(self):
+            if isinstance(self._payload, bytes):
+                return self._payload
             return json.dumps(self._payload).encode("utf-8")
 
         def __enter__(self):
@@ -562,6 +564,135 @@ class SubmitProtocol(unittest.TestCase):
             cs.submit("http://endpoint.example", big,
                       {"schema_version": 1, "kind": "deep"}, urlopen=server)
         self.assertEqual(server.requests, [])
+
+    # The collectors catch only SubmitError, so a response of the wrong
+    # JSON shape must surface as one, never as a raw AttributeError.
+    def test_non_object_json_raises_submit_error(self):
+        import collect_submit as cs
+        deep = b"[" * 100000 + b"]" * 100000
+        for body in (["ok"], None, "ok", 7, deep):
+            for stage, server in (
+                    ("probe", SubmitProtocol.FakeServer(probe=(200, body))),
+                    ("complete", SubmitProtocol.FakeServer(
+                        complete=(200, body))),
+                    ("incomplete", SubmitProtocol.FakeServer(
+                        complete=(409, body)))):
+                with self.subTest(stage=stage, body=str(body)[:12]), \
+                        self.assertRaises(cs.SubmitError):
+                    self.run_submit(server)
+
+    def test_pow_invalid_with_non_object_detail_raises_submit_error(self):
+        import collect_submit as cs
+        for detail in ("bad", [20], 20):
+            server = SubmitProtocol.FakeServer(initiate=[
+                (403, {"error": "pow_invalid", "detail": detail})])
+            with self.subTest(detail=detail):
+                with self.assertRaises(cs.SubmitError) as ctx:
+                    self.run_submit(server)
+                self.assertIn("HTTP 403", str(ctx.exception))
+                self.assertEqual(len(self.initiate_bodies(server)), 1)
+
+    def test_malformed_missing_chunks_raise_before_any_upload(self):
+        import collect_submit as cs
+        # -1 and true index real chunks in Python, so they would silently
+        # re-upload the wrong piece instead of failing.
+        for missing in ([3], [-1], [True], [0, "1"], [1.0], "0", None, 2):
+            server = SubmitProtocol.FakeServer(initiate=[
+                (200, {"status": "awaiting_chunks",
+                       "missing_chunks": missing})])
+            with self.subTest(missing=missing):
+                with self.assertRaises(cs.SubmitError) as ctx:
+                    self.run_submit(server)
+                self.assertIn("missing_chunks", str(ctx.exception))
+                self.assertEqual(server.chunk_bodies, {})
+                self.assertFalse(any(
+                    r.get_full_url().endswith("/complete")
+                    for r in server.requests))
+
+    def test_deeply_nested_missing_chunks_raise_submit_error(self):
+        import collect_submit as cs
+        deep = []
+        for _ in range(200000):
+            deep = [deep]
+        real = cs._decode
+        server = SubmitProtocol.FakeServer(complete=(409, b"deep"))
+        with patch.object(cs, "_decode", lambda body: {
+                "error": "incomplete", "missing_chunks": deep}
+                if body == b"deep" else real(body)):
+            with self.assertRaises(cs.SubmitError) as ctx:
+                self.run_submit(server)
+        self.assertIn("still misses chunks", str(ctx.exception))
+        with self.assertRaises(cs.SubmitError):
+            cs._missing_chunks({"missing_chunks": deep}, 1)
+
+    def test_unparseable_redirect_raises_submit_error(self):
+        import http.server
+        import threading
+        import urllib.request
+        import collect_submit as cs
+
+        class BadRedirect(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", "http://[::1")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), BadRedirect)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        redirect = f"http://127.0.0.1:{server.server_address[1]}"
+        # No proxy handler, so the loopback request stays direct.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # urllib's redirect handler raises ValueError on this Location.
+        for name, call in (
+                ("submit", lambda: cs.submit(
+                    redirect, b"x", {}, urlopen=opener.open)),
+                ("submit_payload", lambda: cs.submit_payload(
+                    redirect, {}, urlopen=opener.open))):
+            with self.subTest(name):
+                with self.assertRaises(cs.SubmitError) as ctx:
+                    call()
+                self.assertIn("Invalid IPv6 URL", str(ctx.exception))
+
+    def test_bad_receipt_url_raises_submit_error(self):
+        import collect_submit as cs
+        for url in (["http://r/1"], {"href": "http://r/1"}, 1,
+                    "http://r/\ud800", "http://r/1\n", "http://r/\x1b[2J"):
+            server = SubmitProtocol.FakeServer(
+                probe=(200, {"status": "duplicate", "receipt_url": url}))
+            with self.subTest(url=url), self.assertRaises(cs.SubmitError):
+                self.run_submit(server)
+
+    def test_truncated_response_raises_submit_error(self):
+        import http.client
+        import urllib.error
+        import collect_submit as cs
+
+        class Truncated(SubmitProtocol.FakeResponse):
+            def read(self, *args):
+                raise http.client.IncompleteRead(b"{", 40)
+
+            def close(self):
+                pass
+
+        def ok_cut(req, timeout=None):
+            return Truncated(200, {})
+
+        def error_cut(req, timeout=None):
+            raise urllib.error.HTTPError(req.get_full_url(), 500, "err",
+                                         {}, Truncated(500, {}))
+
+        for opener in (ok_cut, error_cut):
+            with self.subTest(opener=opener.__name__):
+                with self.assertRaises(cs.SubmitError) as ctx:
+                    cs.submit("http://endpoint.example", b"x",
+                              {"schema_version": 1}, urlopen=opener)
+                self.assertIn("IncompleteRead", str(ctx.exception))
 
 
 class SubmitEndpointWiring(unittest.TestCase):
@@ -2327,6 +2458,19 @@ class PayloadOnlySubmit(unittest.TestCase):
         sent = {k.lower(): v for k, v in post.headers.items()}
         self.assertEqual(sent.get(cs.ALIAS_HEADER.lower()),
                          "box1-max-aa,box1")
+
+    def test_malformed_responses_raise_submit_error(self):
+        import collect_submit as cs
+        for fake in (
+                self.Fake(probe=(200, ["ok"])),
+                self.Fake(initiate=(200, 7)),
+                self.Fake(initiate=(200, {"receipt_url": ["http://r/q"]})),
+                self.Fake(initiate=(403, {"error": "pow_invalid",
+                                          "detail": [20]}))):
+            with self.subTest(probe=fake.probe, initiate=fake.initiate):
+                with self.assertRaises(cs.SubmitError):
+                    cs.submit_payload("http://e.example", self.PAYLOAD,
+                                      urlopen=fake.open)
 
     def test_alias_header_omitted_when_no_aliases(self):
         import collect_submit as cs
