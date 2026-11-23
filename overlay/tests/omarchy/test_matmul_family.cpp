@@ -738,21 +738,35 @@ TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
         32u);
 }
 
-TEST_CASE("the small-M qmm prefill arm on G16S: today's pick, pinned") {
+TEST_CASE("the small-M qmm prefill arm on G16S: the occupancy floor governs") {
   using mlx::core::omarchy::coopmat_tile_rows;
   const std::string g16s = "Apple M4 Pro (G16S B1)";
-  // G16S has no core count in apple_gpu_cores (returns 0), so the
-  // occupancy step-down never applies: M in 17..127 lands on the 32-row
-  // tile however small the grid is. This is the behavior the G401 audit
-  // names as the small-M gap (the kit workload is M=23, 9 of 32 tile
-  // rows dead); when the G412 A/B picks a different small-M default,
-  // this is the test that flips.
+  // G16S carries its core count (M4 Pro, 20-core GPU, J616s/T6040), so
+  // the measured occupancy floor (6 workgroups/core,
+  // receipts/2026-09-14-qmm-occupancy-tilem) governs the small-M arm:
+  // grids under 20*6 = 120 workgroups step down to the 16-row twin,
+  // wider grids keep the shipped 32-row tile, and M <= 16 keeps its
+  // unconditional 16-row tile. At M in 17..31 one 32-row m-group covers
+  // the prompt (the kit workload is M=23, 9 of 32 tile rows dead).
   CHECK(coopmat_tile_rows(16u, 64u, g16s, false) == 16u);
-  for (uint32_t m : {17u, 23u, 31u, 127u}) {
-    CHECK(coopmat_tile_rows(m, 64u, g16s, false) == 32u);
-    // A tiny grid does not step down either: no core count, no compare.
-    CHECK(coopmat_tile_rows(m, 2u, g16s, false) == 32u);
-  }
+  // M=23: n_groups = ceil(N/32); N=1024 -> 32, N=2048 -> 64,
+  // N=4096 -> 128, N=12288 -> 384. The floor boundary is exact.
+  CHECK(coopmat_tile_rows(23u, 32u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 64u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 119u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 120u, g16s, false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 128u, g16s, false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 384u, g16s, false) == 32u);
+  // Deeper in the arm four 32-row m-groups need a smaller column grid.
+  CHECK(coopmat_tile_rows(127u, 29u, g16s, false) == 16u); // 4*29 < 120
+  CHECK(coopmat_tile_rows(127u, 30u, g16s, false) == 32u); // 4*30 = 120
+  // The 64-row default at M >= 128 keeps its fill gate now that the
+  // core count is known; the tile64 receipt's shapes still fill.
+  CHECK(coopmat_tile_rows(128u, 64u, g16s, true) == 64u);
+  CHECK(coopmat_tile_rows(128u, 128u, g16s, true) == 64u);
+  // A 64-row grid too small to fill the part falls to the floor
+  // compare instead of the vacuous always-64.
+  CHECK(coopmat_tile_rows(128u, 32u, g16s, true) == 32u); // 64<120 -> floor 128>=120
   // A part with a known core count still steps a small grid down.
   const std::string m1max = "Apple M1 Max (G13C C0)";
   CHECK(coopmat_tile_rows(23u, 2u, m1max, false) == 16u);
