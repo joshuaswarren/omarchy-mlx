@@ -315,7 +315,7 @@ def parse_jsonl(text):
             continue
         try:
             obj = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             skipped += 1
             continue
         if isinstance(obj, dict):
@@ -570,7 +570,7 @@ def _fetch_remote_record(sha, args):
     body = fetch_url(url)
     try:
         record = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise DatasetError(f"invalid JSON from {url}") from exc
     if not isinstance(record, dict):
         raise DatasetError(

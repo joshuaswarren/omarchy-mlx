@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -152,6 +153,36 @@ def snapshot_bytes():
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+# Balanced, so a decoder with room to spare would return a dict.
+DEEP_JSON = '{"a":' * 200_000 + "1" + "}" * 200_000
+
+
+def run_with_small_stack(fn):
+    """Return fn() run in a thread with a pinned 4 MiB stack.
+
+    Python 3.14 bounds JSON nesting by the C stack, which follows
+    ulimit -s; the pinned stack makes DEEP_JSON overflow on any host.
+    """
+    outcome = {}
+
+    def target():
+        try:
+            outcome["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            outcome["error"] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
 class SnapshotTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -186,6 +217,16 @@ class QueryCliTests(SnapshotTestCase):
         shas = [r["content_sha256"] for r in data["results"]]
         self.assertEqual(shas, [SHA_DEEP_M1, SHA_QUICK_M2,
                                 SHA_PARTIAL, SHA_FUTURE])
+
+    def test_too_deeply_nested_line_is_skipped(self):
+        with self.assertRaises(RecursionError):
+            run_with_small_stack(lambda: json.loads(DEEP_JSON))
+        with open(self.snapshot / "latest.jsonl", "a",
+                  encoding="utf-8") as handle:
+            handle.write(DEEP_JSON + "\n")
+        data = run_with_small_stack(self.json_list)
+        self.assertEqual(data["count"], 4)
+        self.assertEqual(data["skipped_malformed"], 2)
 
     def test_human_list_has_one_line_per_record(self):
         rc, out, err = self.run_cli("--source", "local",
@@ -869,6 +910,16 @@ class RemoteShowTests(unittest.TestCase):
         self.assertEqual(macos["dart_nodes"][0]["phandle"], 0x2A)
         self.assertIn("read-side correction", parsed["_read_side_correction"])
         self.assertIn("read-side correction", err)
+
+    def test_remote_show_too_deeply_nested_payload_errors_cleanly(self):
+        calls, fake_fetch = self.make_fetcher(
+            [], {SHA_DEEP_M1: DEEP_JSON.encode("ascii")})
+        rc, out, err = run_with_small_stack(
+            lambda: self.run_remote(fake_fetch, "show", SHA_DEEP_M1))
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("invalid JSON", err)
+        self.assertEqual(calls, [self.RESULTS_URL + SHA_DEEP_M1])
 
     def test_remote_show_malformed_result_payload_errors_cleanly(self):
         summary = {"content_sha256": SHA_DEEP_M1, "kind": "deep"}
