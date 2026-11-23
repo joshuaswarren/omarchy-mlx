@@ -5430,11 +5430,14 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   // Depthwise 2-D (Parakeet frontend convs): same straight-line approach
   // as ConvDw1d, with stride/pad/dilation carried in params and the pad
   // taps skipped by bounds guards — the same +0.0 terms conv.comp's
-  // guards add, so the stored bits are identical. Flagged with the
-  // unit-window direct-GEMM route above (VS-3 residual).
+  // guards add, so the stored bits are identical. The shader indexes x
+  // channels-last linearly, so this is contiguous input only (the same
+  // gate the padded dw1d route carries). Flagged with the unit-window
+  // direct-GEMM route above (VS-3 residual).
   if (conv_direct_mm && spatial == 2 && groups_ == in_channels &&
       out_channels == in_channels && in_channels_per_group == 1 &&
-      !flip_ && axis_or_one(input_dilation_, 0) == 1u &&
+      !flip_ && x.flags().row_contiguous &&
+      axis_or_one(input_dilation_, 0) == 1u &&
       axis_or_one(input_dilation_, 1) == 1u) {
     omarchy::ComputeParams dw;
     dw.count = total;
@@ -5720,7 +5723,9 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     // frontend 3x3, K=9), gather stays compact and a strided copy into a
     // zero-filled padded buffer adds the extra K columns as +0.0 terms —
     // the same contributions the unpadded GEMM never evaluates, so the
-    // accumulator bits are unchanged.
+    // accumulator bits are unchanged except the one corner named for the
+    // padded dw1d route above: an accumulation at exactly -0.0 flips to
+    // +0.0 when a padded tap contributes +0.0.
     const auto& caps = encoder.device().capabilities();
     static const bool coopmat_disabled =
         omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
