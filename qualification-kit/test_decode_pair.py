@@ -35,6 +35,15 @@ class DecodePairGate(unittest.TestCase):
         v = self.gate.verdict(100.0, 105.0)
         self.assertEqual(v['verdict'], 'pass')
 
+    def test_ids_mismatch_refuses(self):
+        v = self.gate.verdict(100.0, 100.5, kit_ids='aaa',
+                              packaged_ids='bbb')
+        self.assertEqual(v['verdict'], 'refuse')
+        self.assertEqual(v['reason'], 'ids_divergence')
+        v = self.gate.verdict(100.0, 100.5, kit_ids='aaa',
+                              packaged_ids='aaa')
+        self.assertEqual(v['verdict'], 'pass')
+
     def test_missing_rate_refuses(self):
         for kit, pkg in ((0.0, 100.0), (100.0, 0.0), (None, 100.0)):
             v = self.gate.verdict(kit, pkg)

@@ -27,10 +27,15 @@ def delta_frac(kit_tps, packaged_tps):
     return abs(kit_tps - packaged_tps) / packaged_tps
 
 
-def verdict(kit_tps, packaged_tps, max_delta=MAX_DELTA):
+def verdict(kit_tps, packaged_tps, max_delta=MAX_DELTA,
+            kit_ids=None, packaged_ids=None):
     """Compare two decode tok/s rates. Refuse above max_delta, or when a
     rate is missing or non-positive — a gate that cannot read both sides
-    must not pass."""
+    must not pass. When both generated-token digests are present they must
+    be equal: matching speeds over different output is not a pass."""
+    if kit_ids and packaged_ids and kit_ids != packaged_ids:
+        return {'verdict': 'refuse', 'reason': 'ids_divergence',
+                'delta_frac': None}
     try:
         kit = float(kit_tps)
         pkg = float(packaged_tps)
@@ -61,7 +66,8 @@ def main(argv=None):
     ap.add_argument('--max-delta', type=float, default=MAX_DELTA)
     args = ap.parse_args(argv)
 
-    v = verdict(args.kit_tps, args.packaged_tps, args.max_delta)
+    v = verdict(args.kit_tps, args.packaged_tps, args.max_delta,
+                kit_ids=args.kit_ids, packaged_ids=args.packaged_ids)
     rec = {
         'schema': 'decode-pair-gate-v1',
         'tag': args.tag,

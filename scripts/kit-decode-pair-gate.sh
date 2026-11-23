@@ -61,9 +61,19 @@ print(tps, ids or '')
 PY
 }
 
+read_pair() {  # read_pair <json-or-log-file> <arm-name> -> sets TPS IDS
+  local pair
+  pair="$(extract "$1")" || {
+    echo "REFUSING: $2 arm produced no usable decode result ($1)" >&2
+    exit 2
+  }
+  TPS="${pair%% *}"
+  IDS="${pair##* }"
+}
+
 if [[ -n "${KIT_JSON:-}" && -n "${PACKAGED_JSON:-}" ]]; then
-  read KIT_TPS KIT_IDS <<<"$(extract "$KIT_JSON")"
-  read PKG_TPS PKG_IDS <<<"$(extract "$PACKAGED_JSON")"
+  read_pair "$KIT_JSON" kit;  KIT_TPS="$TPS";  KIT_IDS="$IDS"
+  read_pair "$PACKAGED_JSON" packaged;  PKG_TPS="$TPS";  PKG_IDS="$IDS"
 else
   : "${KIT_GATE_HOST_SSH:?KIT_GATE_HOST_SSH is required: ssh alias of the reference host}"
   : "${KIT_DIR:?KIT_DIR is required: sealed kit dir on the host}"
@@ -72,10 +82,13 @@ else
   : "${GUARD_WRAP:=/var/tmp/appbar/gpuwin.sh}"
 
   REMOTE=/tmp/kit-decode-pair-$KIT_TAG
-  scp -q "$SCRIPTS_DIR/bench_decode.py" "$KIT_GATE_HOST_SSH:/tmp/" 
   ssh "$KIT_GATE_HOST_SSH" "mkdir -p $REMOTE"
+  # bench_decode imports caps_sim_guard and mlx_provenance from its own
+  # directory; both are repo scripts, not part of the packaged install.
+  scp -q "$SCRIPTS_DIR/bench_decode.py" "$SCRIPTS_DIR/caps_sim_guard.py" \
+    "$SCRIPTS_DIR/mlx_provenance.py" "$KIT_GATE_HOST_SSH:$REMOTE/"
   KIT_CMD="cd $KIT_DIR && python3 qualify.py --benchmark-only --machine-id dec0de00dec0de00 --model-dir $MODEL_DIR --out $REMOTE/kit.json && cat $REMOTE/kit.json"
-  PKG_CMD="$PACKAGED_PYTHON /tmp/bench_decode.py --model $MODEL_DIR --tokens $KIT_TOKENS"
+  PKG_CMD="$PACKAGED_PYTHON $REMOTE/bench_decode.py --model $MODEL_DIR --tokens $KIT_TOKENS"
   kit_out="$(ssh "$KIT_GATE_HOST_SSH" "$GUARD_WRAP \"$KIT_CMD\"")"
   pkg_json="$(ssh "$KIT_GATE_HOST_SSH" "$GUARD_WRAP \"$PKG_CMD\"")"
 
@@ -83,8 +96,8 @@ else
   PACKAGED_JSON="$REMOTE-dir-pkg.json"
   printf '%s' "$kit_out" > "$KIT_JSON"
   printf '%s' "$pkg_json" > "$PACKAGED_JSON"
-  read KIT_TPS KIT_IDS <<<"$(extract "$KIT_JSON")"
-  read PKG_TPS PKG_IDS <<<"$(extract "$PACKAGED_JSON")"
+  read_pair "$KIT_JSON" kit;  KIT_TPS="$TPS";  KIT_IDS="$IDS"
+  read_pair "$PACKAGED_JSON" packaged;  PKG_TPS="$TPS";  PKG_IDS="$IDS"
 fi
 
 mkdir -p "$(dirname "$RECEIPT")"
