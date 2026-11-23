@@ -4,10 +4,11 @@
          mx.async_eval(y)
      else:
          mx.async_eval(y, logprobs)
-+    # HOST-3: MLX_OMARCHY_READBACK_CHUNK=N keeps each sampled token on the GPU
++    # HOST-3: MLX_OMARCHY_READBACK_CHUNK keeps each sampled token on the GPU
 +    # and reads back once per N tokens. An EOS inside a chunk just ends the
 +    # consumer early - the extra generated tokens are never yielded.
-+    _omarchy_chunk = int(os.environ.get("MLX_OMARCHY_READBACK_CHUNK", "0"))
++    # Default 16; =0 or =1 restores stock per-token readback.
++    _omarchy_chunk = int(os.environ.get("MLX_OMARCHY_READBACK_CHUNK", "16"))
 +    _pend = []
      n = 0
      while True:
