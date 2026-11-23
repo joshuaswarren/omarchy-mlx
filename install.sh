@@ -654,8 +654,9 @@ TAG_LISTING="$(curl -fsSL "https://api.github.com/repos/$REPO/git/trees/$VERSION
   || die "could not fetch the $VERSION tree listing; cannot tell a post-tag file from a failed fetch"
 TAG_LISTING="$(printf '%s' "$TAG_LISTING" | tr -d ' \n')"
 printf '%s' "$TAG_LISTING" | grep -qF '"truncated":false' \
-  && printf '%s' "$TAG_LISTING" | grep -qF '"path":"serve/mlx_omarchy_assistant/__init__.py"' \
   || die "the $VERSION tree listing is empty, truncated or unparseable; cannot tell a post-tag file from a failed fetch"
+printf '%s' "$TAG_LISTING" | grep -qF '"path":"serve/mlx_omarchy_assistant/__init__.py"' \
+  || die "$VERSION does not contain serve/mlx_omarchy_assistant; this installer requires the assistant package at the resolved tag"
 in_tag_tree() { printf '%s' "$TAG_LISTING" | grep -qF "\"path\":\"$1\""; }
 # Shared name module first: venv discovery and the install name table,
 # imported by the serve CLI, the assistant, and the retire tooling.
