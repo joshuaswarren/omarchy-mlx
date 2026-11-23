@@ -105,10 +105,22 @@ def _unbind(a, dim):
     return tuple(out)
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
+    """native_layer_norm with real mean/rstd.
+
+    aot_autograd saves the returned mean and rstd and feeds them to
+    aten.native_layer_norm_backward; dummies (the old lowering) make that
+    backward divide by rstd = 0 and every gradient upstream of the norm
+    turns NaN at the first training step (PT-T1 bisect).
+    """
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
-    dummy = mx.array(np.zeros(1, np.float32))
-    return (mx.fast.layer_norm(a, w, b, eps), dummy, dummy)
+    mu = a.mean(axis=-1, keepdims=True)
+    var = a.square().mean(axis=-1, keepdims=True) - mu.square()
+    rstd = mx.rsqrt(var + eps)
+    out = (a - mu) * rstd
+    out = out * w if w is not None else out
+    out = out + b if b is not None else out
+    return (out, mu.squeeze(-1), rstd.squeeze(-1))
 
 def _expand(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
