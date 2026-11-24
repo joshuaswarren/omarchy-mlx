@@ -1925,7 +1925,8 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 if groups != 1:
                     raise NotImplementedError("aten.convolution groups>1")
                 x = mx.transpose(inp, (0, 2, 3, 1))
-                y = mx.conv2d(x, wt, stride=stride, padding=padding,
+                wt_nhwc = mx.transpose(wt, (0, 2, 3, 1))
+                y = mx.conv2d(x, wt_nhwc, stride=stride, padding=padding,
                               dilation=dilation)
                 y = mx.transpose(y, (0, 3, 1, 2))
                 if bias is not None:
