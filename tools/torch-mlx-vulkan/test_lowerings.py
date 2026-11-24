@@ -284,12 +284,43 @@ def test_gelu_backward():
     print("test_gelu_backward PASS")
 
 
+def test_linear():
+    rng = np.random.RandomState(3)
+    x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
+    w = rng.randn(6, 8).astype(np.float32)      # (out_features, in_features)
+    b = rng.randn(6).astype(np.float32)
+    for bias in (b, None):
+        exp = torch.nn.functional.linear(torch.tensor(x), torch.tensor(w),
+                                         None if bias is None else torch.tensor(bias))
+        out = mlx_vulkan._linear(mx.array(x), mx.array(w), None if bias is None else mx.array(bias))
+        assert np.abs(_np(out) - exp.numpy()).max() < 1e-5
+    # through the eager executor: the aten.linear node must lower, not
+    # fall back (compiled executor has its own hardcoded linear branch)
+    tx, tw, tb = torch.randn(3, 8), torch.randn(6, 8), torch.randn(6)
+    for args, bias_kw in ((("x", "w", "b"), False), (("x", "w"), False), (("x", "w"), True)):
+        g = torch.fx.Graph()
+        needed = set(args) | ({"b"} if bias_kw else set())
+        ph = {k: g.placeholder(k) for k in ("x", "w", "b") if k in needed}
+        kw = {"bias": ph["b"]} if bias_kw else {}
+        n = g.call_function(torch.ops.aten.linear.default, tuple(ph[k] for k in args), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        ins = [tx, tw] + ([tb] if "b" in args or bias_kw else [])
+        out = run(*ins)
+        assert "linear" in stats["mlx"], stats
+        assert "linear" not in stats["cpu"], stats
+        exp = torch.nn.functional.linear(tx, tw, tb if len(ins) == 3 else None)
+        assert np.allclose(_np(out), exp.numpy(), atol=1e-4)
+    print("test_linear PASS")
+
+
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
                  "_native_batch_norm_legit_functional", "threshold_backward", "t",
-                 "gelu_backward", "embedding_dense_backward"):
+                 "gelu_backward", "embedding_dense_backward", "linear"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 
@@ -307,5 +338,6 @@ if __name__ == "__main__":
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
+    test_linear()
     test_dispatch_registered()
     print("ALL PASS")
