@@ -7,6 +7,7 @@ Usage:
     python3 scripts/check_tested_hardware.py latest.jsonl [--docs docs/TESTED-HARDWARE.md]
 
 Exits 1 and names each chip that is in the dataset but missing from the matrix.
+Exits 1 with an error line when either file cannot be read or parsed.
 """
 
 import argparse
@@ -18,15 +19,44 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DOCS = REPO_ROOT / "docs" / "TESTED-HARDWARE.md"
 
 
+class DatasetError(ValueError):
+    """A dataset or matrix file this check cannot read."""
+
+
 def dataset_chips(path):
-    """Distinct non-empty chip values in a latest.jsonl, sorted."""
+    """Distinct non-empty chip values in a latest.jsonl, sorted.
+
+    A line that is not UTF-8, not a JSON object, or has a chip that is not a
+    string raises DatasetError naming the line: a corrupt snapshot fails the
+    check rather than passing it.
+    """
     chips = set()
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
+    # surrogateescape keeps an undecodable byte on its own line, so the
+    # error can name that line; strict UTF-8 never yields lone surrogates.
+    with open(path, encoding="utf-8", errors="surrogateescape") as handle:
+        for number, line in enumerate(handle, 1):
             line = line.strip()
             if not line:
                 continue
-            chip = json.loads(line).get("chip")
+            where = f"{path}:{number}"
+            try:
+                line.encode("utf-8")
+            except UnicodeEncodeError:
+                raise DatasetError(f"{where}: not UTF-8 text") from None
+            try:
+                record = json.loads(line)
+            except (ValueError, RecursionError) as exc:
+                raise DatasetError(f"{where}: not a JSON line: {exc}") from exc
+            if not isinstance(record, dict):
+                raise DatasetError(
+                    f"{where}: record is {type(record).__name__}, not an object")
+            chip = record.get("chip")
+            if chip is None:
+                continue
+            if not isinstance(chip, str):
+                raise DatasetError(
+                    f"{where}: chip is {type(chip).__name__}, not a string")
+            chip = chip.strip()
             if chip:
                 chips.add(chip)
     return sorted(chips)
@@ -37,7 +67,11 @@ def matrix_chips(docs_path):
     chips = set()
     in_apple_section = False
     past_header = False
-    for line in Path(docs_path).read_text(encoding="utf-8").splitlines():
+    try:
+        text = Path(docs_path).read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise DatasetError(f"{docs_path}: not UTF-8 text: {exc}") from exc
+    for line in text.splitlines():
         if line.startswith("## "):
             in_apple_section = line.startswith("## Apple silicon")
             past_header = False
@@ -67,7 +101,11 @@ def main(argv=None):
     parser.add_argument("--docs", type=Path, default=DEFAULT_DOCS,
                         help="hardware matrix markdown (default: %(default)s)")
     args = parser.parse_args(argv)
-    gone = missing(dataset_chips(args.dataset), matrix_chips(args.docs))
+    try:
+        gone = missing(dataset_chips(args.dataset), matrix_chips(args.docs))
+    except (OSError, DatasetError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     for chip in gone:
         print(f"chip in dataset but missing from {args.docs.name}: {chip}",
               file=sys.stderr)
