@@ -1163,6 +1163,7 @@ _FUNC_SPECS = {
     "add": lambda a, b, *k: _mx(a) + _mx(b),
     "sub": lambda a, b, *k: _mx(a) - _mx(b),
     "mul": lambda a, b, *k: _mx(a) * _mx(b),
+    "mul_": lambda a, b, *k: _mx(a) * _mx(b),
     "div": lambda a, b, *k: _mx(a) / _mx(b),
     "truediv": lambda a, b, *k: _mx(a) / _mx(b),
     "neg": lambda a: -a,
@@ -1616,6 +1617,9 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
+            if (name == "mul_" and node.op in ("call_function", "call_method")
+                    and isinstance(node.args[0], torch.fx.Node)):
+                env[node.args[0]] = val
             if _DBG_ENV is not None:
                 _DBG_ENV[node] = val
             _tick(name)
@@ -2186,6 +2190,14 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name == "add_":
                 upd = env[n.args[0]] + args[1]
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name == "mul_":
+                upd = env[n.args[0]] * args[1]
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
