@@ -1162,9 +1162,13 @@ def _coerce_index(v):
 
 _FUNC_SPECS = {
     "linear": _linear,
-    "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
-    "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
-    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
+    # PT-AE: MLX matmul answers bf16 inputs in fp32; torch keeps bf16. Cast back
+    # to the left operand dtype (fp32 accumulate, same rounding as torch).
+    "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
+    "bmm": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
+    "mm": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
+    "addmm": lambda b, m1, m2, beta=1, alpha=1: (beta * _mx(b) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
+    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: (beta * _mx(b) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
     "mv": lambda a, v: mx.matmul(a, v),
     "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
     "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
