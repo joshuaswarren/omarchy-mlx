@@ -750,10 +750,11 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
 // MLX_OMARCHY_GDN_G18G_FUSED=1 re-enables the fused route for
 // measurement. Pure.
 inline bool gdn_g18g_composed_default(const std::string& device_name) {
-  if (const char* env = std::getenv("MLX_OMARCHY_GDN_G18G_FUSED")) {
-    return env[0] == '\0' || std::strcmp(env, "0") == 0;
+  if (device_name.find("G18G") == std::string::npos) {
+    return false;
   }
-  return device_name.find("G18G") != std::string::npos;
+  const char* env = std::getenv("MLX_OMARCHY_GDN_G18G_FUSED");
+  return env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0;
 }
 
 // ArgMax, ArgMin and LogSumExp over a long row (8192 to 1048576 columns, the vocabulary row of a decode step): the parts whose default is the chunked

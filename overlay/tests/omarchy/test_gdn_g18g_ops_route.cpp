@@ -26,9 +26,11 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
+#include "mlx/fast_primitives.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
@@ -181,7 +183,46 @@ TEST_CASE("G18G: Hk==Hv prefill composes") {
   check_composed("prefill T=32", gated(gpu_stream(), 32), 16);
 }
 
+// The route's pure gate, over parts and env values: G18G composes unless
+// MLX_OMARCHY_GDN_G18G_FUSED=1, and no env value moves a non-G18G part.
+TEST_CASE("gdn_g18g_composed_default: part x env matrix") {
+  using omarchy::gdn_g18g_composed_default;
+  const char* kG18 = "Apple M6 (G18G B1)";
+  const char* kG13 = "Apple M1 (G13G B1)";
+  const char* kG16 = "Apple M4 Pro (G16S)";
+  const char* kVar = "MLX_OMARCHY_GDN_G18G_FUSED";
+
+  unsetenv(kVar);
+  CHECK(gdn_g18g_composed_default(kG18));
+  CHECK(!gdn_g18g_composed_default(kG13));
+  CHECK(!gdn_g18g_composed_default(kG16));
+
+  setenv(kVar, "0", 1);
+  CHECK(gdn_g18g_composed_default(kG18));
+  CHECK(!gdn_g18g_composed_default(kG13));
+  CHECK(!gdn_g18g_composed_default(kG16));
+
+  setenv(kVar, "", 1);
+  CHECK(gdn_g18g_composed_default(kG18));
+  CHECK(!gdn_g18g_composed_default(kG13));
+
+  setenv(kVar, "1", 1);
+  CHECK(!gdn_g18g_composed_default(kG18));
+  CHECK(!gdn_g18g_composed_default(kG13));
+  CHECK(!gdn_g18g_composed_default(kG16));
+
+  unsetenv(kVar);
+}
+
+TEST_CASE("G18G: GatedDeltaUpdateVJP::use_fallback composes") {
+  if (!simulated_g18g()) return;
+  Stream s = gpu_stream();
+  CHECK(fast::GatedDeltaUpdateVJP::use_fallback(16, 128, 16, 128, s));
+}
+
 int main(int argc, char** argv) {
+  // An inherited measurement env must not flip the route under test.
+  unsetenv("MLX_OMARCHY_GDN_G18G_FUSED");
   setenv("MLX_OMARCHY_CAPS_SIM", kProfile, 1);
   doctest::Context context(argc, argv);
   return context.run();
