@@ -1069,6 +1069,8 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, 
 // Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) with the variable unset: the parts where the route defaults off because
 // the per-node decode GEMV was measured faster than the fused groups:
 //   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-decode-defaults.
+// G14C keeps FUSED_GEMV on so QMM_RESIDUAL_NORM and KV_DIRECT stay active (disabling FUSED_GEMV on G14C
+// leaves gemv_groups empty and regresses Qwen3-4B decode -2.11% to -10.91%, 0/3).
 // The trio (MLX_OMARCHY_FUSED_TRIO) keeps its default on every part: on G16G the numerics gate found that the
 // standalone trio kernels move Qwen2.5-0.5B perplexity away from the reference (same receipt, numerics-gate/).
 // Keyed on the device name so an unmeasured part keeps the route on; callers pass the executing device's name
@@ -1077,18 +1079,35 @@ inline bool fused_gemv_off_default_part(const std::string& device_name) {
   return device_name.find("G16G") != std::string::npos;
 }
 
+// Maximum trailing RMSNorm column width eligible for the G14C default-on
+// QMM_RESIDUAL_NORM fold: hits Qwen3.8-2B (hidden=2048) while skipping larger
+// dense models such as Qwen3-4B (hidden=2560) and Qwen3.8-9B (hidden=4096).
+inline constexpr int kQmmResidualNormG14cMaxCols = 2048;
+
 // Fused Qmm + ResidualAdd + RMSNorm decode epilogue
-// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the parts where the epilogue is
-// on by default because matched ABBA decode measured faster with
-// bit-identical output and token ids:
+// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the parts (and G14C norm widths)
+// where the epilogue is on by default because matched ABBA decode measured
+// faster with bit-identical output and token ids:
 //   G13C (16-inch Apple M1 Max): Qwen3.8-2B 4-bit ctx 512 decode
 //     7.689 -> 7.547 ms/tok (-0.142 ms, +1.84%, 3/3 ABBA pairs, chunk=1)
 //     and 7.699 -> 7.564 ms/tok (-0.135 ms, +1.75%, 3/3 ABBA pairs, chunk=16),
 //     -48 dispatches/tok, identical ids_sha 4784df039da0.
+//   G14C (14-inch Apple M2 Max), norm_cols <= 2048: Qwen3.8-2B (hidden=2048)
+//     gains across ctx 128/512/2048 (+0.37%/+1.36%/+3.03% atop greedy-prune-off,
+//     3/3 pairs), whereas Qwen3-4B (hidden=2560) regresses (-2.26%/-1.91%/-1.61%,
+//     0/3 pairs). norm_cols <= 0 acts as the device-level precheck before shape
+//     filtering.
 // Other parts stay off until measured; MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0
-// overrides on any part, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
-inline bool qmm_residual_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13C") != std::string::npos;
+// overrides on any part/width, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
+inline bool qmm_residual_norm_default_part(
+    const std::string& device_name, int norm_cols = 0) {
+  if (device_name.find("G13C") != std::string::npos) {
+    return true;
+  }
+  if (device_name.find("G14C") != std::string::npos) {
+    return norm_cols <= 0 || norm_cols <= kQmmResidualNormG14cMaxCols;
+  }
+  return false;
 }
 
 // Dense bf16 matmul in the linear-layer orientation (row-major lhs, transposed rhs, alpha 1) where both the scalar-FMA kernel

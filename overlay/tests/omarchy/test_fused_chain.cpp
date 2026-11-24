@@ -2052,10 +2052,19 @@ TEST_CASE("fused gemv default: the part rule") {
 
 TEST_CASE("qmm residual norm default: the part rule and overrides") {
   CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)", 2048));
+  CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)", 2560));
+  CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)", 4096));
+  CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)", 2048));
+  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)", 2560));
+  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)", 4096));
   CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M1 (G13G B1)", 2048));
   CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M4 (G16G B1)", 2048));
   CHECK_FALSE(omarchy::qmm_residual_norm_default_part(""));
+  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("", 2048));
 
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};
@@ -2069,23 +2078,30 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
   const std::string g13g = "Apple M1 (G13G B1)";
   const std::string g14c = "Apple M2 Max (G14C B1)";
   CHECK(omarchy::qmm_residual_norm_enabled(g13c));
+  CHECK(omarchy::qmm_residual_norm_enabled(g13c, 2048));
+  CHECK(omarchy::qmm_residual_norm_enabled(g13c, 2560));
+  CHECK(omarchy::qmm_residual_norm_enabled(g14c, 2048));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c, 2560));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c, 4096));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g, 2048));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   CHECK(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK(omarchy::qmm_residual_norm_enabled(g13g, 2048));
+  CHECK(omarchy::qmm_residual_norm_enabled(g14c, 2560));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c, 2048));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c, 2048));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c, 2048));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c, 2560));
 
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {

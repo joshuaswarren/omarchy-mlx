@@ -1868,7 +1868,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         const array& norm = *it->second;
         const array& nw = norm.inputs()[1];
-        if (claimed.count(norm.id()) ||
+        const Device* qmm_dev = stream_device(qmm);
+        if (claimed.count(norm.id()) || qmm_dev == nullptr ||
+            !qmm_residual_norm_enabled(
+                qmm_dev->capabilities().device_name,
+                static_cast<int>(norm.shape(-1))) ||
             norm.primitive().stream() != qmm.primitive().stream() ||
             norm.ndim() < 1 || norm.size() != add.size() ||
             norm.shape(-1) != qmm.inputs()[1].shape(0) ||
@@ -2298,7 +2302,7 @@ bool outgate_fold_enabled() {
   return outgate_fold_default_for_device(device().capabilities().device_name);
 }
 
-bool qmm_residual_norm_enabled(const std::string& device_name) {
+bool qmm_residual_norm_enabled(const std::string& device_name, int norm_cols) {
   if (!fused_chain_enabled()) {
     return false;
   }
@@ -2306,7 +2310,7 @@ bool qmm_residual_norm_enabled(const std::string& device_name) {
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
-  return qmm_residual_norm_default_part(device_name);
+  return qmm_residual_norm_default_part(device_name, norm_cols);
 }
 
 bool qmm_residual_norm_enabled() {
