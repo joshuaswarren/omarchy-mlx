@@ -25,6 +25,7 @@ import mlx.core as mx
 import torch._dynamo
 
 log = logging.getLogger("mlx_vulkan")
+_DBG_ENV = None
 
 # ---------------- conversions ----------------
 
@@ -269,6 +270,37 @@ def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
         gb = mx.sum(gm, axis=(0,) + tuple(range(1, gm.ndim - 1)))
     return (gi, gw, gb)
 
+
+def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
+    # torch: a NCL, w OIK ; mlx.conv1d: x NLC, w (K, I/groups, O)
+    if groups != 1:
+        return _raise("grouped conv1d")
+    x = _mx(a).transpose(0, 2, 1)
+    wt = _mx(w).transpose(0, 2, 1)  # torch O,I,K -> mlx O,K,I
+    st = stride[0] if isinstance(stride, (list, tuple)) else stride
+    p = padding[0] if isinstance(padding, (list, tuple)) else padding
+    dl = dilation[0] if isinstance(dilation, (list, tuple)) else dilation
+    y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl)
+    if b is not None:
+        y = y + _mx(b).reshape(1, 1, -1)
+    return y.transpose(0, 2, 1)
+
+def _diff(a, n=1, dim=-1, prepend=None, append=None):
+    x = _mx(a)
+    d = dim % x.ndim
+    if prepend is not None:
+        x = mx.concatenate([_mx(prepend), x], axis=d)
+    if append is not None:
+        x = mx.concatenate([x, _mx(append)], axis=d)
+
+    def _s(t, lo, hi):
+        idx = [slice(None)] * t.ndim
+        idx[d] = slice(lo, hi)
+        return t[tuple(idx)]
+
+    for _ in range(n):
+        x = _s(x, 1, x.shape[d]) - _s(x, 0, x.shape[d] - 1)
+    return x
 
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
@@ -645,6 +677,8 @@ _FUNC_SPECS = {
     "_adaptive_avg_pool2d": _adaptive_avg_pool2d,
     "adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
     "_adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
+    "conv1d": _conv1d,
+    "diff": _diff,
     "convolution": _convolution,
     "convolution_backward": _convolution_backward,
     "t": _wt,
@@ -663,6 +697,7 @@ _FUNC_SPECS = {
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
+    "not_equal": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
@@ -862,7 +897,9 @@ def _run_method(obj, name, args, kwargs):
             return int(np.prod(obj.shape)), True
         if name in ("new_empty", "new_zeros", "new_ones", "new_full"):
             dt = _MX_DT.get(kwargs.get("dtype"), obj.dtype)
-            shape = tuple(args[0])
+            if name == "new_full" and len(args) < 2:
+                args = (kwargs["size"], args[0] if args else kwargs["fill_value"])
+            shape = tuple(args[0] if args else kwargs["size"])
             if name == "new_ones":
                 return mx.ones(shape, dtype=dt), True
             if name == "new_full":
@@ -932,9 +969,21 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 continue
             if node.target is operator.getitem or name == "getitem":
-                env[node] = args[0][_coerce_index(args[1])]
-                stats["glue"].append("getitem")
-                continue
+                try:
+                    env[node] = args[0][_coerce_index(args[1])]
+                    stats["glue"].append("getitem")
+                    continue
+                except Exception as e:
+                    # Mixed-domain getitem (torch source, mlx index): coerce the
+                    # indexable side to mx when any operand lives there.
+                    if has_mx((args[0], args[1])):
+                        try:
+                            env[node] = _mx(args[0])[_deep_mx(_coerce_index(args[1]))]
+                            stats["glue"].append("getitem")
+                            continue
+                        except Exception:
+                            pass
+                    log.info("LOWER-FAIL	getitem	%s", e)
 
             val = None
             on_mlx = False
@@ -991,6 +1040,8 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
+            if _DBG_ENV is not None:
+                _DBG_ENV[node] = val
         return None
 
     return run, stats
@@ -1004,6 +1055,8 @@ def _eager_run(gm):
 
 @torch._dynamo.register_backend(name="mlx_vulkan")
 def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
+    if os.environ.get("MLX_VK_EAGER"):
+        return _eager_run(gm)
     try:
         run_c = make_compiled_executor(gm, dt=_dt)
     except Exception as e:
@@ -1213,7 +1266,27 @@ def make_compiled_executor(gm, dt=None):
     phs = [n for n in nodes if n.op == "placeholder"]
     skip, fused = _fuse_rmsnorm(nodes)
     fp32_params = {str(w.target) for _, w, _ in fused.values()}
+    # embedding gathers feed the whole residual spine; keep their source weights
+    # fp32 (a gather is not a GEMM and gains nothing from the bf16 cast).
+    _pass = {"to", "detach", "clone", "contiguous", "view"}
+    for n in nodes:
+        if n.op == "call_function" and _opname(n) == "embedding" and len(n.args) > 1:
+            w = n.args[1]
+            while getattr(w, "op", None) == "call_method" and _opname(w) in _pass and w.args:
+                w = w.args[0]
+            if getattr(w, "op", None) == "placeholder":
+                fp32_params.add(str(w.target))
     state_names = {str(n.target) for n in phs if "_cache_layers_" in str(n.target)}
+    # cache placeholders only count as mutated state when the graph actually
+    # mutates them in place; HF concat-style cache (cat -> new outputs) must not
+    # replay step-1 state on later calls.
+    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_")
+    if not any(
+            n.op == "call_method" and _opname(n) in _mutfns
+            and getattr(n.args[0], "op", None) == "placeholder"
+            and str(n.args[0].target) in state_names
+            for n in nodes):
+        state_names = set()
     static_names = {str(n.target) for n in phs if str(n.target).startswith("G_")}
     mutated = [n for n in phs if str(n.target) in state_names]
     quant_names = _quantizable_phs(phs) if _Q_BITS else set()
@@ -1227,7 +1300,7 @@ def make_compiled_executor(gm, dt=None):
         return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
 
     def build(*flat):
-        env = {}
+        env = _DBG_ENV if _DBG_ENV is not None else {}
         for n, v in zip(phs, flat):
             env[n] = _QW(*v) if str(n.target) in quant_names and isinstance(v, (tuple, list)) else v
 
@@ -1413,7 +1486,8 @@ def make_compiled_executor(gm, dt=None):
                     conv_static[name] = arr
                 flat.append(arr)
         t1 = _t.perf_counter()
-        outs = cfn(*flat)
+        outs = (build if _DBG_ENV is not None else cfn)(*flat)
+        outs = outs if isinstance(outs, (tuple, list)) else (outs,)
         mx.eval(*outs)
         t2 = _t.perf_counter()
         # outs = real outputs + len(mutated) state tail. aot graphs have no
