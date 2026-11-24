@@ -876,7 +876,7 @@ inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
 // so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent
 // calls, default against split on one tree, receipts/2026-10-23-sdpa-split-decode) where the split route is faster in both shapes of work, except G14C, which starts where it is faster in the chain shape of a decode step:
 //   G13G (Apple M1): 128 keys (chain 91.5 against 78.6 microseconds; the shortest length measured);
-//   G13C (Apple M1 Max): 320 keys (chain 107.3 against 82.5, independent 84.0 against 78.2);
+//   G13C (Apple M1 Max): 320 keys (chain 107.3 against 82.5, independent 84.0 against 78.2); the decode default now starts at 256 keys on the 5-pair ABBA win below;
 //   G14C (Apple M2 Max): 320 keys with the value-phase pass 1 (chain 89.7 against 64.3; in the independent shape the fused kernel is 2.6 microseconds faster, 55.6 against 58.2, receipts/2026-10-24-sdpa-split-pv); the plain pass 1 first won at 448 keys (chain 127.2 against 86.8, independent 79.4 against 78.6), and at 320 keys it still wins the chain (89.7 against 85.5).
 // Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated: +21.9 percent (G13G), +19.5 percent (G13C), +12.8 percent (G14C). An unmeasured part keeps the
 // fused kernel.
@@ -906,7 +906,10 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
   if (device_name.find("G13G") != std::string::npos) return 128;
-  if (device_name.find("G13C") != std::string::npos) return 320;
+  // G13C: 5-pair ABBA Qwen3-4B decode (all three split knobs vs default) wins at ctx 256
+  // (+9.32%, 5/5, k_len ~264..328), bit-identical tokens; ctx below 256 unmeasured,
+  // so the threshold sits at the measured boundary.
+  if (device_name.find("G13C") != std::string::npos) return 256;
   // G14C: 5-pair ABBA Qwen3-4B decode (64-key value-phase split vs default) wins at ctx 128 (+1.10%), 192 (+3.02%), and 256 (+7.99%), bit-identical tokens.
   if (device_name.find("G14C") != std::string::npos) return 128;
   if (device_name.find("G17C") != std::string::npos) return 320;  // initial M5 placeholder pending M5 calibration
@@ -937,6 +940,8 @@ inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
   if (device_name.find("G17C") != std::string::npos) return 320;
   if (device_name.find("G16S") != std::string::npos) return 768;
   if (device_name.find("G15S") != std::string::npos) return 1408;
+  // G13C head width 256 is unmeasured, so it keeps the previous effective 320 instead of following min_keys down to 256.
+  if (device_name.find("G13C") != std::string::npos) return 320;
   return sdpa_split_min_keys(device_name);
 }
 
@@ -949,7 +954,7 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len, i
 // 0 means the plain pass 1 stays the default. The variant takes about 19 microseconds off the flat 80 to 90 microsecond floor of the split route on short caches and costs more
 // than it saves on long ones. Chain microseconds per call, split against split with the variant:
 //   G14C (Apple M2 Max): 128 to 1024 keys 86 to 93 against 64 to 75; 2048 keys 103.8 against 89.1; 4096 keys 124.8 against 150.1; so the limit is 2048;
-//   G13C (Apple M1 Max): 128 to 2048 keys 80 to 104 against 59 to 85; 4096 keys 155.6 against 149.4 (tie); 8192 keys 299.7 against 313.2; so the limit is 2048;
+//   G13C (Apple M1 Max): 128 to 2048 keys 80 to 104 against 59 to 85; 4096 keys 155.6 against 149.4 (tie); 8192 keys 299.7 against 313.2; the chain holds through 2048 but decode ABBA turns past 9 blocks, so the default limit is 1152;
 //   G13G (Apple M1): 128 and 512 keys 78 and 88 against 57 and 73, but 1024 keys 113 against 130 and 2048 keys 239 against 268, and decode of Qwen3-4B reads -0.5 percent at 477 prompt tokens and -2.4 percent at 1888, so the default stays off.
 //   G16S (Apple M4 Pro): the variant is faster at every measured length, 224 to 16384 keys (2048 keys 145.8 against 109.8 independent, 4096 keys 212.4 against 164.5,
 //   6144 keys 278.5 against 226.6, 16384 keys 633.4 against 507.8; receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), so the limit is the longest length measured.
@@ -962,7 +967,10 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   }
   // G14C 17-block (136 workgroups at 8 KV heads) ceiling: 5-pair ABBA Qwen3-4B decode wins at ctx 2048 (+3.77%, 5/5, k_len 2057..2120) and drops at ctx 2176 (-5.89%, 0/5, 18 blocks); 17 * 128 = 2176 keys, bit-identical tokens.
   if (device_name.find("G14C") != std::string::npos) return 2176;
-  if (device_name.find("G13C") != std::string::npos) return 2048;
+  // G13C: 5-pair ABBA Qwen3-4B decode (value-phase variant vs default) wins at ctx 512
+  // (+5.37%, 5/5) and ctx 1024 (+4.80%, 5/5, k_len ~1032..1096) and loses at ctx 2048
+  // (-8.71%, 0/3 screen); 9 * 128 = 1152 keys, bit-identical tokens.
+  if (device_name.find("G13C") != std::string::npos) return 1152;
   if (device_name.find("G17C") != std::string::npos) return 2048;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 16384;
   if (device_name.find("G15S") != std::string::npos) return 1280;
@@ -990,6 +998,10 @@ inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   }
   // G14C 17-block (136 workgroups at 8 KV heads) ceiling: 5-pair ABBA Qwen3-4B decode wins at ctx 512 (+2.20%), 768 (+1.53%), and 1024 (+0.75%, 5/5) and drops at ctx 1088 (-4.67%, 0/5, 18 blocks); 17 * 64 = 1088 keys, bit-identical tokens.
   if (device_name.find("G14C") != std::string::npos) return 1088;
+  // G13C: 5-pair ABBA Qwen3-4B decode (64-key blocks vs default) wins at ctx 512
+  // (+3.25%, 5/5, k_len ~520..584) and loses at ctx 1024 (-4.52%, 0/3 screen);
+  // 10 * 64 = 640 keys, bit-identical tokens.
+  if (device_name.find("G13C") != std::string::npos) return 640;
   if (device_name.find("G17C") != std::string::npos) return 512;  // initial M5 placeholder pending M5 calibration
   if (device_name.find("G16S") != std::string::npos) return 512;
   if (device_name.find("G15S") != std::string::npos) return 640;
