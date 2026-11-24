@@ -346,6 +346,59 @@ int main() {
       select_compute_barrier(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, 1),
       "MLX_OMARCHY_COMPUTE_BARRIER=1 forces the compute barrier");
 
+  // 6. Activation route default: discrete GPUs take the device-local route
+  // with the env unset; everything else keeps the strict opt-in.
+  fails += check(
+      device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, -1),
+      "discrete GPU defaults the device-local activation route ON");
+  fails += check(
+      !device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, -1),
+      "integrated (Apple) GPUs keep the opt-in: env unset stays off");
+  fails += check(
+      !device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_CPU, -1),
+      "software Vulkan keeps the opt-in: env unset stays off");
+  fails += check(
+      !device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 0),
+      "MLX_OMARCHY_VRAM_ACTIVATIONS=0 opts a discrete GPU out");
+  fails += check(
+      device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, 1),
+      "MLX_OMARCHY_VRAM_ACTIVATIONS=1 still enables an integrated GPU");
+
+  // 7. The B60-over-USB4 memory shape that motivated the default: a large
+  // pure device-local VRAM heap, a host system-memory heap, and a ~256 MiB
+  // device-local+host-visible BAR window. The activation route must land on
+  // the large VRAM heap's type, never the window's.
+  VkPhysicalDeviceMemoryProperties b60{};
+  b60.memoryHeapCount = 3;
+  b60.memoryHeaps[0] = {23ull << 30, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT};
+  b60.memoryHeaps[1] = {46ull << 30, 0};
+  b60.memoryHeaps[2] = {256ull << 20, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT};
+  b60.memoryTypeCount = 4;
+  b60.memoryTypes[0] = {VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0};
+  b60.memoryTypes[1] = {
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+      1};
+  b60.memoryTypes[2] = {
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      2};
+  b60.memoryTypes[3] = {VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0};
+  const uint32_t b60_type = vram_activation_memory_type(
+      device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, -1),
+      VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, b60, 0xF);
+  fails += check(
+      b60_type != UINT32_MAX && b60.memoryTypes[b60_type].heapIndex == 0,
+      "default-on B60 route selects the large VRAM heap, not the BAR window");
+  fails += check(
+      vram_activation_memory_type(
+          device_local_activations_default(
+              VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 0),
+          VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, b60, 0xF) == UINT32_MAX,
+      "opted-out B60 route selects nothing");
+
   if (fails != 0) {
     return 1;
   }
