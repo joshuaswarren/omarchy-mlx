@@ -54,6 +54,25 @@ inline uint32_t local_device_memory_type(
   return best;
 }
 
+// True when the device exposes any device-local memory type the host can
+// map: a resizable-bar aperture or unified memory. A card behind a link
+// without one (Thunderbolt dGPU) splits memory into pure VRAM and host-only
+// GTT, so mapped weight buffers land in GTT and fail allocation far below
+// real VRAM; such a card must take the DMA-upload weight path.
+inline bool mapped_device_local_memory_type(
+    const VkPhysicalDeviceMemoryProperties& memory) {
+  for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+    const auto& type = memory.memoryTypes[i];
+    if ((type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+        (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+        (memory.memoryHeaps[type.heapIndex].flags &
+         VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Where inference weights live on a discrete GPU.
 //
 // The card memory a driver exposes is not always the card memory a model

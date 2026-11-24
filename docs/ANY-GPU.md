@@ -118,9 +118,9 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/<driver>_icd.json \
 
 ## Discrete GPU checkpoint placement
 
-Set `MLX_OMARCHY_VRAM_WEIGHTS` to the absolute path of a local checkpoint directory.
-Direct Safetensors loads from that directory use unmapped VRAM on discrete GPUs with a separate host memory heap.
-Other loads and Apple GPUs keep the default mapped path.
+A card that cannot map device-local memory into host space — a discrete GPU behind a link without a resizable-bar aperture — takes the unmapped VRAM weight path automatically: every direct Safetensors load becomes an inference-weight candidate.
+Set `MLX_OMARCHY_VRAM_WEIGHTS` to the absolute path of a local checkpoint directory to flag only loads from that directory; set it to any other value to keep the default mapped path.
+Cards with a mapped device-local memory type and Apple GPUs keep the default mapped path unless the env names the checkpoint directory.
 The backend reuses one mapped 4 MiB upload buffer per device.
 If VRAM allocation fails, the load reports the error without moving weights to host memory.
 
