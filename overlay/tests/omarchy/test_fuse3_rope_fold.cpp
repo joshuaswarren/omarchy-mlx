@@ -271,3 +271,53 @@ TEST_CASE("folded split p1 scratch equals the unfused rope+split scratch") {
   }
   CHECK_EQ(diffs, size_t{0});
 }
+
+TEST_CASE("the folded route leaves the attention result unchanged") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto s = gpu_stream();
+  constexpr uint32_t heads = KV_HEADS * SPLIT_R;
+  auto q_host = pattern(static_cast<size_t>(heads) * HD, 100003u, 1.0f);
+  auto w_host = pattern(HD, 200003u, 0.5f);
+  auto k_host = pattern(static_cast<size_t>(KV_HEADS) * K_LEN * HD, 300003u, 1.0f);
+  auto v_host = pattern(static_cast<size_t>(KV_HEADS) * K_LEN * HD, 400003u, 1.0f);
+
+  auto run = [&](bool fold) {
+    setenv("MLX_OMARCHY_FUSE3", fold ? "1" : "0", 1);
+    array x = bf16_array(q_host, Shape{1, heads, 1, HD}, s);
+    array w = bf16_array(w_host, Shape{HD}, s);
+    array k = bf16_array(k_host, Shape{1, KV_HEADS, K_LEN, HD}, s);
+    array v = bf16_array(v_host, Shape{1, KV_HEADS, K_LEN, HD}, s);
+    array off = zeros({1}, int32, s);
+    array roped = fast::rope_rms_norm(
+        x, HD, w, ROPE_EPS, false, 1000000.0f, 1.0f, off, s);
+    array out = fast::scaled_dot_product_attention(
+        roped, k, v, SDPA_SCALE, "", std::nullopt, std::nullopt, false, s);
+    out.eval();
+    omarchy::get_command_encoder(s).synchronize();
+    std::vector<float> values(out.size());
+    std::memcpy(
+        values.data(), out.data<float>(), values.size() * sizeof(float));
+    return values;
+  };
+
+  auto unfused = run(false);
+  auto folded = run(true);
+  unsetenv("MLX_OMARCHY_FUSE3");
+  // The fold must not change a single bit of the attention result. On a
+  // device without the split route the fold refuses and the skipped rope
+  // node runs in place, which this also covers.
+  CHECK_EQ(folded.size(), unfused.size());
+  size_t diffs = 0;
+  for (size_t i = 0; i < unfused.size() && i < folded.size(); ++i) {
+    if (std::memcmp(&unfused[i], &folded[i], sizeof(float)) != 0) {
+      if (diffs < 8u) {
+        std::printf(
+            "value %zu: unfused %.9g folded %.9g\n", i, unfused[i], folded[i]);
+      }
+      ++diffs;
+    }
+  }
+  CHECK_EQ(diffs, size_t{0});
+}

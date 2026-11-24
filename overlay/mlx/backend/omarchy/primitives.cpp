@@ -17177,6 +17177,19 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
+  // FUSE-3 fold 1: the planner arms this node when its query is a
+  // single-use rope_rms_norm output. The rope dispatch is skipped and the
+  // split route below computes the rope norm+rotation inside its pass 1.
+  // Nothing before the split block dispatches a one-token query, so a
+  // refusal here runs the rope in place before any route binds the query.
+  std::optional<omarchy::SdpaRopeFoldPlan> rope_fold;
+  if (omarchy::sdpa_rope_fold_enabled() && outputs.size() == 1) {
+    rope_fold = omarchy::sdpa_rope_fold_plan(outputs[0].id());
+  }
+  const bool rope_fold_ready = rope_fold.has_value() && q_len == 1 &&
+      rope_fold->x.dtype() == bfloat16 &&
+      rope_fold->dims == static_cast<int>(head_dim) &&
+      rope_fold->x.strides().back() == 1;
   // Split-K decode route (bf16, head width 128 or 256, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
   // fused kernel above is one 256-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
@@ -17262,6 +17275,33 @@ void ScaledDotProductAttention::eval_gpu(
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
         split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
+        // FUSE-3 fold 1: fold only on the plain width-256, four-heads-per-
+        // kv-head pass 1 with one query row. Any other variant runs the
+        // skipped rope node in place first, so the ordinary dispatch below
+        // reads a query with its data.
+        const bool fold_here = rope_fold_ready && split_rows == 1u &&
+            split_p1 == omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+        if (rope_fold.has_value() && !fold_here) {
+          omarchy::sdpa_rope_fold_refused(outputs[0].id());
+          rope_fold.reset();
+        }
+        const uint32_t rope_lhs_offset = fold_here
+            ? checked_item_offset(rope_fold->x, rope_fold->x.size(), tag, out)
+            : 0u;
+        const uint32_t rope_head_stride = fold_here
+            ? checked_u32(rope_fold->x.strides()[1], tag, out)
+            : 0u;
+        const uint32_t rope_dim_stride = fold_here
+            ? checked_u32(rope_fold->x.strides()[3], tag, out)
+            : 0u;
+        const omarchy::ComputeKernel rope_fold_kernel = fold_here
+            ? (apple_norm_enabled(
+                   encoder.device(),
+                   static_cast<size_t>(head_dim),
+                   static_cast<size_t>(heads))
+                   ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple
+                   : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope)
+            : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
         // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
         for (uint32_t row = 0; row < split_rows; ++row) {
           const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
@@ -17273,14 +17313,58 @@ void ScaledDotProductAttention::eval_gpu(
           split_params.matrix_k = row_k;
           split_params.lhs_offset = split_q_offset + row * split_q_row;
           split_params.output_offset = split_out_offset + row * split_out_row;
-          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
-          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+          if (fold_here) {
+            // The folded pass 1 reads the raw query and computes the rope
+            // norm+rotation in its Q load. The rope's eps, scale, base and
+            // half dims ride the push fields the split kernels leave free;
+            // the norm weight and the position offsets ride two extra
+            // bindings. Pass 2 is unchanged, so matrix_m goes back to the
+            // head count it was.
+            const uint32_t split_matrix_m = split_params.matrix_m;
+            const uint32_t half_dims = static_cast<uint32_t>(rope_fold->dims / 2);
+            split_params.operation = std::bit_cast<uint32_t>(rope_fold->eps);
+            split_params.lhs_size = std::bit_cast<uint32_t>(rope_fold->scale);
+            split_params.beta =
+                std::log(rope_fold->base) / static_cast<float>(half_dims);
+            split_params.dims = half_dims;
+            split_params.matrix_m = 0; // the query row's time index
+            split_params.output_offset = 0; // the offsets element offset
+            split_params.aux_size = 0;     // the weight element offset
+            split_params.lhs_offset = rope_lhs_offset;
+            split_params.shape[0] = rope_head_stride;
+            split_params.shape[3] = rope_dim_stride;
+            std::array<omarchy::ComputeBinding, 6> rope_bindings{
+                binding(rope_fold->x),
+                binding(k),
+                binding(v),
+                binding(scratch),
+                binding(rope_fold->weight),
+                binding(rope_fold->offset)};
+            encoder.dispatch_compute(
+                rope_fold_kernel,
+                rope_bindings,
+                split_params,
+                split_params.matrix_n,
+                row_blocks);
+            split_params.matrix_m = split_matrix_m;
+            split_params.lhs_offset = split_q_offset + row * split_q_row;
+            split_params.output_offset = split_out_offset + row * split_out_row;
+          } else {
+            std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+            encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+          }
           std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
           encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
         }
         return;
       }
     }
+  }
+  // FUSE-3 fold 1: the split route declined an armed node. The skipped
+  // rope node runs in place now, before the later routes bind the query.
+  if (rope_fold.has_value()) {
+    omarchy::sdpa_rope_fold_refused(outputs[0].id());
+    rope_fold.reset();
   }
   std::optional<omarchy::SdpaDecodeMaskLayout> decode_mask;
   omarchy::ComputeBinding mask_binding{};

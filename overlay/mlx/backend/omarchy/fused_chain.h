@@ -252,6 +252,32 @@ bool kv_direct_enabled();
 // MLX_OMARCHY_FUSED_CHAIN gate also covers it); on by default.
 bool rope_norm_fold_enabled();
 
+// FUSE-3 fold 1: the attention dispatch computes the query's rope
+// norm+rotation itself, so the rope dispatch disappears. The planner
+// arms the attention node when its query is a single-use fast::RoPE
+// output with the fused norm; the attention primitive's own eval
+// performs the folded dispatch (the split route's guards live there)
+// and asks the planner to run the skipped rope node in place when it
+// refuses. MLX_OMARCHY_FUSE3=1 arms the fold; unset or 0 keeps the
+// unfused rope + attention pair.
+struct SdpaRopeFoldPlan {
+  // The raw query the rope reads, the position offsets and the norm
+  // weight, plus the rope's own parameters.
+  array x;
+  array offset;
+  array weight;
+  float eps;
+  // The rope's full rotary width (the half dims are dims / 2).
+  int dims;
+  float base;
+  float scale;
+};
+std::optional<SdpaRopeFoldPlan> sdpa_rope_fold_plan(std::uintptr_t node_id);
+// The armed fold refused: the skipped rope node runs in place now, so
+// the query the attention reads is the rope's real output.
+void sdpa_rope_fold_refused(std::uintptr_t node_id);
+bool sdpa_rope_fold_enabled();
+
 class Device;
 
 // One fused decode route variable (MLX_OMARCHY_FUSED_GEMV or

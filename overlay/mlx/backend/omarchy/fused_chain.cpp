@@ -796,6 +796,24 @@ struct SliceUpdatePair {
   bool values_committed{false};
 };
 
+// A planned FUSE-3 fold: the attention node's query is this rope
+// node's output, and the rope's own dispatch disappears into the
+// attention dispatch.
+struct SdpaRopeFold {
+  array rope;
+  array x;
+  array offset;
+  array weight;
+  // Eval detaches tape nodes (clears inputs and primitive), so the
+  // refusal path keeps the pieces it needs to run the rope in place.
+  std::shared_ptr<Primitive> rope_prim;
+  std::vector<array> rope_inputs;
+  float eps;
+  int dims;
+  float base;
+  float scale;
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
@@ -813,6 +831,13 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, size_t> rope_norm_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> rope_norm_roles;
   std::vector<RopeNormFold> rope_norms;
+  // FUSE-3 fold 1: the attention dispatch owns the rope node's
+  // dispatch. The rope node is skipped while the fold can still fire;
+  // the attention node asks for the plan and runs the skipped rope node
+  // in place when it refuses.
+  std::unordered_map<std::uintptr_t, size_t> sdpa_rope_fold_roles;
+  std::unordered_map<std::uintptr_t, size_t> rope_fold_skip_roles;
+  std::vector<SdpaRopeFold> sdpa_rope_folds;
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
@@ -2108,6 +2133,85 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           cand);
     }
   }
+
+  // FUSE-3 fold 1: an attention node whose query is a single-use
+  // fast::RoPE output (the fused rope_rms_norm) can compute the rope
+  // norm+rotation inside the attention dispatch. The rope node's
+  // dispatch is then skipped and the attention node's own eval performs
+  // the folded dispatch; if it refuses, it asks for the rope node to run
+  // in place.
+  if (sdpa_rope_fold_enabled()) {
+    static int sdpa_fold_trace = 0;
+    const bool trace = std::getenv("MLX_OMARCHY_FUSE3_TRACE") != nullptr;
+    size_t cand = 0;
+    for (const array& node : tape) {
+      if (!is_op(&node, typeid(fast::ScaledDotProductAttention)) ||
+          node.inputs().size() < 3) {
+        continue;
+      }
+      const array& q = node.inputs()[0];
+      const array* rope_p = lookup(q);
+      if (rope_p == nullptr || !is_op(rope_p, typeid(fast::RoPE)) ||
+          uses[q.id()] != 1 || claimed.count(q.id()) ||
+          rope_p->inputs().size() != 3) {
+        continue;
+      }
+      ++cand;
+      const auto& rp = static_cast<const fast::RoPE&>(rope_p->primitive());
+      const auto st = rp.state();
+      const int dims = std::get<1>(st);
+      const array& x = rope_p->inputs()[0];
+      const array& off = rope_p->inputs()[1];
+      const array& w = rope_p->inputs()[2];
+      const int d = x.ndim() > 0 ? x.shape(-1) : 0;
+      if (!rp.has_norm() || !std::get<5>(st) || std::get<2>(st) ||
+          x.dtype() != bfloat16 || w.dtype() != bfloat16 ||
+          off.dtype() != int32 || w.size() != static_cast<size_t>(d) ||
+          d <= 0 || d > 256 || (d % 2) != 0 || dims != d ||
+          x.strides().back() != 1 ||
+          fast::RoPE::use_fallback(rope_p->primitive().stream())) {
+        if (trace && sdpa_fold_trace < 4) {
+          ++sdpa_fold_trace;
+          std::fprintf(
+              stderr,
+              "[fuse3] reject: norm=%d fwd=%d trad=%d dims=%d d=%d "
+              "xdt=%d wdt=%d odt=%d\n",
+              static_cast<int>(rp.has_norm()),
+              static_cast<int>(std::get<5>(st)),
+              static_cast<int>(std::get<2>(st)),
+              dims,
+              d,
+              static_cast<int>(x.dtype().val()),
+              static_cast<int>(w.dtype().val()),
+              static_cast<int>(off.dtype().val()));
+        }
+        continue;
+      }
+      const size_t index = state->sdpa_rope_folds.size();
+      state->sdpa_rope_fold_roles.emplace(node.id(), index);
+      state->rope_fold_skip_roles.emplace(q.id(), index);
+      state->sdpa_rope_folds.push_back(SdpaRopeFold{
+          *rope_p,
+          x,
+          off,
+          w,
+          rope_p->primitive_ptr(),
+          rope_p->inputs(),
+          rp.norm_eps(),
+          dims,
+          std::get<3>(st),
+          std::get<4>(st)});
+      claimed.insert(q.id());
+    }
+    if (trace && sdpa_fold_trace < 8) {
+      ++sdpa_fold_trace;
+      std::fprintf(
+          stderr,
+          "[fuse3] planned=%zu cand=%zu\n",
+          state->sdpa_rope_folds.size(),
+          cand);
+    }
+  }
 }
 
 EagerFusionScope::~EagerFusionScope() {
@@ -2195,6 +2299,47 @@ bool kv_direct_enabled() {
   return fused_chain_enabled() &&
       (std::getenv("MLX_OMARCHY_KV_DIRECT") == nullptr ||
        env_flag("MLX_OMARCHY_KV_DIRECT"));
+}
+
+bool sdpa_rope_fold_enabled() {
+  return env_flag("MLX_OMARCHY_FUSE3");
+}
+
+std::optional<SdpaRopeFoldPlan> sdpa_rope_fold_plan(
+    std::uintptr_t node_id) {
+  if (!eager_state) {
+    return std::nullopt;
+  }
+  auto it = eager_state->sdpa_rope_fold_roles.find(node_id);
+  if (it == eager_state->sdpa_rope_fold_roles.end()) {
+    return std::nullopt;
+  }
+  const auto& fold = eager_state->sdpa_rope_folds[it->second];
+  return SdpaRopeFoldPlan{
+      fold.x, fold.offset, fold.weight, fold.eps, fold.dims, fold.base,
+      fold.scale};
+}
+
+void sdpa_rope_fold_refused(std::uintptr_t node_id) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->sdpa_rope_fold_roles.find(node_id);
+  if (it == eager_state->sdpa_rope_fold_roles.end()) {
+    return;
+  }
+  auto& fold = eager_state->sdpa_rope_folds[it->second];
+  // The tape's detach clears primitive and inputs on the descriptor the
+  // rope node shares with this record, and the rope eval reads
+  // out.primitive().stream(), so the rope node itself cannot be its
+  // output. Build a fresh output from the stashed primitive and inputs,
+  // run the rope into it, then give the rope node's descriptor the bytes:
+  // the attention reads the query through that same descriptor.
+  std::vector<array> outputs;
+  outputs.emplace_back(
+      fold.rope.shape(), fold.rope.dtype(), fold.rope_prim, fold.rope_inputs);
+  fold.rope_prim->eval_gpu(fold.rope_inputs, outputs);
+  fold.rope.copy_shared_buffer(outputs[0]);
 }
 
 bool rope_norm_fold_enabled() {
@@ -2413,6 +2558,19 @@ bool dispatch_rope_norm_fold(
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
+  }
+  if (auto skip = eager_state->rope_fold_skip_roles.find(node.id());
+      skip != eager_state->rope_fold_skip_roles.end()) {
+    // FUSE-3: the attention dispatch owns this rope dispatch. The eval
+    // loop releases a tape node's inputs once its consumers have run,
+    // and the fold (or the refusal path) reads them at the attention
+    // node's turn, so pin them to this submission.
+    auto& fold = eager_state->sdpa_rope_folds[skip->second];
+    auto& encoder = get_command_encoder(stream);
+    encoder.add_temporary(fold.x);
+    encoder.add_temporary(fold.offset);
+    encoder.add_temporary(fold.weight);
+    return true;
   }
   if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
       skip != eager_state->res_norm_skip_roles.end()) {
