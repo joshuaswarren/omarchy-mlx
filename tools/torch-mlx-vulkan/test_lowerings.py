@@ -182,6 +182,53 @@ def test_scalar_tensor_factory_lowering():
     print("test_scalar_tensor_factory_lowering PASS")
 
 
+def _closure_dict(run, key_is_node):
+    for cell in (run.__closure__ or ()):
+        v = cell.cell_contents
+        if isinstance(v, dict) and all(isinstance(k, torch.fx.Node) for k in v) == key_is_node:
+            return v
+    return None
+
+
+def test_pcache_skips_static_weights():
+    # G_* placeholders are static weights: conv_static pins the (possibly
+    # quantized) array, and pcache must not retain the raw source alongside.
+    g = torch.fx.Graph()
+    w = g.placeholder("G_w")
+    p = g.placeholder("p_bias")
+    x = g.placeholder("x")
+    mm = g.call_function(torch.ops.aten.mm.default, (x, w), {})
+    out = g.call_function(torch.ops.aten.add.Tensor, (mm, p), {})
+    g.output(out)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run = mlx_vulkan.make_compiled_executor(gm, dt=mx.float32)
+    tw = torch.randn(8, 8); tp = torch.randn(8); tx = torch.randn(4, 8)
+    o1 = run(tw, tp, tx)
+    o2 = run(tw, tp, tx)  # second call: pcache reuse path
+    pcache = _closure_dict(run, True)
+    assert pcache is not None
+    names = {str(n.target) for n in pcache}
+    assert "p_bias" in names and "G_w" not in names, names
+    exp = (tx @ tw + tp).numpy()
+    assert np.allclose(_np(o2[0]), exp, atol=1e-4)
+    print("test_pcache_skips_static_weights PASS")
+
+
+def test_compiled_executor_nonarray_outputs():
+    # aot partitions can emit a non-array element among tensor outputs
+    # (glue values); mx.eval must not be called on them.
+    g = torch.fx.Graph()
+    x = g.placeholder("x")
+    y = g.call_function(torch.ops.aten.add.Tensor, (x, x), {})
+    g.output((y, 7))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run = mlx_vulkan.make_compiled_executor(gm, dt=mx.float32)
+    out = run(torch.tensor([1.0, 2.0]))
+    assert np.allclose(_np(out[0]), [2.0, 4.0])
+    assert out[1] == 7
+    print("test_compiled_executor_nonarray_outputs PASS")
+
+
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
@@ -200,5 +247,7 @@ if __name__ == "__main__":
     test_bn_legit_functional()
     test_scalar_tensor_factory_lowering()
     test_arange()
+    test_pcache_skips_static_weights()
+    test_compiled_executor_nonarray_outputs()
     test_dispatch_registered()
     print("ALL PASS")
