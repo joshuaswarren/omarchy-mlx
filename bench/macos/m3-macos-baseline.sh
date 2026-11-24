@@ -24,6 +24,10 @@ RAW="https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/$PIN_REF"
 MODEL_REPO="mlx-community/Qwen3-4B-Instruct-2507-4bit"
 MODEL_REV="50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
 BENCH_SHA="8220064c5ea3aaafb7564bab704632083d4fab59605232abe3e135fab65b132c"
+# The pinned fixture's identity digest on the Linux reference (the r4
+# M4 Pro row). A macOS run that returns a different digest is a real
+# divergence and must be flagged in the artifact, not only printed.
+EXPECT_DIGEST="acca26cfaf8e37d0"
 PROMPT="Explain how a transistor can function as a switch in a simple circuit."
 REPS=5
 
@@ -58,6 +62,7 @@ PY="$WORK/venv/bin/python"
 "$PY" -m pip -q install --upgrade pip
 "$PY" -m pip -q install mlx-lm huggingface_hub
 PIPVER=$("$PY" -m pip freeze | grep -iE '^(mlx|mlx-lm|mlx_lm|huggingface|tokenizers|numpy)' | tr '\n' ' ')
+"$PY" -m pip freeze > out/pip-freeze.txt 2>/dev/null || true
 echo "pip: $PIPVER"
 
 # --- 3. model snapshot (pinned revision) ---
@@ -176,9 +181,9 @@ curl -fsSL "$RAW/qualification-kit/scripts/coreml_smoke.py" -o harness/coreml_sm
 "$PY" harness/coreml_smoke.py | tee out/coreml.json || echo "COREML smoke=SKIP"
 
 # --- 8. result bundle ---
-"$PY" - out <<'PY'
+"$PY" - out "$MODEL_REPO" "$MODEL_REV" "$PIN_REF" "$BENCH_SHA" "$EXPECT_DIGEST" <<'PY'
 import json, os, platform, subprocess, sys
-outd = sys.argv[1]
+outd, model_repo, model_rev, pin_ref, bench_sha, expect_digest = sys.argv[1:7]
 res = {"host": {"uname": platform.platform(),
                 "chip": subprocess.run(["sysctl","-n","machdep.cpu.brand_string"],
                                        capture_output=True, text=True).stdout.strip()}}
@@ -187,7 +192,31 @@ for name in ("armA-summary.json", "armB.json", "parakeet.json", "coreml.json"):
     if os.path.exists(p):
         try: res[name.split(".")[0]] = json.load(open(p))
         except Exception: res[name.split(".")[0]] = open(p).read().strip()
+# Provenance travels with the artifact: the pins the run used, the
+# package set it ran on, and the digest it was expected to reproduce.
+pip_freeze = ""
+pf = os.path.join(outd, "pip-freeze.txt")
+if os.path.exists(pf):
+    pip_freeze = open(pf).read().strip()
+res["provenance"] = {"model_repo": model_repo, "model_rev": model_rev,
+                     "pin_ref": pin_ref, "bench_sha256": bench_sha,
+                     "pip_freeze": pip_freeze,
+                     "expected_ids_sha256_16": expect_digest}
+# The arm-A digest against the Linux reference, with the mismatch flagged.
+flags = []
+armA = res.get("armA-summary") or {}
+got = armA.get("ids_sha256_16")
+got_list = list(got) if isinstance(got, (list, tuple)) else ([got] if got else [])
+match = bool(got_list) and all(d == expect_digest for d in got_list)
+res["armA_digest"] = {"expected": expect_digest, "got": got_list, "match": match}
+if got_list and not match:
+    flags.append("armA_ids_digest_differs_from_linux_reference")
+if not got_list:
+    flags.append("armA_ids_digest_missing")
+res["flags"] = flags
 json.dump(res, open(os.path.join(outd, "m3-macos-result.json"), "w"), indent=1)
+for flag in flags:
+    print("FLAG " + flag + ": expected " + expect_digest + " got " + ",".join(got_list))
 PY
 echo "== done: $WORK/out/m3-macos-result.json =="
 echo "CARD-CELLS: decode tok/s (armA median + armB), prefill s, ids_sha256_16, prompt_tokens, parakeet encoder_ms, coreml smoke"
