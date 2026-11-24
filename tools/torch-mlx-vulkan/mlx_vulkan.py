@@ -113,7 +113,7 @@ def _ln_native(a, normalized_shape, weight, bias, eps):
     dummy = mx.array(np.zeros(1, np.float32))
     return (mx.fast.layer_norm(a, w, b, eps), dummy, dummy)
 
-def _expand(a, *s):
+def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
     shape = tuple(a.shape[i] if x == -1 else x for i, x in enumerate(s))
@@ -203,10 +203,37 @@ def _interpolate(a, size=None, scale_factor=None, mode="nearest",
     xi = (mx.arange(tw) * (w / tw)).astype(mx.int32)
     return x[:, yi][:, :, xi].transpose(0, 3, 1, 2)
 
+
+def _bitwise_or_logical(a, b, bitop, logop):
+    a, b = _mx(a), _mx(b)
+    _float_dts = (mx.float32, mx.float16, mx.bfloat16)
+    if a.dtype in _float_dts or b.dtype in _float_dts:
+        _b = getattr(mx, "bool_", None) or mx.uint8
+        return logop(a.astype(_b), b.astype(_b))
+    return bitop(a, b)
+
 # ---------------- lowering tables ----------------
 
 # torch-level function objects -> lowering. Built lazily below so missing
 # attributes on any given torch build can't break the import.
+def _coerce_index(v):
+    # fx graphs under dynamic shapes carry torch.SymInt/SymBool indices;
+    # mx slicing needs concrete python scalars. Coerce recursively through
+    # slices and tuples; tensors/arrays pass through for advanced indexing.
+    if isinstance(v, torch.SymInt):
+        return int(v)
+    if isinstance(v, torch.SymBool):
+        return bool(v)
+    if isinstance(v, torch.SymFloat):
+        return float(v)
+    if isinstance(v, slice):
+        return slice(_coerce_index(v.start), _coerce_index(v.stop),
+                     _coerce_index(v.step))
+    if isinstance(v, (tuple, list)):
+        return type(v)(_coerce_index(x) for x in v)
+    return v
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -221,8 +248,8 @@ _FUNC_SPECS = {
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
-    "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
-    "reshape": _reshape, "view": _reshape,
+    "t": lambda a: mx.transpose(a), "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
+    "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
     "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
@@ -233,22 +260,22 @@ _FUNC_SPECS = {
     "split": lambda a, ss, dim=0: _split_even(a, ss, dim) if isinstance(ss, int) else _split_sizes(a, ss, dim),
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
-    "select": lambda a, dim, i: _slice(a, dim, i, i + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
+    "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
-    "max": lambda a, d=None, keepdim=False, *k: mx.max(a, axis=d, keepdims=keepdim) if d is not None else mx.max(a),
-    "min": lambda a, d=None, keepdim=False, *k: mx.min(a, axis=d, keepdims=keepdim) if d is not None else mx.min(a),
+    "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
+    "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
-    "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k)),
-    "zeros_like": lambda a: mx.zeros(a.shape),
-    "ones": lambda *a, **k: mx.ones(_shape_of(a, k)),
-    "ones_like": lambda a: mx.ones(a.shape),
-    "full": lambda s, v, **k: mx.full(tuple(s), v),
-    "full_like": lambda a, v, **k: mx.full(a.shape, v),
+    "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
+    "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
+    "ones_like": lambda a, **k: mx.ones(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "full": lambda s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"))),
+    "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
-    "getitem": lambda t, i: t[i],
+    "getitem": lambda t, i: t[_coerce_index(i)],
     "detach": lambda a: a, "clone": lambda a: a, "contiguous": lambda a: a,
-    "alias": lambda a: a, "lift_fresh": lambda a: a, "to": lambda a, *a_, **k_: a,
+    "alias": lambda a: a, "lift_fresh": lambda a: a, "lift_fresh_copy": lambda a: a, "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
@@ -294,6 +321,12 @@ _FUNC_SPECS = {
     "greater": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "less": lambda a, b: mx.less(_mx(a), _mx(b)),
     "logical_and": lambda a, b: mx.logical_and(_mx(a), _mx(b)),
+    "bitwise_and": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
+    "bitwise_or": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
+    "bitwise_xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
+    "and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
+    "or_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
+    "xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
     "logical_not": lambda a: mx.logical_not(a),
     "invert": lambda a: mx.logical_not(a),
@@ -309,12 +342,17 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
+    "embedding": lambda w, idx, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
-    "empty": lambda *a, **k: mx.zeros(_shape_of(a, k)),
-    "empty_like": lambda a, **k: mx.zeros(a.shape),
+    "empty": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
+    "empty_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_zeros": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_ones": lambda a, s, **k: mx.ones(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_empty": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_full": lambda a, s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "scalar_tensor": lambda v, **k: mx.array(v, _MX_DT.get(k.get("dtype"), mx.int64 if type(v) is int else None)),
     "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
@@ -327,14 +365,17 @@ FUNC_TABLE = {}
 _FN_SOURCES = [torch, F, torch.special, operator]
 
 def _resolve(dotted):
-    obj = _FN_SOURCES[0]
-    for part in dotted.split("."):
+    parts = dotted.split(".")
+    obj = globals()[parts[0]]
+    for part in parts[1:]:
         obj = getattr(obj, part)
     return obj
 
 def _build_func_table():
     candidates = []
     for fn_name, lowering in _FUNC_SPECS.items():
+        if fn_name == "embedding":
+            continue  # spec is aten (weight, indices); python-order names map explicitly below
         for src in (torch, F, torch.special):
             fn = getattr(src, fn_name, None)
             if fn is not None:
@@ -350,6 +391,7 @@ def _build_func_table():
         ("torch.nn.functional.scaled_dot_product_attention", _sdpa),
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
         ("torch.nn.functional.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
+        ("torch.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
         ("operator.getitem", lambda t, i: t[i]),
         ("operator.matmul", mx.matmul),
         ("operator.add", _FUNC_SPECS["add"]),
@@ -358,6 +400,10 @@ def _build_func_table():
         ("operator.truediv", _FUNC_SPECS["div"]),
         ("operator.floordiv", _FUNC_SPECS["div"]),
         ("operator.neg", _FUNC_SPECS["neg"]),
+        ("operator.and_", _FUNC_SPECS["and_"]),
+        ("operator.or_", _FUNC_SPECS["or_"]),
+        ("operator.xor", _FUNC_SPECS["xor"]),
+        ("operator.invert", _FUNC_SPECS["invert"]),
     ]
     for dotted, lowering in explicit:
         try:
@@ -420,10 +466,14 @@ def _run_method(obj, name, args, kwargs):
             return obj.dtype, True
         if name == "numel":
             return int(np.prod(obj.shape)), True
-        if name == "new_empty":
-            return mx.zeros(tuple(args[0])), True
-        if name == "new_zeros":
-            return mx.zeros(tuple(args[0])), True
+        if name in ("new_empty", "new_zeros", "new_ones", "new_full"):
+            dt = _MX_DT.get(kwargs.get("dtype"), obj.dtype)
+            shape = tuple(args[0])
+            if name == "new_ones":
+                return mx.ones(shape, dtype=dt), True
+            if name == "new_full":
+                return mx.full(shape, args[1], dtype=dt), True
+            return mx.zeros(shape, dtype=dt), True
         if name in ("cpu", "detach", "type", "cuda"):
             return obj, True
         if name == "to":
@@ -488,7 +538,7 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 continue
             if node.target is operator.getitem or name == "getitem":
-                env[node] = args[0][args[1]]
+                env[node] = args[0][_coerce_index(args[1])]
                 stats["glue"].append("getitem")
                 continue
 
@@ -760,6 +810,7 @@ def make_compiled_executor(gm):
             name = getattr(n.target, "__name__", None) or _opname(n)
             if n.op == "output":
                 out = res(n.args[0])
+                holder["n_out"] = len(out) if isinstance(out, (tuple, list)) else 0
                 tail = [env[m] for m in mutated]
                 return (*out, *tail) if isinstance(out, (tuple, list)) else (out, *tail)
             if n.op == "get_attr":
@@ -846,9 +897,15 @@ def make_compiled_executor(gm):
                 k = _cast(uk) if uk is not None else _cast(args[1])
                 v = _cast(uv) if uv is not None else _cast(args[2])
                 mask = kwargs.get("attn_mask")
+                if mask is None and kwargs.get("is_causal"):
+                    mask = "causal"
+                scale = kwargs.get("scale")
+                if scale is None:
+                    scale = 1.0 / math.sqrt(q.shape[-1])
+                if isinstance(mask, mx.array) and mask.dtype != getattr(mx, "bool_", mx.uint8):
+                    mask = _cast(mask)
                 env[n] = mx.fast.scaled_dot_product_attention(
-                    q, k, v, scale=kwargs.get("scale"),
-                    mask=_cast(mask) if isinstance(mask, mx.array) else mask).astype(mx.float32)
+                    q, k, v, scale=scale, mask=mask).astype(mx.float32)
                 continue
             if name in ("matmul", "mm", "bmm") and n.op == "call_function":
                 env[n] = mx.matmul(_cast(args[0]), _cast(args[1])).astype(mx.float32)
@@ -867,7 +924,7 @@ def make_compiled_executor(gm):
                 env[n] = getattr(args[0], name)(*args[1:], **kwargs)
                 continue
             if n.target is operator.getitem:
-                env[n] = args[0][args[1]]
+                env[n] = args[0][_coerce_index(args[1])]
                 continue
             if n.op == "call_function":
                 low = (FUNC_TABLE.get(n.target)
@@ -925,7 +982,9 @@ def make_compiled_executor(gm):
         outs = cfn(*flat)
         mx.eval(*outs)
         t2 = _t.perf_counter()
-        logits, extra = outs[0], outs[1:]
+        n_out = holder.get("n_out", 1)
+        logits = tuple(outs[:n_out]) if n_out > 1 else outs[0]
+        extra = outs[n_out:] if n_out else outs[1:]
         for m, arr in zip(mutated, extra):
             state[str(m.target)] = arr
         out = _torch(logits)
