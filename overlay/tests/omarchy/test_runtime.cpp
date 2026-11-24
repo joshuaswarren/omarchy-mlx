@@ -929,6 +929,25 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   }
 }
 
+TEST_CASE("per-submission timestamps are gated per board") {
+  // The M6 (G18G) cannot carry a timestamp-bearing compute submit: the
+  // 7.1.12-aurora-m6usb-ARCH G18 compute admission check refuses it
+  // ("check d value 0", then "invalid resource metadata"), the submit
+  // fails with -EINVAL and the driver reports VK_ERROR_DEVICE_LOST
+  // (issue #526). The board has no per-submission timestamp wheel
+  // (receipts/2026-11-13-g18g-batch-work), so the GPU profiler runs
+  // host-costs-only there and no submit carries a timestamp command.
+  CHECK(omarchy::submission_timestamps_supported("Apple M6 (G18G B1)") == false);
+
+  // Every other board keeps the queue's timestamp support, including
+  // the boards whose per-submission timestamps are calibrated elsewhere.
+  CHECK(omarchy::submission_timestamps_supported("Apple M1 Max (G13C)") == true);
+  CHECK(omarchy::submission_timestamps_supported("Apple M2 Max (G14C B1)") == true);
+  CHECK(omarchy::submission_timestamps_supported("Apple M5 Max (G17C B1)") == true);
+  CHECK(omarchy::submission_timestamps_supported("Apple A18 Pro (G17P B1)") == true);
+  CHECK(omarchy::submission_timestamps_supported("llvmpipe (LLVM 19.1.0, 256 bits)") == true);
+}
+
 TEST_CASE("work budget resolves per device name, not per process") {
   // The override env var replaces the table for every device, so the
   // per-device checks below only mean anything without it.
