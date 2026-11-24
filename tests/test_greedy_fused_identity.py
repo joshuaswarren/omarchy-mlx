@@ -131,7 +131,7 @@ def test_ties_keep_first_index_across_flags_and_composed():
     args = _inputs(rng, dup_rows=[(5, 100), (7, 8), (13, 13), (13, 400)])
     token_off, _ = _greedy(*args, fused=False)
     token_on, _ = _greedy(*args, fused=True)
-    composed = _composed(*args)
+    composed = _composed(*args[:4])
     assert token_off == token_on == composed, (
         f"tie divergence: off={token_off} on={token_on} composed={composed}"
     )
@@ -144,7 +144,7 @@ def test_randomized_identity_matches_flag_off_and_composed(seed):
     args = _inputs(rng)
     token_off, stats_off = _greedy(*args, fused=False)
     token_on, stats_on = _greedy(*args, fused=True)
-    composed = _composed(*args)
+    composed = _composed(*args[:4])
     assert token_off == token_on == composed, (
         f"seed {seed}: off={token_off} on={token_on} composed={composed}"
     )
