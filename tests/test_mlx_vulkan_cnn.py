@@ -12,21 +12,6 @@ torch = pytest.importorskip("torch")
 mx = pytest.importorskip("mlx.core")
 
 
-def _conv_lower(inp, wt, bias, stride, padding, dilation, transposed, groups):
-    stride = (stride, stride) if isinstance(stride, int) else \
-        (tuple(stride) * 2 if len(stride) == 1 else tuple(stride))
-    padding = (padding, padding) if isinstance(padding, int) else \
-        (tuple(padding) * 2 if len(padding) == 1 else tuple(padding))
-    dilation = (dilation, dilation) if isinstance(dilation, int) else \
-        (tuple(dilation) * 2 if len(dilation) == 1 else tuple(dilation))
-    x = mx.transpose(inp, (0, 2, 3, 1))
-    y = mx.conv2d(x, wt, stride=stride, padding=padding, dilation=dilation)
-    y = mx.transpose(y, (0, 3, 1, 2))
-    if bias is not None:
-        y = y + bias.reshape(1, -1, 1, 1)
-    return y
-
-
 def test_conv2d_forward_matches_torch(mlx_vulkan):
     torch.manual_seed(0)
     x = torch.randn(2, 8, 16, 16)
@@ -34,9 +19,10 @@ def test_conv2d_forward_matches_torch(mlx_vulkan):
     b = torch.randn(12)
     ref = torch.nn.functional.conv2d(x, w, b, stride=1, padding=1)
 
-    out = _conv_lower(mx.array(x.numpy()), mx.array(w.numpy()),
-                      mx.array(b.numpy()), [1], [1], [1], False, 1)
-    got = np.asarray(out.transpose(0, 3, 1, 2))
+    out = mlx_vulkan.ATEN_TABLE["convolution"](
+        mx.array(x.numpy()), mx.array(w.numpy()), mx.array(b.numpy()),
+        [1], [1], [1], False, 0, 1)
+    got = np.asarray(out)
     diff = float(abs(got - ref.detach().numpy()).max())
     assert diff < 1e-4, "the conv forward differs: %.3e" % diff
 
@@ -107,7 +93,7 @@ def test_conv_training_step_matches_cpu(mlx_vulkan):
     from torch._dynamo.backends.common import aot_autograd
 
     def lower(gm2, ex):
-        return aot(gm2, ex)
+        return aot_autograd(fw_compiler=aot, bw_compiler=aot)(gm2, ex)
 
     loss_gpu, grads_gpu = run(lambda m: torch.compile(m, backend=lower))
     loss_cpu, grads_cpu = run(None)

@@ -87,9 +87,10 @@ def test_layer_norm_training_step_gradients_are_finite_and_match(mlx_vulkan):
 
 
 def test_whole_graph_training_step_stays_on_mx(mlx_vulkan, caplog):
-    """wAX/PT-T1 speed gate: the nanoGPT-shaped step must run the whole
+    """PT-T1 speed gate: the nanoGPT-shaped step must run the whole
     graph under mx.compile - no per-node executor fallback, no torch CPU
-    fallback records from the backend's own logger."""
+    fallback records from the backend's own logger - and the gradients
+    must match an eager CPU run."""
     import logging
 
     torch.manual_seed(0)
@@ -162,8 +163,26 @@ def test_whole_graph_training_step_stays_on_mx(mlx_vulkan, caplog):
             step_fn(x).reshape(-1, 65), y)
         loss.backward()
         assert math.isfinite(float(loss))
+        grads_gpu = {n: (None if p.grad is None else p.grad.detach().clone())
+                     for n, p in model.named_parameters()}
     finally:
         log.removeHandler(handler)
+
+    torch.manual_seed(0)
+    model_cpu = Nano()
+    model_cpu.head = nn.Linear(96, 65)
+    loss_cpu = torch.nn.functional.cross_entropy(
+        model_cpu(x).reshape(-1, 65), y)
+    loss_cpu.backward()
+    grads_cpu = {n: (None if p.grad is None else p.grad.detach().clone())
+                 for n, p in model_cpu.named_parameters()}
+    assert math.isclose(float(loss), float(loss_cpu), rel_tol=1e-4)
+    for name, grad in grads_gpu.items():
+        assert grad is not None, "the %s gradient is missing" % name
+        assert torch.isfinite(grad).all(), \
+            "the %s gradient is not finite" % name
+        assert torch.allclose(grad, grads_cpu[name], rtol=1e-3, atol=1e-5), \
+            "the %s gradient differs from the CPU run" % name
 
     assert not [m for m in records if "FALLBACK" in m], \
         "the per-node executor fell back to torch: %s" % records[:4]

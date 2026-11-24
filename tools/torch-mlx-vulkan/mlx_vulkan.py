@@ -334,6 +334,39 @@ def _silu_backward(g, x):
     return g * sig * (1.0 + x * (1.0 - sig))
 
 
+def _gelu_backward(gout, x, approximate="none"):
+    g, x = _mx(gout), _mx(x)
+    if approximate == "tanh":
+        c = math.sqrt(2.0 / math.pi)
+        u = c * (x + 0.044715 * x * x * x)
+        t = mx.tanh(u)
+        du = c * (1.0 + 3.0 * 0.044715 * x * x)
+        return g * (0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du)
+    return g * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
+                + x * mx.exp(-(x * x) / 2.0) / math.sqrt(2.0 * math.pi))
+
+
+def _embedding_dense_backward(go, idx, num_weights, padding_idx,
+                              scale_grad_by_freq):
+    # aten: grad_output, indices, num_weights, padding_idx, scale_grad_by_freq
+    g = _mx(go)
+    g = g.reshape(-1, g.shape[-1])
+    i = _mx(idx).astype(mx.int32).reshape(-1)
+    out = mx.zeros((num_weights, g.shape[-1]), dtype=g.dtype)
+    out = out.at[i].add(g)
+    if scale_grad_by_freq:
+        # counts in int32 keep exactness past 256 (bf16) / 65504 (fp16);
+        # the division itself runs in float32 like torch's.
+        c = mx.zeros((num_weights,), dtype=mx.int32).at[i].add(
+            mx.ones(i.shape, dtype=mx.int32))
+        out = (out.astype(mx.float32)
+               / mx.maximum(c.astype(mx.float32), 1.0)[:, None]).astype(g.dtype)
+    if padding_idx >= 0:
+        out = mx.where((mx.arange(num_weights) != padding_idx)[:, None],
+                       out, 0.0)
+    return out
+
+
 def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
     if dropout_p:
         _raise("flash_cpu dropout_p")
@@ -403,7 +436,7 @@ def _ln_native(a, normalized_shape, weight, bias, eps):
     if w is not None:
         out = out * w
     if b is not None:
-        out = out + b (torch-mlx-vulkan: order-agnostic embedding lowering + guarded bwd lowering block)
+        out = out + b
     return (out, mu, rstd)
 
 def _expand(a, *s, **k):
@@ -1080,6 +1113,8 @@ _FUNC_SPECS = {
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
+    "gelu_backward": _gelu_backward,
+    "embedding_dense_backward": _embedding_dense_backward,
     "slice_backward": _slice_backward,
     "silu_backward": _silu_backward,
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
@@ -1143,7 +1178,7 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": _embedding_any, (torch-mlx-vulkan: order-agnostic embedding lowering + guarded bwd lowering block)
+    "embedding": _embedding_any,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
@@ -1193,7 +1228,7 @@ def _build_func_table():
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
         ("torch.nn.functional.batch_norm", lambda x, rm, rv, w=None, b=None, training=False, momentum=0.1, eps=1e-5: _bn3(x, w, b, rm, rv, training, momentum, eps)[0]),
         ("torch.batch_norm", _FUNC_SPECS["batch_norm"]),
-        ("torch.nn.functional.embedding", _embedding_any), (torch-mlx-vulkan: order-agnostic embedding lowering + guarded bwd lowering block)
+        ("torch.nn.functional.embedding", _embedding_any),
         ("torch.embedding", _embedding),
         ("operator.getitem", lambda t, i: t[i]),
         ("operator.matmul", mx.matmul),
@@ -1246,8 +1281,6 @@ ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 # aten.embedding is (weight, indices): F.embedding is (input, weight).
 ATEN_TABLE["embedding"] = _embedding_any
-ATEN_TABLE["threshold_backward"] = \
-    lambda go, inp, threshold: go * (inp > threshold)
 
 # zero-kernel bookkeeping targets: run on python values, logged GLUE
 GLUE_FNS = {len, tuple, list, dict, int, float, str, bool, slice, range, zip, torch.finfo, torch.iinfo,
@@ -1731,7 +1764,9 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     state = {}
     holder = {"ar": None}
 
-    _dte = dt or _DT
+    _dte = dt or (mx.float32
+                  if return_all_outputs and not os.environ.get("MV_DT")
+                  else _DT)
 
     def _cast(x, dt=_dte):
         return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
@@ -1857,85 +1892,6 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name == "detach" and n.op == "call_function":
                 env[n] = args[0]
-                continue
-            if name == "gelu_backward" and n.op == "call_function":
-                go, x = _cast(args[0]), _cast(args[1])
-                approx = args[2] if len(args) > 2 else "none"
-                if approx == "tanh":
-                    inner = math.sqrt(2.0 / math.pi) * (x + 0.044715 * x * x * x)
-                    phi = 0.5 * (1.0 + mx.tanh(inner))
-                    dphi = math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * x * x) \
-                        * (1.0 - mx.tanh(inner) * mx.tanh(inner))
-                    env[n] = go * (phi + x * dphi)
-                else:
-                    env[n] = go * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
-                                   + x * mx.exp(-(x * x) / 2.0)
-                                   / math.sqrt(2.0 * math.pi))
-                continue
-            if name == "native_layer_norm_backward" and n.op == "call_function":
-                go, inp = _cast(args[0]), _cast(args[1])
-                nshape = args[2]
-                mean, rstd, weight = _cast(args[3]), _cast(args[4]), args[5]
-                out_mask = args[7] if len(args) > 7 else [True, True, True]
-                w = _cast(weight) if weight is not None else None
-                inp_nd = inp.ndim
-                red = tuple(range(inp_nd - len(nshape), inp_nd))
-                xhat = (inp - mean) * rstd
-                dw = (go * xhat).sum(axis=red) if out_mask[1] else None
-                db = go.sum(axis=red) if out_mask[2] else None
-                dx = rstd * (go - go.mean(axis=red, keepdims=True)
-                             - xhat * (go * xhat).mean(axis=red,
-                                                       keepdims=True))
-                if w is not None:
-                    dx = dx * w
-                env[n] = tuple(v for v in (dx, dw, db) if v is not None)
-                continue
-            if name in ("_scaled_dot_product_flash_attention_for_cpu",
-                        "_scaled_dot_product_efficient_attention_forward") \
-                    and n.op == "call_function":
-                # aten CPU flash attention: (q, k, v, dropout_p, is_causal,
-                # kw: attn_mask, scale) -> (output, logsumexp); the decode
-                # graph consumes output via getitem.
-                q, k, v = _cast(args[0]), _cast(args[1]), _cast(args[2])
-                is_causal = bool(args[4]) if len(args) > 4 else False
-                kw = {}
-                if kwargs.get("attn_mask") is not None:
-                    kw["mask"] = _cast(kwargs["attn_mask"])
-                elif is_causal:
-                    # jwm1's mlx rejects the "causal" str overload; build
-                    # the additive causal mask from the q/k seq lengths.
-                    neg = mx.full((q.shape[-2], k.shape[-2]), -mx.inf)
-                    causal = mx.tril(mx.zeros_like(neg) + 0.0) * 0 + \
-                        mx.triu(neg, 1)
-                    kw["mask"] = causal
-                if kwargs.get("scale") is not None:
-                    kw["scale"] = kwargs["scale"]
-                out = mx.fast.scaled_dot_product_attention(q, k, v, **kw)
-                env[n] = (out, mx.zeros((1,)))
-                continue
-            if name == "convolution" and n.op == "call_function":
-                inp, wt = _cast(args[0]), _cast(args[1])
-                bias = args[2]
-                stride = tuple(list(args[3]) * (2 // len(args[3])))
-                padding = tuple(list(args[4]) * (2 // len(args[4])))
-                dilation = tuple(list(args[5]) * (2 // len(args[5])))
-                transposed, groups = args[6], args[8] or 1
-                if transposed:
-                    raise NotImplementedError("aten.convolution transposed")
-                if groups != 1:
-                    raise NotImplementedError("aten.convolution groups>1")
-                x = mx.transpose(inp, (0, 2, 3, 1))
-                wt_nhwc = mx.transpose(wt, (0, 2, 3, 1))
-                y = mx.conv2d(x, wt_nhwc, stride=stride, padding=padding,
-                              dilation=dilation)
-                y = mx.transpose(y, (0, 3, 1, 2))
-                if bias is not None:
-                    y = y + _cast(bias).reshape(1, -1, 1, 1)
-                env[n] = y
-                continue
-            if name == "threshold_backward" and n.op == "call_function":
-                go, inp = _cast(args[0]), _cast(args[1])
-                env[n] = go * (inp > args[2])
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
