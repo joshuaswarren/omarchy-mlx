@@ -26,6 +26,17 @@ jwm1 (G13G, honeykrisp e7631595df, mlx 0.32.4.dev202611230356+9b8185041).
 72/72 arm runs emitted ids identical to def. Routing flags change kernel
 choice only; small arm is bit-identical per row by construction.
 
+## sm8 arm (SMALL_T_CAP=8, batch-8 dispatch) — sweep2c clean run
+m=8 wins at every shape vs def/tile: +3.7% (2b 2048x6144), +20.3%
+(2b 6144x2048), +12.2% (2b 2048x2048), +3.8% (4b 2560x9728), +5.6%
+(4b 9728x2560), +5.0% (4b 2560x2560); bit-identical (sm8_id=True).
+m=16: falls back to tile (cap 8), parity -2.1..+0.5% (noise).
+
 ## Flip
-G13G: MLX_OMARCHY_QMV_SMALL_T default 0 -> 4 (device cap already 4 on
-non-wide parts). G14C: pending M2 leg (w9C). G17C: stays 0.
+G13G: MLX_OMARCHY_QMV_SMALL_T default 0 -> 8 (qmv_small_t_default_part
+in device.h). Covers M=2..8 short-pass GEMV; M>=9 keeps the tile.
+M=5..7 unswept (same single batch-8 dispatch M=8 wins with).
+G14C: pending M2 leg (w9C). G17C: stays 0.
+Note: the 2026-09-29 negative receipt probed coopmat-family variants,
+not this comparison; the small-row chain shipped 2026-11-15 and was
+never re-raced against the batch GEMV on G13G.
