@@ -10,6 +10,7 @@ without resolving dependencies again.
 
 import base64
 import hashlib
+import io
 import re
 import subprocess
 import sys
@@ -98,6 +99,31 @@ class VoiceSetTest(unittest.TestCase):
 CHECK = PACKAGING / "check-nodeps-closure.py"
 
 
+def zip_bytes(members, compression=zipfile.ZIP_STORED):
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression) as zf:
+        for member, data in members.items():
+            zf.writestr(member, data)
+    return bytearray(out.getvalue())
+
+
+def encrypted_metadata_wheel():
+    """A wheel whose METADATA is flagged encrypted, so reading it needs a password."""
+    raw = zip_bytes({"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm\n"})
+    raw[6] |= 1  # local file header flag
+    raw[raw.index(b"PK\x01\x02") + 8] |= 1  # central directory flag
+    return bytes(raw)
+
+
+def corrupt_deflate_wheel():
+    member = "voicepkg-1.0.dist-info/METADATA"
+    raw = zip_bytes({member: "".join(f"Requires-Dist: pkg{i}\n" for i in range(400))}, zipfile.ZIP_DEFLATED)
+    data = 30 + len(member)  # compressed data follows the local file header
+    for i in range(data + 10, data + 30):
+        raw[i] ^= 0xFF
+    return bytes(raw)
+
+
 class NodepsClosureCheckTest(unittest.TestCase):
     """check-nodeps-closure.py: every Requires-Dist of a --no-deps wheel is in the lock."""
 
@@ -142,6 +168,131 @@ class NodepsClosureCheckTest(unittest.TestCase):
     def test_specifier_lines_of_the_input_file_count_as_covered(self):
         result = self.run_check(["scipy>=1.10"], ["scipy>=1.10.0"])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def run_raw(self, nodeps, lock, wheels):
+        """nodeps, lock: file bytes (None leaves the file out); wheels: filename -> bytes or {member: bytes}."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "wheels").mkdir()
+            for filename, body in wheels.items():
+                if isinstance(body, bytes):
+                    (tmp / "wheels" / filename).write_bytes(body)
+                    continue
+                with zipfile.ZipFile(tmp / "wheels" / filename, "w") as zf:
+                    for member, data in body.items():
+                        zf.writestr(member, data)
+            for name, data in (("nodeps.in", nodeps), ("lock.txt", lock)):
+                if data is not None:
+                    (tmp / name).write_bytes(data)
+            return subprocess.run([sys.executable, str(CHECK), "--nodeps", str(tmp / "nodeps.in"),
+                                   "--wheels", str(tmp / "wheels"), "--lock", str(tmp / "lock.txt")],
+                                  capture_output=True, text=True)
+
+    def assert_clean_error(self, result, text):
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue(result.stderr.startswith("error: "), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn(text, result.stderr)
+
+    def test_an_entry_that_is_not_one_exact_pin_fails_cleanly(self):
+        # An unpinned or URL entry used to raise StopIteration; a range or
+        # compound one checked whichever wheel its first specifier named.
+        lock = f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        wheels = {f"voicepkg-{v}-py3-none-any.whl": {f"voicepkg-{v}.dist-info/METADATA": meta}
+                  for v, meta in (("1.0", b"Name: voicepkg\nRequires-Dist: tqdm\n"),
+                                  ("2.0", b"Name: voicepkg\nRequires-Dist: einops\n"))}
+        for entry in ("voicepkg", "voicepkg @ https://example.com/voicepkg-1.0-py3-none-any.whl",
+                      "voicepkg>=1.0", "voicepkg!=2.0", "voicepkg~=1.0", "voicepkg==1.0,!=1.0.1",
+                      "voicepkg==1.*", "voicepkg===1.0", "voicepkg[extra]==1.0",
+                      'voicepkg==1.0; sys_platform == "win32"'):
+            with self.subTest(entry=entry):
+                result = self.run_raw(f"{entry}\n".encode(), lock, wheels)
+                self.assert_clean_error(result, f"nodeps.in:1: {entry!r} must pin one version as name==version")
+
+    def test_the_pin_finds_its_wheel_by_normalized_name_and_version(self):
+        lock = f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        meta = b"Name: voice.pkg\nRequires-Dist: tqdm\n"
+        for entry, filename in (("voice-pkg==1.0.0", "voice_pkg-1.0-py3-none-any.whl"),
+                                ("Voice_Pkg==1.0", "voice.pkg-1.0-py3-none-any.whl")):
+            with self.subTest(entry=entry, wheel=filename):
+                result = self.run_raw(f"{entry}\n".encode(), lock,
+                                      {filename: {f"{filename.split('-')[0]}-1.0.dist-info/METADATA": meta}})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_only_the_exact_version_with_wheel_tags_is_checked(self):
+        # ==1.0 also contains 1.0+cpu, so a contains() match checked
+        # whichever wheel the directory listed first.
+        lock = f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        local = {"voicepkg-1.0+cpu-py3-none-any.whl": {"voicepkg-1.0+cpu.dist-info/METADATA":
+                                                       b"Requires-Dist: einops\n"}}
+        untagged = {"voicepkg-1.0-anything.whl": {"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: einops\n"}}
+        for label, wheels in (("local version only", local), ("no wheel tags", untagged)):
+            with self.subTest(label):
+                self.assert_clean_error(self.run_raw(b"voicepkg==1.0\n", lock, wheels),
+                                        "error: no wheel for voicepkg==1.0")
+        # foo-1.0---.whl sorts first; older packaging parses its empty tags.
+        empty_tags = dict(untagged, **{"voicepkg-1.0---.whl": {"voicepkg-1.0.dist-info/METADATA": b"Name: voicepkg\n"},
+                                       "voicepkg-1.0-py3-none-any.whl": untagged["voicepkg-1.0-anything.whl"]})
+        self.assert_clean_error(self.run_raw(b"voicepkg==1.0\n", lock, empty_tags), "voicepkg needs einops")
+        both = dict(local, **{"voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA":
+                                                                 b"Requires-Dist: tqdm\n"}})
+        result = self.run_raw(b"voicepkg==1.0\n", lock, both)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_vendored_dist_info_inside_the_wheel_is_not_its_metadata(self):
+        result = self.run_raw(b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode(),
+                              {"voicepkg-1.0-py3-none-any.whl": {
+                                  "voicepkg/_vendor/ghost-9.dist-info/METADATA":
+                                      b"Name: ghost\nRequires-Dist: einops\n",
+                                  "voicepkg-1.0.dist-info/METADATA": b"Name: voicepkg\nRequires-Dist: tqdm\n"}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_malformed_inputs_fail_with_an_error_line(self):
+        pin, lock = b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        good = {"voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm\n"}}
+        cases = {
+            "invalid nodeps line": (b"voicepkg==\n", lock, good, "nodeps.in:1: invalid requirement 'voicepkg=='"),
+            "invalid compound specifier": (b"voicepkg===1.0,2.0\n", lock, good, "nodeps.in:1: invalid requirement"),
+            "non-UTF-8 nodeps file": (b"voicepkg==1.0  # caf\xe9\n", lock, good, "cannot read"),
+            "missing lock file": (pin, None, good, "cannot read"),
+            "non-UTF-8 lock file": (pin, lock.rstrip() + b" # caf\xe9\n", good, "cannot read"),
+            "invalid lock version": (pin, f"tqdm==x!y --hash=sha256:{'0' * 64}\n".encode(), good,
+                                     "lock.txt:1: Invalid version: 'x!y'"),
+            "invalid lock line": (pin, b"???\n", good, "lock.txt:1: invalid requirement '???'"),
+            "corrupt wheel": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": b"not a zip"}, "cannot read"),
+            "corrupt compressed METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": corrupt_deflate_wheel()},
+                                            "cannot read"),
+            "encrypted METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": encrypted_metadata_wheel()},
+                                   "cannot read"),
+            "wheel without METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {"voicepkg/__init__.py": b""}},
+                                       "has no .dist-info/METADATA"),
+            "non-UTF-8 METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Summary: caf\xe9\n"}}, "cannot read"),
+            "invalid Requires-Dist": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm>>1\n"}},
+                "Requires-Dist: invalid requirement 'tqdm>>1'"),
+            "METADATA header line without a colon": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Name: voicepkg\nRequires-Dist missing\nRequires-Dist: einops\n"}},
+                "METADATA has a malformed header line"),
+            "METADATA starting with a continuation line": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b" Requires-Dist: einops\nName: voicepkg\n"}},
+                "METADATA has a malformed header line"),
+            "Requires-Dist with an invalid compound specifier": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: bar===1.0,2.0\n"}},
+                "Requires-Dist: invalid requirement"),
+            "Requires-Dist with an unterminated quote": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: bar; sys_platform == 'win32\\'\n"}},
+                "Requires-Dist: invalid requirement"),
+            "Requires-Dist marker that cannot be evaluated": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b'Requires-Dist: bar; os_name ~= "1.0"\n'}},
+                "Requires-Dist: cannot evaluate"),
+            "Requires-Dist marker on an unknown variable": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b'Requires-Dist: bar; "dev" in dependency_groups\n'}},
+                "Requires-Dist: cannot evaluate"),
+        }
+        for label, (nodeps, lock_bytes, wheels, text) in cases.items():
+            with self.subTest(label):
+                self.assert_clean_error(self.run_raw(nodeps, lock_bytes, wheels), text)
 
     def test_the_real_nodeps_file_declares_its_exemptions(self):
         text = NODEPS_IN.read_text()
