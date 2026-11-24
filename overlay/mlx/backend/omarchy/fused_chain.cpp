@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -1234,6 +1235,547 @@ bool node_trio_enabled(const array& node) {
   return d != nullptr && fused_trio_enabled(*d);
 }
 
+// A decode step replays a structurally identical tape every eval, so the
+// plan can be rebuilt from positions instead of the scan passes. Records
+// hold tape positions and (consumer, input) pairs only - never array
+// objects: inputs get fresh ids each step, so a stale handle would
+// corrupt the plan. Set MLX_OMARCHY_NO_PLAN_CACHE to restore per-eval
+// planning.
+struct PlanARef {
+  int32_t node = -2;  // tape position; -1 resolves through |via|, -2 absent
+  int32_t via = -1;   // consuming tape node's position
+  int32_t arg = -1;   // its input index
+};
+
+struct PlanRecord {
+  struct Role {
+    int32_t node, group, step;
+  };
+  struct Idx {
+    int32_t node, idx;
+  };
+  struct Win {
+    PlanARef node, base;
+    uint32_t offset, ndim, row_gap, head_dim, strides[4];
+    bool in_place;
+  };
+  struct OutView {
+    PlanARef parent;
+    uint32_t offset;
+  };
+  struct Outgate {
+    PlanARef gate, out, x;
+    int32_t sigmoid;
+  };
+  struct ResNorm {
+    PlanARef out, weight;
+    float eps;
+  };
+  struct Member {
+    PlanARef node, epi, addend;
+    std::optional<Win> sum_window;
+    std::optional<OutView> out_view;
+  };
+  struct Gemv {
+    std::vector<Member> members;
+    PlanARef swiglu;
+    std::optional<Outgate> outgate;
+    std::optional<ResNorm> res_norm;
+  };
+  struct Dense {
+    std::vector<PlanARef> nodes;
+    PlanARef input;
+    std::vector<std::optional<Win>> sum_windows;
+  };
+  struct Slice {
+    int32_t a, b;
+    bool direct;
+    std::optional<Win> w0, w1;
+  };
+  struct RopeNorm {
+    int32_t norm, rope, view{-1};
+    PlanARef x, w;
+    float eps;
+  };
+  struct PStep {
+    int32_t node;
+    std::vector<PlanARef> inputs;
+  };
+  struct Prologue {
+    PlanARef quant, ids, w, scales, biases;
+    std::vector<PStep> replay;
+    int32_t bits, group_size;
+    int64_t wpr, gpr, nrows;
+  };
+  std::vector<Role> roles;
+  std::vector<Idx> gemv_roles, res_norm_skip, dense_roles, slice_roles,
+      rope_redirect, reshape_redirect, rope_pair_roles, rope_norm_skip,
+      rope_norm_roles, prologue_skip, prologue_fold;
+  std::vector<Gemv> gemv;
+  std::vector<Dense> dense;
+  std::vector<Slice> slices;
+  std::vector<std::array<int32_t, 2>> pairs;
+  std::vector<RopeNorm> norms;
+  std::vector<Prologue> prologues;
+};
+
+bool record_aref(
+    PlanARef& ref,
+    const array& a,
+    const TapeIndex<size_t>& pos,
+    const TapeIndex<uint32_t>& owner) {
+  if (const size_t* p = pos.find(a.id())) {
+    ref.node = static_cast<int32_t>(*p);
+    return true;
+  }
+  if (const uint32_t* o = owner.find(a.id())) {
+    ref.node = -1;
+    ref.via = static_cast<int32_t>(*o >> 6);
+    ref.arg = static_cast<int32_t>(*o & 63);
+    return true;
+  }
+  return false;
+}
+
+bool record_win(
+    PlanRecord::Win& w,
+    const KvDirectWindow& k,
+    const TapeIndex<size_t>& pos,
+    const TapeIndex<uint32_t>& owner) {
+  w.offset = k.offset;
+  w.ndim = k.ndim;
+  w.row_gap = k.row_gap;
+  w.head_dim = k.head_dim;
+  w.in_place = k.in_place;
+  std::copy(k.strides, k.strides + 4, w.strides);
+  return record_aref(w.node, k.node, pos, owner) &&
+      record_aref(w.base, k.base, pos, owner);
+}
+
+bool record_plan(
+    const EagerFusionState& state,
+    const TapeIndex<size_t>& pos,
+    const TapeIndex<uint32_t>& owner,
+    PlanRecord& rec) {
+  rec = PlanRecord{};
+  auto ra = [&](PlanARef& r, const array& a) {
+    return record_aref(r, a, pos, owner);
+  };
+  auto opt = [&](PlanARef& r, const std::optional<array>& a) {
+    return !a.has_value() || ra(r, *a);
+  };
+  auto win = [&](std::optional<PlanRecord::Win>& w,
+                 const std::optional<KvDirectWindow>& k) {
+    if (!k) {
+      return true;
+    }
+    w.emplace();
+    return record_win(*w, *k, pos, owner);
+  };
+  for (const auto& [id, role] : state.roles) {
+    const size_t* np = pos.find(id);
+    const size_t* gp = pos.find(role.group);
+    if (!np || !gp) {
+      return false;
+    }
+    rec.roles.push_back(
+        {int32_t(*np), int32_t(*gp), int32_t(role.step)});
+  }
+  auto idxs = [&](const std::unordered_map<std::uintptr_t, size_t>& m,
+                  std::vector<PlanRecord::Idx>& v) {
+    for (const auto& [id, i] : m) {
+      const size_t* np = pos.find(id);
+      if (!np) {
+        return false;
+      }
+      v.push_back({int32_t(*np), int32_t(i)});
+    }
+    return true;
+  };
+  if (!idxs(state.gemv_roles, rec.gemv_roles) ||
+      !idxs(state.res_norm_skip_roles, rec.res_norm_skip) ||
+      !idxs(state.dense_gemv_roles, rec.dense_roles) ||
+      !idxs(state.slice_update_roles, rec.slice_roles) ||
+      !idxs(state.rope_redirect_roles, rec.rope_redirect) ||
+      !idxs(state.reshape_redirect_roles, rec.reshape_redirect) ||
+      !idxs(state.rope_pair_roles, rec.rope_pair_roles) ||
+      !idxs(state.rope_norm_skip_roles, rec.rope_norm_skip) ||
+      !idxs(state.rope_norm_roles, rec.rope_norm_roles) ||
+      !idxs(state.prologue_skip_roles, rec.prologue_skip) ||
+      !idxs(state.prologue_fold_roles, rec.prologue_fold)) {
+    return false;
+  }
+  for (const auto& g : state.gemv_groups) {
+    PlanRecord::Gemv rg;
+    for (const auto& m : g.members) {
+      PlanRecord::Member rm;
+      if (!ra(rm.node, m.node) || !opt(rm.epi, m.epilogue) ||
+          !opt(rm.addend, m.addend) ||
+          !win(rm.sum_window, m.sum_window)) {
+        return false;
+      }
+      if (m.out_view) {
+        PlanRecord::OutView ov;
+        if (!ra(ov.parent, m.out_view->parent)) {
+          return false;
+        }
+        ov.offset = m.out_view->offset;
+        rm.out_view = ov;
+      }
+      rg.members.push_back(std::move(rm));
+    }
+    if (!opt(rg.swiglu, g.swiglu_out)) {
+      return false;
+    }
+    if (g.outgate) {
+      PlanRecord::Outgate og;
+      const size_t* sp = pos.find(g.outgate->sigmoid_id);
+      if (!ra(og.gate, g.outgate->gate) || !ra(og.out, g.outgate->out) ||
+          !ra(og.x, g.outgate->x) || !sp) {
+        return false;
+      }
+      og.sigmoid = int32_t(*sp);
+      rg.outgate = og;
+    }
+    if (g.res_norm) {
+      PlanRecord::ResNorm rn;
+      if (!ra(rn.out, g.res_norm->out) ||
+          !ra(rn.weight, g.res_norm->weight)) {
+        return false;
+      }
+      rn.eps = g.res_norm->eps;
+      rg.res_norm = rn;
+    }
+    rec.gemv.push_back(std::move(rg));
+  }
+  for (const auto& d : state.dense_gemv_groups) {
+    PlanRecord::Dense rd;
+    for (const auto& n : d.nodes) {
+      PlanARef r;
+      if (!ra(r, n)) {
+        return false;
+      }
+      rd.nodes.push_back(r);
+    }
+    if (!opt(rd.input, d.input)) {
+      return false;
+    }
+    for (const auto& k : d.sum_windows) {
+      std::optional<PlanRecord::Win> w;
+      if (!win(w, k)) {
+        return false;
+      }
+      rd.sum_windows.push_back(std::move(w));
+    }
+    rec.dense.push_back(std::move(rd));
+  }
+  for (const auto& p : state.slice_update_pairs) {
+    PlanRecord::Slice rs;
+    const size_t* a = pos.find(p.nodes[0].id());
+    const size_t* b = pos.find(p.nodes[1].id());
+    if (!a || !b) {
+      return false;
+    }
+    rs.a = int32_t(*a);
+    rs.b = int32_t(*b);
+    rs.direct = p.direct;
+    if (!win(rs.w0, p.windows[0]) || !win(rs.w1, p.windows[1])) {
+      return false;
+    }
+    rec.slices.push_back(rs);
+  }
+  for (const auto& p : state.rope_pairs) {
+    const size_t* a = pos.find(p.nodes[0].id());
+    const size_t* b = pos.find(p.nodes[1].id());
+    if (!a || !b) {
+      return false;
+    }
+    rec.pairs.push_back({int32_t(*a), int32_t(*b)});
+  }
+  for (const auto& f : state.rope_norms) {
+    PlanRecord::RopeNorm rn;
+    const size_t* n = pos.find(f.norm.id());
+    const size_t* r = pos.find(f.rope.id());
+    if (!n || !r || !ra(rn.x, f.x) || !ra(rn.w, f.w)) {
+      return false;
+    }
+    rn.norm = int32_t(*n);
+    rn.rope = int32_t(*r);
+    if (f.view) {
+      const size_t* v = pos.find(f.view->id());
+      if (!v) {
+        return false;
+      }
+      rn.view = int32_t(*v);
+    }
+    rn.eps = f.eps;
+    rec.norms.push_back(rn);
+  }
+  for (const auto& f : state.prologue_folds) {
+    PlanRecord::Prologue rp;
+    if (!ra(rp.quant, f.quant) || !ra(rp.ids, f.ids) || !ra(rp.w, f.w) ||
+        !ra(rp.scales, f.scales) || !ra(rp.biases, f.biases)) {
+      return false;
+    }
+    for (const auto& s : f.replay) {
+      const size_t* np = pos.find(s.node.id());
+      if (!np) {
+        return false;
+      }
+      PlanRecord::PStep st{int32_t(*np), {}};
+      for (const auto& in : s.inputs) {
+        PlanARef ir;
+        if (!ra(ir, in)) {
+          return false;
+        }
+        st.inputs.push_back(ir);
+      }
+      rp.replay.push_back(std::move(st));
+    }
+    rp.bits = f.bits;
+    rp.group_size = f.group_size;
+    rp.wpr = f.words_per_row;
+    rp.gpr = f.groups_per_row;
+    rp.nrows = f.nrows;
+    rec.prologues.push_back(std::move(rp));
+  }
+  return true;
+}
+
+EagerFusionState* replay_plan(
+    const std::deque<array>& tape,
+    const PlanRecord& rec) {
+  auto* state = new EagerFusionState;
+  auto get = [&](const PlanARef& r) -> std::optional<array> {
+    if (r.node >= 0 && size_t(r.node) < tape.size()) {
+      return tape[r.node];
+    }
+    if (r.node == -1 && r.via >= 0 && size_t(r.via) < tape.size() &&
+        r.arg >= 0 && size_t(r.arg) < tape[r.via].inputs().size()) {
+      return tape[r.via].inputs()[r.arg];
+    }
+    return std::nullopt;
+  };
+  auto sopt = [&](std::optional<array>& slot, const PlanARef& r) -> bool {
+    if (r.node == -2) {
+      return true;
+    }
+    if (auto a = get(r)) {
+      slot = std::move(*a);
+      return true;
+    }
+    return false;
+  };
+  auto rwin = [&](const PlanRecord::Win& w)
+      -> std::optional<KvDirectWindow> {
+    auto node = get(w.node);
+    auto base = get(w.base);
+    if (!node || !base) {
+      return std::nullopt;
+    }
+    KvDirectWindow k{std::move(*node), std::move(*base)};
+    k.offset = w.offset;
+    k.ndim = w.ndim;
+    k.row_gap = w.row_gap;
+    k.head_dim = w.head_dim;
+    k.in_place = w.in_place;
+    std::copy(w.strides, w.strides + 4, k.strides);
+    return k;
+  };
+  auto wopt = [&](std::optional<KvDirectWindow>& k,
+                  const std::optional<PlanRecord::Win>& w) -> bool {
+    if (!w) {
+      return true;
+    }
+    if (auto r = rwin(*w)) {
+      k = std::move(*r);
+      return true;
+    }
+    return false;
+  };
+  auto fill = [&]() -> bool {
+    for (const auto& e : rec.roles) {
+      if (e.node < 0 || e.group < 0 || size_t(e.node) >= tape.size() ||
+          size_t(e.group) >= tape.size()) {
+        return false;
+      }
+      state->roles.emplace(
+          tape[e.node].id(),
+          EagerRole{tape[e.group].id(), EagerStep(e.step)});
+    }
+    auto idxs = [&](const std::vector<PlanRecord::Idx>& v,
+                    std::unordered_map<std::uintptr_t, size_t>& m) {
+      for (const auto& e : v) {
+        if (e.node < 0 || size_t(e.node) >= tape.size()) {
+          return false;
+        }
+        m.emplace(tape[e.node].id(), e.idx);
+      }
+      return true;
+    };
+    if (!idxs(rec.gemv_roles, state->gemv_roles) ||
+        !idxs(rec.res_norm_skip, state->res_norm_skip_roles) ||
+        !idxs(rec.dense_roles, state->dense_gemv_roles) ||
+        !idxs(rec.slice_roles, state->slice_update_roles) ||
+        !idxs(rec.rope_redirect, state->rope_redirect_roles) ||
+        !idxs(rec.reshape_redirect, state->reshape_redirect_roles) ||
+        !idxs(rec.rope_pair_roles, state->rope_pair_roles) ||
+        !idxs(rec.rope_norm_skip, state->rope_norm_skip_roles) ||
+        !idxs(rec.rope_norm_roles, state->rope_norm_roles) ||
+        !idxs(rec.prologue_skip, state->prologue_skip_roles) ||
+        !idxs(rec.prologue_fold, state->prologue_fold_roles)) {
+      return false;
+    }
+    for (const auto& g : rec.gemv) {
+      GemvGroup grp;
+      for (const auto& m : g.members) {
+        auto node = get(m.node);
+        if (!node) {
+          return false;
+        }
+        GemvFusionMember rm{std::move(*node)};
+        if (!sopt(rm.epilogue, m.epi) || !sopt(rm.addend, m.addend) ||
+            !wopt(rm.sum_window, m.sum_window)) {
+          return false;
+        }
+        if (m.out_view) {
+          auto parent = get(m.out_view->parent);
+          if (!parent) {
+            return false;
+          }
+          rm.out_view = GemvOutView{std::move(*parent), m.out_view->offset};
+        }
+        grp.members.push_back(std::move(rm));
+      }
+      if (!sopt(grp.swiglu_out, g.swiglu)) {
+        return false;
+      }
+      if (g.outgate) {
+        auto gate = get(g.outgate->gate);
+        auto out = get(g.outgate->out);
+        auto x = get(g.outgate->x);
+        if (!gate || !out || !x || g.outgate->sigmoid < 0 ||
+            size_t(g.outgate->sigmoid) >= tape.size()) {
+          return false;
+        }
+        grp.outgate = OutgatePlan{std::move(*gate), std::move(*out),
+                                  std::move(*x),
+                                  tape[g.outgate->sigmoid].id()};
+      }
+      if (g.res_norm) {
+        auto out = get(g.res_norm->out);
+        auto weight = get(g.res_norm->weight);
+        if (!out || !weight) {
+          return false;
+        }
+        grp.res_norm =
+            ResNormPlan{std::move(*out), std::move(*weight), g.res_norm->eps};
+      }
+      state->gemv_groups.push_back(std::move(grp));
+    }
+    for (const auto& d : rec.dense) {
+      DenseGemvGroup dg;
+      for (const auto& n : d.nodes) {
+        auto a = get(n);
+        if (!a) {
+          return false;
+        }
+        dg.nodes.push_back(std::move(*a));
+      }
+      if (!sopt(dg.input, d.input)) {
+        return false;
+      }
+      for (const auto& w : d.sum_windows) {
+        std::optional<KvDirectWindow> k;
+        if (!wopt(k, w)) {
+          return false;
+        }
+        dg.sum_windows.push_back(std::move(k));
+      }
+      state->dense_gemv_groups.push_back(std::move(dg));
+    }
+    for (const auto& s : rec.slices) {
+      if (s.a < 0 || s.b < 0 || size_t(s.a) >= tape.size() ||
+          size_t(s.b) >= tape.size()) {
+        return false;
+      }
+      SliceUpdatePair p(tape[s.a], tape[s.b]);
+      p.direct = s.direct;
+      if (!wopt(p.windows[0], s.w0) || !wopt(p.windows[1], s.w1)) {
+        return false;
+      }
+      state->slice_update_pairs.push_back(std::move(p));
+    }
+    for (const auto& pr : rec.pairs) {
+      if (pr[0] < 0 || pr[1] < 0 || size_t(pr[0]) >= tape.size() ||
+          size_t(pr[1]) >= tape.size()) {
+        return false;
+      }
+      RopePair rp{{tape[pr[0]], tape[pr[1]]}};
+      state->rope_pairs.push_back(std::move(rp));
+    }
+    for (const auto& f : rec.norms) {
+      if (f.norm < 0 || f.rope < 0 || size_t(f.norm) >= tape.size() ||
+          size_t(f.rope) >= tape.size() ||
+          (f.view >= 0 && size_t(f.view) >= tape.size())) {
+        return false;
+      }
+      auto x = get(f.x);
+      auto w = get(f.w);
+      if (!x || !w) {
+        return false;
+      }
+      RopeNormFold rn{
+          tape[f.norm],
+          tape[f.rope],
+          f.view >= 0 ? std::optional<array>(tape[f.view]) : std::nullopt,
+          std::move(*x),
+          std::move(*w),
+          tape[f.norm].primitive_ptr(),
+          f.view >= 0 ? tape[f.view].primitive_ptr() : nullptr,
+          f.eps};
+      state->rope_norms.push_back(std::move(rn));
+    }
+    for (const auto& f : rec.prologues) {
+      auto quant = get(f.quant);
+      auto ids = get(f.ids);
+      auto w = get(f.w);
+      auto scales = get(f.scales);
+      auto biases = get(f.biases);
+      if (!quant || !ids || !w || !scales || !biases) {
+        return false;
+      }
+      PrologueFold pf{
+          std::move(*quant), std::move(*ids), std::move(*w),
+          std::move(*scales), std::move(*biases),
+          {},
+          f.bits, f.group_size, f.wpr, f.gpr, f.nrows};
+      for (const auto& s : f.replay) {
+        if (s.node < 0 || size_t(s.node) >= tape.size()) {
+          return false;
+        }
+        PrologueFold::ReplayStep st{
+            tape[s.node], tape[s.node].primitive_ptr(), {}};
+        for (const auto& ir : s.inputs) {
+          auto a = get(ir);
+          if (!a) {
+            return false;
+          }
+          st.inputs.push_back(std::move(*a));
+        }
+        pf.replay.push_back(std::move(st));
+      }
+      state->prologue_folds.push_back(std::move(pf));
+    }
+    return true;
+  };
+  if (fill()) {
+    return state;
+  }
+  delete state;
+  return nullptr;
+}
+
 } // namespace
 
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
@@ -1264,6 +1806,165 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     if (!anchor) {
       return;
     }
+  }
+
+  // Decode steps replay a structurally identical tape each eval: the
+  // plan depends only on that structure, so a signature hit rebuilds
+  // the state maps without the scan passes below.
+  const bool plan_cache =
+      std::getenv("MLX_OMARCHY_NO_PLAN_CACHE") == nullptr;
+  static thread_local TapeIndex<size_t> node_pos;
+  static thread_local TapeIndex<uint32_t> ext_owner;
+  static thread_local TapeIndex<size_t> ext_ord;
+  static thread_local TapeIndex<size_t> val_ord;
+  static thread_local uint64_t plan_sig = 0;
+  static thread_local PlanRecord plan_rec;
+  static thread_local bool plan_valid = false;
+  uint64_t sig = 0xcbf29ce484222325ull;
+  auto mix = [&sig](uint64_t v) {
+    sig ^= v + 0x9e3779b97f4a7c15ull + (sig << 6) + (sig >> 2);
+  };
+  node_pos.prepare(tape.size());
+  ext_owner.prepare(tape.size() * 2);
+  ext_ord.prepare(64);
+  val_ord.prepare(64);
+  size_t next_ext = 0;
+  size_t next_val = 0;
+  bool sig_ok = true;
+  for (size_t i = 0; i < tape.size(); ++i) {
+    node_pos[tape[i].id()] = i;
+  }
+  for (size_t i = 0; i < tape.size() && sig_ok; ++i) {
+    const array& node = tape[i];
+    mix(node.has_primitive() ? typeid(node.primitive()).hash_code()
+                            : 0x517cc1b727220a95ull);
+    mix(static_cast<uint64_t>(node.dtype().val()));
+    mix(node.ndim());
+    for (const auto d : node.shape()) {
+      mix(static_cast<uint64_t>(d) + 1);
+    }
+    // Plan gates read layout: contiguity, strides and offsets.
+    mix(node.flags().row_contiguous);
+    mix(node.flags().col_contiguous);
+    mix(static_cast<uint64_t>(node.offset()) + 1);
+    for (const auto s : node.strides()) {
+      mix(static_cast<uint64_t>(s) + 1);
+    }
+    const auto& ins = node.inputs();
+    mix(ins.size());
+    for (size_t j = 0; j < ins.size(); ++j) {
+      const array& in = ins[j];
+      mix(j + 1);
+      mix(in.flags().row_contiguous);
+      mix(in.flags().col_contiguous);
+      mix(static_cast<uint64_t>(in.offset()) + 1);
+      for (const auto s : in.strides()) {
+        mix(static_cast<uint64_t>(s) + 1);
+      }
+      if (const size_t* p = node_pos.find(in.id())) {
+        mix(*p + 1);
+        continue;
+      }
+      if (j >= 64) {
+        sig_ok = false;
+        break;
+      }
+      ext_owner[in.id()] = static_cast<uint32_t>(i * 64 + j);
+      if (!ext_ord.find(in.id())) {
+        ext_ord[in.id()] = next_ext++;
+      }
+      mix(0x8000000000000000ull | (ext_ord[in.id()] + 1));
+      mix(static_cast<uint64_t>(in.dtype().val()));
+      mix(in.ndim());
+      for (const auto d : in.shape()) {
+        mix(static_cast<uint64_t>(d) + 1);
+      }
+      if (in.size() == 1 && in.dtype() == int32 &&
+          in.status() == array::Status::available &&
+          !in.has_primitive()) {
+        const uint32_t key = static_cast<uint32_t>(in.item<int>());
+        if (!val_ord.find(key)) {
+          val_ord[key] = next_val++;
+        }
+        mix(0x4000000000000000ull | (val_ord[key] + 1));
+      }
+    }
+    if (node.has_primitive()) {
+      const auto& st = node.primitive().stream();
+      mix(static_cast<uint64_t>(st.index) * 4 +
+          static_cast<int>(st.device.type));
+      if (typeid(node.primitive()) == typeid(SliceUpdate)) {
+        const auto& p =
+            static_cast<const SliceUpdate&>(node.primitive()).state();
+        mix(static_cast<int>(std::get<0>(p)));
+        for (const auto d : std::get<1>(p)) {
+          mix(static_cast<uint64_t>(d) + 1);
+        }
+        for (const auto d : std::get<2>(p)) {
+          mix(static_cast<uint64_t>(d) + 1);
+        }
+        for (const auto d : std::get<3>(p)) {
+          mix(static_cast<uint64_t>(d) + 1);
+        }
+      } else if (typeid(node.primitive()) == typeid(QuantizedMatmul)) {
+        const auto& p =
+            static_cast<const QuantizedMatmul&>(node.primitive()).state();
+        mix(std::get<0>(p));
+        mix(std::get<1>(p));
+        mix(static_cast<int>(std::get<2>(p)));
+        mix(std::get<3>(p));
+      } else if (typeid(node.primitive()) == typeid(fast::RoPE)) {
+        const auto& p =
+            static_cast<const fast::RoPE&>(node.primitive()).state();
+        mix(std::get<1>(p));
+        mix(std::get<2>(p));
+        mix(std::bit_cast<uint32_t>(std::get<3>(p)));
+        mix(std::bit_cast<uint32_t>(std::get<4>(p)));
+        mix(std::get<5>(p));
+        const auto& r =
+            static_cast<const fast::RoPE&>(node.primitive());
+        mix(r.has_norm());
+        mix(std::bit_cast<uint32_t>(r.norm_eps()));
+      } else if (typeid(node.primitive()) == typeid(fast::RMSNorm)) {
+        mix(std::bit_cast<uint32_t>(
+            static_cast<const fast::RMSNorm&>(node.primitive())
+                .state()
+                .second));
+      } else if (typeid(node.primitive()) == typeid(fast::Quantize)) {
+        const auto& p =
+            static_cast<const fast::Quantize&>(node.primitive()).state();
+        mix(std::get<1>(p));
+        mix(std::get<2>(p));
+        mix(static_cast<int>(std::get<3>(p)));
+        mix(std::get<4>(p));
+      } else if (typeid(node.primitive()) == typeid(Gather)) {
+        const auto& p =
+            static_cast<const Gather&>(node.primitive()).state();
+        mix(p.first.size());
+        for (const auto a : p.first) {
+          mix(static_cast<uint64_t>(a) + 1);
+        }
+        mix(p.second.size());
+        for (const auto d : p.second) {
+          mix(static_cast<uint64_t>(d) + 1);
+        }
+      }
+    }
+  }
+  mix(outgate_fold_enabled());
+  mix(qmm_residual_norm_enabled());
+  mix(kv_direct_enabled());
+  mix(rope_norm_fold_enabled());
+  mix(qmm_vec_q4_word_enabled());
+  mix(std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") != nullptr);
+  mix(std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") != nullptr);
+  mix(tape.size());
+  if (plan_cache && sig_ok && plan_valid && sig == plan_sig) {
+    if (EagerFusionState* hit = replay_plan(tape, plan_rec)) {
+      eager_state = hit;
+      return;
+    }
+    plan_valid = false;
   }
 
   auto* state = new EagerFusionState;
@@ -2274,6 +2975,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         groups_per_row,
         nrows,
         PrologueFold::State::pending});
+  }
+
+  if (plan_cache && sig_ok) {
+    plan_valid = record_plan(*state, node_pos, ext_owner, plan_rec);
+    plan_sig = sig;
   }
 }
 
