@@ -574,6 +574,25 @@ def _bn3(x, w, b, rm, rv, training, momentum, eps):
     squeeze = lambda t: mx.reshape(t, (-1,)) if t.ndim > 1 else t
     return y, squeeze(mean), squeeze(invstd)
 
+def _bn_legit_functional(x, w, b, rm, rv, training, momentum, eps):
+    """aten._native_batch_norm_legit_functional (aot train path): same core as
+    _bn3 but returns updated running stats: (out, save_mean, save_invstd,
+    new_running_mean, new_running_var). Torch updates running_var with the
+    UNBIASED batch var while normalizing with the biased one."""
+    x = _mx(x)
+    out, sm, si = _bn3(x, w, b, rm, rv, training, momentum, eps)
+    rmx, rvx = _mx(rm), _mx(rv)
+    if training:
+        axes = tuple(d for d in range(x.ndim) if d != 1)
+        n = x.size / x.shape[1]
+        var_b = mx.var(x, axis=axes)
+        unbias = var_b * (n / (n - 1)) if n > 1 else var_b
+        new_rm = (1.0 - momentum) * rmx + momentum * sm
+        new_rv = (1.0 - momentum) * rvx + momentum * unbias
+    else:
+        new_rm, new_rv = rmx, rvx
+    return out, sm, si, new_rm, new_rv
+
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
     """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask."""
     dy, x = _mx(dy), _mx(x)
@@ -666,6 +685,7 @@ _FUNC_SPECS = {
     # aten.batch_norm order: (x, weight, bias, running_mean, running_var, training, momentum, eps, cudnn)
     "batch_norm": lambda x, w, b, rm, rv, training, momentum, eps, *k: _bn3(x, w, b, rm, rv, training, momentum, eps)[0],
     "native_batch_norm": lambda x, w, b, rm, rv, training, momentum, eps: _bn3(x, w, b, rm, rv, training, momentum, eps),
+    "_native_batch_norm_legit_functional": _bn_legit_functional,
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
@@ -846,7 +866,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "max_pool2d_with_indices_backward", "avg_pool2d",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
-                 "_adaptive_avg_pool2d_backward"}
+                 "_adaptive_avg_pool2d_backward", "convolution_backward",
+                 "threshold_backward", "native_batch_norm_backward"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
