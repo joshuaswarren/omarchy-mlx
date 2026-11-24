@@ -1574,12 +1574,40 @@ EagerFusionState* replay_plan(
     if (!node || !base) {
       return std::nullopt;
     }
+    // The recorded offset and in-place flag came from the slice's
+    // absolute write position, which moves every decode step. Re-derive
+    // them from the live member; the structural fields must match the
+    // record or the stored plan does not apply to this tape.
+    auto g = direct_window_geometry(*node);
+    if (!g || g->ndim != w.ndim || node->inputs().size() != 2) {
+      return std::nullopt;
+    }
+    const auto& upd = node->inputs()[1];
+    if (w.head_dim != 0) {
+      if (upd.ndim() != 4 || w.row_gap != g->strides[1] ||
+          w.head_dim != static_cast<uint32_t>(upd.shape(3)) ||
+          w.strides[0] != g->strides[0] || w.strides[1] != g->strides[1] ||
+          w.strides[2] != g->strides[2] || w.strides[3] != g->strides[3]) {
+        return std::nullopt;
+      }
+    } else {
+      const uint32_t mstride =
+          upd.ndim() == 4 ? g->strides[1] : g->strides[0];
+      if (upd.ndim() < 2 || w.row_gap != 0 || w.strides[0] != mstride ||
+          w.strides[1] != g->strides[upd.ndim() - 2] ||
+          w.strides[2] != 1 || w.strides[3] != 0 ||
+          (upd.ndim() == 4 &&
+           g->strides[0] !=
+               static_cast<uint32_t>(upd.shape(1)) * g->strides[1])) {
+        return std::nullopt;
+      }
+    }
     KvDirectWindow k{std::move(*node), std::move(*base)};
-    k.offset = w.offset;
+    k.offset = g->offset;
     k.ndim = w.ndim;
     k.row_gap = w.row_gap;
     k.head_dim = w.head_dim;
-    k.in_place = w.in_place;
+    k.in_place = kv_window_in_place(k.node);
     std::copy(w.strides, w.strides + 4, k.strides);
     return k;
   };
@@ -1698,6 +1726,14 @@ EagerFusionState* replay_plan(
     for (const auto& s : rec.slices) {
       if (s.a < 0 || s.b < 0 || size_t(s.a) >= tape.size() ||
           size_t(s.b) >= tape.size()) {
+        return false;
+      }
+      // Planning only paired these when their full states matched;
+      // absolute coordinates were hashed relative, so confirm equality
+      // on the live nodes before replaying the pair.
+      if (static_cast<const SliceUpdate&>(tape[s.a].primitive()).state() !=
+              static_cast<const SliceUpdate&>(
+                  tape[s.b].primitive()).state()) {
         return false;
       }
       SliceUpdatePair p(tape[s.a], tape[s.b]);
@@ -1831,6 +1867,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   val_ord.prepare(64);
   size_t next_ext = 0;
   size_t next_val = 0;
+  // SliceUpdate coordinates are hashed relative to the first one seen:
+  // their absolute values move every decode step, but planning only
+  // compares them between nodes (the k/v pair must share coordinates),
+  // so the differences carry the decision-relevant part of the state.
+  bool su_ref_set = false;
+  Shape su_ref_start, su_ref_end;
   bool sig_ok = true;
   for (size_t i = 0; i < tape.size(); ++i) {
     node_pos[tape[i].id()] = i;
@@ -1898,11 +1940,24 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         const auto& p =
             static_cast<const SliceUpdate&>(node.primitive()).state();
         mix(static_cast<int>(std::get<0>(p)));
-        for (const auto d : std::get<1>(p)) {
-          mix(static_cast<uint64_t>(d) + 1);
+        const auto& su_start = std::get<1>(p);
+        const auto& su_end = std::get<2>(p);
+        if (!su_ref_set) {
+          su_ref_start = su_start;
+          su_ref_end = su_end;
+          su_ref_set = true;
         }
-        for (const auto d : std::get<2>(p)) {
-          mix(static_cast<uint64_t>(d) + 1);
+        mix(su_start.size());
+        for (size_t ax = 0; ax < su_start.size(); ++ax) {
+          const int64_t ref =
+              ax < su_ref_start.size() ? su_ref_start[ax] : 0;
+          mix(static_cast<uint64_t>(su_start[ax] - ref + 1));
+        }
+        mix(su_end.size());
+        for (size_t ax = 0; ax < su_end.size(); ++ax) {
+          const int64_t ref =
+              ax < su_ref_end.size() ? su_ref_end[ax] : 0;
+          mix(static_cast<uint64_t>(su_end[ax] - ref + 1));
         }
         for (const auto d : std::get<3>(p)) {
           mix(static_cast<uint64_t>(d) + 1);
