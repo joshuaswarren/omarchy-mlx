@@ -1854,6 +1854,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   static thread_local TapeIndex<uint32_t> ext_owner;
   static thread_local TapeIndex<size_t> ext_ord;
   static thread_local TapeIndex<size_t> val_ord;
+  static thread_local TapeIndex<size_t> dim_ord;
   static thread_local uint64_t plan_sig = 0;
   static thread_local PlanRecord plan_rec;
   static thread_local bool plan_valid = false;
@@ -1873,6 +1874,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // so the differences carry the decision-relevant part of the state.
   bool su_ref_set = false;
   Shape su_ref_start, su_ref_end;
+  // The cache grows one row per decode step, so absolute lengths churn
+  // the signature while the plan stays fixed. Planning predicates only
+  // compare dims to small literals (0/1) or to each other, so values
+  // above the cap hash through a first-appearance ordinal: equal values
+  // in equal positions produce equal tags.
+  dim_ord.prepare(64);
+  size_t next_dim = 0;
+  auto mix_size = [&](uint64_t v) {
+    if (v <= 8) {
+      mix(v + 1);
+      return;
+    }
+    if (!dim_ord.find(v)) {
+      dim_ord[v] = next_dim++;
+    }
+    mix(0x2000000000000000ull | (dim_ord[v] + 1));
+  };
   bool sig_ok = true;
   for (size_t i = 0; i < tape.size(); ++i) {
     node_pos[tape[i].id()] = i;
@@ -1887,14 +1905,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     mix(static_cast<uint64_t>(node.dtype().val()));
     mix(node.ndim());
     for (const auto d : node.shape()) {
-      mix(static_cast<uint64_t>(d) + 1);
+      mix_size(static_cast<uint64_t>(d));
     }
     // Plan gates read layout: contiguity, strides and offsets.
     mix(node.flags().row_contiguous);
     mix(node.flags().col_contiguous);
-    mix(static_cast<uint64_t>(node.offset()) + 1);
+    mix_size(static_cast<uint64_t>(node.offset()));
     for (const auto s : node.strides()) {
-      mix(static_cast<uint64_t>(s) + 1);
+      mix_size(static_cast<uint64_t>(s));
     }
     const auto& ins = node.inputs();
     mix(ins.size());
@@ -1903,9 +1921,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       mix(j + 1);
       mix(in.flags().row_contiguous);
       mix(in.flags().col_contiguous);
-      mix(static_cast<uint64_t>(in.offset()) + 1);
+      mix_size(static_cast<uint64_t>(in.offset()));
       for (const auto s : in.strides()) {
-        mix(static_cast<uint64_t>(s) + 1);
+        mix_size(static_cast<uint64_t>(s));
       }
       if (const size_t* p = node_pos.find(in.id())) {
         mix(*p + 1);
@@ -1923,7 +1941,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       mix(static_cast<uint64_t>(in.dtype().val()));
       mix(in.ndim());
       for (const auto d : in.shape()) {
-        mix(static_cast<uint64_t>(d) + 1);
+        mix_size(static_cast<uint64_t>(d));
       }
       if (in.size() == 1 && in.dtype() == int32 &&
           in.status() == array::Status::available &&
