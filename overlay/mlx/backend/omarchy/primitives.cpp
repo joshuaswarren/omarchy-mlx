@@ -193,8 +193,16 @@ const QmmGeometry& qmm_geometry() {
               omarchy::device_local_activations_enabled())) {
         // BMG defaults to the K-contiguous fast-tile load: +3.8% over
         // the uvec2 route at ctx 512 (2 clean interleaved pairs, ids
-        // identical; also +3.4% in the first window).
+        // identical; also +3.4% in the first window). On drivers whose
+        // subgroup size-control range admits 16 the 16-lane build runs
+        // instead: -5.5% median kernel time on the B60 (5/5 interleaved
+        // pairs, PRED_SHA identical).
         if (caps.device_name.find("BMG") != std::string::npos) {
+          if (dev.hardware_capabilities().subgroup_size_16_admitted) {
+            return QmmGeometry{
+                32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+                K::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16, "2x16kcs16"};
+          }
           return QmmGeometry{
               32u, K::QmmVecQ4WordSubgroupBF16R2S16,
               K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
@@ -229,6 +237,21 @@ const QmmGeometry& qmm_geometry() {
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
     }
+    if (v == "2x16kcs16") {
+      // 16-lane subgroups (16 slots of 16, still 32 columns). Only on
+      // hardware that can legally pin requiredSubgroupSize = 16 for a
+      // 256-lane workgroup; elsewhere the kcont route stands. Hardware
+      // truth, not the (possibly simulated) dispatch report.
+      const auto& hw = omarchy::device().hardware_capabilities();
+      if (hw.subgroup_size_16_admitted) {
+        return QmmGeometry{
+            32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+            K::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16, "2x16kcs16"};
+      }
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+          K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
+    }
     if (v == "2x4") {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
@@ -240,7 +263,7 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont 2x16kcs16");
   }();
   return geometry;
 }

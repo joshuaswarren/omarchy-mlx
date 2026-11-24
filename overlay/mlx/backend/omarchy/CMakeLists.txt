@@ -411,6 +411,10 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kcont shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_KCONT=1)
+# 16-lane subgroup on the kcont multi column (PAR-40 B60 screen
+# winner): pairs with a requiredSubgroupSize=16 pipeline on drivers
+# whose size-control range admits 16.
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_KCONT=1 -DQMM_LANES=16)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)

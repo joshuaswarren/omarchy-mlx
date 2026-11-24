@@ -166,9 +166,19 @@ uint16_t bf16_store(float value) {
 #define Q4_KCONT_OK(wpr) true
 #endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
-const uint LANES = 32u;
+// Slot width. The device default is 32; QMM_LANES=16 builds pair with a
+// requiredSubgroupSize=16 pipeline (parts whose size-control range
+// admits 16, e.g. ANV/Xe2). Every slot walk and reduction is written in
+// LANES, so only this constant and the workgroup size change.
+#ifndef QMM_LANES
+#define QMM_LANES 32
+#endif
+#if QMM_LANES != 16 && QMM_LANES != 32
+#error "QMM_LANES must be 16 or 32"
+#endif
+const uint LANES = uint(QMM_LANES);
 
-layout(local_size_x = SLOTS_PER_GROUP * 32) in;
+layout(local_size_x = SLOTS_PER_GROUP * QMM_LANES) in;
 
 #if (defined(USE_FP16) || defined(USE_BF16)) && defined(QMM_VEC_Q4_WORD)
 // Decode x rows are 16-byte aligned by dispatch. Reading eight packed halves

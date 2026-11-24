@@ -1046,6 +1046,22 @@ bool Runtime::init_impl() {
         p13.minSubgroupSize,
         p13.maxSubgroupSize,
         info.caps.subgroup_size);
+    info.caps.subgroup_size_min =
+        info.caps.required_subgroup_size != 0 ? p13.minSubgroupSize : 0;
+    // 16-lane admission follows subgroupSizeControl's enable rule: only a
+    // device that will run pinned pipelines (required_subgroup_size != 0)
+    // gets the bit, so a later KCONTS16 pipeline request can throw instead
+    // of creating a pipeline the driver cannot legally build.
+    info.caps.subgroup_size_16_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            16u,
+            256u);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1385,6 +1401,21 @@ uint32_t required_subgroup_size(
     return 0;
   }
   return subgroup_size;
+}
+
+bool subgroup_size_admitted(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t max_workgroup_subgroups,
+    uint32_t target,
+    uint32_t workgroup_size) {
+  return size_control &&
+      (required_stages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+      min_size <= target && target <= max_size &&
+      static_cast<uint64_t>(target) * max_workgroup_subgroups >=
+          workgroup_size;
 }
 
 std::vector<size_t> device_order(
@@ -1778,7 +1809,10 @@ Device::Device(uint32_t physical_device_index) {
           caps_.max_per_stage_descriptor_storage_buffers,
           caps_.max_descriptor_set_storage_buffers));
   compute_ = std::make_unique<ComputeRuntime>(
-      device_, binding_limit, hardware_caps_.required_subgroup_size);
+      device_,
+      binding_limit,
+      hardware_caps_.required_subgroup_size,
+      hardware_caps_.subgroup_size_16_admitted);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 
