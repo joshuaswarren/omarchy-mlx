@@ -161,8 +161,10 @@ def _check_qualification(group: str, obj) -> None:
 
 
 def _check_positive_number(value, field: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        _fail(f"{field}: expected number > 0")
+    # json.loads accepts NaN and Infinity; NaN fails every comparison, so bound both sides.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not 0 < value < math.inf:
+        _fail(f"{field}: expected finite number > 0")
 
 
 def _check_selection_evidence(where: str, evidence) -> None:

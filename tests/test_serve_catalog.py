@@ -82,6 +82,20 @@ def pair_catalog(pair_id="everyday"):
                       pairs=[pair])
 
 
+def selection_evidence(**overrides):
+    evidence = {
+        "arch": ["t8103"], "backend": "mlx-lm", "chat_revision": "a" * 40,
+        "decision_revision": "a" * 40, "date": "2026-09-20",
+        "quality": {"task": "t", "score": 0.5, "receipt": "r"},
+        "latency": {"decode_tokens_per_sec": 1, "target_tokens_per_sec": 1,
+                    "first_visible_p95_ms": 1, "receipt": "r"},
+        "runtime": {"mlx_version": "0", "extension_sha256": "b" * 64,
+                    "libmlx_sha256": "b" * 64},
+    }
+    evidence.update(overrides)
+    return evidence
+
+
 class ValidateTests(unittest.TestCase):
     def test_bundled_seed_is_valid(self):
         obj = bundled_catalog()
@@ -174,15 +188,6 @@ class ValidateTests(unittest.TestCase):
         # str `\d` matches any Unicode decimal digit; a catalog date is ISO ASCII.
         qualified = {"status": "qualified", "receipt": "r", "date": "2026-09-20"}
         untested = {"status": "untested", "receipt": None, "date": None}
-        evidence = {
-            "arch": ["t8103"], "backend": "mlx-lm", "chat_revision": "a" * 40,
-            "decision_revision": "a" * 40, "date": "2026-09-20",
-            "quality": {"task": "t", "score": 0.5, "receipt": "r"},
-            "latency": {"decode_tokens_per_sec": 1, "target_tokens_per_sec": 1,
-                        "first_visible_p95_ms": 1, "receipt": "r"},
-            "runtime": {"mlx_version": "0", "extension_sha256": "b" * 64,
-                        "libmlx_sha256": "b" * 64},
-        }
 
         def model_date(date):
             return catalog_of(entry(qualification={
@@ -197,7 +202,7 @@ class ValidateTests(unittest.TestCase):
         def evidence_date(date):
             obj = pair_catalog()
             obj["pairs"][0]["extension"] = {
-                "selection_evidence": {**evidence, "date": date}}
+                "selection_evidence": selection_evidence(date=date)}
             return obj
 
         for build in (model_date, pair_date, evidence_date):
@@ -210,6 +215,33 @@ class ValidateTests(unittest.TestCase):
                     with self.assertRaisesRegex(catalog.CatalogError,
                                                 "does not match required format"):
                         catalog.validate_catalog(build(date))
+
+    def test_pair_numbers_reject_nan_and_infinity(self):
+        # json.loads reads NaN/Infinity tokens; NaN <= 0 and inf <= 0 are both False.
+        def with_value(field, value):
+            obj = pair_catalog()
+            pair = obj["pairs"][0]
+            pair["first_text_budget_ms"] = 2000
+            pair["extension"] = {"selection_evidence": selection_evidence()}
+            if field == "first_text_budget_ms":
+                pair[field] = value
+            else:
+                pair["extension"]["selection_evidence"]["latency"][field] = value
+            return obj
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "catalog.json"
+            for field in ("first_text_budget_ms", "decode_tokens_per_sec",
+                          "target_tokens_per_sec", "first_visible_p95_ms"):
+                for value in (1, 10**400):  # a huge int is finite, not an OverflowError
+                    path.write_text(json.dumps(with_value(field, value)))
+                    catalog.validate_file(path)
+                for value in (float("nan"), float("inf"), float("-inf")):
+                    with self.subTest(field, value=value):
+                        path.write_text(json.dumps(with_value(field, value)))
+                        with self.assertRaisesRegex(catalog.CatalogError,
+                                                    "expected finite number > 0"):
+                            catalog.validate_file(path)
 
     def test_ids_and_repo_reject_trailing_newline(self):
         catalog.validate_catalog(pair_catalog())
