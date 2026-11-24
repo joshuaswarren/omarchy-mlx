@@ -822,7 +822,7 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
 }
 
 // Intel-shaped bf16 cooperative-matrix prefill (MLX_OMARCHY_QMM_INTEL
-// unset): kernel 659 (QmmPrefillIntelBF16, the 8x16x16
+// unset): QmmPrefillIntelBF16 (the 8x16x16
 // bf16 x bf16 -> f32 subgroup shape) replaces the FMA route by
 // default on the Intel Arc parts it was measured on; env=0 switches
 // off, env=1 opts an unmeasured part in. Only a device advertising

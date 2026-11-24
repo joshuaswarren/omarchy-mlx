@@ -7927,6 +7927,11 @@ TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
 // unmeasured part in. The kernel's shape/subgroup gate stays the real
 // dispatch bound regardless of the default.
 TEST_CASE("intel QMM prefill: the part and env rules") {
+  constexpr auto flag = "MLX_OMARCHY_QMM_INTEL";
+  const char* old_flag = std::getenv(flag);
+  const auto saved_flag =
+      old_flag ? std::optional<std::string>(old_flag) : std::nullopt;
+  unsetenv(flag);
   CHECK(omarchy::qmm_intel_default_part(
       "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));
   CHECK(omarchy::qmm_intel_default_part(
@@ -7939,12 +7944,16 @@ TEST_CASE("intel QMM prefill: the part and env rules") {
       "NVIDIA GeForce RTX 5060 Ti"));
   CHECK_FALSE(omarchy::qmm_intel_default_part("NVIDIA GeForce RTX 4090"));
   CHECK_FALSE(omarchy::qmm_intel_default_part(""));
-  setenv("MLX_OMARCHY_QMM_INTEL", "0", 1);
+  setenv(flag, "0", 1);
   CHECK_FALSE(omarchy::qmm_intel_default_part(
       "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));
-  setenv("MLX_OMARCHY_QMM_INTEL", "1", 1);
+  setenv(flag, "1", 1);
   CHECK(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
-  unsetenv("MLX_OMARCHY_QMM_INTEL");
+  if (saved_flag) {
+    setenv(flag, saved_flag->c_str(), 1);
+  } else {
+    unsetenv(flag);
+  }
 }
 
 // MLX_OMARCHY_QMM_BF16W=1 on a cooperative-matrix device: a bf16 4-bit
