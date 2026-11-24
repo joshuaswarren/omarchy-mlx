@@ -173,6 +173,103 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
+def _tup(v, n):
+    return tuple(v) if isinstance(v, (list, tuple)) else (v,) * n
+
+
+def _nhwc(a):
+    return _mx(a).transpose(0, *range(2, a.ndim), 1)
+
+
+def _nchw(a):
+    return a.transpose(0, a.ndim - 1, *range(1, a.ndim - 1))
+
+
+def _nll_loss_forward(a, target, weight=None, reduction=1, ignore_index=-100):
+    if weight is not None:
+        return _raise("nll_loss weight")
+    a, t = _mx(a), _mx(target).astype(mx.int32)
+    n = a.shape[0]
+    lp = a[mx.arange(n), t]
+    m = t != ignore_index
+    tw = mx.sum(m.astype(mx.float32))
+    if reduction == 0:
+        return (mx.where(m, -lp, 0.0), tw)
+    return (-mx.sum(mx.where(m, lp, 0.0)) / (tw if reduction == 1 else 1.0), tw)
+
+
+def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
+    if weight is not None:
+        return _raise("nll_loss_backward weight")
+    a, t = _mx(a), _mx(target).astype(mx.int32)
+    n = a.shape[0]
+    m = (t != ignore_index).astype(a.dtype)
+    if reduction == 1:
+        g = -_mx(gout) * m / mx.maximum(_mx(tw).astype(a.dtype), 1e-12)
+    else:
+        g = -_mx(gout).reshape(-1)[:n] * m
+    onehot = mx.equal(t.reshape(n, 1), mx.arange(a.shape[1]).reshape(1, -1))
+    return mx.where(onehot, g.reshape(n, 1), mx.zeros_like(a))
+
+
+def _convolution(x, w, b=None, stride=1, padding=0, dilation=1,
+                 transposed=False, output_padding=0, groups=1):
+    # aten.convolution: torch layouts NCHW / OIHW; mx weight (O,H,W,I), x NHWC.
+    if transposed:
+        return _raise("transposed convolution")
+    if isinstance(output_padding, (list, tuple)) and any(output_padding):
+        return _raise("convolution output_padding")
+    nd = x.ndim - 2
+    y = mx.conv_general(_nhwc(x), _nhwc(w), stride=_tup(stride, nd),
+                        padding=_tup(padding, nd),
+                        kernel_dilation=_tup(dilation, nd), groups=groups)
+    if b is not None:
+        y = y + _mx(b).reshape((1,) * (y.ndim - 1) + (-1,))
+    return _nchw(y)
+
+
+def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
+                          transposed, output_padding, groups, output_mask):
+    # grad_input: transposed conv = conv_general(input_dilation=stride, flip=True)
+    # with padding d(k-1)-p, plus output_padding folded into the hi pad.
+    # grad_weight: batch->groups trick - conv(x^T [batch=Ci, ch=N],
+    # gout^T [out=Co, in=N, kernel=(Ho,Wo)], stride=d, kernel_dilation=s),
+    # then slice to (kh,kw). Verified vs torch to ~1e-6 (stride 2, pad 1).
+    if transposed or groups != 1:
+        return _raise("convolution_backward transposed/groups")
+    if isinstance(output_padding, (list, tuple)) and any(output_padding):
+        return _raise("convolution_backward output_padding")
+    nd = x.ndim - 2
+    st, pd, dl = _tup(stride, nd), _tup(padding, nd), _tup(dilation, nd)
+    gm = _nhwc(gout)
+    mask = output_mask if output_mask is not None else (True, True, True)
+    gi = gw = gb = None
+    if mask[0]:
+        wt_t = _mx(w).transpose(1, *range(2, w.ndim), 0)     # (Ci,K...,Co)
+        pe = [dl[i] * (w.shape[2 + i] - 1) - pd[i] for i in range(nd)]
+        if min(pe) < 0:
+            return _raise("convolution_backward neg pad")
+        op = [x.shape[2 + i] - ((gout.shape[2 + i] - 1) * st[i]
+                                + dl[i] * (w.shape[2 + i] - 1) - 2 * pd[i] + 1)
+              for i in range(nd)]
+        if min(op) < 0:
+            return _raise("convolution_backward neg op")
+        gi = _nchw(mx.conv_general(gm, wt_t, input_dilation=st,
+                                   kernel_dilation=dl,
+                                   padding=(pe, [pe[i] + op[i] for i in range(nd)]),
+                                   flip=True))
+    if mask[1]:
+        xt = _mx(x).transpose(1, *range(2, x.ndim), 0)       # (Ci,S...,N)
+        gt = _mx(gout).transpose(1, *range(2, gout.ndim), 0)  # (Co,S'...,N)
+        c = mx.conv_general(xt, gt, stride=dl, kernel_dilation=st, padding=pd)
+        c = c[tuple([slice(None)] + [slice(0, w.shape[2 + i]) for i in range(nd)]
+                    + [slice(None)])]
+        gw = c.transpose(c.ndim - 1, 0, *range(1, c.ndim - 1))  # (Co,Ci,K...)
+    if mask[2] and bias_sizes:
+        gb = mx.sum(gm, axis=(0,) + tuple(range(1, gm.ndim - 1)))
+    return (gi, gw, gb)
+
+
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
     x = _mx(a)
@@ -500,6 +597,14 @@ _FUNC_SPECS = {
     "_adaptive_avg_pool2d": _adaptive_avg_pool2d,
     "adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
     "_adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
+    "convolution": _convolution,
+    "convolution_backward": _convolution_backward,
+    "t": _wt,
+    "threshold_backward": lambda g, x, t=0.0: mx.where(mx.greater(_mx(x), t), _mx(g), mx.zeros_like(_mx(g))),
+    "nll_loss_forward": _nll_loss_forward,
+    "nll_loss_backward": _nll_loss_backward,
+    "_log_softmax": lambda a, dim, half_to_float=False: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
+    "_log_softmax_backward_data": lambda go, out, dim, dt=None: _mx(go) - mx.exp(_mx(out)) * mx.sum(_mx(go), axis=dim, keepdims=True),
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
@@ -844,25 +949,10 @@ def _eager_run(gm):
     return run
 
 
-# Training variant: AOTAutograd splits fwd/bwd and compiles both subgraphs
-# through the same executor, so *_backward aten nodes lower to mx (pools,
-# conv bwd, bn bwd). Use for train graphs: backend="mlx_vulkan_train".
-def _aot_exec(gm, inputs):
-    return _eager_run(gm)
-
-
-try:
-    from torch._dynamo.backends.common import aot_autograd
-    torch._dynamo.register_backend(name="mlx_vulkan_train")(
-        aot_autograd(fw_compiler=_aot_exec, bw_compiler=_aot_exec))
-except Exception as _e:
-    log.info("mlx_vulkan_train backend unavailable: %s", _e)
-
-
 @torch._dynamo.register_backend(name="mlx_vulkan")
-def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
+def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
     try:
-        run_c = make_compiled_executor(gm)
+        run_c = make_compiled_executor(gm, dt=_dt)
     except Exception as e:
         log.warning("compiled executor setup failed: %s", e)
         return _eager_run(gm)
@@ -882,6 +972,42 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
 
     guarded._mlx_stats = run_c._mlx_stats
     return guarded
+
+
+# Training variant: AOTAutograd splits fwd/bwd and compiles both subgraphs
+# through the same lowering tables, so *_backward aten nodes lower to mx
+# (aten.convolution_backward -> transposed conv + batch->groups conv via
+# mx.conv_general; pools fwd+bwd). Use for train graphs:
+# backend="mlx_vulkan_train". Kept a separate name: aot functionalizes
+# input mutations, which the decode state machinery in
+# make_compiled_executor does not model.
+def _aot_compiler(gm, example_inputs):
+    try:
+        from torch._functorch._aot_autograd.utils import make_boxed_func
+    except ImportError:
+        from functorch.compile import make_boxed_func
+    # Training defaults to fp32: bf16 grads drift the loss vs CPU. Explicit
+    # MV_DT still overrides.
+    run = mlx_vulkan_backend(gm, example_inputs,
+                             _dt=None if os.environ.get("MV_DT") else mx.float32)
+
+    def unboxed(*args):
+        # aot's bw runtime may deliver the arg list nested one level deep
+        while len(args) == 1 and isinstance(args[0], (list, tuple)):
+            args = tuple(args[0])
+        return run(*args)
+
+    return make_boxed_func(unboxed)
+
+
+try:
+    from torch._dynamo.backends.common import aot_autograd
+    torch._dynamo.register_backend(name="mlx_vulkan_train")(
+        aot_autograd(fw_compiler=_aot_compiler,
+                     bw_compiler=_aot_compiler,
+                     inference_compiler=_aot_compiler))
+except Exception as e:
+    log.warning("mlx_vulkan_train backend unavailable: %s", e)
 
 
 # ================= compiled executor (v2) =================
@@ -945,7 +1071,7 @@ def _dqall(v):
 def _node_name(n):
     if n.op == "call_method":
         return str(n.target)
-    return getattr(n.target, "__name__", None) or _opname(n)
+    return (getattr(n.target, "__name__", None) or _opname(n)).split(".")[0]
 
 
 def _quantizable_phs(phs):
@@ -1029,7 +1155,7 @@ def _fuse_rmsnorm(nodes):
     return skip, final
 
 
-def make_compiled_executor(gm):
+def make_compiled_executor(gm, dt=None):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
     skip, fused = _fuse_rmsnorm(nodes)
@@ -1042,7 +1168,9 @@ def make_compiled_executor(gm):
     state = {}
     holder = {"ar": None}
 
-    def _cast(x, dt=_DT):
+    _dte = dt or _DT
+
+    def _cast(x, dt=_dte):
         return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
 
     def build(*flat):
@@ -1060,7 +1188,7 @@ def make_compiled_executor(gm):
         for n in nodes:
             if n.op == "placeholder" or n in skip:
                 continue
-            name = getattr(n.target, "__name__", None) or _opname(n)
+            name = (getattr(n.target, "__name__", None) or _opname(n)).split(".")[0]
             if n.op == "output":
                 out = res(n.args[0])
                 holder["n_out"] = len(out) if isinstance(out, (tuple, list)) else 0
@@ -1235,12 +1363,17 @@ def make_compiled_executor(gm):
         outs = cfn(*flat)
         mx.eval(*outs)
         t2 = _t.perf_counter()
+        # outs = real outputs + len(mutated) state tail. aot graphs have no
+        # mutated placeholders, so all outputs are real (and include the
+        # saved-for-backward tensors aot needs back). holder["n_out"] marks
+        # the boundary when the output node ran multi-output.
         n_out = holder.get("n_out", 1)
-        logits = tuple(outs[:n_out]) if n_out > 1 else outs[0]
+        real = outs[:n_out] if n_out else outs[:1]
         extra = outs[n_out:] if n_out else outs[1:]
         for m, arr in zip(mutated, extra):
             state[str(m.target)] = arr
-        out = _torch(logits)
+        out = (_torch(real[0]) if len(real) == 1
+               else tuple(_torch(x) for x in real))
         t3 = _t.perf_counter()
         if _profile:
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
