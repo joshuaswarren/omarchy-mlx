@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -17,6 +18,39 @@ import qualify
 from qualify import ane_result, benchmark_result, counts
 
 from scripts import bench_decode, mlx_provenance
+
+DEEP_JSON = '[' * 200_000 + ']' * 200_000
+
+
+def on_pinned_stack(fn):
+    """Run fn on a thread with a 4 MiB stack, so nesting limits do not follow
+    the runner's ulimit -s (Python 3.14 bounds recursion by the C stack)."""
+    outcome = {}
+
+    def target():
+        try:
+            outcome['value'] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            outcome['error'] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+    if 'error' in outcome:
+        raise outcome['error']
+    return outcome['value']
+
+
+def run_main(*argv):
+    """Run the CLI on the pinned stack with a strict UTF-8 stdout, like a real pipe."""
+    out = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', write_through=True)
+    with contextlib.redirect_stdout(out), patch.object(sys, 'argv', ['qualify.py', *map(str, argv)]):
+        rc = on_pinned_stack(qualify.main)
+    return rc, out.buffer.getvalue().decode()
 
 
 class ReceiptTest(unittest.TestCase):
@@ -83,6 +117,48 @@ class CardRowTest(unittest.TestCase):
             out = subprocess.run([sys.executable, str(Path(qualify.__file__)), '--row', str(path)],
                                  capture_output=True, text=True, check=True).stdout
         self.assertEqual(out.strip(), qualify.card_row(self.LINUX))
+
+    def test_row_refuses_a_receipt_it_cannot_read_or_render(self):
+        deep_field = '{"a": ' * 30_000 + '1' + '}' * 30_000
+        with self.assertRaises(RecursionError):
+            on_pinned_stack(lambda: json.loads(DEEP_JSON))
+        with self.assertRaises(RecursionError):  # 3.14 decodes it and overflows in str(); 3.11 at decode
+            on_pinned_stack(lambda: str(json.loads(deep_field)))
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        bench = {'decode_tps': 1, 'prefill_tps': 1, 'generated': 64, 'ids_sha256_16': '0'}
+        receipts = {
+            'missing': (None, 'FileNotFoundError'),
+            'not_an_object': (b'[1]', 'ValueError: invalid_receipt'),
+            'invalid_utf8': (b'{"status": "ok\xff"}', 'UnicodeDecodeError'),
+            'invalid_json': (b'{not json', 'JSONDecodeError'),
+            'huge_int': (b'{"status": ' + b'1' * 5000 + b'}', 'ValueError'),
+            'deep': (DEEP_JSON.encode(), 'RecursionError'),
+            'deep_field': (b'{"machine": {"chip": ' + deep_field.encode() + b'}}', 'RecursionError'),
+            'surrogate': (b'{"status": "\\ud800"}', 'UnicodeEncodeError'),
+            'machine_not_an_object': (b'{"machine": [1]}', 'AttributeError'),
+            'checks_not_an_object': (b'{"mlx_checks": [1]}', 'TypeError'),
+            'checks_missing_total': (b'{"mlx_checks": {"passed": 1}}', 'KeyError'),
+            'rate_not_a_number': (json.dumps({'benchmark': dict(bench, decode_tps='x')}).encode(), 'ValueError'),
+            'rate_overflows_float': (json.dumps({'benchmark': dict(bench, decode_tps=10 ** 400)}).encode(),
+                                     'OverflowError'),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, (data, error) in receipts.items():
+                with self.subTest(name=name):
+                    path = Path(tmp) / f'{name}.json'
+                    if data is not None:
+                        path.write_bytes(data)
+                    rc, out = run_main('--row', path)
+                    self.assertEqual(rc, 1)
+                    self.assertTrue(out.startswith(f'row refused: {error}'), out[:200])
+            path = Path(tmp) / 'list.json'
+            path.write_text('[1]')
+            result = subprocess.run([sys.executable, str(Path(qualify.__file__)), '--row', str(path)],
+                                    capture_output=True, text=True, check=False)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (1, 'row refused: ValueError: invalid_receipt\n', ''))
+
 
 class PatchStateTest(unittest.TestCase):
     """The kit must know whether the mlx-lm it benchmarks carries the series."""
@@ -253,6 +329,23 @@ class PairTest(unittest.TestCase):
                         capture_output=True, text=True, check=False)
                     self.assertIn(expected, result.stdout)
                     self.assertEqual(result.returncode, 0 if name == 'matched' else 1)
+
+    def test_pair_refuses_a_receipt_nested_too_deeply_to_decode(self):
+        with self.assertRaises(RecursionError):
+            on_pinned_stack(lambda: json.loads(DEEP_JSON))
+        benchmark = json.loads(bench_decode.result_line(12, list(range(64)), 460_000_000, 23, 'Apple M5 Max'))
+        linux = {'schema': qualify.SCHEMA, 'machine_id': '0123456789abcdef', 'workload': qualify.WORKLOAD,
+                 'arm': 'linux-release-wheel', 'benchmark': benchmark}
+        with tempfile.TemporaryDirectory() as tmp:
+            deep = Path(tmp) / 'deep.json'
+            deep.write_text(DEEP_JSON)
+            other = Path(tmp) / 'linux.json'
+            other.write_text(json.dumps(linux))
+            for paths in ((deep, other), (other, deep)):
+                with self.subTest(deep=paths.index(deep)):
+                    rc, out = run_main('--compare', *paths)
+                    self.assertEqual(rc, 1)
+                    self.assertRegex(out, r'^pair refused: .* while decoding a JSON array')
 
 
 class QualificationRunTest(unittest.TestCase):
