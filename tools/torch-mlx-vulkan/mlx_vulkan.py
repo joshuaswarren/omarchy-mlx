@@ -500,6 +500,59 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, e
             kw["mask"] = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
 
+def _sdpa_lse(q, k, v, attn_mask=None, is_causal=False, scale=None,
+              causal_off=0):
+    # (output, logsumexp) pair the aot bw graph needs: logsumexp is saved
+    # for _scaled_dot_product_flash_attention_backward, so it must be real.
+    # fp32 throughout - bf16 inputs break the 1e-4 CPU-match bound.
+    q, k, v = _mx(q), _mx(k), _mx(v)
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    if attn_mask is not None:
+        m = _mx(attn_mask)
+        bias = mx.where(m, 0.0, -mx.inf) if m.dtype == mx.bool_ else m
+    elif is_causal:
+        # aten flash_cpu causal aligns top-left; the efficient kernel is
+        # bottom-right. Verified vs torch for sq != sk.
+        sq, sk = q.shape[-2], k.shape[-2]
+        keep = mx.less_equal(mx.arange(sk).reshape(1, sk),
+                             mx.arange(sq).reshape(sq, 1) + causal_off)
+        bias = mx.where(keep, 0.0, -mx.inf)
+    else:
+        bias = None
+    out = mx.fast.scaled_dot_product_attention(
+        q, k, v, scale=scale, mask=bias if bias is not None else None)
+    scores = mx.matmul(q, mx.transpose(
+        k, axes=(*range(k.ndim - 2), k.ndim - 1, k.ndim - 2))) * scale
+    if bias is not None:
+        scores = scores + bias
+    lse = mx.logsumexp(scores, axis=-1)
+    return out.astype(mx.float32), lse.astype(mx.float32)
+
+def _sdpa_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None,
+              scale=None):
+    # aten._scaled_dot_product_flash_attention_for_cpu -> (output, logsumexp)
+    if dropout_p not in (0, 0.0):
+        return _raise("flash_attention_for_cpu dropout")
+    return _sdpa_lse(q, k, v, attn_mask, is_causal, scale)
+
+def _sdpa_eff(q, k, v, attn_bias, compute_log_sumexp, dropout_p=0.0,
+              is_causal=False, scale=None):
+    # aten._scaled_dot_product_efficient_attention_forward ->
+    # (output, logsumexp, philox_seed, philox_offset)
+    if dropout_p not in (0, 0.0):
+        return _raise("efficient_attention dropout")
+    out, lse = _sdpa_lse(q, k, v, attn_bias, is_causal, scale,
+                         causal_off=k.shape[-2] - q.shape[-2])
+    z = mx.zeros((1,), mx.int64)
+    return (out, lse, z, z)
+
+def _sdpa_eff_out(q, k, v, attn_bias, compute_log_sumexp, dropout_p=0.0,
+                  is_causal=False, scale=None):
+    # aten._scaled_dot_product_efficient_attention -> output only
+    return _sdpa_eff(q, k, v, attn_bias, compute_log_sumexp, dropout_p,
+                     is_causal, scale)[0]
+
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     # torch: a NCHW, w OIHW ; mlx.conv2d: x NHWC, w (H, W, I/groups, O)
     if groups != 1:
@@ -1131,6 +1184,10 @@ _FUNC_SPECS = {
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
+    "_scaled_dot_product_flash_attention_for_cpu": _sdpa_cpu,
+    "_scaled_dot_product_efficient_attention_forward": _sdpa_eff,
+    "_efficient_attention_forward": _sdpa_eff,
+    "_scaled_dot_product_efficient_attention": _sdpa_eff_out,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
     "not_equal": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
@@ -1905,22 +1962,15 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
 
                 continue
             if name in ("_scaled_dot_product_flash_attention_for_cpu",
-                        "_scaled_dot_product_efficient_attention_forward") \
+                        "_scaled_dot_product_efficient_attention_forward",
+                        "_efficient_attention_forward",
+                        "_scaled_dot_product_efficient_attention") \
                     and n.op == "call_function":
-                # aten CPU flash attention: (q, k, v, dropout_p, is_causal,
-                # kw: attn_mask, scale) -> (output, logsumexp); the decode
-                # graph consumes output via getitem.
-                q, k, v = _cast(args[0]), _cast(args[1]), _cast(args[2])
-                is_causal = bool(args[4]) if len(args) > 4 else False
-                kw = {}
-                if kwargs.get("attn_mask") is not None:
-                    kw["mask"] = _cast(kwargs["attn_mask"])
-                elif is_causal:
-                    kw["mask"] = "causal"
-                if kwargs.get("scale") is not None:
-                    kw["scale"] = kwargs["scale"]
-                out = mx.fast.scaled_dot_product_attention(q, k, v, **kw)
-                env[n] = (out, mx.zeros((1,)))
+                # aot saves logsumexp for the attention backward, so the
+                # (output, logsumexp) tuple must be real and fp32.
+                fn = (_sdpa_cpu if name == "_scaled_dot_product_flash_attention_for_cpu"
+                      else _sdpa_eff if "forward" in name else _sdpa_eff_out)
+                env[n] = fn(*args, **kwargs)
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
