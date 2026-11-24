@@ -6,18 +6,21 @@ Usage:
 
 URL defaults to https://mlx-omarchy-community-data.joshua-s-warren.workers.dev.
 
-Exits non-zero if the live worker reports a different fields_sha256 or
-schema_sha256 than the bundled schema. That catches the failure mode
-behind the 2026-09-17 ane_port 422: the worker was deployed from a
-revision that pre-dated the schema field, so the JSON validator silently
-rejected every current-collector submit. Wire it into pre-deploy and
-cron health checks.
+Exits 2 if the live worker reports a different schema_versions,
+fields_sha256 or schema_sha256 than the bundled schema, and 1 if the
+worker cannot be reached or its reply is not a JSON object. Exit 2
+catches the failure mode behind the 2026-09-17 ane_port 422: the worker
+was deployed from a revision that pre-dated the schema field, so the
+JSON validator silently rejected every current-collector submit. Wire it
+into pre-deploy and cron health checks.
 """
 
 import argparse
 import hashlib
+import http.client
 import json
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -54,25 +57,51 @@ def live(url: str) -> dict:
     req = urllib.request.Request(
         f"{url}/v1/schema", headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+        got = json.loads(resp.read())
+    if not isinstance(got, dict):
+        raise ValueError(f"reply is {type(got).__name__}, not a JSON object")
+    return got
 
 
-def main() -> int:
+def same_versions(want: list, have: object) -> bool:
+    # bool is an int subclass and 1.0 == 1, so [True, 2.0] would sort
+    # equal to [1, 2]; the worker sends plain integers.
+    return (isinstance(have, list)
+            and all(type(v) is int for v in have)
+            and sorted(want) == sorted(have))
+
+
+def shown(value: object) -> str:
+    # Python 3.14 can decode a reply nested deeper than it can repr.
+    try:
+        return str(value)
+    except RecursionError:
+        return f"<{type(value).__name__} nested too deeply to print>"
+
+
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--url", default=DEFAULT_URL,
                     help="worker URL (default: %(default)s)")
-    args = ap.parse_args()
-    url = args.url
+    args = ap.parse_args(argv)
+    url = args.url.rstrip("/")
     exp = expected()
-    got = live(url)
+    try:
+        got = live(url)
+    except (OSError, http.client.HTTPException, ValueError,
+            OverflowError, RecursionError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()  # urlopen raised before the with block owned it
+        print(f"[schema-identity] cannot read {url}/v1/schema: {exc}",
+              file=sys.stderr)
+        return 1
     mismatches = []
     for key in ("schema_versions", "fields_sha256", "schema_sha256"):
         want, have = exp[key], got.get(key)
-        same = (sorted(want) == sorted(have or [])) \
+        same = same_versions(want, have) \
             if key == "schema_versions" else want == have
         if not same:
-            mismatches.append(
-                f"  {key}: expected={exp[key]} live={got.get(key)}")
+            mismatches.append(f"  {key}: expected={want} live={shown(have)}")
     if mismatches:
         print(
             f"[schema-identity] STALE DEPLOY at {url}\n"

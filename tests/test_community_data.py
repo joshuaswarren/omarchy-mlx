@@ -5,6 +5,8 @@ directory and shaped like the real collector payloads.
 """
 
 import contextlib
+import http.client
+import importlib.util
 import io
 import json
 import os
@@ -13,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -654,6 +657,163 @@ class WorkflowStepOrderTests(unittest.TestCase):
     def test_check_script_is_reachable_after_a_later_snapshot(self):
         result = self.run_steps(with_remote_branch=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+def load_schema_check():
+    path = REPO_ROOT / WorkflowStepOrderTests.SCRIPT
+    spec = importlib.util.spec_from_file_location("check_schema_identity",
+                                                  path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SchemaIdentityCheckTests(unittest.TestCase):
+    """check_schema_identity.py against a faked GET /v1/schema reply.
+
+    Exit 0 means the live identity matches, 2 means a JSON object came
+    back with a different identity, and 1 means no usable reply.
+    """
+
+    URL = "https://worker.example"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.check = load_schema_check()
+        cls.good = cls.check.expected()
+
+    def run_check(self, reply, url=URL):
+        """Run main(); reply is the body bytes or an exception to raise."""
+        urlopen = mock.Mock(side_effect=reply) \
+            if isinstance(reply, BaseException) \
+            else mock.Mock(return_value=io.BytesIO(reply))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(self.check.urllib.request, "urlopen",
+                               urlopen), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = self.check.main(["--url", url])
+        return code, out.getvalue(), err.getvalue(), urlopen
+
+    def reply(self, **changes):
+        return json.dumps(dict(self.good, **changes)).encode()
+
+    def test_matching_identity_is_ok(self):
+        code, out, err, _ = self.run_check(self.reply())
+        self.assertEqual(code, 0, err)
+        self.assertIn("[schema-identity] OK", out)
+
+    def test_trailing_slash_url_requests_v1_schema(self):
+        for url in (self.URL + "/", self.URL + "//"):
+            with self.subTest(url=url):
+                code, _, err, urlopen = self.run_check(self.reply(), url)
+                self.assertEqual(code, 0, err)
+                self.assertEqual(urlopen.call_args.args[0].full_url,
+                                 self.URL + "/v1/schema")
+
+    def test_different_identity_exits_2(self):
+        for key, value in (
+                ("schema_sha256", "0" * 64),
+                ("schema_versions", [1]),
+                ("schema_versions", 1),
+                ("schema_versions", [1, "2"]),
+                ("schema_versions", [1, None]),
+                ("schema_versions", [True, 2]),
+                ("schema_versions", [1.0, 2]),
+                ("fields_sha256", [self.good["fields_sha256"]])):
+            with self.subTest(key=key, value=value):
+                code, out, err, _ = self.run_check(
+                    self.reply(**{key: value}))
+                self.assertEqual(code, 2, out + err)
+                self.assertIn("STALE DEPLOY", err)
+                self.assertIn(f"  {key}: expected=", err)
+
+    def test_missing_key_exits_2(self):
+        body = {k: v for k, v in self.good.items() if k != "schema_versions"}
+        code, _, err, _ = self.run_check(json.dumps(body).encode())
+        self.assertEqual(code, 2, err)
+        self.assertIn("schema_versions: expected=[1, 2] live=None", err)
+
+    def assert_unreadable(self, reply, reason, small_stack=False):
+        code, out, err, _ = (
+            run_with_small_stack(lambda: self.run_check(reply))
+            if small_stack else self.run_check(reply))
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(out, "")
+        self.assertTrue(err.startswith(
+            f"[schema-identity] cannot read {self.URL}/v1/schema: "), err)
+        self.assertIn(reason, err)
+
+    def test_non_object_reply_exits_1(self):
+        for body, name in ((b"[]", "list"), (b"null", "NoneType"),
+                           (b'"ok"', "str"), (b"123", "int")):
+            with self.subTest(body=body):
+                self.assert_unreadable(
+                    body, f"reply is {name}, not a JSON object")
+
+    def test_undecodable_reply_exits_1(self):
+        for body, reason in ((b"{not json", "Expecting property name"),
+                             (b"", "Expecting value"),
+                             (b"\xff\xfe\xfa", "codec can't decode")):
+            with self.subTest(body=body):
+                self.assert_unreadable(body, reason)
+
+    def test_network_failure_exits_1(self):
+        body = io.BytesIO(b"oops")
+        http_500 = urllib.error.HTTPError(
+            self.URL, 500, "Internal Server Error", {}, body)
+        self.addCleanup(http_500.close)
+        for exc in (
+                http_500,
+                urllib.error.URLError("[Errno -2] Name or service not known"),
+                TimeoutError("timed out"),
+                ConnectionResetError("reset by peer"),
+                http.client.IncompleteRead(b"{", 10),
+                http.client.InvalidURL("nonnumeric port: 'x'"),
+                # Python 3.11 getaddrinfo on a port above C long.
+                OverflowError("Python int too large to convert to C long")):
+            with self.subTest(exc=type(exc).__name__):
+                self.assert_unreadable(exc, str(exc))
+        self.assertTrue(body.closed)
+
+    def test_too_deep_reply_exits_1(self):
+        self.assert_unreadable(DEEP_JSON.encode("ascii"),
+                               "while decoding a JSON", small_stack=True)
+
+    def test_value_too_deep_to_print_is_reported(self):
+        # Python 3.14 decodes this on the pinned stack but cannot repr it;
+        # Python 3.11 cannot decode it. Either way, no traceback.
+        deep = '{"a":' * 25_000 + "1" + "}" * 25_000
+        body = json.dumps(dict(self.good, schema_sha256="DEEP")).replace(
+            '"DEEP"', deep).encode("ascii")
+        code, out, err, _ = run_with_small_stack(
+            lambda: self.run_check(body))
+        self.assertIn(code, (1, 2), out + err)
+        self.assertEqual(out, "")
+        self.assertTrue(err.startswith(
+            "[schema-identity] STALE DEPLOY" if code == 2
+            else "[schema-identity] cannot read"), err)
+
+    def test_unprintable_live_value_exits_2(self):
+        # The same handler as above, independent of the stack size.
+        class Unprintable:
+            def __str__(self):
+                raise RecursionError("too deep")
+
+        with mock.patch.object(self.check, "live", return_value=dict(
+                self.good, schema_sha256=Unprintable())):
+            code, out, err, _ = self.run_check(b"{}")
+        self.assertEqual(code, 2, out + err)
+        self.assertIn(
+            "schema_sha256: expected="
+            f"{self.good['schema_sha256']} "
+            "live=<Unprintable nested too deeply to print>", err)
+
+    def test_recursion_error_while_reading_exits_1(self):
+        # The same handler as above, independent of the stack size.
+        with mock.patch.object(self.check, "live",
+                               side_effect=RecursionError("too deep")):
+            self.assert_unreadable(b"{}", "too deep")
 
 
 class ReadApiSummaryShape(unittest.TestCase):
