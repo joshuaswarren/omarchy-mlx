@@ -3603,6 +3603,16 @@ void dispatch_gather_qmm(
   if (lhs.shape() != rhs.shape()) {
     omarchy::unsupported(tag + " index shape", out);
   }
+  // The ops.cpp nvfp4 path validates the scale as float32 with one
+  // entry per expert, but the qqmm callers reach here without that
+  // validation: a narrower dtype would make the staged copy read past
+  // the source buffer, and an empty scale would leave the kernel
+  // indexing words the packed buffer never held.
+  if (out_global_scale &&
+      (out_global_scale->dtype() != float32 ||
+       out_global_scale->size() == 0)) {
+    omarchy::unsupported(tag + " global scale", out);
+  }
   std::optional<array> x_temp;
   std::optional<array> w_temp;
   std::optional<array> scales_temp;
@@ -3644,6 +3654,7 @@ void dispatch_gather_qmm(
   size_t index_count = lhs_d.size();
   if (scales_d.offset() % 4 != 0 ||
       (biases_d && biases_d->offset() % 4 != 0) ||
+      (gs_d && gs_d->offset() % 4 != 0) ||
       lhs_d.offset() % 4 != 0 || rhs_d.offset() % 4 != 0) {
     omarchy::unsupported(tag + " byte offset", out);
   }
@@ -3964,7 +3975,7 @@ void dispatch_gather_qmm(
     // same per-expert multiply the pinned Metal _hgs variants perform.
     // flags bit 1 selects per-expert indexing; a scalar scale (the qqmm
     // path accepts one) applies to every row.
-    params.aux_size = static_cast<uint32_t>(gs_base / 4);
+    params.aux_size = checked_u32(gs_base / 4, tag, out);
     if (gs_d->size() > 1) {
       size_t experts = 1;
       for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
@@ -7504,7 +7515,11 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
   // no bias. ops.cpp inserts the optional nvfp4 output global scale
   // ahead of the index pair, so the index slots shift by one when it is
   // present.
-  const bool has_gs = inputs.size() == 6;
+  const bool has_gs =
+      mode_ == QuantizationMode::Nvfp4 && inputs.size() == 6;
+  if (inputs.size() != 5 && !has_gs) {
+    omarchy::unsupported(tag + " operand count", out);
+  }
   dispatch_gather_qmm(
       tag,
       inputs[0],
