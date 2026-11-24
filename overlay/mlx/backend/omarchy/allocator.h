@@ -35,8 +35,8 @@ struct VulkanBuffer {
   void* data{nullptr};
   size_t size{0};
   bool inference_weight{false};
-  // True when backed by non-HOST_VISIBLE DEVICE_LOCAL VRAM under the opt-in
-  // discrete-GPU activation path (MLX_OMARCHY_VRAM_ACTIVATIONS=1).
+  // True when backed by non-HOST_VISIBLE DEVICE_LOCAL VRAM under the
+  // discrete-GPU activation path (MLX_OMARCHY_VRAM_ACTIVATIONS).
   bool device_local{false};
   // Lazily allocated CPU shadow buffer, created only if host code requests
   // Buffer::raw_ptr() on a device_local buffer.
@@ -304,9 +304,10 @@ class VulkanAllocator : public allocator::Allocator {
 
 MLX_API VulkanAllocator& allocator();
 
-// True when MLX_OMARCHY_VRAM_ACTIVATIONS=1 is set and the active device is a
-// discrete GPU with both a pure DEVICE_LOCAL memory type and a host-visible
-// staging memory type.
+// True when the device-local activation route applies: on discrete GPUs by
+// default (MLX_OMARCHY_VRAM_ACTIVATIONS=0 opts out), elsewhere only with an
+// explicit =1 — and only when the device has both a pure DEVICE_LOCAL
+// memory type and a host-visible staging memory type.
 bool device_local_activations_enabled();
 
 // Round a request to the allocator page so cached buffers can be reused for

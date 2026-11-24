@@ -576,10 +576,16 @@ void Device::download_device_to_host(
 }
 
 bool device_local_activations_enabled() {
-  if (!env_flag("MLX_OMARCHY_VRAM_ACTIVATIONS") || !is_available()) {
+  if (!is_available()) {
     return false;
   }
   auto& dev = device();
+  const int env_setting = std::getenv("MLX_OMARCHY_VRAM_ACTIVATIONS") == nullptr
+      ? -1
+      : (env_flag("MLX_OMARCHY_VRAM_ACTIVATIONS") ? 1 : 0);
+  if (!device_local_activations_default(dev.physical_type(), env_setting)) {
+    return false;
+  }
   return vram_activation_memory_type(
              true, dev.physical_type(), dev.memory_properties(), UINT32_MAX) !=
       UINT32_MAX;

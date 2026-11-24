@@ -14,8 +14,8 @@
 
 namespace mlx::core::omarchy {
 
-// Minimum *unrounded* allocation size placed in pure DEVICE_LOCAL VRAM when
-// MLX_OMARCHY_VRAM_ACTIVATIONS=1. Tiny scalar buffers (<= 16 B, e.g. 4-byte
+// Minimum *unrounded* allocation size placed in pure DEVICE_LOCAL VRAM on
+// the discrete-GPU activation route. Tiny scalar buffers (<= 16 B, e.g. 4-byte
 // sampled token IDs, RoPE offsets, scalar reductions) stay
 // HOST_VISIBLE|HOST_COHERENT so pipelined host readback (y.item()) never
 // stalls behind the next token's queued compute work on a shared VkQueue.
@@ -27,7 +27,23 @@ inline bool should_use_device_local_activation(
   return opt_in_enabled && requested_size > kMinDeviceLocalActivationBytes;
 }
 
-// Memory type for opt-in device-local activation/general buffers on discrete
+// Whether the device-local activation route applies for a device type and
+// env setting (-1 unset, 0 off, 1 on). Discrete GPUs default ON: a foreign
+// card behind a narrow BAR window exposes a small device-local+host-visible
+// heap (the B60 over USB4 shows ~256 MiB) that captured every mapped
+// buffer until vkAllocateMemory failed far below real VRAM; routing the
+// large allocations to the pure device-local heap with staged upload is the
+// working path. Non-discrete parts keep the strict opt-in.
+inline bool device_local_activations_default(
+    VkPhysicalDeviceType device_type,
+    int env_setting) {
+  if (env_setting >= 0) {
+    return env_setting > 0;
+  }
+  return device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+}
+
+// Memory type for device-local activation/general buffers on discrete
 // GPUs. Returns UINT32_MAX when disabled, on integrated/UMA/software GPUs, or
 // when no pure DEVICE_LOCAL + non-DEVICE_LOCAL HOST_VISIBLE staging pair
 // exists.
@@ -117,7 +133,7 @@ inline bool supports_qmm_2x16(const QmmWideCaps& caps) {
 
 // Default Qmm decode geometry selection when MLX_OMARCHY_QMM_GEOM is unset.
 // Preserves Apple defaults (G13G/G13C -> 2x16; other Apple chips -> 2x4 until
-// calibrated) and enables 2x16 on discrete GPUs with opt-in VRAM activations
+// calibrated) and enables 2x16 on discrete GPUs with VRAM activations
 // whenever the device advertises support for 512-thread 32-wide subgroup WGs.
 inline bool select_qmm_wide_2x16(
     std::string_view device_name,
