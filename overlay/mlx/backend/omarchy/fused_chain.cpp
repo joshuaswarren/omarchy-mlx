@@ -1960,14 +1960,29 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   mix(std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") != nullptr);
   mix(std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") != nullptr);
   mix(tape.size());
+  const bool plan_debug =
+      std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG") != nullptr;
   if (plan_cache && sig_ok && plan_valid && sig == plan_sig) {
     if (EagerFusionState* hit = replay_plan(tape, plan_rec)) {
       trace::counters().eager_fusion_plan_cache_hits++;
       eager_state = hit;
+      if (plan_debug) {
+        std::fprintf(stderr, "[plan-cache] HIT sig=%016llx\n", (unsigned long long)sig);
+      }
       return;
     }
     trace::counters().eager_fusion_plan_cache_replay_failures++;
+    if (plan_debug) {
+      std::fprintf(stderr, "[plan-cache] REPLAY-FAIL sig=%016llx\n", (unsigned long long)sig);
+    }
     plan_valid = false;
+  } else if (plan_debug && plan_cache && plan_valid) {
+    std::fprintf(
+        stderr,
+        "[plan-cache] MISS sig=%016llx want=%016llx ok=%d\n",
+        (unsigned long long)sig,
+        (unsigned long long)plan_sig,
+        int(sig_ok));
   }
 
   auto* state = new EagerFusionState;
@@ -2983,6 +2998,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   if (plan_cache && sig_ok) {
     plan_valid = record_plan(*state, node_pos, ext_owner, plan_rec);
     plan_sig = sig;
+    if (plan_debug) {
+      std::fprintf(
+          stderr,
+          "[plan-cache] %s sig=%016llx\n",
+          plan_valid ? "STORE" : "REC-FAIL",
+          (unsigned long long)sig);
+    }
     if (plan_valid) {
       trace::counters().eager_fusion_plan_cache_stores++;
     } else {
