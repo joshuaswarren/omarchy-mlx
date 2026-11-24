@@ -76,7 +76,7 @@ i64 G18 `int_elementwise` builds with `-O` and knows no
 trivial stand-in for the coopmat files). CI's modern glslc compiles
 both for real; nothing in the repo depends on the shim.
 
-## The planner: what the first attempt showed, and the two shapes that work
+## The planner: what the first attempt showed, and the sound shape
 
 The naive shape - the planner skips the rope node and the attention
 node's eval performs the folded dispatch - **crashes**, and the reason
@@ -90,34 +90,46 @@ through to its ordinary path, which binds the query array - and that
 array is the skipped rope output, which has no buffer. The crash is a
 null dereference in `binding(q)`, not a wrong value, but it is fatal.
 
-Two shapes solve it:
 
-1. **The rope node drives.** The planner arms the rope node with the
-   attention node's inputs (keys, values, the scale, the output) and
-   the attention node is marked "skip if the rope fold ran". The rope
-   node's interception calls the attention primitive's eval with a
-   thread-local fold context (the raw query, the weight, the offsets,
-   the rope params). The attention eval either folds (the split route's
-   folded variant) or returns "refused" **without dispatching**; on a
-   refusal the rope node runs its ordinary rope dispatch and the
-   attention node later runs its ordinary path, where the query now has
-   its data. The refusal must be an early-out inside the attention
-   eval: it may not fall through to a route that reads the query.
-2. **The skip is conditional on a superset of the route's guards.** The
-   planner skips the rope node only when it can prove the split route
-   with the folded variant will run (batch 1, one token, head width
-   256, the bf16 dtypes, the split-group set, the stride alignments,
-   the device's subgroup and workgroup limits, and the split/pv/bk64
-   env pins). That predicate duplicates the route's guard chain, so it
-   must live next to it - a predicate that drifts from the route would
-   skip the rope and leave the attention with no query.
+The fix has two parts, and the first one is a trap.
 
-Shape 1 keeps the route logic in one place (the attention eval) and
-needs no duplicated guards; its cost is that the attention eval needs
-a "refused, do not dispatch" early-out, which is a new contract on
-that function.
+**The decision belongs at the attention node's turn, not the rope
+node's.** It is tempting to let the rope node drive - its interception
+calls the attention eval, which folds or refuses - but that is unsound:
+the attention's keys and values are the KV cache after the update, and
+that update sits between the rope node and the attention node in the
+tape. At the rope node's turn the cache is not ready, so the attention
+cannot be dispatched from there.
 
-## What the planner still needs after the shape is chosen
+**So the rope node is skipped, and the attention eval must know, before
+it dispatches anything, whether the split route will fold.** The
+attention eval's route precedence is: the one-pass decode route, the
+prefill routes, then the split-K block - and each of them binds the
+query. With the rope skipped, a route that cannot fold would bind an
+array with no buffer. The sound shape is therefore:
+
+1. Extract the split route's **decision** (its guard chain and the
+   `split_params`/kernel selection, which are pure) into a lambda
+   defined in place inside `eval_gpu`, capturing the locals by
+   reference - no parameter plumbing, one copy of the guards. The
+   ordinary split block then becomes `if (auto route = split_route()) {
+   dispatch }`, and the route's precedence is unchanged.
+2. At the top of `eval_gpu`, when the planner has armed this node: call
+   `split_route()`. If it folds (the `SdpaDecodeSplitP1R4BF16Hd256`
+   variant, one token, width 256, the rope's `dims == head_dim`), the
+   split block below takes the folded kernel. If it does not, run the
+   skipped rope node in place **now** (`sdpa_rope_fold_refused`), so
+   every later route finds a query with its data.
+3. The planner skips the rope node whenever the attention node is armed
+   and eligible, because step 2 makes a refusal safe at the attention
+   node's turn: no predicate has to predict the route, and nothing can
+   drift from it.
+
+The refusal is cheap and exact: the rope node's primitive and inputs
+are stashed at plan time, so the in-place run is the rope's own
+`eval_gpu` on its own arrays.
+
+## What the planner needs
 
 - The fold's dispatch belongs in `ScaledDotProductAttention::eval_gpu`
   (the split route at ~line 16830 of `primitives.cpp`), not in the
