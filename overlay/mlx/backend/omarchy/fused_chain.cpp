@@ -988,6 +988,98 @@ bool kv_window_in_place(const array& member) {
       member.inputs()[0].is_donatable();
 }
 
+// Flat open-addressed scratch map for one scope pass. eval_impl builds a
+// scope per pass, and unordered_map pays a node allocation per insert plus
+// bucket rehashing each time; here entries are POD slots and "clear" is one
+// generation bump, so a reused table allocates nothing per pass. prepare()
+// sizes for 2x the expected distinct keys and shrinks back when the table
+// is more than 4x oversized, so a rare large tape does not pin peak memory.
+template <typename V>
+class TapeIndex {
+ public:
+  void prepare(std::size_t expected) {
+    std::size_t want = 16;
+    while (want < expected * 2) {
+      want <<= 1;
+    }
+    if (slots_.size() != want &&
+        (slots_.size() < want || slots_.size() > want * 4)) {
+      slots_.assign(want, Slot{});
+      gen_ = 0;
+    }
+    if (++gen_ == 0) {
+      for (auto& s : slots_) {
+        s.gen = 0;
+      }
+      gen_ = 1;
+    }
+  }
+
+  V* find(std::uintptr_t key) {
+    return const_cast<V*>(const_cast<const TapeIndex*>(this)->find(key));
+  }
+
+  const V* find(std::uintptr_t key) const {
+    std::size_t i = hash(key) & mask();
+    while (slots_[i].gen == gen_ && slots_[i].key != key) {
+      i = (i + 1) & mask();
+    }
+    return slots_[i].gen == gen_ ? &slots_[i].value : nullptr;
+  }
+
+  bool put_if_absent(std::uintptr_t key, V v) {
+    std::size_t i = hash(key) & mask();
+    while (slots_[i].gen == gen_ && slots_[i].key != key) {
+      i = (i + 1) & mask();
+    }
+    Slot& s = slots_[i];
+    if (s.gen == gen_) {
+      return false;
+    }
+    s.gen = gen_;
+    s.key = key;
+    s.value = v;
+    return true;
+  }
+
+  V& operator[](std::uintptr_t key) {
+    std::size_t i = hash(key) & mask();
+    while (slots_[i].gen == gen_ && slots_[i].key != key) {
+      i = (i + 1) & mask();
+    }
+    Slot& s = slots_[i];
+    if (s.gen != gen_) {
+      s.gen = gen_;
+      s.key = key;
+      s.value = V{};
+    }
+    return s.value;
+  }
+
+  std::size_t count(std::uintptr_t key) const {
+    return find(key) != nullptr ? 1 : 0;
+  }
+
+ private:
+  struct Slot {
+    std::uintptr_t key = 0;
+    std::uint32_t gen = 0;
+    V value{};
+  };
+
+  std::size_t mask() const {
+    return slots_.size() - 1;
+  }
+
+  static std::size_t hash(std::uintptr_t key) {
+    std::size_t h = key * 0x9E3779B97F4A7C15ULL;
+    return h ^ (h >> 33);
+  }
+
+  std::vector<Slot> slots_;
+  std::uint32_t gen_ = 0;
+};
+
 // Keys: the RoPE kernel writes (matrix, time, feature) output strides,
 // so the window's (batch, kv-head) axes must form one regular matrix
 // axis. The RoPE fence (forward, scalar offset, fused-path conditions)
@@ -1045,14 +1137,14 @@ DirectPlan plan_keys_window(const array& member, const array* update) {
 DirectPlan plan_values_window(
     const array& member,
     const array* update,
-    const std::unordered_map<std::uintptr_t, size_t>& uses,
+    const TapeIndex<size_t>& uses,
     const std::vector<GemvGroup>& groups,
     const std::unordered_map<std::uintptr_t, size_t>& dense_roles,
     std::vector<DenseGemvGroup>& dense_groups) {
   DirectPlan plan;
   auto use_count = [&](const array& value) {
-    auto it = uses.find(value.id());
-    return it == uses.end() ? size_t{0} : it->second;
+    auto* it = uses.find(value.id());
+    return it == nullptr ? size_t{0} : *it;
   };
   // Walk the chain of view-only ops (Transpose/Reshape) from the
   // pair's update input down to the Add sum. Every view must have
@@ -1267,28 +1359,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 
   auto* state = new EagerFusionState;
   eager_state = state;
-  // Scratch index for this pass only: the maps die with the scope's
-  // planning section, so reusing thread-local storage is safe under
-  // nested scopes (a nested scope's constructor finishes before the
-  // outer constructor touches the maps again) and removes ~2 hash-map
-  // builds per eval_impl (same reuse contract as the encoder's
-  // WaveIndex).
-  static thread_local std::unordered_map<std::uintptr_t, const array*>
-      nodes;
-  static thread_local std::unordered_map<std::uintptr_t, size_t> uses;
-  nodes.clear();
-  uses.clear();
-  nodes.reserve(tape.size());
-  uses.reserve(tape.size() * 3);
+  // Tape-index scratch is thread-local and reused across passes. The maps
+  // are only live for this planning section, so reuse is safe under nested
+  // scopes: a nested scope's eval runs after this constructor returns,
+  // never while it still holds the tables.
+  static thread_local TapeIndex<const array*> nodes;
+  static thread_local TapeIndex<size_t> uses;
+  nodes.prepare(tape.size());
+  uses.prepare(tape.size() * 2);
   for (const auto& node : tape) {
-    nodes.emplace(node.id(), &node);
+    nodes.put_if_absent(node.id(), &node);
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
     }
   }
   auto lookup = [&](const array& ref) -> const array* {
-    auto it = nodes.find(ref.id());
-    return it == nodes.end() ? nullptr : it->second;
+    auto* it = nodes.find(ref.id());
+    return it == nullptr ? nullptr : *it;
   };
   // Swiglu chains planned for the GEMV store epilogue fold: the gate
   // and up leaves plus the tail array the fold will store into.
@@ -1744,9 +1831,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       bool classifiable = true;
       for (int side = 0; side < 2 && classifiable; ++side) {
         const array* update = lookup(pair.nodes[side].inputs()[1]);
-        auto use_it =
-            update ? uses.find(update->id()) : uses.end();
-        if (!update || use_it == uses.end() || use_it->second != 1) {
+        const size_t* use_p = update ? uses.find(update->id()) : nullptr;
+        if (!update || use_p == nullptr || *use_p != 1) {
           classifiable = false;
           break;
         }
