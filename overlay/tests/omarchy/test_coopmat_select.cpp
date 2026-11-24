@@ -82,6 +82,40 @@ TEST_CASE("no coopmat device advertises nothing") {
       adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
+TEST_CASE("RADV GFX1201 advertises the 16x16x16 bf16 route, not the 8x8x8 f32 one") {
+  // Shapes as measured by
+  // vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR on RADV GFX1201
+  // (Mesa 26.3.1): 16x16x16 subgroup shapes only, bf16 and fp16 A/B
+  // feeding fp32 accumulators, plus fp8/int8 entries that record as
+  // Other. No 8x8x8 and no fp32 A/B operands.
+  const std::vector<CoopmatShape> adv = {
+      {16u, 16u, 16u, CoopmatType::Float16, CoopmatType::Float16,
+       CoopmatType::Float16, CoopmatType::Float16, CoopmatScope::Subgroup,
+       false},
+      {16u, 16u, 16u, CoopmatType::Float16, CoopmatType::Float16,
+       CoopmatType::Float32, CoopmatType::Float32, CoopmatScope::Subgroup,
+       false},
+      {16u, 16u, 16u, CoopmatType::BFloat16, CoopmatType::BFloat16,
+       CoopmatType::BFloat16, CoopmatType::BFloat16, CoopmatScope::Subgroup,
+       false},
+      {16u, 16u, 16u, CoopmatType::BFloat16, CoopmatType::BFloat16,
+       CoopmatType::Float32, CoopmatType::Float32, CoopmatScope::Subgroup,
+       false},
+      {16u, 16u, 16u, CoopmatType::Other, CoopmatType::Other,
+       CoopmatType::Other, CoopmatType::Other, CoopmatScope::Subgroup,
+       false},
+  };
+  CHECK(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat16_bf16_shape()));
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape()));
+}
+
+TEST_CASE("the 8x8x8 devices do not match the 16x16x16 route") {
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      agx3b_shapes(), omarchy::qmm_prefill_coopmat16_bf16_shape()));
+}
+
 TEST_CASE("the match is exact in every field") {
   const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape();
 

@@ -1211,6 +1211,11 @@ enum class ComputeKernel : uint16_t {
   // (shaders/qmm_vec.comp, QMM_LANES=16; requiredSubgroupSize 16).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S16KCONTS16,
+  // bf16-operand 16x16x16 build for parts whose driver advertises only
+  // the WMMA-shaped bf16 x bf16 -> f32 subgroup shape (RADV RDNA3+;
+  // shaders/qmm_coopmat16_bf16.comp). Appended to keep profile kernel
+  // ids stable.
+  QmmPrefillCoopmat16BF16,
   Count,
 };
 
