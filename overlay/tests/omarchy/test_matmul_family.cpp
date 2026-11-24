@@ -7920,6 +7920,33 @@ TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
       512, std::numeric_limits<size_t>::max() / 2 + 1, 2));
 }
 
+// The Intel-shaped bf16 coopmat QMM prefill (QmmPrefillIntelBF16) is
+// default-on only for the Intel Arc parts it was measured on: Apple
+// and NVIDIA names keep the shipped default, so their dispatch paths
+// are unchanged; env=0 switches the route off, env=1 opts an
+// unmeasured part in. The kernel's shape/subgroup gate stays the real
+// dispatch bound regardless of the default.
+TEST_CASE("intel QMM prefill: the part and env rules") {
+  CHECK(omarchy::qmm_intel_default_part(
+      "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));
+  CHECK(omarchy::qmm_intel_default_part(
+      "Intel(R) Arc(tm) A770 Graphics (DG2)"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M5 Max (G17C B1)"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part(
+      "NVIDIA GeForce RTX 5060 Ti"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part("NVIDIA GeForce RTX 4090"));
+  CHECK_FALSE(omarchy::qmm_intel_default_part(""));
+  setenv("MLX_OMARCHY_QMM_INTEL", "0", 1);
+  CHECK_FALSE(omarchy::qmm_intel_default_part(
+      "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));
+  setenv("MLX_OMARCHY_QMM_INTEL", "1", 1);
+  CHECK(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
+  unsetenv("MLX_OMARCHY_QMM_INTEL");
+}
+
 // MLX_OMARCHY_QMM_BF16W=1 on a cooperative-matrix device: a bf16 4-bit
 // group-64 transposed product with enough rows is the affine Dequant kernel
 // to bf16 followed by the dense bf16 matmul, so it must equal that

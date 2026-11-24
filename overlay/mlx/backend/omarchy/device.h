@@ -821,6 +821,26 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   return device_name.find("G16S") != std::string::npos;
 }
 
+// Intel-shaped bf16 cooperative-matrix prefill (MLX_OMARCHY_QMM_INTEL
+// unset): kernel 659 (QmmPrefillIntelBF16, the 8x16x16
+// bf16 x bf16 -> f32 subgroup shape) replaces the FMA route by
+// default on the Intel Arc parts it was measured on; env=0 switches
+// off, env=1 opts an unmeasured part in. Only a device advertising
+// that exact shape can dispatch the kernel at all, so a wider
+// default cannot reroute anything that lacks it.
+//   BMG G21 (Intel Arc Pro B60 eGPU, ANV/xe driver), Qwen3-4B-4bit
+//   prefill on jw16: kernel time 1649.6 -> ~770 ms (2.10x); quiet-host
+//   5-pair ABBA wall +54% pp512, +94% pp2048, 5/5, PRED_SHA identical
+//   (PAR-28, PR #836).
+// Apple and NVIDIA parts keep the shipped default. Pure.
+inline bool qmm_intel_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_QMM_INTEL")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("Intel") != std::string::npos &&
+      device_name.find("Arc") != std::string::npos;
+}
+
 // Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T) default row cap per part.
 // G16S/G13C: 8 (measured ~3x at M=2..4 vs the coopmat tile). G13G: 8 —
 // the short-pass GEMV beat the shipped routes at every measured row
