@@ -13,10 +13,14 @@ op-coverage evidence for the milestone.
 """
 from __future__ import annotations
 
+import dataclasses
+import importlib
 import logging
 import math
 import operator
 import os
+import sys
+import types
 
 import numpy as np
 import torch
@@ -26,6 +30,103 @@ import torch._dynamo
 
 log = logging.getLogger("mlx_vulkan")
 _DBG_ENV = None
+
+# Cross-process cache: when the user opts in (MLX_VK_DISK_CACHE=1 -> dynamo
+# caching_precompile + save_cache_artifacts at exit), dynamo stores each frame's
+# CompilePackage under <inductor-cache>/dynamo keyed on the wrapped fn. A package
+# is only loadable if every __compiled_fn_<id> it references has a registered
+# BackendCacheArtifact - we serialize the traced GraphModule (all our executors
+# need) and rebuild the backend callable in after_deserialization, so a warm
+# process skips the whole dynamo trace AND our lowering walk before first call.
+try:
+    from torch._dynamo.precompile_context import (
+        BackendCacheArtifact as _BCA,
+        PrecompileContext as _PCtx,
+    )
+except Exception:  # older torch without the precompile API
+    _BCA = None
+    _PCtx = None
+
+if _BCA is not None:
+
+    @dataclasses.dataclass
+    class _MlxVkArtifact(_BCA):
+        def __getstate__(self):
+            # torch re-binds this artifact's backend as
+            # module.__dict__[backend_id] for the frame's recorded
+            # python_module - which comes from fn.__module__ and is spoofed by
+            # @functools.wraps wrappers (HF deprecate_kwarg): the compiled code
+            # then runs under the *wrapper* module's globals and LOAD_GLOBAL
+            # misses. At save time the name is bound in the real dicts, so
+            # snapshot those module names and restore them at load.
+            mods = [
+                m.__name__
+                for m in list(sys.modules.values())
+                if isinstance(getattr(m, "__dict__", None), dict)
+                and self.key in m.__dict__
+            ]
+            # The same spoofed __module__ makes torch install() plant the
+            # entry's other dynamo globals in the wrong dict; snapshot the
+            # module-valued ones (__import_* aliases, ___module_* handles)
+            # from the dicts that really ran the code.
+            imports = {}
+            for m in list(sys.modules.values()):
+                d = getattr(m, "__dict__", None)
+                if isinstance(d, dict) and self.key in d:
+                    for k, v in d.items():
+                        if isinstance(v, types.ModuleType) and (
+                                k.startswith("__import_")
+                                or k.startswith("___module_")):
+                            imports[k] = v.__name__
+            return {"key": self.key, "content": self.content, "mods": mods,
+                    "imports": imports}
+
+        def __setstate__(self, state):
+            self.key = state["key"]
+            self.content = state["content"]
+            self._mods = state.get("mods", [])
+            self._imports = state.get("imports", {})
+
+        def after_deserialization(self):
+            backend = _restore_backend(self.content)
+            for name in getattr(self, "_mods", ()):
+                mod = sys.modules.get(name)
+                if mod is not None:
+                    mod.__dict__[self.key] = backend
+                    for alias, modname in self._imports.items():
+                        if alias not in mod.__dict__:
+                            mod.__dict__[alias] = importlib.import_module(modname)
+            return backend
+
+
+def _restore_backend(gm):
+    return mlx_vulkan_backend(gm, [])
+
+
+def _record_artifact(gm):
+    if _PCtx is None:
+        return
+    bid = getattr(gm, "meta", {}).get("backend_id")
+    if not bid:
+        return
+    try:
+        _PCtx.record_artifact(_MlxVkArtifact(key=str(bid), content=gm))
+    except Exception as e:
+        log.debug("precompile artifact record failed: %s", e)
+
+
+if os.environ.get("MLX_VK_DISK_CACHE") and _PCtx is not None:
+    torch._dynamo.config.caching_precompile = True
+
+    import atexit
+
+    def _save_artifacts():
+        try:
+            torch.compiler.save_cache_artifacts()
+        except Exception as e:
+            log.debug("cache artifact save failed: %s", e)
+
+    atexit.register(_save_artifacts)
 
 # ---------------- conversions ----------------
 
@@ -1078,6 +1179,7 @@ def _eager_run(gm):
 def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
     if os.environ.get("MLX_VK_EAGER"):
         return _eager_run(gm)
+    _record_artifact(gm)
     try:
         run_c = make_compiled_executor(gm, dt=_dt)
     except Exception as e:
