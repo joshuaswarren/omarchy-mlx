@@ -1428,6 +1428,7 @@ _FUNC_SPECS = {
     "bitwise_or": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "bitwise_xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
+    "bitwise_and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
     "or_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
@@ -1758,7 +1759,7 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
-            if (name == "mul_" and node.op in ("call_function", "call_method")
+            if (name in ("mul_", "bitwise_and_") and node.op in ("call_function", "call_method")
                     and isinstance(node.args[0], torch.fx.Node)):
                 env[node.args[0]] = val
             if _DBG_ENV is not None:
@@ -2192,7 +2193,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # cache placeholders only count as mutated state when the graph actually
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
-    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_")
+    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_")
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
             and getattr(n.args[0], "op", None)
@@ -2339,6 +2340,14 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name == "mul_":
                 upd = env[n.args[0]] * args[1]
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name == "bitwise_and_":
+                upd = _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
