@@ -43,6 +43,9 @@ def main():
 
     expect = [2.5, -5.0, 7.5]
     got_list = out.tolist() if hasattr(out, "tolist") else list(out)
+    wrapped = zt.tolist() if hasattr(zt, "tolist") else zt
+    ok = got_list == expect and abs(float(scalar) - 2.5) < 1e-9 \
+        and abs(float(wrapped) - 2.5) < 1e-9
     # PT-AF review round 2: native scalar types (torch .item() keeps int/bool)
     # and the non-0-dim Float.Tensor cast (int64 -> fp32, torch .float()
     # semantics) that previously slipped through uncast.
