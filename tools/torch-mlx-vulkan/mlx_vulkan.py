@@ -909,6 +909,19 @@ def _bn_legit_functional(x, w, b, rm, rv, training, momentum, eps):
         new_rm, new_rv = rmx, rvx
     return out, sm, si, new_rm, new_rv
 
+
+def _select_backward(g, sizes, dim, index):
+    """aten.select_backward: grad scattered into zeros shaped like the input."""
+    g = _mx(g)
+    sizes = [int(s) for s in sizes]
+    dim = int(dim) % len(sizes)
+    index = int(index) % sizes[dim]
+    shape = [1] * len(sizes)
+    shape[dim] = sizes[dim]
+    mask = (mx.arange(sizes[dim]) == index).reshape(shape)
+    return mx.where(mask, mx.expand_dims(g, dim), mx.zeros((), dtype=g.dtype))
+
+
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
     """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask."""
     dy, x = _mx(dy), _mx(x)
@@ -1020,6 +1033,8 @@ _FUNC_SPECS = {
     "convolution_backward": _convolution_backward,
     "t": _wt,
     "threshold_backward": lambda g, x, t=0.0: mx.where(mx.greater(_mx(x), t), _mx(g), mx.zeros_like(_mx(g))),
+    "select_backward": _select_backward,
+    "tanh_backward": lambda g, out: _mx(g) * (1.0 - _mx(out) * _mx(out)),
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
     "_log_softmax": lambda a, dim, half_to_float=False: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
