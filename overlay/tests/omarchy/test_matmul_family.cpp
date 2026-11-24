@@ -6073,6 +6073,136 @@ TEST_CASE("qmm coopmat prefill matches host reference at Qwen shapes") {
   }
 }
 
+// NEON M3 bisect (Aurora seq 3348): the coopmat A-tile coopMatLoad
+// covers 8 whole rows, so a workgroup on the ragged edge of a
+// 23-token (M % 32 != 0) prefill read past input_x and the driver
+// raised event 4 / EIO; the aligned 33-token prompt passed. The
+// kernel now stages an edge tile's A blocks through shared memory
+// with per-element row guards. These cases run both dtype routes at
+// m values straddling the 8-row matrix block and the 32-row tile -
+// including m < 8, where no in-bounds 8-row load exists at all - and
+// hold each to the same host bound as the aligned cases while the
+// non-coopmat baseline anchors the comparison.
+TEST_CASE("qmm coopmat prefill keeps ragged m tails in bounds") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_device =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32 &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape());
+  std::cout << "[provenance] cooperative_matrix_f32_8="
+            << (caps.cooperative_matrix_f32_8 ? 1 : 0)
+            << " subgroup_size=" << caps.subgroup_size
+            << " -> ragged-m prefill runs "
+            << (coopmat_device ? "QmmPrefillCoopmat*" : "QmmTile*/Qmm*")
+            << "\n";
+
+  constexpr int group_size = 64;
+  constexpr int bits = 4;
+  constexpr int k = 2048;
+  constexpr int n = 512;
+  const int words_per_row = k / (32 / bits);
+  const int groups_per_row = k / group_size;
+  std::mt19937 gen(20261124);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& value : matrix) {
+    value = dist(gen);
+  }
+  HostQuantizedWeights weights =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+
+  for (auto dtype : {bfloat16, float16}) {
+    if (dtype == float16 && !float16_available()) {
+      continue;
+    }
+    HostQuantizedWeights rounded = weights;
+    rounded.scales = round_trip(stream, weights.scales, dtype);
+    rounded.biases = round_trip(stream, weights.biases, dtype);
+    array w_words(
+        weights.words.begin(), Shape{n, words_per_row}, uint32);
+    array scales(
+        rounded.scales.begin(), Shape{n, groups_per_row}, dtype);
+    array biases(
+        rounded.biases.begin(), Shape{n, groups_per_row}, dtype);
+    const int mantissa = dtype == float16 ? 10 : 7;
+
+    // m < 8 can never feed an 8-row A load; 23 reproduces the M3
+    // bisect prompt; 33 and 40 cross the 32-row tile mid-block.
+    for (int m : {7, 23, 33, 40}) {
+      std::vector<float> x_values(static_cast<size_t>(m) * k);
+      for (auto& value : x_values) {
+        value = dist(gen);
+      }
+      x_values = round_trip(stream, x_values, dtype);
+      const std::vector<float> expected = host_quantized_matmul(
+          rounded, x_values, m, n, k, group_size, bits);
+      array x(x_values.begin(), Shape{m, k}, dtype);
+
+      QmmTileGate gate(true, true);
+      array out_coop = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      INFO("ragged m=", m, " dtype=", dtype);
+      const auto error = evaluation_error(out_coop);
+      REQUIRE_MESSAGE(error.empty(), error);
+      const std::vector<float> coop_v = readback_f32(stream, out_coop);
+
+      gate.set(false);
+      array out_base = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      const std::vector<float> base_v = readback_f32(stream, out_base);
+
+      double max_abs = 1.0;
+      for (size_t index = 0; index < expected.size(); ++index) {
+        REQUIRE(std::isfinite(coop_v[index]));
+        REQUIRE(std::isfinite(base_v[index]));
+        max_abs = std::max(
+            {max_abs, std::fabs(static_cast<double>(coop_v[index])),
+             std::fabs(static_cast<double>(base_v[index])),
+             std::fabs(static_cast<double>(expected[index]))});
+      }
+      const double bound =
+          (3.0 * k + 1.0) * (2.0 * max_abs) * std::ldexp(1.0, -23) +
+          (2.0 * max_abs) * std::ldexp(1.0, -(mantissa + 1));
+      double coop_diff = 0.0;
+      double base_diff = 0.0;
+      for (size_t index = 0; index < expected.size(); ++index) {
+        coop_diff = std::max(
+            coop_diff, std::fabs(
+                           static_cast<double>(coop_v[index]) -
+                           expected[index]));
+        base_diff = std::max(
+            base_diff, std::fabs(
+                           static_cast<double>(base_v[index]) -
+                           expected[index]));
+      }
+      INFO("m=" << m << " dtype=" << dtype << " coop_diff=" << coop_diff
+           << " base_diff=" << base_diff << " bound=" << bound);
+      CHECK(coop_diff <= bound);
+      CHECK(base_diff <= bound);
+      if (coopmat_device) {
+        // The whole point of the case: the coopmat arm must produce
+        // the same in-bounds output as the scalar baseline.
+        double arm_diff = 0.0;
+        for (size_t index = 0; index < expected.size(); ++index) {
+          arm_diff = std::max(
+              arm_diff, std::fabs(
+                            static_cast<double>(coop_v[index]) -
+                            base_v[index]));
+        }
+        INFO("m=" << m << " arm_diff=" << arm_diff);
+        CHECK(arm_diff <= 2.0 * bound);
+      }
+    }
+  }
+}
+
 // The coopmat gate used to reroute a row-contiguous x view at an odd
 // f16-element offset to the register-blocked tile kernel, whose different
 // accumulation order silently changes generated tokens under allocator

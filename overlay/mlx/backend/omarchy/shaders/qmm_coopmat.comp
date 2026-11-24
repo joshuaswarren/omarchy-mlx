@@ -265,6 +265,14 @@ layout(push_constant) uniform Params {
 // QMM_W_STRIDE in every build.
 #ifdef X_BF16
 shared float x_s[TILE_M * STEP_K];
+#else
+// Tail-tile A staging (r m tail): a coopMatLoad covers 8 whole rows, so
+// an edge tile cannot load straight from input_x without reading past
+// the buffer. The tail workgroup stages every 8x8 A block of its
+// (step, ks) tile here through guarded per-element stores - zeros past
+// matrix_m, whose accumulators are never stored. ROW_BLOCKS*64 f32:
+// 1 KiB at TILE_M=32, at most 2 KiB at TILE_M=64.
+shared float a_s[ROW_BLOCKS * MAT * MAT];
 #endif
 shared float w_s[QMM_W_ROWS * QMM_W_STRIDE];
 
@@ -276,6 +284,26 @@ uint g_wpart;
 uint g_k_chunks;
 uint g_words_per_row;
 uint g_groups_per_row;
+
+#ifndef X_BF16
+// Stage this tile's 8-row A blocks for one 8-column k slice into a_s,
+// zero-filling rows past matrix_m. Called only on a tail tile, where
+// the direct coopMatLoad of a block could pass the buffer end; the
+// caller barriers before the staged loads and before the next stage.
+// Element type follows the build (f16 widened or pre-widened f32);
+// either reads exactly the value the direct load would produce.
+void a_stage_tail(uint row_base, uint x_slice, uint k_col) {
+  for (uint idx = g_lid; idx < ROW_BLOCKS * MAT * MAT;
+       idx += gl_WorkGroupSize.x) {
+    const uint grow =
+        row_base + (idx / (MAT * MAT)) * MAT + (idx / MAT) % MAT;
+    a_s[idx] = grow < params.matrix_m
+        ? float(input_x.values[x_slice + grow * params.matrix_k +
+                               k_col + idx % MAT])
+        : 0.0f;
+  }
+}
+#endif
 
 // One (row tile, column tile) output block: the shipped kernel's body
 // unchanged. Raster and persistent mappings only choose which tiles a
@@ -305,6 +333,13 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #endif
   uint out_slice = params.output_offset +
       b * params.matrix_m * params.matrix_n;
+#ifndef X_BF16
+  // Edge tile: any 8-row A block of this tile can reach past input_x,
+  // so the whole tile stages A through a_s (uniform across the
+  // workgroup - the barriers below stay legal). Interior tiles keep
+  // the direct coopMatLoad and never touch a_s.
+  const bool tile_tail = row_base + TILE_M > params.matrix_m;
+#endif
   uint column = tile_col * TILE_N + g_wcol;
 #ifdef FULL_N
   // Every column tile is full (matrix_n % 32 == 0, checked on the host):
@@ -368,16 +403,23 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       for (uint ks = 0u; ks < STEP_K / MAT; ++ks) {
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
+        if (tile_tail) {
+          a_stage_tail(row_base, x_slice, k_base + ks * MAT);
+          barrier();
+        }
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
-          // Rows past matrix_m are never stored, but the load must
-          // stay in bounds: clamp to the last real row.
-          uint row = row_base + (g_sub_rb + rb) * MAT;
-          row = min(row, params.matrix_m - 1u);
-          coopMatLoad(
-              mat_a[rb], input_x.values,
-              x_slice + row * params.matrix_k + k_base + ks * MAT,
-              params.matrix_k,
-              gl_CooperativeMatrixLayoutRowMajor);
+          if (tile_tail) {
+            coopMatLoad(
+                mat_a[rb], a_s, (g_sub_rb + rb) * MAT * MAT, MAT,
+                gl_CooperativeMatrixLayoutRowMajor);
+          } else {
+            coopMatLoad(
+                mat_a[rb], input_x.values,
+                x_slice + (row_base + (g_sub_rb + rb) * MAT) *
+                    params.matrix_k + k_base + ks * MAT,
+                params.matrix_k,
+                gl_CooperativeMatrixLayoutRowMajor);
+          }
         }
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
         uint k_row = step * STEP_K + ks * MAT;
@@ -391,6 +433,9 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
             acc[rb][cb] =
                 coopMatMulAdd(mat_a[rb], mat_b[cb], acc[rb][cb]);
           }
+        }
+        if (tile_tail) {
+          barrier();
         }
       }
     }
@@ -536,27 +581,39 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
               gl_CooperativeMatrixLayoutRowMajor);
         }
 #else
+        if (tile_tail) {
+          a_stage_tail(row_base, x_slice, k_base + ks * MAT);
+          barrier();
+        }
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
-          // Rows past matrix_m are never stored, but the load must
-          // stay in bounds: clamp to the last real row.
-          uint row = row_base + (g_sub_rb + rb) * MAT;
-          row = min(row, params.matrix_m - 1u);
+          if (tile_tail) {
+            coopMatLoad(
+                mat_a[rb], a_s, (g_sub_rb + rb) * MAT * MAT, MAT,
+                gl_CooperativeMatrixLayoutRowMajor);
+          } else {
 #ifdef X_F32
-          coopMatLoad(
-              mat_a[rb], input_x.values,
-              x_slice + row * params.matrix_k + k_base + ks * MAT,
-              params.matrix_k,
-              gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(
+                mat_a[rb], input_x.values,
+                x_slice + (row_base + (g_sub_rb + rb) * MAT) *
+                    params.matrix_k + k_base + ks * MAT,
+                params.matrix_k,
+                gl_CooperativeMatrixLayoutRowMajor);
 #else
-          coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> a16;
-          coopMatLoad(
-              a16, input_x.values,
-              x_slice + row * params.matrix_k + k_base + ks * MAT,
-              params.matrix_k,
-              gl_CooperativeMatrixLayoutRowMajor);
-          mat_a[rb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
-                              gl_MatrixUseA>(a16);
+            coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT,
+                gl_MatrixUseA> a16;
+            coopMatLoad(
+                a16, input_x.values,
+                x_slice + (row_base + (g_sub_rb + rb) * MAT) *
+                    params.matrix_k + k_base + ks * MAT,
+                params.matrix_k,
+                gl_CooperativeMatrixLayoutRowMajor);
+            mat_a[rb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+                                gl_MatrixUseA>(a16);
 #endif
+          }
+        }
+        if (tile_tail) {
+          barrier();
         }
 #endif
         for (uint cb = 0u; cb < 4u; ++cb) {
@@ -651,6 +708,8 @@ void qmm_tile_two(uint tile_row, uint tile_col, uint b) {
   uint x_slice = params.lhs_offset / 2u + b * x_batch_rows;
   uint out_slice = params.output_offset +
       b * params.matrix_m * params.matrix_n;
+  // Same tail-tile staging contract as qmm_tile.
+  const bool tile_tail = row_base + TILE_M > params.matrix_m;
   uint column0 = tile_col * TILE_N + g_wcol;
   uint column1 = column0 + TILE_N;
   uint w_row0 = w_slice + column0 * g_words_per_row;
@@ -721,16 +780,26 @@ void qmm_tile_two(uint tile_row, uint tile_col, uint b) {
       for (uint ks = 0u; ks < STEP_K / MAT; ++ks) {
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
+        if (tile_tail) {
+          a_stage_tail(row_base, x_slice, k_base + ks * MAT);
+          barrier();
+        }
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
-          // Rows past matrix_m are never stored, but the load must
-          // stay in bounds: clamp to the last real row.
-          uint row = row_base + (g_sub_rb + rb) * MAT;
-          row = min(row, params.matrix_m - 1u);
-          coopMatLoad(
-              mat_a[rb], input_x.values,
-              x_slice + row * params.matrix_k + k_base + ks * MAT,
-              params.matrix_k,
-              gl_CooperativeMatrixLayoutRowMajor);
+          if (tile_tail) {
+            coopMatLoad(
+                mat_a[rb], a_s, (g_sub_rb + rb) * MAT * MAT, MAT,
+                gl_CooperativeMatrixLayoutRowMajor);
+          } else {
+            coopMatLoad(
+                mat_a[rb], input_x.values,
+                x_slice + (row_base + (g_sub_rb + rb) * MAT) *
+                    params.matrix_k + k_base + ks * MAT,
+                params.matrix_k,
+                gl_CooperativeMatrixLayoutRowMajor);
+          }
+        }
+        if (tile_tail) {
+          barrier();
         }
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
         for (uint cb = 0u; cb < 4u; ++cb) {
