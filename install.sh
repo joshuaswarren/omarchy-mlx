@@ -662,6 +662,10 @@ printf '%s' "$TAG_LISTING" | grep -qF '"truncated":false' \
 printf '%s' "$TAG_LISTING" | grep -qF '"path":"serve/mlx_omarchy_assistant/__init__.py"' \
   || die "$VERSION does not contain serve/mlx_omarchy_assistant; this installer requires the assistant package at the resolved tag"
 in_tag_tree() { printf '%s' "$TAG_LISTING" | grep -qF "\"path\":\"$1\""; }
+# Uniform skip note for a listed file absent at the tag; the flag feeds the
+# one remediation hint printed after the last package loop.
+TAG_SKIP_SEEN=
+note_tag_skip() { say "note: $1 not in $VERSION (added after the tag); skipped"; TAG_SKIP_SEEN=1; }
 # Shared name module first: venv discovery and the install name table,
 # imported by the serve CLI, the assistant, and the retire tooling.
 curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_paths.py" \
@@ -674,7 +678,7 @@ for serve_file in __init__.py catalog.py budget.py perf_placement.py export_fit_
       -o "$SERVE_PKG/$serve_file"
   else
     rm -f "$SERVE_PKG/$serve_file"
-    say "note: serve/mlx_omarchy_serve/$serve_file not in $VERSION (added after the tag); skipped"
+    note_tag_skip "serve/mlx_omarchy_serve/$serve_file"
   fi
 done
 # Laya typed-decisions server (serve/mlx_omarchy_laya/), same release tag;
@@ -687,7 +691,7 @@ for laya_file in __init__.py model.py sequence.py api.py server.py convert.py qu
       -o "$LAYA_PKG/$laya_file"
   else
     rm -f "$LAYA_PKG/$laya_file"
-    say "note: serve/mlx_omarchy_laya/$laya_file not in $VERSION (added after the tag); skipped"
+    note_tag_skip "serve/mlx_omarchy_laya/$laya_file"
   fi
 done
 # Bonsai2 packed-runtime server (serve/mlx_omarchy_bonsai2/), same release
@@ -700,7 +704,7 @@ for bonsai2_file in __init__.py packed.py loader.py server.py; do
       -o "$BONSAI2_PKG/$bonsai2_file"
   else
     rm -f "$BONSAI2_PKG/$bonsai2_file"
-    say "note: serve/mlx_omarchy_bonsai2/$bonsai2_file not in $VERSION (added after the tag); skipped"
+    note_tag_skip "serve/mlx_omarchy_bonsai2/$bonsai2_file"
   fi
 done
 cat >"$BIN/mlx-omarchy-serve" <<EOF
@@ -762,7 +766,7 @@ for assistant_file in __init__.py __main__.py card_promotion.py routing.py coord
       -o "$ASSISTANT_PKG/$assistant_file"
   else
     rm -f "$ASSISTANT_PKG/$assistant_file"
-    say "note: $assistant_file not in $VERSION (added after the tag); skipped"
+    note_tag_skip "$assistant_file"
   fi
 done
 
@@ -793,9 +797,11 @@ for assistant_static in index.html css/app.css js/api.js js/app.js js/chat.js js
       -o "$ASSISTANT_PKG/static/$assistant_static"
   else
     rm -f "$ASSISTANT_PKG/static/$assistant_static"
-    say "note: static/$assistant_static not in $VERSION (added after the tag); skipped"
+    note_tag_skip "static/$assistant_static"
   fi
 done
+[ -z "$TAG_SKIP_SEEN" ] || \
+  say "note: files skipped above were merged after $VERSION; they land in the next release tag — re-run this installer then to fetch them (a feature needing one stays off until then)"
 
 # Desktop entry: MLX Chat opens the same loopback web application the
 # launcher starts — no terminal wrapper, no model dialog. The coordinator
