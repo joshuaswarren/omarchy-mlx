@@ -10267,21 +10267,38 @@ bool dispatch_quantized_gemv_group(
     }
   }
   bool res_norm_active = false;
-  if (res_norm != nullptr && !token_route && !swiglu_out &&
+  // The residual+norm epilogue rides the token column too: rows 2..4
+  // dispatch the single-member group on the token4+resnorm kernel,
+  // whose last workgroup norms every live row of the materialized sum
+  // (bit-identical to the eager 256-thread-per-row norm). The group's
+  // norm output is then (rows, n), not a flat n vector.
+  const bool res_norm_token = token_route && rows <= 4u;
+  if (res_norm != nullptr && (!token_route || res_norm_token) &&
+      !swiglu_out &&
       members.size() == 1 && members[0].epilogue.has_value() &&
       members[0].addend.has_value() && !members[0].sum_window &&
       dtype == bfloat16 && subgroup_ready &&
       members[0].node.inputs().size() == 4) {
     const array& w = members[0].node.inputs()[1];
     const int n_cand = w.ndim() == 2 ? w.shape(0) : 0;
-    const size_t min_bindings = outgate != nullptr ? 13u : 10u;
+    const size_t expected_out =
+        static_cast<size_t>(token_route ? rows : 1u) *
+        static_cast<size_t>(n_cand);
+    const size_t min_bindings = outgate != nullptr ? 13u
+        : token_route                            ? 28u
+                                                 : 10u;
     if (n_cand > 0 &&
         encoder.device().compute().binding_limit() >= min_bindings &&
         apple_norm_enabled(
-            encoder.device(), static_cast<size_t>(n_cand), size_t{1}) &&
+            encoder.device(),
+            static_cast<size_t>(n_cand),
+            static_cast<size_t>(token_route ? rows : 1u)) &&
         res_norm->out.dtype() == bfloat16 &&
-        res_norm->out.size() == static_cast<size_t>(n_cand) &&
+        res_norm->out.size() == expected_out &&
         res_norm->out.ndim() >= 1 && res_norm->out.shape(-1) == n_cand &&
+        (!token_route || (res_norm->out.ndim() >= 2 &&
+                          res_norm->out.shape(-2) ==
+                              static_cast<int>(rows))) &&
         res_norm->out.primitive().stream() == stream &&
         res_norm->out.data_shared_ptr() == nullptr) {
       const array& nw = res_norm->weight;
@@ -10298,7 +10315,7 @@ bool dispatch_quantized_gemv_group(
   // to the bf16 subgroup single-token multi kernel only (or 2x16 / 2x8 for
   // the fused resnorm epilogue kernels).
   const uint32_t group_columns = res_norm_active
-      ? (outgate != nullptr ? 16u : 32u)
+      ? (token_route ? 8u : (outgate != nullptr ? 16u : 32u))
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
              ? qmm_geometry().columns
@@ -10561,6 +10578,34 @@ bool dispatch_quantized_gemv_group(
           binding(outgate->x)};
       encoder.dispatch_compute(
           ComputeKernel::QmmVecQ4OutgateResNormBF16,
+          rn_bindings,
+          params,
+          total_groups,
+          1u,
+          1u);
+    } else if (token_route) {
+      // Token column resnorm: the multi binding layout (x + four
+      // weight slots, unused slots filler-bound like the plain group
+      // dispatch) with the norm weight/output and the ticket on the
+      // free slots above binding 24.
+      std::array<ComputeBinding, kQmmVecMultiBindings + 3> rn_bindings{};
+      rn_bindings[0] = binding(x);
+      rn_bindings[1] = binding(members[0].node.inputs()[1]);
+      rn_bindings[2] = binding(members[0].node.inputs()[2]);
+      rn_bindings[3] = binding(members[0].node.inputs()[3]);
+      rn_bindings[4] = binding(members[0].node);
+      rn_bindings[5] = binding(*members[0].addend);
+      rn_bindings[6] = binding(*members[0].epilogue);
+      const ComputeBinding rn_filler = binding(members[0].node);
+      for (uint32_t b = 7u; b < kQmmVecMultiBindings; ++b) {
+        rn_bindings[b] = rn_filler;
+      }
+      rn_bindings[kQmmVecMultiBindings] = binding(res_norm->weight);
+      rn_bindings[kQmmVecMultiBindings + 1] = binding(res_norm->out);
+      rn_bindings[kQmmVecMultiBindings + 2] =
+          encoder.resnorm_ticket_binding();
+      encoder.dispatch_compute(
+          ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16,
           rn_bindings,
           params,
           total_groups,

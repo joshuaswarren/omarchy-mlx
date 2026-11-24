@@ -1932,8 +1932,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         const array& qmm = group.members[0].node;
         const array& add = *group.members[0].epilogue;
+        // Rows 1 folds on the single-row resnorm kernel; rows 2..4 on
+        // the token4+resnorm variant (dispatch re-verifies the full
+        // contract and falls back eager when it cannot run).
         if (qmm.dtype() != bfloat16 || qmm.inputs()[0].ndim() < 2 ||
-            qmm.inputs()[0].shape(-2) != 1) {
+            qmm.inputs()[0].shape(-2) > 4) {
           continue;
         }
         auto it = res_norms_by_in.find(add.id());

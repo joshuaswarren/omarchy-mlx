@@ -431,6 +431,12 @@ omarchy_shader(qmm_vec_q4_multi_token16_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 # pass, rows 9..16 run two (the token16 unroll miscompiles on AGX).
 omarchy_shader(qmm_vec_q4_multi_token8_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
 omarchy_shader(qmm_vec_q4_multi_token8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
+# Token4 + residual-norm epilogue: the token column's single-member
+# group carries sum0 materialized and the last finishing workgroup
+# norms every live token row (bit-identical to the eager
+# 256-thread-per-row Apple norm via a two-virtual-lane emulation on the
+# 128-thread workgroup). Bindings 25..27 ride above the weight slots.
+omarchy_shader(qmm_vec_q4_multi_token4_resnorm_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_RESNORM=1)
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)

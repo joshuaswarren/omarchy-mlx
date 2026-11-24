@@ -1922,6 +1922,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           qmm_vec_q4_multi_token8_subgroup_bf16_size};
     case ComputeKernel::QmmVecQ4MultiToken8BF16:
       return {qmm_vec_q4_multi_token8_bf16, qmm_vec_q4_multi_token8_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16,
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16_size};
     case ComputeKernel::SdpaDecodeNativeF16:
       return {sdpa_decode_native_f16, sdpa_decode_native_f16_size};
     case ComputeKernel::SdpaDecodeNativeBF16:

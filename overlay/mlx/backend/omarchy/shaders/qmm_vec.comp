@@ -93,13 +93,19 @@ uint16_t bf16_store(float value) {
      (!defined(QMM_VEC_MULTI) && !defined(QMM_VEC_RESNORM)))
 #error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi or resnorm column"
 #endif
-#if defined(QMM_VEC_RESNORM) && \
+#if defined(QMM_VEC_RESNORM) && !defined(QMM_VEC_TOKENS) && \
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
      !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_MULTI) || \
      defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
-     defined(QMM_VEC_TOKENS) || defined(QMM_VEC_GREEDY) || \
+     defined(QMM_VEC_GREEDY) || \
      ROWS_PER_SLOT != 2 || SLOTS_PER_GROUP < 8)
 #error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row >=8-slot single weight"
+#endif
+#if defined(QMM_VEC_RESNORM) && defined(QMM_VEC_TOKENS) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     !defined(QMM_VEC_Q4_WORD) || !defined(QMM_VEC_MULTI) || \
+     !defined(M_TOKENS))
+#error "QMM_VEC_RESNORM on the token column builds on the bf16 subgroup multi-token variant"
 #endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
@@ -201,6 +207,15 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // the member's output store lands at out_strides[i] + column inside a
 // whole parent buffer the member's binding aliases; unflagged members
 // store at column exactly as before.
+// The token-route residual+norm epilogue reads Sum0 back inside the same
+// dispatch (the last finishing workgroup norms the materialized sum), so
+// that variant upgrades every Sum slot to coherent; all other multi
+// builds keep the writeonly store contract.
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_RESNORM)
+#define QMM_VEC_SUM_ACCESS coherent
+#else
+#define QMM_VEC_SUM_ACCESS writeonly
+#endif
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   WVEC_T values[]; \
@@ -217,13 +232,29 @@ layout(set = 0, binding = B + 3, std430) writeonly buffer Output##I { \
 layout(set = 0, binding = B + 4, std430) readonly buffer Addend##I { \
   STORAGE_TYPE values[]; \
 } addend##I; \
-layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
+layout(set = 0, binding = B + 5, std430) QMM_VEC_SUM_ACCESS buffer Sum##I { \
   STORAGE_TYPE values[]; \
 } sum##I;
 QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_RESNORM)
+// Token residual+norm epilogue: single-member groups only (weights 1..3
+// stay filler-bound), so the norm weight/output and the last-workgroup
+// ticket ride the free slots above binding 24.
+layout(set = 0, binding = 25, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 26, std430) writeonly buffer NormOutput {
+  STORAGE_TYPE values[];
+} norm_output;
+layout(set = 0, binding = 27, std430) coherent buffer Ticket {
+  uint done;
+} ticket;
+shared uint s_resnorm_is_last;
+shared float s_resnorm_partial[8u];
+#endif
 #if defined(QMM_VEC_OUTGATE)
 // Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
 // exact arithmetic and rounding of the two elementwise kernels the
@@ -1144,6 +1175,185 @@ void main() {
       }
     }
   }
+#if defined(QMM_VEC_RESNORM)
+  // Residual+norm epilogue on the token column: the same last-workgroup
+  // Apple RMSNorm the single-row variant runs, once per live token row
+  // of sum0 (single-member groups only, so the norm row length is n0).
+  // The 128-thread workgroup emulates the 256-thread tree exactly: real
+  // lane l covers virtual lanes l and l+128, each subgroup's hardware
+  // reduction sees the identical operand order the 256-thread kernel
+  // gives that virtual subgroup (v-subgroups 0..3 on pass A, 4..7 on
+  // pass B), and the combine consumes the same eight partials. Per-row
+  // bits therefore match the eager 256-thread-per-row kernel exactly.
+  barrier();
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    uint prev = atomicAdd(ticket.done, 1u);
+    s_resnorm_is_last = (prev == gl_NumWorkGroups.x - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_resnorm_is_last == 0u) {
+    return;
+  }
+  if (lane == 0u) {
+    ticket.done = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  {
+    uint sub_id = lane / LANES;
+    uint sub_lane = lane % LANES;
+    uint row_length = n0;
+    float eps = params.alpha;
+    uint n_reads = row_length / 256u;
+    bool reg_path =
+        (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+    for (uint m = 0u; m < token_count; ++m) {
+      uint row_off = (row0 + m) * n0;
+      float reg_x0[16u];
+      float reg_x1[16u];
+      precise float reg_sq0 = 0.0;
+      precise float reg_sq1 = 0.0;
+      if (reg_path) {
+        uint base0 = lane * n_reads;
+        uint base1 = (lane + 128u) * n_reads;
+        for (uint i = 0u; i < 8u; ++i) {
+          reg_x0[i] = LOAD_VALUE(sum0.values[row_off + base0 + i]);
+          reg_sq0 += reg_x0[i] * reg_x0[i];
+          reg_x1[i] = LOAD_VALUE(sum0.values[row_off + base1 + i]);
+          reg_sq1 += reg_x1[i] * reg_x1[i];
+        }
+        if (n_reads == 10u) {
+          for (uint i = 8u; i < 10u; ++i) {
+            reg_x0[i] = LOAD_VALUE(sum0.values[row_off + base0 + i]);
+            reg_sq0 += reg_x0[i] * reg_x0[i];
+            reg_x1[i] = LOAD_VALUE(sum0.values[row_off + base1 + i]);
+            reg_sq1 += reg_x1[i] * reg_x1[i];
+          }
+        } else if (n_reads == 16u) {
+          for (uint i = 8u; i < 16u; ++i) {
+            reg_x0[i] = LOAD_VALUE(sum0.values[row_off + base0 + i]);
+            reg_sq0 += reg_x0[i] * reg_x0[i];
+            reg_x1[i] = LOAD_VALUE(sum0.values[row_off + base1 + i]);
+            reg_sq1 += reg_x1[i] * reg_x1[i];
+          }
+        }
+      } else {
+        for (uint index = lane; index < row_length; index += 256u) {
+          reg_sq0 += LOAD_VALUE(sum0.values[row_off + index]) *
+                     LOAD_VALUE(sum0.values[row_off + index]);
+        }
+        for (uint index = lane + 128u; index < row_length; index += 256u) {
+          reg_sq1 += LOAD_VALUE(sum0.values[row_off + index]) *
+                     LOAD_VALUE(sum0.values[row_off + index]);
+        }
+      }
+      float sub_partial0 = subgroupAdd(reg_sq0);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id] = sub_partial0;
+      }
+      barrier();
+      float sub_partial1 = subgroupAdd(reg_sq1);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id + 4u] = sub_partial1;
+      }
+      barrier();
+      if (sub_id == 0u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[0] = total_sq;
+        }
+      }
+      barrier();
+      float mean_square = s_resnorm_partial[0] / float(row_length);
+      float norm = inversesqrt(mean_square + eps);
+      if (reg_path) {
+        uint base0 = lane * n_reads;
+        uint base1 = (lane + 128u) * n_reads;
+        for (uint i = 0u; i < 8u; ++i) {
+          uint index0 = base0 + i;
+          uint index1 = base1 + i;
+          float weight0 =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index0]);
+          float weight1 =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index1]);
+          precise float norm_weight_v0 = norm * weight0;
+          precise float norm_weight_v1 = norm * weight1;
+          precise float result0 = reg_x0[i] * norm_weight_v0;
+          precise float result1 = reg_x1[i] * norm_weight_v1;
+          norm_output.values[row_off + index0] = STORE_VALUE(result0);
+          norm_output.values[row_off + index1] = STORE_VALUE(result1);
+        }
+        if (n_reads == 10u) {
+          for (uint i = 8u; i < 10u; ++i) {
+            uint index0 = base0 + i;
+            uint index1 = base1 + i;
+            float weight0 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index0]);
+            float weight1 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index1]);
+            precise float norm_weight_v0 = norm * weight0;
+            precise float norm_weight_v1 = norm * weight1;
+            precise float result0 = reg_x0[i] * norm_weight_v0;
+            precise float result1 = reg_x1[i] * norm_weight_v1;
+            norm_output.values[row_off + index0] = STORE_VALUE(result0);
+            norm_output.values[row_off + index1] = STORE_VALUE(result1);
+          }
+        } else if (n_reads == 16u) {
+          for (uint i = 8u; i < 16u; ++i) {
+            uint index0 = base0 + i;
+            uint index1 = base1 + i;
+            float weight0 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index0]);
+            float weight1 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index1]);
+            precise float norm_weight_v0 = norm * weight0;
+            precise float norm_weight_v1 = norm * weight1;
+            precise float result0 = reg_x0[i] * norm_weight_v0;
+            precise float result1 = reg_x1[i] * norm_weight_v1;
+            norm_output.values[row_off + index0] = STORE_VALUE(result0);
+            norm_output.values[row_off + index1] = STORE_VALUE(result1);
+          }
+        }
+      } else {
+        for (uint index = lane; index < row_length; index += 256u) {
+          float value = LOAD_VALUE(sum0.values[row_off + index]);
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+          precise float norm_weight_v = norm * weight;
+          precise float result = value * norm_weight_v;
+          norm_output.values[row_off + index] = STORE_VALUE(result);
+        }
+        for (uint index = lane + 128u; index < row_length; index += 256u) {
+          float value = LOAD_VALUE(sum0.values[row_off + index]);
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+          precise float norm_weight_v = norm * weight;
+          precise float result = value * norm_weight_v;
+          norm_output.values[row_off + index] = STORE_VALUE(result);
+        }
+      }
+      barrier();
+    }
+  }
+#endif
 }
 #elif ROWS_PER_SLOT > 1
 // Multi-row main: same workgroup -> weight partition and fold contract as

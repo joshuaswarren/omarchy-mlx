@@ -1211,6 +1211,11 @@ enum class ComputeKernel : uint16_t {
   // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
   // element type. Appended to keep profile kernel ids stable.
   SliceUpdatePairBF16,
+  // Token4 column carrying the residual+norm epilogue (qmm_vec.comp
+  // QMM_VEC_TOKENS+RESNORM): the last finishing workgroup norms every
+  // live token row of the materialized sum. Appended to keep profile
+  // kernel ids stable.
+  QmmVecQ4MultiToken4ResNormSubgroupBF16,
   Count,
 };
 
