@@ -565,9 +565,8 @@ def _sdpa_eff_fwd(q, k, v, bias, cu_seqlens_q, cu_seqlens_k,
     q, k, v = (mx.swapaxes(t, 1, 2) for t in (q, k, v))
     k = _gqa_expand(k, q.shape[-3])
     v = _gqa_expand(v, q.shape[-3])
+    # bias is already (B, H, Sq, Sk) per attention.cu; only q/k/v/out are BSHD.
     bias = _mx(bias)
-    if bias is not None and bias.ndim == 4:
-        bias = mx.swapaxes(bias, 1, 2)  # (B, Sq, H, Sk) -> (B, H, Sq, Sk)
     is_causal = custom_mask_type in (1, 2)
     off = 0 if custom_mask_type == 1 else (sk - sq if custom_mask_type == 2 else 0)
     s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])

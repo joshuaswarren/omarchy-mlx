@@ -277,6 +277,18 @@ def test_efficient_attention_forward_schema():
     assert my[4] == S and my[5] == S
     _cmp("eff_fwd out", my[0], ref_out)
     _cmp("eff_fwd lse", my[1], ref_lse)
+    # 4-D bias stays (B, H, Sq, Sk) - H != Sq catches layout swaps.
+    bias = torch.randn(B, H, S, S) * 0.5
+    qb, kb, vb = (t_.transpose(1, 2) for t_ in (q, k, v))
+    sc = torch.matmul(qb.float(), kb.float().transpose(-2, -1)) / D ** 0.5
+    sc = sc + bias.float()
+    ref_out_b = torch.softmax(sc, dim=-1).matmul(vb.float()).transpose(1, 2)
+    ref_lse_b = torch.logsumexp(sc, dim=-1)
+    my_b = mlx_vulkan.ATEN_TABLE["_efficient_attention_forward"](
+        mx.array(q.numpy()), mx.array(k.numpy()), mx.array(v.numpy()),
+        _am(bias), None, None, S, S, 0.0, 0, True)
+    _cmp("eff_fwd bias out", my_b[0], ref_out_b)
+    _cmp("eff_fwd bias lse", my_b[1], ref_lse_b)
 
 
 def test_no_duplicate_table_keys():
