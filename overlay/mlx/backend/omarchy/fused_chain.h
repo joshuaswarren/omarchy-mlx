@@ -264,6 +264,15 @@ bool kv_direct_enabled();
 // MLX_OMARCHY_FUSED_CHAIN gate also covers it); on by default.
 bool rope_norm_fold_enabled();
 
+// find_sdpa_transpose_out returns the materializing Reshape node a
+// decode-rows SDPA should store into directly (the planned
+// (1,H,S,D) -> (1,S,H*D) out-transpose fold), or nullptr when the
+// output has no planned fold or the fold already fired. The caller
+// re-verifies the reshape's shape/stride contract before adopting it.
+// commit marks the fold done so the view chain and reshape evals skip.
+const array* find_sdpa_transpose_out(const array& out);
+void commit_sdpa_transpose_out(const array& out);
+
 class Device;
 
 // One fused decode route variable (MLX_OMARCHY_FUSED_GEMV or

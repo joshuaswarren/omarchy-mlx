@@ -17690,11 +17690,51 @@ void ScaledDotProductAttention::eval_gpu(
       // One dispatch per (head, row): gl_WorkGroupID.y selects the
       // verify row; the kernel derives each row's causal key bound from
       // dims (q_len) and walks the single-query arm over the visible
-      // prefix. out_strides[0] carries the q row stride (D); the
-      // output row stride is the compiled SDPA_DIM.
+      // prefix. out_strides[0] carries the q row stride (D);
+      // out_strides[1]/[2] carry the out head/row strides so the
+      // out-transpose fold can store (1,S,H*D) directly.
       params.dims = checked_u32(q_len, tag, out);
       params.out_strides[0] = checked_u32(q.strides()[2], tag, out);
-      params.out_strides[1] = checked_u32(out.strides()[2], tag, out);
+      // A planned materializing Reshape whose view chain maps out's
+      // (1,H,S,D) layout to (1,S,H*D) takes the kernel's store into its
+      // own buffer — head stride D, row stride H*D — and the transpose
+      // copy dispatch is skipped. The dispatch re-verifies the reshape's
+      // shape contract; any mismatch keeps the ordinary path and the
+      // reshape evaluates normally.
+      if (const array* transpose_plan =
+              omarchy::find_sdpa_transpose_out(out);
+          transpose_plan != nullptr &&
+          transpose_plan->shape() == Shape{1, q_len, heads * head_dim} &&
+          transpose_plan->dtype() == bfloat16 &&
+          transpose_plan->primitive().stream() == s &&
+          transpose_plan->data_shared_ptr() == nullptr &&
+          out.flags().contiguous) {
+        array& transpose_out =
+            const_cast<array&>(*transpose_plan);
+        transpose_out.set_data(
+            allocate_omarchy(transpose_out.nbytes()));
+        encoder.add_temporary(transpose_out);
+        std::array<omarchy::ComputeBinding, 4> transpose_bindings{
+            binding(q),
+            binding(k),
+            binding(v),
+            binding(transpose_out)};
+        params.output_offset = checked_item_offset(
+            transpose_out, transpose_out.size(), tag, out);
+        params.out_strides[1] = checked_u32(head_dim, tag, out);
+        params.out_strides[2] =
+            checked_u32(heads * head_dim, tag, out);
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::SdpaDecodeRowsBF16Hd128,
+            transpose_bindings,
+            params,
+            params.matrix_m,
+            static_cast<uint32_t>(q_len));
+        omarchy::commit_sdpa_transpose_out(out);
+        return;
+      }
+      params.out_strides[1] = checked_u32(out.strides()[1], tag, out);
+      params.out_strides[2] = checked_u32(out.strides()[2], tag, out);
       encoder.dispatch_compute(
           omarchy::ComputeKernel::SdpaDecodeRowsBF16Hd128,
           bindings,

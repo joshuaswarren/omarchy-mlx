@@ -826,12 +826,30 @@ struct SliceUpdatePair {
   bool values_committed{false};
 };
 
+// Decode-rows SDPA out-transpose fold: the verify route's (1,H,S,D)
+// output feeds a single-consumer Transpose(0,2,1,3) whose view a
+// materializing Reshape copies into (1,S,H*D). The rows kernel can
+// write the transposed layout straight into the reshape's buffer
+// (out_strides[1] head stride D, out_strides[2] row stride H*D),
+// deleting the copy dispatch. reshape is the Reshape node; chain
+// holds the view nodes between it and the attention so their evals
+// skip once the fold fires.
+struct SdpaTransposeFold {
+  array reshape;
+  std::vector<array> chain;
+  bool fired{false};
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
   std::unordered_map<std::uintptr_t, size_t> gemv_roles;
   std::vector<GemvGroup> gemv_groups;
   std::unordered_map<std::uintptr_t, size_t> res_norm_skip_roles;
+  std::vector<SdpaTransposeFold> sdpa_transpose_folds;
+  // attention out array id -> fold index; reshape/view ids -> fold index
+  std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_plans;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
   std::unordered_map<std::uintptr_t, size_t> slice_update_roles;
@@ -1962,6 +1980,120 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
   }
+  // Decode-rows SDPA out-transpose fold: a materializing Reshape whose
+  // single-consumer view chain bottoms out at a bf16
+  // ScaledDotProductAttention is exactly the (1,H,S,D) -> (1,S,H*D)
+  // transpose-copy the verify route's consumers build. The rows kernel
+  // can store the transposed layout directly, deleting the copy. The
+  // dispatch re-verifies the shape contract and falls back eager when
+  // it cannot run.
+  {
+    auto use_count = [&](const array& value) {
+      auto* it = uses.find(value.id());
+      return it == nullptr ? size_t{0} : *it;
+    };
+    auto contiguous_strides = [](const Shape& shape) {
+      Strides strides(shape.size(), 0);
+      strides.back() = 1;
+      for (int ax = static_cast<int>(shape.size()) - 2; ax >= 0; --ax) {
+        strides[ax] = strides[ax + 1] * shape[ax + 1];
+      }
+      return strides;
+    };
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(Reshape)) || node.dtype() != bfloat16 ||
+          claimed.count(node.id()) || node.ndim() != 3 ||
+          node.shape(0) != 1 || node.inputs().empty()) {
+        continue;
+      }
+      std::vector<const array*> chain;
+      const array* cur = &node.inputs()[0];
+      bool ok = true;
+      while (is_op(cur, typeid(Transpose)) || is_op(cur, typeid(Reshape))) {
+        if (use_count(*cur) != 1) {
+          ok = false;
+          break;
+        }
+        chain.push_back(cur);
+        cur = &cur->inputs()[0];
+      }
+      if (!ok || chain.empty() ||
+          !is_op(cur, typeid(fast::ScaledDotProductAttention)) ||
+          cur->dtype() != bfloat16 || cur->ndim() != 4 ||
+          cur->shape(0) != 1 || use_count(*cur) != 1 ||
+          claimed.count(cur->id())) {
+        continue;
+      }
+      const array& sdpa = *cur;
+      // Compose the view map from the contiguous (1,H,S,D) out through
+      // the chain, sdpa-side first: Transpose always composes; a
+      // Reshape composes only off a contiguous map.
+      Shape map_shape(sdpa.shape());
+      Strides map_strides = contiguous_strides(map_shape);
+      bool composes = true;
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const array& view = **it;
+        if (is_op(&view, typeid(Transpose))) {
+          const auto& axes =
+              static_cast<const Transpose&>(view.primitive()).state();
+          if (axes.size() != map_shape.size()) {
+            composes = false;
+            break;
+          }
+          Shape next_shape(map_shape.size());
+          Strides next_strides(map_shape.size());
+          bool axes_ok = true;
+          for (size_t ax = 0; ax < axes.size(); ++ax) {
+            if (axes[ax] < 0 ||
+                static_cast<size_t>(axes[ax]) >= map_shape.size()) {
+              axes_ok = false;
+              break;
+            }
+            next_shape[ax] = map_shape[axes[ax]];
+            next_strides[ax] = map_strides[axes[ax]];
+          }
+          if (!axes_ok) {
+            composes = false;
+            break;
+          }
+          map_shape = std::move(next_shape);
+          map_strides = std::move(next_strides);
+        } else {
+          if (map_strides != contiguous_strides(map_shape)) {
+            composes = false;
+            break;
+          }
+          map_shape = view.shape();
+          map_strides = contiguous_strides(map_shape);
+        }
+      }
+      // The chain's result must be exactly the (1,S,H,D) transposed
+      // view of the out: strides (S*H*D, D, S*D, 1). The Reshape then
+      // merges H*D contiguously, so node.shape is (1,S,H*D).
+      if (!composes || map_shape.size() != 4 || map_shape[0] != 1 ||
+          map_strides[0] != static_cast<ptrdiff_t>(
+                                map_shape[1] * map_shape[2] * map_shape[3]) ||
+          map_strides[1] != static_cast<ptrdiff_t>(map_shape[3]) ||
+          map_strides[2] != static_cast<ptrdiff_t>(
+                                map_shape[1] * map_shape[3]) ||
+          map_strides[3] != 1 ||
+          node.shape() !=
+              Shape{1, map_shape[1], map_shape[2] * map_shape[3]}) {
+        continue;
+      }
+      const size_t index = state->sdpa_transpose_folds.size();
+      state->sdpa_transpose_folds.push_back(SdpaTransposeFold{node, {}, false});
+      auto& fold = state->sdpa_transpose_folds.back();
+      for (const array* view : chain) {
+        fold.chain.push_back(*view);
+        state->sdpa_transpose_skip_roles.emplace(view->id(), index);
+        claimed.insert(view->id());
+      }
+      state->sdpa_transpose_plans.emplace(sdpa.id(), index);
+      state->sdpa_transpose_skip_roles.emplace(node.id(), index);
+      claimed.insert(node.id());
+    }
+  }
   // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
   // scalar offset input, one stream, float16 storage, identical rope
   // state (dims, traditional, base, scale, forward; no freqs), and no
@@ -2495,6 +2627,28 @@ void commit_values_kv_write(const array& sum_node) {
   }
 }
 
+const array* find_sdpa_transpose_out(const array& out) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->sdpa_transpose_plans.find(out.id());
+  if (it == eager_state->sdpa_transpose_plans.end()) {
+    return nullptr;
+  }
+  auto& fold = eager_state->sdpa_transpose_folds[it->second];
+  return fold.fired ? nullptr : &fold.reshape;
+}
+
+void commit_sdpa_transpose_out(const array& out) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->sdpa_transpose_plans.find(out.id());
+  if (it != eager_state->sdpa_transpose_plans.end()) {
+    eager_state->sdpa_transpose_folds[it->second].fired = true;
+  }
+}
+
 void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
   if (window.in_place) {
     window.node.copy_shared_buffer(
@@ -2734,6 +2888,10 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
       skip != eager_state->res_norm_skip_roles.end()) {
     return eager_state->gemv_groups[skip->second].res_norm_done;
+  }
+  if (auto skip = eager_state->sdpa_transpose_skip_roles.find(node.id());
+      skip != eager_state->sdpa_transpose_skip_roles.end()) {
+    return eager_state->sdpa_transpose_folds[skip->second].fired;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
       skip != eager_state->prologue_skip_roles.end()) {
