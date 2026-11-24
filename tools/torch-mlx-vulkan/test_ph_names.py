@@ -51,7 +51,8 @@ def build_graph():
     return torch.fx.GraphModule(torch.nn.Module(), g)
 
 
-def build_rope_graph(half=3, bad_cos=False, bad_slice=False, bad_angle=False):
+def build_rope_graph(half=3, bad_cos=False, bad_slice=False, bad_angle=False,
+                     bare_slice=False):
     """HF NeoX decomposition:
     add(mul(x, cos(ang)), mul(cat(neg(x[...,h:]), x[...,:h]), sin(ang)))
     with ang = cat(pos*inv_freq, pos*inv_freq) shared by cos and sin.
@@ -69,7 +70,11 @@ def build_rope_graph(half=3, bad_cos=False, bad_slice=False, bad_angle=False):
             torch.cat, ((ang, ang),), {"dim": -1}),))
     else:
         s = g.call_function(torch.sin, (angf,))
-    if bad_slice:
+    if bare_slice:
+        # bare x[:h]/x[h:] — an axis-0 slice on a 4-D tensor, must not match
+        g1 = g.call_function(operator.getitem, (x, (slice(None, half),)))
+        g2 = g.call_function(operator.getitem, (x, (slice(half, None),)))
+    elif bad_slice:
         # bounded slice on axis 1 (no Ellipsis) — must not match
         g1 = g.call_function(operator.getitem,
                              (x, (slice(None), slice(None, half))))
@@ -163,6 +168,7 @@ def main():
         fails.append(f"rope fused={len(rfused)} expect 1")
     for tag, kw in (("m_cos-not-x", {"bad_cos": True}),
                     ("non-last-axis-slice", {"bad_slice": True}),
+                    ("bare-axis0-slice", {"bare_slice": True}),
                     ("distinct-angle", {"bad_angle": True})):
         _, bad = mlx_vulkan._fuse_rope(list(build_rope_graph(**kw).graph.nodes))
         if bad:
@@ -199,6 +205,23 @@ def main():
                  (x, torch.tensor([[0, 2]]), invf), "non-contiguous", fails)
     expect_raise(mlx_vulkan.make_compiled_executor(build_rope_graph()),
                  (torch.randn(1, L, 1, D), pos, invf), "layout", fails)
+    # linear-scaled inv_freq is geometric but f[0] != 1 -> wrong theta
+    expect_raise(mlx_vulkan.make_compiled_executor(build_rope_graph()),
+                 (x, pos, torch.tensor([0.5, 5e-3, 5e-5])), "scaled", fails)
+    # f[1] >= 1 implies theta <= 1 -> out of range
+    expect_raise(mlx_vulkan.make_compiled_executor(build_rope_graph()),
+                 (x, pos, torch.tensor([1.0, 1.0, 1.0])), "out of range", fails)
+    # position gate runs on every call: a clean call 1 must not let a
+    # divergent call 2 slip through
+    prun = mlx_vulkan.make_compiled_executor(build_rope_graph())
+    prun(x, pos, invf)
+    expect_raise(prun, (x, torch.tensor([[0, 2]]), invf),
+                 "non-contiguous", fails)
+    prun2 = mlx_vulkan.make_compiled_executor(build_rope_graph())
+    prun2(x, pos, invf)
+    expect_raise(prun2, (x.expand(2, 1, L, D).contiguous(),
+                         torch.tensor([[0, 1], [2, 3]]), invf),
+                 "per-row", fails)
 
     # --- alias walk: detach marks state + writes back; neg does not -------
     keys = torch.tensor([[1.0, 1.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])

@@ -1759,12 +1759,10 @@ def _fuse_rope(nodes):
         idx = n.args[1]
         if not isinstance(idx, tuple):
             idx = (idx,)
-        # last-axis slice: x[h:] or x[..., h:]; x[:, :h] slices axis 1 and
-        # must not match. Ellipsis or a bare index is the only proof of
-        # last-axis slicing without the tensor's ndim.
-        if len(idx) != 1 and Ellipsis not in idx:
-            return None
-        if not idx or not isinstance(idx[-1], slice):
+        # last-axis slice is only provable via Ellipsis (x[..., h:]): a bare
+        # x[:h] is a one-element index on axis 0, and x[:, :h] slices axis 1;
+        # without the tensor's ndim neither can be distinguished.
+        if not idx or Ellipsis not in idx or not isinstance(idx[-1], slice):
             return None
         if any(s is not Ellipsis and s != slice(None) for s in idx[:-1]):
             return None
@@ -2235,18 +2233,10 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
             # publish only after a clean build so a mid-setup exception
             # cannot leave a partially populated slot cache behind.
             _slots["st"], _slots["dyn"], _slots["flat"] = st, dyn, flat
-        if rfused and _rope["base"] is None:
-            # theta = inv_freq[1]^(-half) only when inv_freq is geometric;
-            # verify spacing + positions once, fail loudly on scaled/YaRN or
-            # ragged/batched layouts the scalar-offset emit cannot model.
-            f = runtime_inputs[_invf_i].reshape(-1)
-            if f.numel() != _rope_half or f.numel() < 2:
-                raise RuntimeError(
-                    f"fused rope: inv_freq numel {f.numel()} != half {_rope_half}")
-            r = f[:-1].double() / f[1:].double()
-            if not bool(((r - r[0]).abs() <= 1e-4 * r[0].abs()).all()):
-                raise RuntimeError("fused rope: non-geometric inv_freq")
-            _rope["base"] = float(f[1]) ** (-_rope_half)
+        if rfused:
+            # positions are gated on EVERY call (a caller may retry after a
+            # call-1 raise or pass divergent rows later); the scalar-offset
+            # emit only models per-row-uniform, unit-contiguous positions.
             pt = runtime_inputs[_pos_i]
             pt = pt.reshape(-1, pt.shape[-1])
             if not bool((pt == pt[:1]).all()):
@@ -2254,6 +2244,22 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
             row = pt[0]
             if row.numel() > 1 and not bool((row[1:] - row[:-1] == 1).all()):
                 raise RuntimeError("fused rope: non-contiguous positions")
+            if _rope["base"] is None:
+                # theta = inv_freq[1]^(-half) only for a geometric inv_freq
+                # anchored at 1.0; scaled (linear rope: f[0] != 1), YaRN and
+                # otherwise non-uniform spacing raise instead of miscomputing.
+                f = runtime_inputs[_invf_i].reshape(-1)
+                if f.numel() != _rope_half or f.numel() < 2:
+                    raise RuntimeError(
+                        f"fused rope: inv_freq numel {f.numel()} != half {_rope_half}")
+                if abs(float(f[0]) - 1.0) > 1e-4:
+                    raise RuntimeError("fused rope: scaled inv_freq")
+                if not (0.0 < float(f[1]) < 1.0):
+                    raise RuntimeError("fused rope: inv_freq out of range")
+                r = f[:-1].double() / f[1:].double()
+                if not bool(((r - r[0]).abs() <= 1e-4 * r[0].abs()).all()):
+                    raise RuntimeError("fused rope: non-geometric inv_freq")
+                _rope["base"] = float(f[1]) ** (-_rope_half)
         t1 = _t.perf_counter()
         outs = (build if _DBG_ENV is not None else cfn)(*flat)
         outs = outs if isinstance(outs, (tuple, list)) else (outs,)
