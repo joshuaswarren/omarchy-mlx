@@ -285,16 +285,19 @@ layout(set = 0, binding = 4, std430) readonly buffer Plane {
 layout(set = 0, binding = 5, std430) writeonly buffer Token {
   uint values[];
 } token;
-layout(set = 0, binding = 6, std430) buffer State {
+// coherent on the fused-path traffic: stages 8-10 let one workgroup
+// consume another workgroup's atomic counters and survivor rows inside
+// a single dispatch; memoryBarrierBuffer() pairs on both sides order it.
+layout(set = 0, binding = 6, std430) coherent buffer State {
   uint values[];
 } state;
 layout(set = 0, binding = 7, std430) buffer Bounds {
   float values[];
 } bounds;
-layout(set = 0, binding = 8, std430) buffer Survivors {
+layout(set = 0, binding = 8, std430) coherent buffer Survivors {
   uint values[];
 } survivors;
-layout(set = 0, binding = 9, std430) buffer RowValues {
+layout(set = 0, binding = 9, std430) coherent buffer RowValues {
   float values[];
 } row_values;
 layout(set = 0, binding = 10, std430) writeonly buffer Stats {
@@ -1333,11 +1336,14 @@ const uint STATE_LB = 64u;
 const uint STATE_UB = 65u;
 const uint STATE_COUNT = 66u;
 const uint STATE_FULL = 67u;
+const uint STATE_DONE = 68u;
+const uint STATE_DONE2 = 69u;
 #define NEG_INF uintBitsToFloat(0xff800000u)
 
 shared float greedy_values[256];
 shared uint greedy_rows[256];
 shared uint greedy_flag;
+shared uint greedy_done;
 
 // Monotone float -> uint map for atomicMax; key 0 decodes to NaN.
 uint order_key(float f) {
@@ -1627,6 +1633,322 @@ void main() {
     }
     return;
   }
+
+// Fused path (MLX_OMARCHY_GREEDY_FUSE): stages 8-10 collapse the eight
+// per-stage dispatches into three — 8 merges prologue+bounds+candidates,
+// 9 merges prune+exact+select, 10 merges the flagged full pass. The
+// cross-stage traffic that used to ride dispatch boundaries (LB*/UB*,
+// survivor pairs, STATE_FULL) instead rides device-scope atomics on
+// state[] plus a fill_buffer zero-init issued before stage 8. The
+// "last workgroup" that sees its done-counter hit the grid size runs
+// the single-workgroup epilogue inline; memoryBarrierBuffer() pairs on
+// both sides order the non-atomic survivor stores.
+if (stage == 8u) {
+  // Prologue: each lane recomputes its group's sums from the same
+  // GREEDY_X8 loads the bounds pass needs, in stage 0's exact
+  // associativity (8 partials of 8). Refusal coverage is complete:
+  // every lane covers its own group, all 32 groups per column_slot.
+  float xr[64];
+  uint xbase = (x_row + lane_in_slot * 64u) / 8u;
+  GREEDY_X8(0u) GREEDY_X8(1u) GREEDY_X8(2u) GREEDY_X8(3u)
+  GREEDY_X8(4u) GREEDY_X8(5u) GREEDY_X8(6u) GREEDY_X8(7u)
+  precise float group_sum = 0.0;
+  precise float group_l1 = 0.0;
+  uint refuse = 0u;
+  for (uint p = 0u; p < 8u; ++p) {
+    precise float ps = 0.0;
+    precise float pl = 0.0;
+    for (uint i = 0u; i < 8u; ++i) {
+      float xv = xr[8u * p + i];
+      ps += xv;
+      pl += abs(xv);
+      refuse |= (abs(xv) <= 1048576.0) ? 0u : 1u;
+    }
+    group_sum += ps;
+    group_l1 += pl;
+  }
+  if (refuse != 0u) {
+    atomicOr(state.values[STATE_FULL], 1u);
+  }
+  if (lane == 0u && (params.flags & 1u) != 0u) {
+    atomicOr(state.values[STATE_FULL], 1u);
+  }
+  // Bounds: verbatim stage-1 body with the local group sums.
+  uint plane_words = groups_per_row * 6u;
+  float ub_max = NEG_INF;
+  float best_center = NEG_INF;
+  uint best_row = 0u;
+  uint nan_seen = 0u;
+  uint first = gl_WorkGroupID.x * (8u * GREEDY_ROWS_PER_SLOT) + column_slot;
+  for (uint i = 0u; i < GREEDY_ROWS_PER_SLOT; ++i) {
+    uint row = first + i * 8u;
+    if (row >= n) {
+      break;
+    }
+    uint p_base = params.rhs_size + row * plane_words + lane_in_slot * 6u;
+    uint pw[7];
+    for (uint k = 0u; k < 6u; ++k) {
+      pw[k] = plane.values[p_base + k];
+    }
+    pw[6] = 0u;
+    uint param = row * groups_per_row + lane_in_slot;
+    float scale = LOAD_VALUE(scales.values[params.aux_offset + param]);
+    float bias = LOAD_VALUE(biases.values[params.aux_size + param]);
+    precise float h = 0.0;
+    GREEDY_TERM16(0u) GREEDY_TERM16(16u) GREEDY_TERM16(32u)
+    GREEDY_TERM16(48u)
+    precise float center = 2.0 * scale * h + (0.5 * scale + bias) * group_sum;
+    precise float radius = abs(scale) * group_l1;
+    precise float mass = (16.0 * abs(scale) + abs(bias)) * group_l1;
+    float c = subgroupAdd(center);
+    float ub = c + 0.5 * subgroupAdd(radius) +
+        subgroupAdd(mass) * (1.0 / 4096.0) + 9.094947e-13;
+    if (lane_in_slot == 0u) {
+      bounds.values[row] = ub;
+    }
+    nan_seen |= (isnan(ub) || isnan(c)) ? 1u : 0u;
+    if (ub > ub_max) {
+      ub_max = ub;
+    }
+    if (c > best_center) {
+      best_center = c;
+      best_row = row;
+    }
+  }
+  if (lane_in_slot == 0u) {
+    greedy_values[column_slot] = best_center;
+    greedy_values[8u + column_slot] = ub_max;
+    greedy_rows[column_slot] = best_row;
+    greedy_rows[8u + column_slot] = nan_seen;
+  }
+  barrier();
+  uint wg_best_row = 0u;
+  if (lane == 0u) {
+    float center = NEG_INF;
+    uint row = greedy_rows[0];
+    float ubs = NEG_INF;
+    uint nans = 0u;
+    for (uint k = 0u; k < 8u; ++k) {
+      if (greedy_values[k] > center) {
+        center = greedy_values[k];
+        row = greedy_rows[k];
+      }
+      ubs = greedy_values[8u + k] > ubs ? greedy_values[8u + k] : ubs;
+      nans |= greedy_rows[8u + k];
+    }
+    atomicMax(state.values[STATE_UB], order_key(ubs));
+    if (nans != 0u) {
+      atomicOr(state.values[STATE_FULL], 1u);
+    }
+    greedy_rows[16u] = row;
+  }
+  barrier();
+  // Candidates: the workgroup's best row is evaluated immediately by
+  // column_slot 0's subgroup — the per-workgroup column of stage 2.
+  wg_best_row = greedy_rows[16u];
+  if (column_slot == 0u) {
+    float value = greedy_exact(wg_best_row, lane_in_slot);
+    if (lane_in_slot == 0u) {
+      if (isnan(value)) {
+        atomicOr(state.values[STATE_FULL], 1u);
+      } else {
+        atomicMax(state.values[STATE_LB], order_key(value));
+      }
+    }
+  }
+  return;
+}
+if (stage == 9u) {
+  // Prune + exact + last-workgroup select (stages 3-5). Each subgroup
+  // owns 32 of the workgroup's 256 rows; every lane recomputes the row's
+  // bound verdict so the subgroup's control flow is uniform, then the
+  // whole subgroup runs the exact column. Pair writes ride the same
+  // atomicAdd slot counter stage 3 used.
+  float lbs = order_value(state.values[STATE_LB]);
+  float ubs = order_value(state.values[STATE_UB]);
+  float guard = 0.13 + max(abs(lbs), abs(ubs)) * (1.0 / 12800.0);
+  for (uint j = 0u; j < 32u; ++j) {
+    uint row = gl_WorkGroupID.x * 256u + column_slot * 32u + j;
+    bool alive = false;
+    if (row < n) {
+      float ub = bounds.values[row];
+      alive = (params.flags & 2u) != 0u ||
+          !((lbs - ub) > guard + abs(ub) * 0.0078125);
+    }
+    if (alive) {
+      float value = greedy_exact(row, lane_in_slot);
+      if (lane_in_slot == 0u) {
+        uint slot = atomicAdd(state.values[STATE_COUNT], 1u);
+        survivors.values[slot] = row;
+        row_values.values[slot] = value;
+      }
+    }
+  }
+  barrier();
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    greedy_done = (atomicAdd(state.values[STATE_DONE], 1u) ==
+                       gl_NumWorkGroups.x - 1u)
+        ? 1u
+        : 0u;
+  }
+  barrier();
+  if (greedy_done == 0u) {
+    return;
+  }
+  memoryBarrierBuffer();
+  // Stage 5, verbatim: first-max over the survivor pairs, then the
+  // full-path handoff checks.
+  uint count = state.values[STATE_COUNT];
+  if (lane == 0u) {
+    greedy_flag = 0u;
+  }
+  float best = NEG_INF;
+  uint best_row = 0xffffffffu;
+  uint nan_seen = 0u;
+  for (uint k = lane; k < count; k += 256u) {
+    float v = row_values.values[k];
+    uint r = survivors.values[k];
+    nan_seen |= isnan(v) ? 1u : 0u;
+    if (v > best || (v == best && r < best_row)) {
+      best = v;
+      best_row = r;
+    }
+  }
+  greedy_values[lane] = best;
+  greedy_rows[lane] = best_row;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      float v = greedy_values[lane + stride];
+      uint r = greedy_rows[lane + stride];
+      if (v > greedy_values[lane] ||
+          (v == greedy_values[lane] && r < greedy_rows[lane])) {
+        greedy_values[lane] = v;
+        greedy_rows[lane] = r;
+      }
+    }
+    barrier();
+  }
+  float top = greedy_values[0];
+  uint top_row = greedy_rows[0];
+  float guard5 = 0.13 + abs(top) * (1.0 / 12800.0);
+  uint risk = nan_seen;
+  for (uint k = lane; k < count; k += 256u) {
+    float v = row_values.values[k];
+    risk |= (survivors.values[k] < top_row && v < top && top - v <= guard5)
+        ? 1u
+        : 0u;
+  }
+  if (risk != 0u) {
+    atomicOr(greedy_flag, 1u);
+  }
+  barrier();
+  if (lane == 0u) {
+    bool full = state.values[STATE_FULL] != 0u || greedy_flag != 0u ||
+        top_row == 0xffffffffu;
+    token.values[0] = top_row;
+    stats.values[0] = count;
+    stats.values[1] = full ? 1u : 0u;
+    stats.values[2] = floatBitsToUint(top);
+    state.values[STATE_FULL] = full ? 1u : 0u;
+  }
+  return;
+}
+// Stage 10, flagged only: stage 6's all-rows pass, then the last
+// workgroup runs stage 7 verbatim (LogSumExpBF16 over row_values, the
+// bf16 subtract, and ArgMaxBF16 statement for statement).
+if (stage == 10u) {
+  if (state.values[STATE_FULL] == 0u) {
+    return;
+  }
+  for (uint k = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+       k < n;
+       k += gl_NumWorkGroups.x * COLUMNS_PER_GROUP) {
+    float value = greedy_exact(k, lane_in_slot);
+    if (lane_in_slot == 0u) {
+      row_values.values[k] = value;
+    }
+  }
+  barrier();
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    greedy_done = (atomicAdd(state.values[STATE_DONE2], 1u) ==
+                       gl_NumWorkGroups.x - 1u)
+        ? 1u
+        : 0u;
+  }
+  barrier();
+  if (greedy_done == 0u) {
+    return;
+  }
+  memoryBarrierBuffer();
+  float local_max = NEG_INF;
+  for (uint index = lane; index < n; index += 256u) {
+    float next = row_values.values[index];
+    if (isnan(next) || next > local_max) {
+      local_max = next;
+    }
+  }
+  greedy_values[lane] = local_max;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      greedy_values[lane] =
+          max(greedy_values[lane], greedy_values[lane + stride]);
+    }
+    barrier();
+  }
+  float row_max = greedy_values[0];
+  barrier();
+  float local_sum = 0.0;
+  for (uint index = lane; index < n; index += 256u) {
+    local_sum += exp(row_values.values[index] - row_max);
+  }
+  greedy_values[lane] = local_sum;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      greedy_values[lane] += greedy_values[lane + stride];
+    }
+    barrier();
+  }
+  float row_sum = greedy_values[0];
+  float value = isinf(row_max) ? row_max : row_max + log(row_sum);
+  float lse = LOAD_VALUE(STORE_VALUE(value));
+  barrier();
+  float local_value = NEG_INF;
+  uint local_index = 0u;
+  for (uint index = lane; index < n; index += 256u) {
+    float next = LOAD_VALUE(STORE_VALUE(row_values.values[index] - lse));
+    if (next > local_value) {
+      local_value = next;
+      local_index = index;
+    }
+  }
+  greedy_values[lane] = local_value;
+  greedy_rows[lane] = local_index;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      float mine = greedy_values[lane];
+      float theirs = greedy_values[lane + stride];
+      bool wins = theirs > mine;
+      bool ties = theirs == mine &&
+          greedy_rows[lane + stride] < greedy_rows[lane];
+      if (wins || ties) {
+        greedy_values[lane] = theirs;
+        greedy_rows[lane] = greedy_rows[lane + stride];
+      }
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    token.values[0] = greedy_rows[0];
+    stats.values[2] = floatBitsToUint(lse);
+  }
+  return;
+}
   // Stage 7, flagged only: LogSumExpBF16 over the stage-6 logits, then
   // the bf16 subtract and ArgMaxBF16, each as its own kernel computes.
   if (state.values[STATE_FULL] == 0u) {
