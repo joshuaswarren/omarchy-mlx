@@ -96,6 +96,22 @@ uint32_t required_subgroup_size(
     uint32_t max_size,
     uint32_t subgroup_size);
 
+// True when a compute pipeline may legally pin |target| as its
+// requiredSubgroupSize for a workgroup of |workgroup_size| lanes: size
+// control enabled, the compute stage covered by
+// requiredSubgroupSizeStages, |target| inside [min_size, max_size]
+// (VUID-02761/02762), and enough workgroup subgroups
+// (VUID-VkPipelineShaderStageCreateInfo-pNext-02757:
+// workgroup_size <= target * max_workgroup_subgroups).
+bool subgroup_size_admitted(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t max_workgroup_subgroups,
+    uint32_t target,
+    uint32_t workgroup_size);
+
 // Device indices for |types| in discovery order: discrete GPUs first, so
 // device 0 is the dGPU where an iGPU enumerates ahead of it. Stable.
 std::vector<size_t> device_order(const std::vector<VkPhysicalDeviceType>& types);
@@ -225,6 +241,14 @@ struct CapabilityReport {
   uint32_t subgroup_operations{0};
   // Nonzero: pipelines pin this subgroup size (required_subgroup_size()).
   uint32_t required_subgroup_size{0};
+  // Smallest requiredSubgroupSize the driver accepts for compute, or 0
+  // when size control is unavailable (per-kernel pins stay off then).
+  uint32_t subgroup_size_min{0};
+  // True: this hardware can pin requiredSubgroupSize = 16 for a 256-lane
+  // compute workgroup (the 16-lane KCONTS16 build). Derived from the
+  // hardware report only; gate on hardware_capabilities(), never the
+  // simulated profile.
+  bool subgroup_size_16_admitted{false};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride

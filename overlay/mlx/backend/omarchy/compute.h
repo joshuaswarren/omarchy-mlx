@@ -1207,6 +1207,10 @@ enum class ComputeKernel : uint16_t {
   // f32 8x8x8 route (shaders/qmm_intel_bf16.comp). Appended to keep
   // profile kernel ids stable.
   QmmPrefillIntelBF16,
+  // 16-lane subgroup build of the fused multi-weight kcont column
+  // (shaders/qmm_vec.comp, QMM_LANES=16; requiredSubgroupSize 16).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S16KCONTS16,
   Count,
 };
 
@@ -1282,7 +1286,8 @@ class ComputeRuntime {
   ComputeRuntime(
       VkDevice device,
       uint32_t binding_limit,
-      uint32_t required_subgroup_size);
+      uint32_t required_subgroup_size,
+      bool subgroup_size_16_admitted);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1342,9 +1347,17 @@ class ComputeRuntime {
       std::span<const uint32_t> spirv,
       const std::string& entry_name,
       const VkSpecializationInfo* spec);
+  // Same, with an explicit requiredSubgroupSize (0 keeps the runtime
+  // default). Used by kernels built for a non-default slot width.
+  VkPipeline create_pipeline(
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec,
+      uint32_t required_subgroup_size);
 
   uint32_t binding_limit_{0};
   uint32_t required_subgroup_size_{0};
+  bool subgroup_size_16_admitted_{false};
   bool push_descriptors_{false};
 
   VkDevice device_;

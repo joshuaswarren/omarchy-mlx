@@ -315,6 +315,7 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kcont.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_resnorm_bf16.h"
@@ -1887,6 +1888,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16kcont,
           qmm_vec_q4_multi_subgroup_bf16_r2s16kcont_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16,
+          qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16_size};
     case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2:
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s4w2,
@@ -2308,10 +2313,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
 ComputeRuntime::ComputeRuntime(
     VkDevice device,
     uint32_t binding_limit,
-    uint32_t required_subgroup_size)
+    uint32_t required_subgroup_size,
+    bool subgroup_size_16_admitted)
     : device_(device),
       binding_limit_(binding_limit),
-      required_subgroup_size_(required_subgroup_size) {
+      required_subgroup_size_(required_subgroup_size),
+      subgroup_size_16_admitted_(subgroup_size_16_admitted) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2464,11 +2471,32 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
   if (size == 0 || size % sizeof(uint32_t) != 0) {
     throw std::runtime_error("[omarchy] embedded SPIR-V has an invalid size.");
   }
+  // Kernels built at a non-default slot width pin their own
+  // subgroup size (the QMM_LANES=16 build runs 16-lane subgroups).
+  // Fail closed: a 16-lane shader on unpinned 32-lane hardware subgroups
+  // corrupts output, and pinning without hardware admission violates
+  // VUID-02761/02762/02757.
+  if (kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16) {
+    if (!subgroup_size_16_admitted_) {
+      throw std::runtime_error(
+          "[omarchy] QmmVecQ4MultiSubgroupBF16R2S16KCONTS16 requires "
+          "requiredSubgroupSize = 16 on a 256-lane workgroup, which this"
+          " device cannot legally pin.");
+    }
+    return create_pipeline(
+        std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(bytes),
+            size / sizeof(uint32_t)},
+        "main",
+        nullptr,
+        16u);
+  }
   return create_pipeline(
       std::span<const uint32_t>{
           reinterpret_cast<const uint32_t*>(bytes), size / sizeof(uint32_t)},
       "main",
-      nullptr);
+      nullptr,
+      required_subgroup_size_);
 }
 
 // Per-binding access from the SPIR-V: glslang lowers `readonly`/`writeonly`
@@ -2548,6 +2576,14 @@ VkPipeline ComputeRuntime::create_pipeline(
     std::span<const uint32_t> spirv,
     const std::string& entry_name,
     const VkSpecializationInfo* spec) {
+  return create_pipeline(spirv, entry_name, spec, required_subgroup_size_);
+}
+
+VkPipeline ComputeRuntime::create_pipeline(
+    std::span<const uint32_t> spirv,
+    const std::string& entry_name,
+    const VkSpecializationInfo* spec,
+    uint32_t required_subgroup_size) {
   if (spirv.empty() || spirv.front() != 0x07230203u) {
     throw std::runtime_error("[omarchy] custom SPIR-V is invalid.");
   }
@@ -2567,8 +2603,8 @@ VkPipeline ComputeRuntime::create_pipeline(
   stage.pSpecializationInfo = spec;
   VkPipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size{
       VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
-  subgroup_size.requiredSubgroupSize = required_subgroup_size_;
-  if (required_subgroup_size_ != 0) {
+  subgroup_size.requiredSubgroupSize = required_subgroup_size;
+  if (required_subgroup_size != 0) {
     stage.pNext = &subgroup_size;
   }
   VkComputePipelineCreateInfo pipeline_info{

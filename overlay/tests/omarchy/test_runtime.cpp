@@ -991,6 +991,27 @@ TEST_CASE("a variable subgroup size is pinned to the reported size") {
   CHECK(omarchy::required_subgroup_size(true, compute, 8, 16, 32) == 0);
 }
 
+TEST_CASE("a 16-lane compute pin needs the full Vulkan admission") {
+  constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
+  // Intel ANV ([8, 32]) and any range containing 16 admit the pin when
+  // the workgroup fits (256 lanes = 16 subgroups of 16).
+  CHECK(omarchy::subgroup_size_admitted(true, compute, 8, 32, 16, 16, 256));
+  CHECK(omarchy::subgroup_size_admitted(true, compute, 16, 32, 16, 16, 256));
+  // min above the target (e.g. RDNA [32, 64]) refuses.
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 32, 64, 32, 16, 256));
+  // max below the target refuses (VUID-02761/02762).
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 4, 8, 32, 16, 256));
+  // A fixed-32 device is outside the target's range.
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 32, 32, 32, 16, 256));
+  // Too few workgroup subgroups breaks VUID-02757 (16 * 8 < 256).
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 8, 32, 8, 16, 256));
+  // No size-control feature or no compute stage coverage: no pin.
+  CHECK(!omarchy::subgroup_size_admitted(false, compute, 8, 32, 16, 16, 256));
+  CHECK(
+      !omarchy::subgroup_size_admitted(
+          true, VK_SHADER_STAGE_FRAGMENT_BIT, 8, 32, 16, 16, 256));
+}
+
 TEST_CASE("discrete GPUs come first, otherwise discovery order") {
   using V = std::vector<VkPhysicalDeviceType>;
   using I = std::vector<size_t>;
