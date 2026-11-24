@@ -124,6 +124,12 @@ class EagerFusionScope {
 // by the active eager-fusion scope; false keeps the ordinary eval_gpu path.
 bool try_eval_eager_fusion(array& node, const Stream& stream);
 
+// MLX_OMARCHY_FOLD_TIMING: thread-local phase accumulators shared with
+// eval.cpp's per-node timers; the scope dtor prints and resets them.
+// Slots: 0=eval() total, 1=dispatch block, 2=needs_commit bookkeeping,
+// 3=encoder.commit in eval, 4=finalize total, 5=eval() node count.
+double* eval_phase_slots();
+
 // Producer-direct KV cache write window. When a SliceUpdate pair's new
 // rows can be stored by the row's PRODUCER (the RoPE kernel for keys,
 // the fused GEMV Add epilogue for values), the merged pair dispatch is

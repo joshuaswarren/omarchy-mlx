@@ -874,6 +874,32 @@ thread_local size_t eager_dispatch_calls = 0;
 bool is_op(const array* node, const std::type_info& op) {
   return node && node->has_primitive() && typeid(node->primitive()) == op;
 }
+
+// Structural signature of an eval tape: op type, dtype, shape, and input
+// arity per node, folded in tape order. Decode steps re-issue the same
+// graph, so identical signatures mean the fold plan transfers by tape
+// position. Prim state (axes, eps, quant bits) is deliberately out of the
+// key: replay revalidates every fold's gates against the new nodes and
+// declines on any mismatch, so a colliding-but-different tape costs one
+// revalidation pass, never a wrong plan.
+uint64_t tape_signature(const std::deque<array>& tape) {
+  uint64_t h = tape.size() * 0x9e3779b97f4a7c15ull;
+  auto mix = [&h](uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+  };
+  for (const auto& node : tape) {
+    mix(node.has_primitive()
+            ? static_cast<uint64_t>(typeid(node.primitive()).hash_code())
+            : 0xfeedfaceull);
+    mix(static_cast<uint64_t>(node.dtype().val()));
+    mix(static_cast<uint64_t>(node.ndim()));
+    for (const auto dim : node.shape()) {
+      mix(static_cast<uint64_t>(dim));
+    }
+    mix(static_cast<uint64_t>(node.inputs().size()));
+  }
+  return h;
+}
 // Two RoPE offset inputs can share one buffer binding when they are the
 // same node, or when both are host-constant int scalars with an equal
 // value (the mlx_lm decode shape: cache.offset is a Python int, so each
@@ -1264,6 +1290,11 @@ bool node_trio_enabled(const array& node) {
 }
 
 } // namespace
+
+double* eval_phase_slots() {
+  static thread_local double slots[8];
+  return slots;
+}
 
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     : previous_(eager_state) {
@@ -2519,12 +2550,24 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 EagerFusionScope::~EagerFusionScope() {
   static const bool fold_timing =
       std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
-  if (fold_timing && eager_state != nullptr) {
+  if (fold_timing) {
+    double* ph = eval_phase_slots();
     std::fprintf(
         stderr,
-        "[fold-time] dispatch us=%.0f nodes-touched=%zu\n",
+        "[fold-time] dispatch us=%.0f n=%zu | eval us=%.0f n=%.0f "
+        "dispatch-blk us=%.0f bookkeeping us=%.0f commit us=%.0f "
+        "finalize us=%.0f\n",
         eager_dispatch_us,
-        eager_dispatch_calls);
+        eager_dispatch_calls,
+        ph[0],
+        ph[5],
+        ph[1],
+        ph[2],
+        ph[3],
+        ph[4]);
+    for (int i = 0; i < 8; ++i) {
+      ph[i] = 0.0;
+    }
   }
   eager_dispatch_us = 0.0;
   eager_dispatch_calls = 0;
