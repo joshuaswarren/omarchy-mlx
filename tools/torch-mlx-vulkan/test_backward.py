@@ -11,7 +11,16 @@ TOL = 1e-5
 
 
 def _tm(a):
+    if getattr(a, "dtype", None) in (mx.bfloat16, mx.float16):
+        a = a.astype(mx.float32)
     return torch.from_numpy(np.array(a))
+
+
+def _am(t):
+    # torch tensor -> mx array preserving bf16 (numpy has no bf16).
+    if t.dtype == torch.bfloat16:
+        return mx.array(t.float().numpy()).astype(mx.bfloat16)
+    return mx.array(t.numpy())
 
 
 def _cmp(tag, mine, ref):
@@ -156,6 +165,112 @@ def test_flash_cpu_bwd():
             _cmp(f"flash_bwd {tag} causal={causal}", m, r)
 
 
+
+
+def test_flash_cpu_fwd_gqa():
+    torch.manual_seed(11)
+    q = torch.randn(2, 8, 16, 32)
+    k = torch.randn(2, 4, 16, 32)
+    v = torch.randn(2, 4, 16, 32)
+    ref_out, ref_lse = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu(
+        q, k.repeat_interleave(2, dim=1), v.repeat_interleave(2, dim=1), 0.0, False)
+    my_out, my_lse = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu"](
+        mx.array(q.numpy()), mx.array(k.numpy()), mx.array(v.numpy()), 0.0, False)
+    _cmp("flash_gqa_fwd out", my_out, ref_out)
+    _cmp("flash_gqa_fwd lse", my_lse, ref_lse)
+
+
+def test_flash_cpu_mask_and_dtype():
+    torch.manual_seed(12)
+    for dt in (torch.float32, torch.bfloat16):
+        q = torch.randn(2, 4, 8, 16, dtype=dt)
+        k = torch.randn(2, 4, 8, 16, dtype=dt)
+        v = torch.randn(2, 4, 8, 16, dtype=dt)
+        bmask = torch.ones(8, 8, dtype=torch.bool).tril()
+        fmask = torch.where(bmask, 0.0, float("-inf")).expand(2, 4, 8, 8)
+        for tag, am in (("bool", bmask), ("float", fmask)):
+            if tag == "float":
+                ref_out, ref_lse = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu(
+                    q, k, v, 0.0, False, attn_mask=am.to(dt))
+            else:
+                # aten flash_cpu on this torch rejects bool masks; math sdpa
+                # gives the same keep/drop semantics, lse scored manually.
+                ref_out = torch.nn.functional.scaled_dot_product_attention(
+                    q, k, v, attn_mask=am)
+                sc = torch.matmul(q.float(), k.float().transpose(-2, -1)) / 16 ** 0.5
+                sc = sc.masked_fill(~am, float("-inf"))
+                ref_lse = torch.logsumexp(sc, dim=-1)
+            my_out, my_lse = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu"](
+                _am(q), _am(k), _am(v), 0.0, False, attn_mask=_am(am))
+            assert my_out.dtype == (mx.bfloat16 if dt == torch.bfloat16 else mx.float32), \
+                f"out dtype {my_out.dtype}"
+            assert my_lse.dtype == mx.float32, f"lse dtype {my_lse.dtype}"
+            tol = 2e-2 if dt == torch.bfloat16 else TOL
+            d_out = float((_tm(my_out).float() - ref_out.float()).abs().max())
+            d_lse = float((_tm(my_lse) - ref_lse).abs().max())
+            assert d_out < tol and d_lse < tol, f"{tag}/{dt}: {d_out:.3e} {d_lse:.3e}"
+            print(f"PASS flash mask {tag} {dt} out={d_out:.3e} lse={d_lse:.3e}")
+
+
+def _eff_ref(q, k, v, causal_off=0):
+    # manual fp32 math reference: top-left causal, softmax@v + logsumexp.
+    sc = torch.matmul(q.float(), k.float().transpose(-2, -1)) / q.shape[-1] ** 0.5
+    sq, sk = q.shape[-2], k.shape[-2]
+    keep = torch.arange(sk)[None, :] <= torch.arange(sq)[:, None] + causal_off
+    sc = sc.masked_fill(~keep, float("-inf"))
+    lse = torch.logsumexp(sc, dim=-1)
+    return torch.softmax(sc, dim=-1).matmul(v.float()), lse
+
+
+def test_efficient_attention_arity_and_causal():
+    torch.manual_seed(13)
+    q = torch.randn(1, 4, 6, 16)
+    k = torch.randn(1, 4, 10, 16)
+    v = torch.randn(1, 4, 10, 16)
+    # no CPU kernel for the aten op on this build; manual top-left ref.
+    ref_out, ref_lse = _eff_ref(q, k, v)
+    my = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_efficient_attention"](
+        mx.array(q.numpy()), mx.array(k.numpy()), mx.array(v.numpy()),
+        None, True, 0.0, True)
+    assert len(my) == 4, f"efficient_attention must return 4-tuple, got {len(my)}"
+    _cmp("eff out", my[0], ref_out)
+    _cmp("eff lse", my[1], ref_lse)
+
+
+def test_efficient_attention_forward_schema():
+    torch.manual_seed(14)
+    q = torch.randn(1, 2, 5, 8)
+    k = torch.randn(1, 2, 5, 8)
+    v = torch.randn(1, 2, 5, 8)
+    ref_out, ref_lse = _eff_ref(q, k, v)
+    my = mlx_vulkan.ATEN_TABLE["_efficient_attention_forward"](
+        mx.array(q.numpy()), mx.array(k.numpy()), mx.array(v.numpy()),
+        None, None, None, 5, 5, 0.0, 1, True)
+    assert len(my) == 6, f"efficient_attention_forward must return 6-tuple, got {len(my)}"
+    _cmp("eff_fwd out", my[0], ref_out)
+    _cmp("eff_fwd lse", my[1], ref_lse)
+
+
+def test_no_duplicate_table_keys():
+    import ast as _ast, collections
+    src = open(mlx_vulkan.__file__).read()
+    tree = _ast.parse(src)
+    dups = []
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Dict):
+            keys = collections.Counter(
+                kk.value for kk in node.keys
+                if isinstance(kk, _ast.Constant) and isinstance(kk.value, str))
+            dups += [k for k, c in keys.items() if c > 1]
+    # "log"/"t"/"tril" are pre-existing intentional overrides inherited from
+    # main (later entries refine earlier fallbacks); this test guards against
+    # NEW shadowing duplicates like the flash-for-cpu one this PR removes.
+    dups = [k for k in set(dups) - {"log", "t", "tril"}]
+    assert not dups, f"new duplicate keys shadowed within one table literal: {dups}"
+    assert mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu"] is \
+        mlx_vulkan._sdpa_flash_cpu
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_flash_cpu_fwd()
@@ -165,4 +280,9 @@ if __name__ == "__main__":
     test_slice_backward_clamp()
     test_flash_cpu_causal_rect()
     test_silu_backward()
+    test_flash_cpu_fwd_gqa()
+    test_flash_cpu_mask_and_dtype()
+    test_efficient_attention_arity_and_causal()
+    test_efficient_attention_forward_schema()
+    test_no_duplicate_table_keys()
     print("ALL PASS")
