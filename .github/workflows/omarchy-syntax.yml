@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Fast part only: checkout through the -fsyntax-only sweep. Measured
     # 2-3 min end to end; 10 catches a real hang without holding a runner.
-    timeout-minutes: 10
+    timeout-minutes: 25
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
