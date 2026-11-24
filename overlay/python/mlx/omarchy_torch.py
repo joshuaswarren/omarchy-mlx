@@ -439,6 +439,12 @@ try:
     GLUE_FNS.add(torch.sym_int)
 except AttributeError:
     pass
+# symbolic-int bookkeeping over dynamic shapes (e.g. HF DynamicCache
+# seq-length sums): concrete ints at call time - pure glue, no kernel.
+for _sf in ("sym_sum",):
+    _f = getattr(torch, _sf, None)
+    if _f is not None:
+        GLUE_FNS.add(_f)
 
 _METHOD_DT = {"float": mx.float32, "double": mx.float32, "half": mx.float16,
               "bfloat16": mx.bfloat16, "int": mx.int32, "long": mx.int64,
@@ -980,10 +986,6 @@ def make_compiled_executor(gm):
                 flat.append(arr)
         t1 = _t.perf_counter()
         outs = cfn(*flat)
-        # mx.compile returns the bare array for single-output builds
-        # (w7R CHANGES): normalize to a tuple first, then restore the rank
-        # the input placeholder declared (wAW's outs[0] squeeze)
-        outs = outs if isinstance(outs, (tuple, list)) else (outs,)
         mx.eval(*outs)
         t2 = _t.perf_counter()
         n_out = holder.get("n_out", 1)
@@ -991,11 +993,7 @@ def make_compiled_executor(gm):
         extra = outs[n_out:] if n_out else outs[1:]
         for m, arr in zip(mutated, extra):
             state[str(m.target)] = arr
-        # return as a tuple over the graph's real outputs: dynamo's
-        # unflatten indexes [0] on the bare tensor run() returned and
-        # collapses the batch dim (w7R's trace); n_out guards the state
-        # tail from nesting the single-output case
-        out = tuple(_torch(o) for o in outs[:n_out])
+        out = _torch(logits)
         t3 = _t.perf_counter()
         if _profile:
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
