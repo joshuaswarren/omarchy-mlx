@@ -17,13 +17,23 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
  #include "mlx/io.h"
  #include "mlx/io/load.h"
  #include "mlx/ops.h"
-@@ -110,9 +114,24 @@
+@@ -110,9 +114,23 @@
  }
  
 +#ifdef MLX_OMARCHY_BACKEND
++// Device-local weight placement defaults on: every safetensors file load is
++// an inference-weight candidate. The discrete-GPU check, staging check and
++// heap-budget check in weight_memory_type_for_size() keep the route a no-op
++// where it cannot apply, so non-discrete and no-fallback devices see no
++// change. MLX_OMARCHY_VRAM_WEIGHTS=0 opts out; an absolute path keeps the
++// opt-in gate, marking only loads from that checkpoint directory. Any other
++// value counts as an explicit setting and also disables the route.
 +static bool is_inference_checkpoint(const std::string& file) {
 +  const char* root = std::getenv("MLX_OMARCHY_VRAM_WEIGHTS");
-+  if (!root || !std::filesystem::path(root).is_absolute()) {
++  if (!root || *root == '\0') {
++    return true;
++  }
++  if (!std::filesystem::path(root).is_absolute()) {
 +    return false;
 +  }
 +  auto directory = std::filesystem::path(root).lexically_normal();
