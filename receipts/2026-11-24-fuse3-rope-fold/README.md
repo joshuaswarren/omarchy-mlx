@@ -131,25 +131,52 @@ are stashed at plan time, so the in-place run is the rope's own
 
 ## What the planner needs
 
-- The fold's dispatch belongs in `ScaledDotProductAttention::eval_gpu`
-  (the split route at ~line 16830 of `primitives.cpp`), not in the
-  planner: the route's guard chain, the scratch allocation and the two
-  pass dispatch all live there, and duplicating them in
-  `fused_chain.cpp` would be a second copy to keep in step. The fold
-  swaps `split_p1` for the folded kernel, adds the weight and offset
-  bindings, and packs the rope params into the push fields the split
-  kernels leave free: eps bits in `operation`, the rope scale bits in
-  `lhs_size`, the freq exponent (`log(base) / half_dims`) in `beta`,
-  the half dims in `dims`, the query row's time index in `matrix_m`,
-  the offsets buffer offset in `output_offset` and the weight element
-  offset in `aux_size`.
-- **Eligibility:** the query's primitive is `fast::RoPE` with
-  `has_norm()` (the fused `rope_rms_norm`), `forward_`, not
-  `traditional_`, `dims_ == head_dim` (the full-row rotation, so
-  `half_dims = head_dim/2`), bf16 query and weight,
-  `weight.size() == head_dim`, the offsets array present, and the
-  rope's `use_fallback` false. The rope's f16 route, the freqs route
-  and the non-fused norm keep the unfused pair.
+The concrete sequence, in the order that keeps every step verifiable:
+
+1. **Hoist the decode locals** (`decode_env`, `decode_caps`,
+   `decode_bf16_probe`, `split_rows_route`, `decode_path_override`)
+   above the native one-pass route in
+   `ScaledDotProductAttention::eval_gpu`. They are pure reads and the
+   fold's decision needs them before any route dispatches.
+2. **Extract the split route's decision** into a pure lambda defined in
+   place (capturing the locals by reference), returning the params, the
+   p1/p2 kernels, the block size and the row count, or `nullopt`. The
+   ordinary split block becomes `if (auto route = split_route()) {
+   dispatch }` - one copy of the guards, no precedence change.
+3. **The fold at the top of `eval_gpu`:** when
+   `MLX_OMARCHY_FUSE3=1` and the planner armed this node, call
+   `split_route()`; fold only when the selected p1 is
+   `SdpaDecodeSplitP1R4BF16Hd256` (no pv, no bk64, one token, width
+   256), the raw query is bf16, and the rope's `dims == head_dim`.
+   Otherwise run the skipped rope node in place now, before any route
+   binds the query.
+4. **The folded dispatch inside the split block:** the raw query, the
+   norm weight and the offsets ride bindings 4-6, and the rope params
+   ride the push fields the split kernels leave free: eps bits in
+   `operation`, the rope scale bits in `lhs_size`, the freq exponent
+   (`log(base) / half_dims`) in `beta`, the half dims in `dims`, the
+   query row's time index in `matrix_m`, the offsets buffer offset in
+   `output_offset` and the weight element offset in `aux_size`. Pass 2
+   is unchanged.
+5. **The late safety net:** right after the split block, if the plan
+   was armed but the block did not run (a guard the arming predicate
+   missed), run the rope in place - the later routes then find a query
+   with its data instead of crashing.
+6. **The planner** (`fused_chain.cpp`): the scan arms the attention
+   node when its query is a single-use `fast::RoPE` output with the
+   fused norm (bf16, forward, non-traditional, `dims == head_dim`, the
+   rope's `use_fallback` false) and marks the rope node as skipped;
+   `try_eval_eager_fusion` returns true for the skipped rope node; the
+   plan accessor and the refusal hook are the two functions the
+   attention eval calls.
+
+Eligibility refuses everything else to the unfused pair: the rope's
+f16 route, the freqs route, the non-fused norm, prefill shapes, and
+every non-split route.
+
+The flag: `MLX_OMARCHY_FUSE3=1` enables the fold; unset or `0` keeps
+the unfused pair. It gates both the planner's skip and the attention's
+fold, so a half-armed state cannot skip the rope without folding it.
 - **The flag:** `MLX_OMARCHY_FUSE3=1` enables the fold; unset or `0`
   keeps the unfused pair. It must gate both the planner's arming and
   the attention's fold, so a half-armed state cannot skip the rope
