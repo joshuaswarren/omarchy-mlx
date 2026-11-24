@@ -439,6 +439,12 @@ try:
     GLUE_FNS.add(torch.sym_int)
 except AttributeError:
     pass
+# symbolic-int bookkeeping over dynamic shapes (e.g. HF DynamicCache
+# seq-length sums): concrete ints at call time - pure glue, no kernel.
+for _sf in ("sym_sum",):
+    _f = getattr(torch, _sf, None)
+    if _f is not None:
+        GLUE_FNS.add(_f)
 
 _METHOD_DT = {"float": mx.float32, "double": mx.float32, "half": mx.float16,
               "bfloat16": mx.bfloat16, "int": mx.int32, "long": mx.int64,
