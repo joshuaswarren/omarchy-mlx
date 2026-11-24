@@ -22,7 +22,8 @@ def _np(a):
 def test_select_backward():
     rng = np.random.RandomState(0)
     for sizes, dim, index in (((3, 4, 5), 1, 2), ((3, 4, 5), 2, 0),
-                              ((3, 4, 5), -1, 4), ((6,), 0, 0)):
+                              ((3, 4, 5), -1, 4), ((6,), 0, 0),
+                              ((3, 4, 5), 1, -1), ((3, 4, 5), 0, -3)):
         dd = dim % len(sizes)
         gg = np.asarray(rng.randn(*[s for i, s in enumerate(sizes) if i != dd]),
                         dtype=np.float32)
@@ -32,7 +33,21 @@ def test_select_backward():
         want = x.grad.numpy()
         assert got.shape == want.shape, (sizes, dim, index, got.shape)
         assert np.allclose(_np(got), want), (sizes, dim, index)
-    print("test_select_backward PASS")
+
+
+def test_select_backward_nan_inf():
+    # A NaN/Inf grad must land only on the selected slice; unselected
+    # positions are exactly 0 (g * 0 would leak NaN/Inf, mx.where does not).
+    sizes, dim, index = (2, 3), 1, 0
+    gg = np.array([np.nan, np.inf], dtype=np.float32)
+    got = _np(mlx_vulkan._select_backward(mx.array(gg), sizes, dim, index))
+    x = torch.zeros(*sizes, requires_grad=True)
+    x.clone().select(dim, index).backward(torch.tensor(gg))
+    want = x.grad.numpy()
+    assert np.array_equal(np.isnan(got), np.isnan(want)), (got, want)
+    assert np.array_equal(np.isinf(got), np.isinf(want)), (got, want)
+    assert np.all(got[:, 1:] == 0.0), got
+    print("test_select_backward_nan_inf PASS")
 
 
 def test_tanh_backward():
@@ -91,6 +106,7 @@ def test_dispatch_registered():
 
 if __name__ == "__main__":
     test_select_backward()
+    test_select_backward_nan_inf()
     test_tanh_backward()
     test_bitwise_and()
     test_new_ones()

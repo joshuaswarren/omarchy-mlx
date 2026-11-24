@@ -700,10 +700,11 @@ def _select_backward(g, sizes, dim, index):
     g = _mx(g)
     sizes = [int(s) for s in sizes]
     dim = int(dim) % len(sizes)
+    index = int(index) % sizes[dim]
     shape = [1] * len(sizes)
     shape[dim] = sizes[dim]
-    mask = (mx.arange(sizes[dim]) == int(index)).astype(g.dtype).reshape(shape)
-    return mx.expand_dims(g, dim) * mask
+    mask = (mx.arange(sizes[dim]) == index).reshape(shape)
+    return mx.where(mask, mx.expand_dims(g, dim), mx.zeros((), dtype=g.dtype))
 
 
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
