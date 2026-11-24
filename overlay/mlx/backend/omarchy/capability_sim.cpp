@@ -156,6 +156,22 @@ const SimulationProfile kProfiles[] = {
         -1,
         "Apple M1 (G13G B1)",
     },
+    {
+        "m6-g18g",
+        "honeykrisp_fork",
+        "Apple M6 (G18G) device name over the runtime capability set: "
+        "the GDN fused routes compose on the part "
+        "(gdn_g18g_composed_default); no capability axis changes",
+        -1,
+        0,
+        kAllSubgroupOps,
+        -1,
+        0,
+        0,
+        0,
+        -1,
+        "Apple M6 (G18G B1)",
+    },
 };
 
 std::string lowered(const char* v) {

@@ -742,6 +742,21 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
   return gdn_conv_delta_norm_default_part(device_name) ? 2 : 0;
 }
 
+// Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
+// decode routes miscompute there. On the 2026-11-24 PAR-35 A/B the fused
+// path diverged from the ops reference from layer 1 prefill on, while the
+// composed path was bit-identical at every layer and step. The part
+// composes until the fused kernels match it.
+// MLX_OMARCHY_GDN_G18G_FUSED=1 re-enables the fused route for
+// measurement. Pure.
+inline bool gdn_g18g_composed_default(const std::string& device_name) {
+  if (device_name.find("G18G") == std::string::npos) {
+    return false;
+  }
+  const char* env = std::getenv("MLX_OMARCHY_GDN_G18G_FUSED");
+  return env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0;
+}
+
 // ArgMax, ArgMin and LogSumExp over a long row (8192 to 1048576 columns, the vocabulary row of a decode step): the parts whose default is the chunked
 // route of MLX_OMARCHY_ARGREDUCE_CHUNKED and MLX_OMARCHY_LSE_CHUNKED (one workgroup per 4096-column chunk plus a merge dispatch). Measured on G14C
 // (M2 Max, Qwen3.5-9B 4-bit decode, both on against both off, same tokens): about 3.9 percent on one boot and 3.2 percent on another,

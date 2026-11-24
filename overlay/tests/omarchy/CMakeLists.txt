@@ -420,6 +420,20 @@ doctest_discover_tests(omarchy_gdn_legacy_policy_tests)
 add_test(NAME omarchy_gdn_legacy_policy_tests
          COMMAND omarchy_gdn_legacy_policy_tests)
 
+# GDN ops route on G18G: every GDN dispatch composes under the m6-g18g
+# capability simulation (main() pins MLX_OMARCHY_CAPS_SIM); the fused
+# kernels miscompute on the part (PAR-35).
+add_executable(omarchy_gdn_g18g_ops_route_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_g18g_ops_route.cpp)
+target_link_libraries(omarchy_gdn_g18g_ops_route_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_g18g_ops_route_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_g18g_ops_route_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_gdn_g18g_ops_route_tests)
+add_test(NAME omarchy_gdn_g18g_ops_route_tests
+         COMMAND omarchy_gdn_g18g_ops_route_tests)
+
 # Batched GDN decode (B > 1): rows bit-equal to per-row B=1 decode, fused.
 add_executable(omarchy_gdn_decode_batch_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_decode_batch.cpp)

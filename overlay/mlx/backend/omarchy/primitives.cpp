@@ -13717,7 +13717,17 @@ bool GatedDeltaUpdate::use_fallback(
   // fused kernels apply load+skip, so a mask no longer forces the
   // composed fallback on its own.
   (void)has_mask;
-  return Dk != 128 || Dv != 128 || Hk <= 0 || Hv % Hk != 0;
+  if (Dk != 128 || Dv != 128 || Hk <= 0 || Hv % Hk != 0) {
+    return true;
+  }
+  // G18G (Apple M6): the fused forward miscomputes there
+  // (gdn_g18g_composed_default): compose until the kernels match.
+  if (s.device == Device::gpu && omarchy::is_available() &&
+      omarchy::gdn_g18g_composed_default(
+          omarchy::device(s.device.index).capabilities().device_name)) {
+    return true;
+  }
+  return false;
 }
 
 // Gradient of the gated delta update (upstream #4565): the fused backward
@@ -13751,6 +13761,14 @@ bool GatedDeltaUpdateVJP::use_fallback(
     return true;
   }
   if (Dk != 128 || Dv != 128 || Hk <= 0 || Hv <= 0) {
+    return true;
+  }
+  // G18G (Apple M6): the forward's fused kernels miscompute there
+  // (gdn_g18g_composed_default); the backward is the same kernel family,
+  // so the part composes until they match.
+  if (omarchy::is_available() &&
+      omarchy::gdn_g18g_composed_default(
+          omarchy::device(s.device.index).capabilities().device_name)) {
     return true;
   }
   if (Hk == Hv) {
