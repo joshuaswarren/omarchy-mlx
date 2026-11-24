@@ -792,6 +792,7 @@
 #include "qmm_intel_bf16.h"
 #include "matmul_bf16_coopmat_xe16.h"
 #include "qmm_coopmat16_xe.h"
+#include "qmm_coopmat16_bf16.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -2269,6 +2270,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_bf16_coopmat_xe16, matmul_bf16_coopmat_xe16_size};
     case ComputeKernel::QmmPrefillCoopmat16XeBF16:
       return {qmm_coopmat16_xe, qmm_coopmat16_xe_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16x16:
+      return {qmm_coopmat16_bf16, qmm_coopmat16_bf16_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -2286,6 +2289,7 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::QmmPrefillIntelBF16:
     case ComputeKernel::MatmulBF16CoopmatXe16:
     case ComputeKernel::QmmPrefillCoopmat16XeBF16:
+    case ComputeKernel::QmmPrefillCoopmatBF16x16:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
