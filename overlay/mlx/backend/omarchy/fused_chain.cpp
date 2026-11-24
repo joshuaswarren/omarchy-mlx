@@ -1874,6 +1874,28 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // so the differences carry the decision-relevant part of the state.
   bool su_ref_set = false;
   Shape su_ref_start, su_ref_end;
+  // Chunked prefill moves the cache-window position through scalar int32
+  // leaf inputs (RoPE and attention offsets equal the SliceUpdate window
+  // start). A value-tagged scalar gives every chunk position a fresh
+  // signature, so the single-slot cache can never hit across chunks.
+  // MLX_OMARCHY_PLAN_REL_OFFSETS tags such scalars by anchor-match
+  // against the first SliceUpdate's start instead of by value; the plan
+  // reads the inputs live at replay, so the value is not plan structure.
+  const bool rel_offsets =
+      std::getenv("MLX_OMARCHY_PLAN_REL_OFFSETS") != nullptr;
+  Shape su_anchor;
+  bool su_anchor_set = false;
+  if (rel_offsets) {
+    for (const auto& t : tape) {
+      if (t.has_primitive() &&
+          typeid(t.primitive()) == typeid(SliceUpdate)) {
+        su_anchor =
+            std::get<1>(static_cast<const SliceUpdate&>(t.primitive()).state());
+        su_anchor_set = true;
+        break;
+      }
+    }
+  }
   // The cache grows one row per decode step, so absolute lengths churn
   // the signature while the plan stays fixed. Planning predicates only
   // compare dims to small literals (0/1) or to each other, so values
@@ -1946,11 +1968,18 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       if (in.size() == 1 && in.dtype() == int32 &&
           in.status() == array::Status::available &&
           !in.has_primitive()) {
-        const uint32_t key = static_cast<uint32_t>(in.item<int>());
-        if (!val_ord.find(key)) {
-          val_ord[key] = next_val++;
+        const int v = in.item<int>();
+        if (su_anchor_set &&
+            std::find(su_anchor.begin(), su_anchor.end(), v) !=
+                su_anchor.end()) {
+          mix(0x5000000000000000ull);
+        } else {
+          const uint32_t key = static_cast<uint32_t>(v);
+          if (!val_ord.find(key)) {
+            val_ord[key] = next_val++;
+          }
+          mix(0x4000000000000000ull | (val_ord[key] + 1));
         }
-        mix(0x4000000000000000ull | (val_ord[key] + 1));
       }
     }
     if (node.has_primitive()) {
