@@ -637,6 +637,7 @@ def run_step(
     flagsj = mx.array(
         np.array([int(frame), int(mode == 1), _JOINT_ARGMAX_ON()], np.int32)
     )
+    window = None
     if _JOINT_ARGMAX_ON():
         (logits, tok_val, tok_idx, dur_val, dur_idx) = _joint_argmax_kernel()(
             inputs=[
@@ -686,7 +687,6 @@ def run_step(
             threadgroup=(_JOINT_THREADS, 1, 1),
             stream=mx.gpu,
         )
-        window = None
     if spec_frames > 0:
         flags_w = mx.array(
             np.array(
