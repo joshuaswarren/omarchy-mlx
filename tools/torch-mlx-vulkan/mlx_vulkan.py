@@ -2182,18 +2182,18 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
             _st, _dyn = _slots["st"], _slots["dyn"]
             for i in _st:
                 flat[i] = state[ph_names[i]]
-            for i in _dyn:
+            for i, n in _dyn:
                 v = runtime_inputs[i]
                 # aot partitions re-feed the same param tensors each step:
                 # reuse the mx array unless the torch tensor was mutated
-                ent = pcache.get(i)
+                ent = pcache.get(n)
                 if (ent is not None and ent[0] is v
                         and ent[1] == getattr(v, "_version", None)):
                     flat[i] = ent[2]
                 else:
                     arr = _mx(v)
                     if isinstance(v, torch.Tensor):
-                        pcache[i] = (v, getattr(v, "_version", None), arr)
+                        pcache[n] = (v, getattr(v, "_version", None), arr)
                     flat[i] = arr
         else:
             flat, st, dyn = [], [], []
@@ -2201,6 +2201,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 name = ph_names[i]
                 if name in state:
                     flat.append(state[name])
+                    st.append(i)   # retry path: keep the slot tracked
                 elif name in conv_static:
                     flat.append(conv_static[name])
                 elif name in state_names:
@@ -2226,9 +2227,9 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                             arr = _cast(arr)
                         conv_static[name] = arr
                     else:
-                        dyn.append(i)
+                        dyn.append((i, n))
                         if isinstance(v, torch.Tensor):
-                            pcache[i] = (v, getattr(v, "_version", None), arr)
+                            pcache[n] = (v, getattr(v, "_version", None), arr)
                     flat.append(arr)
             # publish only after a clean build so a mid-setup exception
             # cannot leave a partially populated slot cache behind.
