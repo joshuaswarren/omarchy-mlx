@@ -585,8 +585,27 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs):
 # only seed state once. RMSNorm chains fuse to mx.fast.rms_norm; the sdpa FX
 # node maps to mx.fast.scaled_dot_product_attention; GEMM/sdpa inputs run bf16
 # while the residual/elementwise spine stays fp32 -> ids match CPU fp32.
+#
+# bf16 is the right default on Apple/Honeykrisp (measured ~2x decode on
+# Qwen3-0.6B) but not on Intel ANV: there fp32 GEMM is faster (7.5 vs 6.9
+# tok/s, B60) AND bf16 activation casts flip ids - a 0.024-margin top-2 tie
+# at decode step 5 resolved to the wrong index (PT-D5 bisect, greedy ids vs
+# CPU diverge at token 5 under bf16, 32/32 match under fp32). Default fp32 on
+# Intel parts; MV_DT=bf16|fp32 forces either arm.
 
-_DT = mx.bfloat16
+def _default_dt():
+    v = os.environ.get("MV_DT")
+    if v:
+        return {"bf16": mx.bfloat16, "fp32": mx.float32}[v]
+    try:
+        info = mx.device_info()
+        if info.get("vendor_id") == 0x8086 or "intel" in str(info.get("driver", "")).lower():
+            return mx.float32
+    except Exception:
+        pass
+    return mx.bfloat16
+
+_DT = _default_dt()
 
 # Optional weight quantization (MV_QUANT=4): static params whose every
 # consumer chain ends at a matmul-family op are stored packed via mx.quantize
