@@ -9023,13 +9023,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (small_t_requested < 0) {
     // Unset: default ON for the wide parts where the multi-row GEMV is a
     // measured small-M bandwidth win (G16S ~3x at M=2..4 vs the coopmat tile;
-    // G13C); OFF elsewhere (G13G regressed, receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
+    // G13C); OFF elsewhere pending per-part calibration.
     const std::string& st_dn = encoder.device().capabilities().device_name;
-    // G16S and G13C default to 8; G14C and initial G17C (Max class) keep 0 pending calibration on M5.
+    // G16S and G13C default to 8 (device cap clamps). G13G defaults to 4:
+    // the batch-4 GEMV beat the shipped row chain by +15..28% at M=4 across
+    // the 2B/4B shapes on jwm1, bit-identical rows (sweep 2026-11-24,
+    // scratch/wB1/qmv-sweep). M=8/16 already route to the tile. Initial G17C
+    // (Max class) keeps 0 pending calibration on M5; G14C pending the M2 leg.
     small_t_requested = (st_dn.find("G16S") != std::string::npos ||
                          st_dn.find("G13C") != std::string::npos)
         ? 8
-        : 0;
+        : (st_dn.find("G13G") != std::string::npos ? 4 : 0);
   }
   const int small_t_max = qmv_small_t_device_cap(encoder, small_t_requested);
   const int small_t_rows = x.ndim() >= 2 ? x.shape(-2) : 1;
