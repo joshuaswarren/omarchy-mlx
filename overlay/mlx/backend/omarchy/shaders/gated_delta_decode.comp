@@ -32,12 +32,17 @@
 //
 // Flag bit 4 (16u, gdn_update_unfused_default; G18G, or
 // MLX_OMARCHY_GDN_UPDATE_UNFUSED=1) selects the same composed-order walk
-// arithmetic bit 9 selects, without touching the gate prologue: the ops
-// chain's eager elementwise kernels leave state*g, (state*g)*k and
-// delta*k uncontracted on parts whose driver does not reassociate, so the
-// default association (k*g table, fma-contracted decay add) is a 1-ulp
-// miscompute there. The gate prologue keeps its own bit-9 checks - bf16
-// A_log models keep their shipped rounding sites either way.
+// arithmetic bit 9 selects, without touching the gate prologue's formula
+// or rounding sites: the ops chain's eager elementwise kernels leave
+// state*g, (state*g)*k and delta*k uncontracted on parts whose driver
+// does not reassociate, so the default association (k*g table,
+// fma-contracted decay add) is a 1-ulp miscompute there. Bit 4 also
+// stages the raw-gates g chain through precise temporaries (the same fix
+// gdn_g_composed applies on the bit-9 route): without it the compiler
+// folds the negate and the exp lowering's log2(e) scale into one
+// reassociated product, and g lands an ulp off the eager chain on some
+// heads on those parts. bf16 A_log models keep their shipped rounding
+// sites either way.
 
 #version 460
 
@@ -254,7 +259,22 @@ vec2 gdn_gates(uint head) {
     // The eager chain keeps g in f32 end to end (compute_g returns f32);
     // exp(A_log) and the product stay f32, so no bf16 round here: the
     // bf16 roundings the eager path applies are on x, sp, and beta.
-    g = exp(-(exp(a_log) * sp));
+    if ((params.flags & 16u) != 0u) {
+      // Bit 4 (ops-order parts): stage the chain through precise
+      // temporaries, the same fix gdn_g_composed uses on the f32 A_log
+      // route. Without it the compiler folds the negate and the exp
+      // lowering's log2(e) scale into the product (e * sp * -log2e in
+      // one reassociated product), and g lands an ulp off the eager
+      // chain on some heads (measured on G18G: 4 of 16 heads one ulp
+      // low, PAR-35).
+      precise float e = exp(a_log);
+      precise float p = e * sp;
+      precise float n = -p;
+      precise float g_precise = exp(n);
+      g = g_precise;
+    } else {
+      g = exp(-(exp(a_log) * sp));
+    }
 #else /* GDN_COMPOSED_ORDER */
     if ((params.flags & 512u) != 0u) {
       // Bit 9 (f32 A_log) selects the models whose serving reference is
