@@ -10142,16 +10142,23 @@ bool dispatch_quantized_gemv_group(
   // Unset or "0" refuses and the caller falls back; today's route is
   // byte-for-byte the default.
   bool any_dual_out = false;
+  bool any_window = false;
   for (auto& member : members) {
     if (member.out_view) {
       any_dual_out = true;
+    }
+    if (member.sum_window) {
+      any_window = true;
     }
   }
   if (any_dual_out) {
     const char* dual_env = std::getenv("MLX_OMARCHY_QMM_DUAL_OUT");
     bool dual_enabled = dual_env != nullptr && dual_env[0] != '\0' &&
         std::strcmp(dual_env, "0") != 0;
-    if (!dual_enabled || token_route || outgate != nullptr ||
+    // dual bits with a KV-window member mix two store contracts in one
+    // group; the per-member kernel check catches it, the route refuses it
+    // (wAP review of #798)
+    if (!dual_enabled || any_window || token_route || outgate != nullptr ||
         swiglu_out != nullptr) {
       return false;
     }

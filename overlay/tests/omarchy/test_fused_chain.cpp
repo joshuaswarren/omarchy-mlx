@@ -2346,6 +2346,44 @@ TEST_CASE("dual-write group refuses view members without the flag") {
   unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
 }
 
+TEST_CASE("dual-write group refuses a KV-window member (wAP review of 798)") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  auto a = make_linear(64, k, bfloat16, stream);
+  auto b = make_linear(64, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+  array parent = zeros({128}, bfloat16, stream);
+  parent.eval();
+  sync_stream(stream);
+  array window_base = zeros({16}, bfloat16, stream);
+  window_base.eval();
+  sync_stream(stream);
+
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
+  members.push_back({project(x, b, stream), std::nullopt, std::nullopt});
+  members[0].out_view = {parent, 0u};
+  // A KV-window member mixes two store contracts in one group: the route
+  // must refuse even though only member[1] carries the window and the
+  // kernel's per-member dual_i check would keep the stores apart.
+  members[1].sum_window = mlx::core::omarchy::KvDirectWindow{
+      window_base, window_base, 0u, {1u, 1u, 1u, 1u}, 1u};
+  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+  uint64_t before = counters().vk_compute_dispatches.load();
+  CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
+  CHECK_EQ(counters().vk_compute_dispatches.load(), before);
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+}
+
 TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
   if (!compute_available()) {
     return;
