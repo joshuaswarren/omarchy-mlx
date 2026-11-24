@@ -143,8 +143,9 @@ def _mx(v):
 def _torch(v):
     if isinstance(v, mx.array):
         if v.dtype == mx.bfloat16:
-            # numpy has no bf16 buffer descriptor: round the bits through uint16
-            return torch.from_numpy(np.array(mx.view(v, mx.uint16))).view(torch.bfloat16)
+            # numpy has no bf16 buffer descriptor and mx.view needs the last
+            # axis contiguous (transposed arrays are not): widen to f32 in mlx.
+            return torch.from_numpy(np.array(mx.astype(v, mx.float32)))
         return torch.from_numpy(np.array(v, copy=True))
     if isinstance(v, (tuple, list)):
         return type(v)(_torch(x) for x in v)
@@ -628,6 +629,20 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     if b is not None:
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
+
+def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
+    # torch: a NCL, w OIL ; mlx.conv1d: x NLC, w (L, I/groups, O)
+    if groups != 1:
+        return _raise("grouped conv1d")
+    x = _mx(a).transpose(0, 2, 1)
+    wt = _mx(w).transpose(0, 2, 1)  # OIL -> O,L,I (mlx conv1d weight layout)
+    p = padding[0] if isinstance(padding, (list, tuple)) else padding
+    st = stride[0] if isinstance(stride, (list, tuple)) else stride
+    dl = dilation[0] if isinstance(dilation, (list, tuple)) else dilation
+    y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl)
+    if b is not None:
+        y = y + _mx(b).reshape(1, -1)
+    return y.transpose(0, 2, 1)
 
 def _tup(v, n):
     return tuple(v) if isinstance(v, (list, tuple)) else (v,) * n
@@ -1209,6 +1224,7 @@ _FUNC_SPECS = {
     "_native_batch_norm_legit_functional": _bn_legit_functional,
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
+    "conv1d": _conv1d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
     "max_pool2d_with_indices": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices=True),
     "max_pool2d_with_indices_backward": _max_pool2d_bwd,
