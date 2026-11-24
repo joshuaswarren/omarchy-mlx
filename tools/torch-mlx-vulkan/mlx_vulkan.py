@@ -423,6 +423,50 @@ def _adaptive_avg_pool2d_backward(grad_output, a):
     return acc
 
 
+def _bn3(x, w, b, rm, rv, training, momentum, eps):
+    """batch-norm forward, channel dim 1 (N,C,... layout). Training
+    normalizes with the biased batch variance (torch semantics); eval
+    reads the running stats. Returns (out, save_mean, save_invstd)."""
+    x = _mx(x)
+    bc = [1, -1] + [1] * (x.ndim - 2)
+    if training:
+        axes = tuple(d for d in range(x.ndim) if d != 1)
+        mean = mx.mean(x, axis=axes, keepdims=True)
+        var = mx.var(x, axis=axes, keepdims=True)
+    else:
+        mean = mx.reshape(_mx(rm), bc)
+        var = mx.reshape(_mx(rv), bc)
+    invstd = mx.rsqrt(var + eps)
+    y = (x - mean) * invstd
+    if w is not None:
+        y = y * mx.reshape(_mx(w), bc)
+    if b is not None:
+        y = y + mx.reshape(_mx(b), bc)
+    squeeze = lambda t: mx.reshape(t, (-1,)) if t.ndim > 1 else t
+    return y, squeeze(mean), squeeze(invstd)
+
+def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
+    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask."""
+    dy, x = _mx(dy), _mx(x)
+    axes = tuple(d for d in range(x.ndim) if d != 1)
+    bc = [1, -1] + [1] * (x.ndim - 2)
+    if training:
+        mean = mx.reshape(_mx(save_mean), bc)
+        invstd = mx.reshape(_mx(save_invstd), bc)
+    else:
+        mean = mx.reshape(_mx(rm), bc)
+        invstd = mx.rsqrt(mx.reshape(_mx(rv), bc) + eps)
+    wb = mx.reshape(_mx(w), bc) if w is not None else 1.0
+    xh = (x - mean) * invstd
+    if training:
+        dx = (dy - mx.mean(dy, axis=axes, keepdims=True)
+              - xh * mx.mean(dy * xh, axis=axes, keepdims=True)) * invstd * wb
+    else:
+        dx = dy * invstd * wb
+    dw = mx.sum(dy * xh, axis=axes) if (w is not None and out_mask[1]) else None
+    db = mx.sum(dy, axis=axes) if out_mask[2] else None
+    return (dx if out_mask[0] else None), dw, db
+
 # ---------------- lowering tables ----------------
 
 # torch-level function objects -> lowering. Built lazily below so missing
@@ -490,6 +534,10 @@ _FUNC_SPECS = {
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
+    # aten.batch_norm order: (x, weight, bias, running_mean, running_var, training, momentum, eps, cudnn)
+    "batch_norm": lambda x, w, b, rm, rv, training, momentum, eps, *k: _bn3(x, w, b, rm, rv, training, momentum, eps)[0],
+    "native_batch_norm": lambda x, w, b, rm, rv, training, momentum, eps: _bn3(x, w, b, rm, rv, training, momentum, eps),
+    "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
     "max_pool2d_with_indices": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices=True),
@@ -596,8 +644,8 @@ def _resolve(dotted):
 def _build_func_table():
     candidates = []
     for fn_name, lowering in _FUNC_SPECS.items():
-        if fn_name == "embedding":
-            continue  # spec is aten (weight, indices); python-order names map explicitly below
+        if fn_name in ("embedding", "batch_norm"):
+            continue  # specs are aten order; python-order names map explicitly below
         for src in (torch, F, torch.special):
             fn = getattr(src, fn_name, None)
             if fn is not None:
@@ -612,6 +660,8 @@ def _build_func_table():
         ("torch.nn.functional.softmax", _FUNC_SPECS["softmax"]),
         ("torch.nn.functional.scaled_dot_product_attention", _sdpa),
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
+        ("torch.nn.functional.batch_norm", lambda x, rm, rv, w=None, b=None, training=False, momentum=0.1, eps=1e-5: _bn3(x, w, b, rm, rv, training, momentum, eps)[0]),
+        ("torch.batch_norm", _FUNC_SPECS["batch_norm"]),
         ("torch.nn.functional.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
         ("torch.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
         ("operator.getitem", lambda t, i: t[i]),
@@ -636,6 +686,8 @@ def _build_func_table():
         FUNC_TABLE[fn] = lowering
 
 _build_func_table()
+# dotted-name resolve only covers torch attrs; operator.* objects register directly
+FUNC_TABLE[operator.iadd] = _FUNC_SPECS["add"]
 
 # name-keyed fallback: dynamo may reference e.g. torch._C._VariableFunctions.matmul
 # which is a different object than torch.matmul
@@ -658,6 +710,7 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
+ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 
 # zero-kernel bookkeeping targets: run on python values, logged GLUE
 GLUE_FNS = {len, tuple, list, dict, int, float, str, bool, slice, range, zip, torch.finfo, torch.iinfo,
