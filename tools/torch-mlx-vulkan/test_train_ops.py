@@ -104,11 +104,40 @@ def t_unsafe_view_mv_dot():
     no_fallback("view_mv_dot")
 
 
+def t_slice_clone_silu():
+    torch.manual_seed(0)
+    # aten.slice with implicit step=1 (4-arg form — the LoRA fwd emits this)
+    a = torch.randn(4, 16, 32, 128)
+    f = torch.compile(lambda t: t[:, :, :, :64], backend="mlx_vulkan")
+    check("slice implicit step", f(a), a[:, :, :, :64])
+    # clone(memory_format=...) kwarg — peft/rope emits it
+    c = torch.randn(4, 8, 16)
+    fc = torch.compile(lambda t: t.clone(memory_format=torch.contiguous_format),
+                       backend="mlx_vulkan")
+    check("clone memory_format", fc(c), c)
+    # slice_backward + silu_backward via train backend
+    sb = a.clone().requires_grad_(True)
+    g = torch.compile(lambda t: t[:, :, :, :64].sum(), backend="mlx_vulkan_train")
+    g(sb).backward()
+    rb = a.clone().requires_grad_(True)
+    rb[:, :, :, :64].sum().backward()
+    check("slice_backward", sb.grad, rb.grad, tol=1e-6)
+    x = torch.randn(8, 32)
+    sx = x.clone().requires_grad_(True)
+    h = torch.compile(lambda t: F.silu(t).sum(), backend="mlx_vulkan_train")
+    h(sx).backward()
+    rx = x.clone().requires_grad_(True)
+    F.silu(rx).sum().backward()
+    check("silu_backward", sx.grad, rx.grad, tol=1e-5)
+    no_fallback("slice_clone_silu")
+
+
 if __name__ == "__main__":
     t_lsm_fwd()
     t_lsm_bwd()
     t_t_backward()
     t_unsafe_view_mv_dot()
+    t_slice_clone_silu()
     fails = [n for n, ok, _ in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} pass; {len(fails)} fail", flush=True)
     sys.exit(1 if fails else 0)

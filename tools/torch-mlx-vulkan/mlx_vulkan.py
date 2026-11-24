@@ -188,6 +188,15 @@ def _slice(a, dim, start, end, step=1):
     idx[dim] = slice(start, end, step)
     return a[tuple(idx)]
 
+def _slice_backward(g, sizes, dim, start, end, step=1):
+    if step != 1:
+        _raise("slice_backward step != 1")
+    dim = dim % len(sizes)
+    end = min(end, sizes[dim])
+    pads = [(0, 0)] * len(sizes)
+    pads[dim] = (start, max(0, sizes[dim] - end))
+    return mx.pad(g, pads)
+
 def _split_sizes(a, sizes, dim):
     idx = list(np.cumsum(sizes))[:-1]
     return tuple(mx.split(a, idx, axis=dim))
@@ -1077,6 +1086,8 @@ _FUNC_SPECS = {
     "silu_backward": _silu_backward,
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
+    "silu_backward": lambda g, x: g * mx.sigmoid(x) * (1.0 + x * (1.0 - mx.sigmoid(x))),
+    "slice_backward": _slice_backward,
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
