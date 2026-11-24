@@ -196,7 +196,11 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // per-weight offsets ride in the push constants — except a weight's sum
 // store under the direct-KV flag (bit 12+i), which the host may aim at
 // one token row of a KV cache copy: out_strides[i] base element,
-// in_strides[i] the row gap, matrix_m the head dim.
+// in_strides[i] the row gap, matrix_m the head dim. Dual-write strided
+// outputs (bits 20+i, host refuses them together with the KV window):
+// the member's output store lands at out_strides[i] + column inside a
+// whole parent buffer the member's binding aliases; unflagged members
+// store at column exactly as before.
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   WVEC_T values[]; \
@@ -899,7 +903,10 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 }
 #endif
 #define Q4_MULTI_STORE(I, rounded) { \
-  output##I.values[column] = STORE_VALUE(rounded); \
+  bool dual_i = ((params.flags & (1048576u << I)) != 0u) && \
+      ((params.flags & (4096u << I)) == 0u); \
+  output##I.values[dual_i ? params.out_strides[I] + column : column] = \
+      STORE_VALUE(rounded); \
   bool raw_kv_i = ((params.flags & 262144u) != 0u) && \
       ((params.flags & (4096u << I)) != 0u) && \
       ((params.flags & (256u << I)) == 0u); \

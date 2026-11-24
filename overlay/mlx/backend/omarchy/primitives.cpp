@@ -10139,6 +10139,33 @@ bool dispatch_quantized_gemv_group(
   if (token_route && outgate != nullptr) {
     return false;
   }
+  // Dual-write strided outputs (FUSE-4): any member with a view opts the
+  // whole group into the MLX_OMARCHY_QMM_DUAL_OUT contract — single-row
+  // groups only, never with the out-gate prologue or the swiglu fold.
+  // Unset or "0" refuses and the caller falls back; today's route is
+  // byte-for-byte the default.
+  bool any_dual_out = false;
+  bool any_window = false;
+  for (auto& member : members) {
+    if (member.out_view) {
+      any_dual_out = true;
+    }
+    if (member.sum_window) {
+      any_window = true;
+    }
+  }
+  if (any_dual_out) {
+    const char* dual_env = std::getenv("MLX_OMARCHY_QMM_DUAL_OUT");
+    bool dual_enabled = dual_env != nullptr && dual_env[0] != '\0' &&
+        std::strcmp(dual_env, "0") != 0;
+    // dual bits with a KV-window member mix two store contracts in one
+    // group; the per-member kernel check catches it, the route refuses it
+    // (wAP review of #798)
+    if (!dual_enabled || any_window || token_route || outgate != nullptr ||
+        swiglu_out != nullptr) {
+      return false;
+    }
+  }
   const int k = x.shape(-1);
   if (k <= 0 || k % 64 != 0 ||
       x.size() != static_cast<size_t>(rows) * static_cast<size_t>(k)) {
@@ -10220,6 +10247,21 @@ bool dispatch_quantized_gemv_group(
     }
     if (members[i].epilogue.has_value() != members[i].addend.has_value()) {
       return false;
+    }
+    if (members[i].out_view) {
+      // Dual-write member: raw output only, bounded inside a whole
+      // dense parent the binding can alias.
+      const auto& view = *members[i].out_view;
+      const array& parent = view.parent;
+      if (members[i].epilogue || members[i].sum_window ||
+          parent.data_shared_ptr() == nullptr ||
+          parent.dtype() != dtype || !parent.flags().row_contiguous ||
+          parent.size() != parent.data_size() || parent.offset() != 0 ||
+          parent.size() > 0xFFFFFFFFull ||
+          view.offset + static_cast<uint32_t>(node.size()) >
+              parent.size()) {
+        return false;
+      }
     }
     if (members[i].epilogue) {
       const array& add = *members[i].epilogue;
@@ -10356,6 +10398,28 @@ bool dispatch_quantized_gemv_group(
         0);
   } else {
     for (auto& member : members) {
+      if (member.out_view) {
+        // Dual-write: alias the member into the caller's parent at its
+        // offset (the swiglu-fold copy_shared_buffer precedent); the
+        // kernel stores through out_strides[i]. No fresh allocation.
+        const auto& view = *member.out_view;
+        Strides view_strides(member.node.ndim(), 1);
+        for (int d = member.node.ndim() - 2; d >= 0; --d) {
+          view_strides[d] =
+              view_strides[d + 1] * member.node.shape(d + 1);
+        }
+        array::Flags view_flags;
+        view_flags.contiguous = true;
+        view_flags.row_contiguous = true;
+        view_flags.col_contiguous = false;
+        member.node.copy_shared_buffer(
+            view.parent,
+            view_strides,
+            view_flags,
+            member.node.data_size(),
+            view.offset);
+        continue;
+      }
       member.node.set_data(allocator().malloc(member.node.nbytes()));
       if (member.epilogue) {
         member.epilogue->set_data(allocator().malloc(member.epilogue->nbytes()));
@@ -10439,6 +10503,16 @@ bool dispatch_quantized_gemv_group(
       *res_norm_done = true;
     }
     return true;
+  }
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (!members[i].out_view) {
+      continue;
+    }
+    // Dual-write strided store: bits 20..23 pick out_strides[i] + column.
+    // A res_norm group returns above, so this loop only sees raw
+    // dual-write members (the route refuses epilogue+view mixing).
+    params.out_strides[i] = members[i].out_view->offset;
+    params.flags |= 1048576u << i;
   }
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
   bindings[0] = binding(outgate != nullptr ? outgate->x : x);

@@ -2274,3 +2274,212 @@ TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env override
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
   CHECK(omarchy::outgate_fold_enabled());
 }
+
+// FUSE-4 dual-write projection GEMV (MLX_OMARCHY_QMM_DUAL_OUT): member
+// outputs as strided views of a caller-provided parent buffer. The
+// dual-write route must be byte-identical to the whole-buffer group
+// route (and through it to the per-node baseline), refuse without the
+// flag, and serve a q/k/v triple or a gate/up pair in one dispatch.
+namespace {
+
+uint64_t dualout_fnv1a64(const void* data, size_t bytes) {
+  const uint8_t* p = (const uint8_t*)data;
+  uint64_t h = 0xcbf29ce484222325ull;
+  for (size_t i = 0; i < bytes; ++i) {
+    h ^= p[i];
+    h *= 0x100000001b3ull;
+  }
+  return h;
+}
+
+// Raw storage bits of a 16-bit array: the digest covers the stored
+// bytes exactly, no widening.
+std::vector<uint16_t> dualout_raw16(const array& value) {
+  if (value.dtype() == bfloat16) {
+    auto* p = value.data<bfloat16_t>();
+    const uint16_t* w = reinterpret_cast<const uint16_t*>(p);
+    return std::vector<uint16_t>(w, w + value.size());
+  }
+  auto* p = value.data<float16_t>();
+  const uint16_t* w = reinterpret_cast<const uint16_t*>(p);
+  return std::vector<uint16_t>(w, w + value.size());
+}
+
+// The dual-write entry point (fused_chain.h); a thin wrapper so the
+// cases below read like the env-flag routes they pin.
+bool mx_omarchy_dualout_dispatch(
+    std::vector<mlx::core::omarchy::GemvFusionMember>& members,
+    const Stream& stream) {
+  return mlx::core::omarchy::dispatch_quantized_gemv_group(
+      members, nullptr, stream);
+}
+
+} // namespace
+
+TEST_CASE("dual-write group refuses view members without the flag") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  auto a = make_linear(96, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+  array parent = zeros({192}, bfloat16, stream);
+  parent.eval();
+  sync_stream(stream);
+
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
+  members[0].out_view = {parent, 0u};
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+  uint64_t before = counters().vk_compute_dispatches.load();
+  CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
+  CHECK_EQ(counters().vk_compute_dispatches.load(), before);
+  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "0", 1);
+  CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+}
+
+TEST_CASE("dual-write group refuses a KV-window member (wAP review of 798)") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  auto a = make_linear(64, k, bfloat16, stream);
+  auto b = make_linear(64, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+  array parent = zeros({128}, bfloat16, stream);
+  parent.eval();
+  sync_stream(stream);
+  array window_base = zeros({16}, bfloat16, stream);
+  window_base.eval();
+  sync_stream(stream);
+
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
+  members.push_back({project(x, b, stream), std::nullopt, std::nullopt});
+  members[0].out_view = {parent, 0u};
+  // A KV-window member mixes two store contracts in one group: the route
+  // must refuse even though only member[1] carries the window and the
+  // kernel's per-member dual_i check would keep the stores apart.
+  members[1].sum_window = mlx::core::omarchy::KvDirectWindow{
+      window_base, window_base, 0u, {1u, 1u, 1u, 1u}, 1u};
+  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+  uint64_t before = counters().vk_compute_dispatches.load();
+  CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
+  CHECK_EQ(counters().vk_compute_dispatches.load(), before);
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+}
+
+TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  for (Dtype dtype : {bfloat16, float16}) {
+    // The q/k/v triple: three linears of different N against one x.
+    auto q = make_linear(96, k, dtype, stream);
+    auto kk = make_linear(64, k, dtype, stream);
+    auto v = make_linear(32, k, dtype, stream);
+    // The gate/up pair: equal N against one x.
+    auto gate = make_linear(64, k, dtype, stream);
+    auto up = make_linear(64, k, dtype, stream);
+    array x = astype(
+        random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+        dtype,
+        stream);
+    x.eval();
+    sync_stream(stream);
+
+    // Per-node baseline: plain quantized_matmul evals, no fusion.
+    std::vector<array> baseline;
+    for (const QuantizedLinear* l : {&q, &kk, &v, &gate, &up}) {
+      baseline.push_back(project(x, *l, stream));
+    }
+    eval(baseline);
+    sync_stream(stream);
+    std::vector<uint64_t> baseline_digests;
+    for (const auto& out : baseline) {
+      auto raw = dualout_raw16(out);
+      baseline_digests.push_back(
+          dualout_fnv1a64(raw.data(), raw.size() * 2));
+    }
+
+    setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+    // Triple: parent 192 wide, members at 0 / 96 / 160.
+    array qkv_parent = zeros({192}, dtype, stream);
+    qkv_parent.eval();
+    sync_stream(stream);
+    std::vector<mlx::core::omarchy::GemvFusionMember> triple;
+    triple.push_back({project(x, q, stream), std::nullopt, std::nullopt});
+    triple.push_back({project(x, kk, stream), std::nullopt, std::nullopt});
+    triple.push_back({project(x, v, stream), std::nullopt, std::nullopt});
+    triple[0].out_view = {qkv_parent, 0u};
+    triple[1].out_view = {qkv_parent, 96u};
+    triple[2].out_view = {qkv_parent, 160u};
+    uint64_t before = counters().vk_compute_dispatches.load();
+    CHECK(mx_omarchy_dualout_dispatch(triple, stream));
+    CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1);
+    qkv_parent.eval();
+    sync_stream(stream);
+
+    // Pair: parent 128 wide, members at 0 / 64.
+    array gu_parent = zeros({128}, dtype, stream);
+    gu_parent.eval();
+    sync_stream(stream);
+    std::vector<mlx::core::omarchy::GemvFusionMember> pair;
+    pair.push_back({project(x, gate, stream), std::nullopt, std::nullopt});
+    pair.push_back({project(x, up, stream), std::nullopt, std::nullopt});
+    pair[0].out_view = {gu_parent, 0u};
+    pair[1].out_view = {gu_parent, 64u};
+    before = counters().vk_compute_dispatches.load();
+    CHECK(mx_omarchy_dualout_dispatch(pair, stream));
+    CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1);
+    gu_parent.eval();
+    sync_stream(stream);
+
+    // Byte identity: every parent view equals its baseline output, and
+    // the digest over the stored bytes pins that identity.
+    auto expect_view = [&](const array& parent,
+                           uint32_t offset,
+                           size_t n,
+                           size_t which) {
+      INFO("member ", which, " dtype ", dtype);
+      array view = astype(
+          reshape(
+              slice(parent, {static_cast<int>(offset)},
+                    {static_cast<int>(offset + n)}, stream),
+              {1, 1, static_cast<int>(n)},
+              stream),
+          parent.dtype(),
+          stream);
+      view.eval();
+      sync_stream(stream);
+      expect_bit_exact(baseline[which], view, stream);
+      auto want = dualout_raw16(view);
+      uint64_t got = dualout_fnv1a64(want.data(), want.size() * 2);
+      CHECK_EQ(got, baseline_digests[which]);
+    };
+    expect_view(qkv_parent, 0u, 96u, 0);
+    expect_view(qkv_parent, 96u, 64u, 1);
+    expect_view(qkv_parent, 160u, 32u, 2);
+    expect_view(gu_parent, 0u, 64u, 3);
+    expect_view(gu_parent, 64u, 64u, 4);
+    unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+  }
+}

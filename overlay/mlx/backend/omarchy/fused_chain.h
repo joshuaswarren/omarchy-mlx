@@ -155,6 +155,16 @@ struct KvDirectWindow {
 // consumer (a bias or residual add), recorded as ONE QmmVecQ4Multi
 // dispatch when the first member evaluates. Every member output and
 // every Add output is materialized, so retained references stay valid.
+// Dual-write strided member output (MLX_OMARCHY_QMM_DUAL_OUT): the
+// member's output lives at |offset| inside the whole dense |parent|
+// buffer; the dispatch aliases the member node into the parent (the
+// swiglu-fold copy_shared_buffer precedent) and stores through
+// out_strides[i] + column. Empty keeps today's whole-buffer output.
+struct GemvOutView {
+  array parent;
+  uint32_t offset;
+};
+
 struct GemvFusionMember {
   array node;
   std::optional<array> epilogue;
@@ -162,6 +172,8 @@ struct GemvFusionMember {
   // Planned producer-direct write of the epilogue sum into the values
   // cache copy; empty keeps the sum in its own buffer.
   std::optional<KvDirectWindow> sum_window;
+  // Planned dual-write strided output; empty keeps the whole buffer.
+  std::optional<GemvOutView> out_view;
 };
 
 // Out-gate prologue fold: the group's shared x is the output of
