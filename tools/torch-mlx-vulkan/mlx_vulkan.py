@@ -39,6 +39,9 @@ def _mx(v):
 
 def _torch(v):
     if isinstance(v, mx.array):
+        if v.dtype == mx.bfloat16:
+            # numpy has no bf16 buffer descriptor: round the bits through uint16
+            return torch.from_numpy(np.array(mx.view(v, mx.uint16))).view(torch.bfloat16)
         return torch.from_numpy(np.array(v, copy=True))
     if isinstance(v, (tuple, list)):
         return type(v)(_torch(x) for x in v)
@@ -312,7 +315,7 @@ _FUNC_SPECS = {
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
     "empty": lambda *a, **k: mx.zeros(_shape_of(a, k)),
     "empty_like": lambda a, **k: mx.zeros(a.shape),
-    "tensor": lambda d, **k: mx.array(np.array(_torch(d)) if isinstance(d, (torch.Tensor, list, tuple)) else d),
+    "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
 }
