@@ -2059,6 +2059,51 @@ TEST_CASE("gemv epilogue-only route: the part rule") {
   CHECK_FALSE(omarchy::gemv_epilogue_only_part(""));
 }
 
+TEST_CASE("gemv wide route: the part rule and overrides") {
+  const char* names[] = {
+      "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_WIDE_GEMV"};
+  std::vector<std::optional<std::string>> saved;
+  for (const char* var : names) {
+    const char* v = std::getenv(var);
+    saved.push_back(v ? std::optional<std::string>(v) : std::nullopt);
+    unsetenv(var);
+  }
+  const std::string g13c = "Apple M1 Max (G13C C0)";
+  const std::string g13g = "Apple M1 (G13G B1)";
+  const std::string g14c = "Apple M2 Max (G14C B1)";
+  const std::string g16g = "Apple M4 (G16G B1)";
+  // Unset: on only where the multi-weight fold defaults off but the
+  // residual-norm epilogue defaults on (G14C today).
+  CHECK(omarchy::gemv_wide_route_enabled(g14c));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13c));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13g));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g16g));
+
+  setenv("MLX_OMARCHY_QMM_WIDE_GEMV", "1", 1);
+  CHECK(omarchy::gemv_wide_route_enabled(g14c));
+  CHECK(omarchy::gemv_wide_route_enabled(g13c));
+  CHECK(omarchy::gemv_wide_route_enabled(g13g));
+
+  setenv("MLX_OMARCHY_QMM_WIDE_GEMV", "0", 1);
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g14c));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13c));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13g));
+
+  setenv("MLX_OMARCHY_QMM_WIDE_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g14c));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13c));
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13g));
+
+  for (size_t i = 0; i < saved.size(); ++i) {
+    if (saved[i]) {
+      setenv(names[i], saved[i]->c_str(), 1);
+    } else {
+      unsetenv(names[i]);
+    }
+  }
+}
+
 TEST_CASE("qmm residual norm default: the part rule and overrides") {
   CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)"));
   CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));

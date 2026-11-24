@@ -225,6 +225,19 @@ bool dispatch_quantized_gemv_group(
     ResNormPlan* res_norm = nullptr,
     bool* res_norm_done = nullptr);
 
+// Wide sibling route: one QmmVecQ4WordSubgroup dispatch over a
+// weight-concatenated buffer (w, scales, biases concatenated along N,
+// built once per sibling set and cached by member weight ids) whose
+// wide output slab each member output aliases at its column offset.
+// Members carry no epilogue; their consumer Adds still dispatch.
+// Returns false having allocated nothing when any member falls outside
+// the contract; the caller then lets every node take its ordinary
+// eval_gpu path. Defined in primitives.cpp beside
+// dispatch_quantized_gemv_group.
+bool dispatch_quantized_gemv_wide(
+    std::vector<GemvFusionMember>& members,
+    const Stream& stream);
+
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
     const array& input,
@@ -304,6 +317,13 @@ bool outgate_fold_enabled();
 // G14C, off elsewhere). MLX_OMARCHY_FUSED_CHAIN=0 turns it off on every part.
 bool qmm_residual_norm_enabled(const std::string& device_name);
 bool qmm_residual_norm_enabled();
+
+// MLX_OMARCHY_QMM_WIDE_GEMV=1/0 forces same-x sibling projections onto
+// one weight-concatenated QmmVecQ4WordSubgroup dispatch with split
+// outputs; unset follows gemv_epilogue_only_part(device_name) (parts
+// where the multi-weight fold defaults off). MLX_OMARCHY_FUSED_CHAIN=0
+// turns it off on every part.
+bool gemv_wide_route_enabled(const std::string& device_name);
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off

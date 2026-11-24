@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <string_view>
 #include <initializer_list>
 #include <optional>
@@ -10205,6 +10207,25 @@ bool input_ready(const array& value, const Stream& stream) {
   return true;
 }
 
+// Wide sibling route cache: one weight-concatenated operand set per
+// sibling group, built once and reused for the model's lifetime. The
+// key is the ordered (w, scales, biases) ArrayDesc pointer triple of
+// every member; holding a live array ref per source pins each desc so
+// a recycled address can never alias a stale key. Weights are treated
+// as immutable (true for decode weights; a mutated weight would also
+// make the standalone path reread changed bytes, which this route
+// would not see until the cache entry ages out).
+struct QmmWideWeights {
+  array w;
+  array scales;
+  array biases;
+  std::vector<array> sources;
+};
+
+std::mutex qmm_wide_mutex;
+std::map<std::vector<std::uintptr_t>, QmmWideWeights> qmm_wide_cache;
+constexpr size_t kQmmWideCacheLimit = 256;
+
 } // namespace
 
 const char* qmm_geometry_name() {
@@ -10752,6 +10773,206 @@ bool dispatch_quantized_gemv_group(
     return true;
   }
   encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+  return true;
+}
+
+// Wide sibling route: same-x sibling projections dispatch as ONE stock
+// single-row word-subgroup pass over a weight-concatenated operand set
+// ([sum n, k/8] words, [sum n, k/64] scales and biases), whose wide
+// output slab each member aliases at its column offset. The shader's
+// per-column chain is untouched — matrix_n just grows — so every
+// member's outputs are bit-identical to its standalone dispatch, and
+// every removed sibling dispatch removes its ~23us serial turnaround.
+bool dispatch_quantized_gemv_wide(
+    std::vector<GemvFusionMember>& members,
+    const Stream& stream) {
+  if (members.size() < 2 || !q4_word_enabled()) {
+    return false;
+  }
+  auto& encoder = get_command_encoder(stream);
+  const auto& caps = encoder.device().capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  const array& x = members[0].node.inputs().at(0);
+  const Dtype dtype = members[0].node.dtype();
+  // The packed-uvec4 x reader needs the row base 16-byte aligned, the
+  // same rule the standalone path applies before it picks this kernel.
+  if (!subgroup_ready || dtype != bfloat16 ||
+      !float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
+      x.ndim() < 2 || x.shape(-2) != 1 || !input_ready(x, stream) ||
+      x.data_shared_ptr() == nullptr || !x.flags().row_contiguous ||
+      x.offset() % (8 * x.itemsize()) != 0) {
+    return false;
+  }
+  const int k = x.shape(-1);
+  if (k <= 0 || k % 64 != 0 || x.size() != static_cast<size_t>(k)) {
+    return false;
+  }
+  uint64_t total_n = 0;
+  std::vector<std::uintptr_t> key;
+  key.reserve(members.size() * 3);
+  for (auto& member : members) {
+    const array& node = member.node;
+    if (member.epilogue || member.addend || member.sum_window ||
+        member.out_view || node.inputs().size() != 4 ||
+        node.inputs()[0].id() != x.id() || node.dtype() != dtype ||
+        node.primitive().stream() != stream ||
+        typeid(node.primitive()) != typeid(QuantizedMatmul)) {
+      return false;
+    }
+    auto [group_size, bits, mode, transpose] =
+        static_cast<const QuantizedMatmul&>(node.primitive()).state();
+    if (mode != QuantizationMode::Affine || !transpose || bits != 4 ||
+        group_size != 64) {
+      return false;
+    }
+    const array& w = node.inputs()[1];
+    const array& scales = node.inputs()[2];
+    const array& biases = node.inputs()[3];
+    if (w.dtype() != uint32 || w.ndim() != 2 || scales.dtype() != dtype ||
+        biases.dtype() != dtype || scales.shape() != biases.shape() ||
+        scales.ndim() != 2) {
+      return false;
+    }
+    const int n = w.shape(0);
+    // The word kernel's paired-word fast path keys on n % 8 at the
+    // dispatch level: when k % 512 == 0 a member whose standalone n
+    // is not 8-aligned would take the serial path while the concat
+    // (with sum n % 8 == 0) would take the paired path — different
+    // lane->word mapping, not bit-identical. Requiring every member
+    // 8-aligned keeps both sides on the same chain; the serial path
+    // (k % 512 != 0) ignores n entirely.
+    if (n <= 0 || w.shape(1) != k / 8 || scales.shape(0) != n ||
+        scales.shape(1) != k / 64 ||
+        node.size() != static_cast<size_t>(n) ||
+        (k % 512 == 0 && n % 8 != 0) ||
+        !whole_dense(w, w.size()) || !whole_dense(scales, scales.size()) ||
+        !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
+        !input_ready(scales, stream) || !input_ready(biases, stream)) {
+      return false;
+    }
+    total_n += static_cast<uint64_t>(n);
+    key.push_back(w.id());
+    key.push_back(scales.id());
+    key.push_back(biases.id());
+  }
+  const auto& geometry = qmm_geometry();
+  if (total_n == 0 || total_n > 0xFFFFFFFFull ||
+      (total_n + geometry.columns - 1u) / geometry.columns >
+          kMaxComputeGroupCountX) {
+    return false;
+  }
+  const uint64_t x_offset = x.offset() / x.itemsize();
+  if (!compute_index_span_fits(x_offset, x.size())) {
+    return false;
+  }
+
+  // Weight concat, built once per sibling set on the first dispatch.
+  // The copies record ahead of the compute on this same encoder, so
+  // the first use is already ordered; later uses hit the finished
+  // buffers through the barrier tracker.
+  std::lock_guard<std::mutex> lock(qmm_wide_mutex);
+  if (qmm_wide_cache.size() >= kQmmWideCacheLimit) {
+    qmm_wide_cache.clear();
+  }
+  auto it = qmm_wide_cache.find(key);
+  if (it == qmm_wide_cache.end()) {
+    QmmWideWeights built{
+        array({static_cast<int>(total_n), k / 8}, uint32, nullptr, {}),
+        array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {}),
+        array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {}),
+        {}};
+    built.w.set_data(allocate_omarchy(built.w.nbytes()));
+    built.scales.set_data(allocate_omarchy(built.scales.nbytes()));
+    built.biases.set_data(allocate_omarchy(built.biases.nbytes()));
+    encoder.add_temporary(built.w);
+    encoder.add_temporary(built.scales);
+    encoder.add_temporary(built.biases);
+    VkDeviceSize w_dst = 0;
+    VkDeviceSize aux_dst = 0;
+    for (const auto& member : members) {
+      const array& w = member.node.inputs()[1];
+      const array& scales = member.node.inputs()[2];
+      const array& biases = member.node.inputs()[3];
+      encoder.add_temporary(w);
+      encoder.add_temporary(scales);
+      encoder.add_temporary(biases);
+      encoder.copy_buffer(
+          binding(w).buffer,
+          binding(built.w).buffer,
+          w.nbytes(),
+          static_cast<VkDeviceSize>(w.offset()),
+          w_dst);
+      encoder.copy_buffer(
+          binding(scales).buffer,
+          binding(built.scales).buffer,
+          scales.nbytes(),
+          static_cast<VkDeviceSize>(scales.offset()),
+          aux_dst);
+      encoder.copy_buffer(
+          binding(biases).buffer,
+          binding(built.biases).buffer,
+          biases.nbytes(),
+          static_cast<VkDeviceSize>(biases.offset()),
+          aux_dst);
+      w_dst += w.nbytes();
+      aux_dst += scales.nbytes();
+      built.sources.push_back(member.node.inputs()[1]);
+      built.sources.push_back(member.node.inputs()[2]);
+      built.sources.push_back(member.node.inputs()[3]);
+    }
+    it = qmm_wide_cache.emplace(std::move(key), std::move(built)).first;
+  }
+  const QmmWideWeights& weights = it->second;
+
+  // One wide output slab; every member output aliases its column
+  // range (the swiglu-fold copy_shared_buffer precedent).
+  array slab({static_cast<int>(total_n)}, dtype, nullptr, {});
+  slab.set_data(allocate_omarchy(slab.nbytes()));
+  encoder.add_temporary(slab);
+  encoder.add_temporary(weights.w);
+  encoder.add_temporary(weights.scales);
+  encoder.add_temporary(weights.biases);
+  uint32_t column = 0;
+  for (auto& member : members) {
+    Strides strides(member.node.ndim(), 1);
+    for (int d = member.node.ndim() - 2; d >= 0; --d) {
+      strides[d] = strides[d + 1] * member.node.shape(d + 1);
+    }
+    array::Flags flags;
+    flags.contiguous = true;
+    flags.row_contiguous = true;
+    flags.col_contiguous = false;
+    member.node.copy_shared_buffer(
+        slab, strides, flags, member.node.data_size(), column);
+    column += static_cast<uint32_t>(member.node.inputs()[1].shape(0));
+  }
+
+  ComputeParams params;
+  params.count = static_cast<uint32_t>(total_n);
+  params.operation = 4u;
+  params.reduce_size = 64u;
+  params.output_size = params.count;
+  params.lhs_offset = static_cast<uint32_t>(x_offset);
+  params.matrix_m = 1u;
+  params.matrix_n = static_cast<uint32_t>(total_n);
+  params.matrix_k = static_cast<uint32_t>(k);
+  params.shape[0] = 1u;
+  std::array<ComputeBinding, 5> bindings{
+      binding(x),
+      binding(weights.w),
+      binding(weights.scales),
+      binding(weights.biases),
+      binding(slab)};
+  const uint32_t groups =
+      (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+  encoder.dispatch_compute(
+      geometry.word,
+      bindings,
+      params,
+      std::min(groups, kMaxComputeGroupCountX),
+      1u,
+      1u);
   return true;
 }
 
