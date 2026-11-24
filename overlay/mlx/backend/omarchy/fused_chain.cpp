@@ -1267,9 +1267,19 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 
   auto* state = new EagerFusionState;
   eager_state = state;
-  std::unordered_map<std::uintptr_t, const array*> nodes;
-  std::unordered_map<std::uintptr_t, size_t> uses;
+  // Scratch index for this pass only: the maps die with the scope's
+  // planning section, so reusing thread-local storage is safe under
+  // nested scopes (a nested scope's constructor finishes before the
+  // outer constructor touches the maps again) and removes ~2 hash-map
+  // builds per eval_impl (same reuse contract as the encoder's
+  // WaveIndex).
+  static thread_local std::unordered_map<std::uintptr_t, const array*>
+      nodes;
+  static thread_local std::unordered_map<std::uintptr_t, size_t> uses;
+  nodes.clear();
+  uses.clear();
   nodes.reserve(tape.size());
+  uses.reserve(tape.size() * 3);
   for (const auto& node : tape) {
     nodes.emplace(node.id(), &node);
     for (const auto& input : node.inputs()) {
