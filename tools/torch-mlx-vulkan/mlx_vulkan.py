@@ -373,22 +373,34 @@ def _embedding_dense_backward(go, idx, num_weights, padding_idx,
     return out
 
 
+def _sdpa_bias(q, k, is_causal=False, attn_mask=None, causal_off=0):
+    # additive scores bias shared by the flash-cpu/efficient lowerings: an
+    # explicit attn_mask wins over is_causal; bool masks mean keep/drop.
+    if attn_mask is not None:
+        m = _mx(attn_mask)
+        return mx.where(m, 0.0, -mx.inf) if m.dtype == mx.bool_ else m
+    if not is_causal:
+        return None
+    sq, sk = q.shape[-2], k.shape[-2]
+    keep = mx.less_equal(mx.arange(sk).reshape(1, sk),
+                         mx.arange(sq).reshape(sq, 1) + causal_off)
+    return mx.where(keep, 0.0, -mx.inf)
+
+
 def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
     if dropout_p:
         _raise("flash_cpu dropout_p")
     q, k, v = _mx(q), _mx(k), _mx(v)
     k = _gqa_expand(k, q.shape[-3])
     v = _gqa_expand(v, q.shape[-3])
-    out = _sdpa(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
-                is_causal=is_causal, scale=scale)
     s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
-    scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
-    if is_causal:
-        T, S = scores.shape[-2], scores.shape[-1]
-        keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
-        scores = mx.where(keep, scores, -mx.inf)
-    if attn_mask is not None:
-        scores = scores + _mx(attn_mask)
+    bias = _sdpa_bias(q, k, is_causal, attn_mask)
+    out = mx.fast.scaled_dot_product_attention(q, k, v, scale=s,
+                                                  mask=None if bias is None else bias.astype(q.dtype))
+    scores = s * mx.matmul(q.astype(mx.float32),
+                           mx.swapaxes(k.astype(mx.float32), -2, -1))
+    if bias is not None:
+        scores = scores + _mx(bias).astype(mx.float32)
     lse = mx.logsumexp(scores, axis=-1)
     return (out, lse)
 
@@ -399,27 +411,30 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
         _raise("flash_cpu_bwd dropout_p")
     gout, q, k, v, out = _mx(gout), _mx(q), _mx(k), _mx(v), _mx(out)
     lse = _mx(lse)
+    dq_t, dk_t, dv_t = q.dtype, k.dtype, v.dtype
     hk = k.shape[-3]
     k = _gqa_expand(k, q.shape[-3])
     v = _gqa_expand(v, q.shape[-3])
     s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
-    scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
-    if is_causal:
-        T, S = scores.shape[-2], scores.shape[-1]
-        keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
-        scores = mx.where(keep, scores, -mx.inf)
-    if attn_mask is not None:
-        scores = scores + _mx(attn_mask)
+    bias = _sdpa_bias(q, k, is_causal, attn_mask)
+    scores = s * mx.matmul(q.astype(mx.float32),
+                           mx.swapaxes(k.astype(mx.float32), -2, -1))
+    if bias is not None:
+        scores = scores + _mx(bias).astype(mx.float32)
     if lse.ndim == scores.ndim:
         lse = lse[..., 0]
+    # backward in fp32: inputs can be bf16/fp16, so gout/out/v/k/q are
+    # promoted before the products and dq/dk/dv cast back at the end.
+    gout, out = gout.astype(mx.float32), out.astype(mx.float32)
     p = mx.exp(scores - lse[..., None])
     dv = mx.matmul(mx.swapaxes(p, -2, -1), gout)
-    dP = mx.matmul(gout, mx.swapaxes(v, -2, -1))
+    dP = mx.matmul(gout, mx.swapaxes(v.astype(mx.float32), -2, -1))
     dsum = mx.sum(gout * out, axis=-1, keepdims=True)
     dS = p * (dP - dsum)
-    dq = s * mx.matmul(dS, k)
-    dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q)
-    return (dq, _gqa_reduce(dk, hk), _gqa_reduce(dv, hk))
+    dq = s * mx.matmul(dS, k.astype(mx.float32))
+    dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q.astype(mx.float32))
+    return (dq.astype(dq_t), _gqa_reduce(dk, hk).astype(dk_t),
+            _gqa_reduce(dv, hk).astype(dv_t))
 
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
@@ -528,6 +543,77 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, e
         else:
             kw["mask"] = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
+
+def _sdpa_eff(q, k, v, attn_bias, compute_log_sumexp, dropout_p=0.0,
+              is_causal=False, scale=None):
+    # aten._scaled_dot_product_efficient_attention ->
+    # (output, logsumexp, philox_seed, philox_offset). is_causal maps to
+    # CausalFromTopLeft (causal_off=0).
+    if dropout_p not in (0, 0.0):
+        return _raise("efficient_attention dropout")
+    q, k, v = _mx(q), _mx(k), _mx(v)
+    k = _gqa_expand(k, q.shape[-3])
+    v = _gqa_expand(v, q.shape[-3])
+    s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
+    bias = _sdpa_bias(q, k, is_causal, attn_bias)
+    out = mx.fast.scaled_dot_product_attention(q, k, v, scale=s,
+                                                  mask=None if bias is None else bias.astype(q.dtype))
+    scores = s * mx.matmul(q.astype(mx.float32),
+                           mx.swapaxes(k.astype(mx.float32), -2, -1))
+    if bias is not None:
+        scores = scores + _mx(bias).astype(mx.float32)
+    lse = mx.logsumexp(scores, axis=-1)
+    z = mx.zeros((1,), mx.int64)
+    if not compute_log_sumexp:
+        lse = mx.zeros(q.shape[:-1] + (0,), mx.float32)
+    return (out, lse, z, z)
+
+def _sdpa_eff_fwd(q, k, v, bias, cu_seqlens_q, cu_seqlens_k,
+                  max_seqlen_q, max_seqlen_k, dropout_p, custom_mask_type,
+                  compute_log_sumexp=False, scale=None, seqlen_k=None,
+                  window_size=None):
+    # aten._efficient_attention_forward -> 6-tuple
+    # (output[BSHD], logsumexp[BHS], philox_seed, philox_offset,
+    #  max_seqlen_batch_q:int, max_seqlen_batch_k:int).
+    # Unlike _scaled_dot_product_efficient_attention (BHSD), this op's
+    # q/k/v are BSHD (attention.cu transposes 1<->2 in and out; lse stays
+    # in BHS layout).
+    if cu_seqlens_q is not None or cu_seqlens_k is not None:
+        return _raise("efficient_attention_forward cu_seqlens")
+    if seqlen_k is not None or window_size is not None:
+        return _raise("efficient_attention_forward seqlen_k/window_size")
+    if dropout_p not in (0, 0.0):
+        return _raise("efficient_attention_forward dropout")
+    if bias is not None and custom_mask_type != 0:
+        return _raise("efficient_attention_forward bias+mask_type")
+    if custom_mask_type not in (0, 1, 2):
+        return _raise(f"efficient_attention_forward mask_type={custom_mask_type}")
+    q, k, v = _mx(q), _mx(k), _mx(v)
+    sq, sk = q.shape[1], k.shape[1]
+    # BSHD -> BHSD for the mx sdpa / scores below.
+    q, k, v = (mx.swapaxes(t, 1, 2) for t in (q, k, v))
+    k = _gqa_expand(k, q.shape[-3])
+    v = _gqa_expand(v, q.shape[-3])
+    # bias is already (B, H, Sq, Sk) per attention.cu; only q/k/v/out are BSHD.
+    bias = _mx(bias)
+    is_causal = custom_mask_type in (1, 2)
+    off = 0 if custom_mask_type == 1 else (sk - sq if custom_mask_type == 2 else 0)
+    s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
+    b = _sdpa_bias(q, k, is_causal, bias, causal_off=off)
+    out = mx.fast.scaled_dot_product_attention(q, k, v, scale=s,
+                                                  mask=None if b is None else b.astype(q.dtype))
+    out = mx.swapaxes(out, 1, 2)  # BHSD -> BSHD
+    scores = s * mx.matmul(q.astype(mx.float32),
+                           mx.swapaxes(k.astype(mx.float32), -2, -1))
+    if b is not None:
+        scores = scores + b.astype(mx.float32)
+    lse = mx.logsumexp(scores, axis=-1)
+    if not compute_log_sumexp:
+        lse = mx.zeros(q.shape[:-1] + (0,), mx.float32)
+    z = mx.zeros((1,), mx.int64)
+    msq = int(max_seqlen_q) if max_seqlen_q is not None else sq
+    msk = int(max_seqlen_k) if max_seqlen_k is not None else sk
+    return (out, lse, z, z, msq, msk)
 
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     # torch: a NCHW, w OIHW ; mlx.conv2d: x NHWC, w (H, W, I/groups, O)
@@ -1154,13 +1240,14 @@ _FUNC_SPECS = {
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
-    "gelu_backward": _gelu_backward,
     "embedding_dense_backward": _embedding_dense_backward,
     "slice_backward": _slice_backward,
     "silu_backward": _silu_backward,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
+    "_scaled_dot_product_efficient_attention": _sdpa_eff,
+    "_efficient_attention_forward": _sdpa_eff_fwd,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
     "not_equal": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
@@ -2127,6 +2214,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name == "detach" and n.op == "call_function":
                 env[n] = args[0]
+
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
