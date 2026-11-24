@@ -1105,7 +1105,7 @@ def make_executor(gm):
 
             def _tick(nm):
                 if _nprof:
-                    stats["node_ms"][nm] = stats["node_ms"].get(nm, 0.0) + (_nt.perf_counter() - _t0)
+                    stats["node_ms"][nm] = stats["node_ms"].get(nm, 0.0) + (_nt.perf_counter() - _t0) * 1e3
 
             args = tuple(resolve(a, env) for a in node.args)
             kwargs = {k: resolve(v, env) for k, v in node.kwargs.items()}
@@ -1633,6 +1633,21 @@ def make_compiled_executor(gm, dt=None):
                     arr = _cast(arr)
                 state[name] = arr
                 flat.append(arr)
+            elif name in static_names:
+                # conv_static pins the quantized/cast array; pcache must not
+                # retain the raw full-precision source alongside it
+                arr = _mx(v)
+                if name in quant_names:
+                    try:
+                        arr = mx.quantize(arr, group_size=_Q_GS, bits=_Q_BITS)
+                        mx.eval(*arr)  # force now: lazy graphs would hold every bf16 source
+                    except Exception:
+                        quant_names.discard(name)
+                        arr = _cast(arr)
+                elif name not in fp32_params:
+                    arr = _cast(arr)
+                conv_static[name] = arr
+                flat.append(arr)
             else:
                 # aot partitions re-feed the same param tensors each step:
                 # reuse the mx array unless the torch tensor was mutated
@@ -1643,22 +1658,11 @@ def make_compiled_executor(gm, dt=None):
                     arr = _mx(v)
                     if isinstance(v, torch.Tensor):
                         pcache[n] = (v, getattr(v, "_version", None), arr)
-                if name in static_names:
-                    if name in quant_names:
-                        try:
-                            arr = mx.quantize(arr, group_size=_Q_GS, bits=_Q_BITS)
-                            mx.eval(*arr)  # force now: lazy graphs would hold every bf16 source
-                        except Exception:
-                            quant_names.discard(name)
-                            arr = _cast(arr)
-                    elif name not in fp32_params:
-                        arr = _cast(arr)
-                    conv_static[name] = arr
                 flat.append(arr)
         t1 = _t.perf_counter()
         outs = (build if _DBG_ENV is not None else cfn)(*flat)
         outs = outs if isinstance(outs, (tuple, list)) else (outs,)
-        mx.eval(*outs)
+        mx.eval(*[o for o in outs if isinstance(o, mx.array)])
         t2 = _t.perf_counter()
         # outs = real outputs + len(mutated) state tail. aot graphs have no
         # mutated placeholders, so all outputs are real (and include the
