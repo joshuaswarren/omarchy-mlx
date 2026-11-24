@@ -36,7 +36,14 @@ m=16: falls back to tile (cap 8), parity -2.1..+0.5% (noise).
 G13G: MLX_OMARCHY_QMV_SMALL_T default 0 -> 8 (qmv_small_t_default_part
 in device.h). Covers M=2..8 short-pass GEMV; M>=9 keeps the tile.
 M=5..7 unswept (same single batch-8 dispatch M=8 wins with).
-G14C: pending M2 leg (w9C). G17C: stays 0.
+G14C (M2, w9C leg, prod venv 0.32.4.dev202611230356+9b818504): default
+0 -> 8 too. Per-cell: m=8 sm8 +10.3..+56.0% at every shape; m<=4 batch-4
+~+7% median (-4.2..+25.0, m=2 cells noisy); m=16 tile parity. Bitwise:
+small identical at m<=4, sm8 identical through m=8, tile never. Medians
+across the 24 cells: def 0.3860, small 0.3544 (-8%), sm8 0.3024 (-22%),
+tile 0.5553 (+44% slower). M2 ids step skipped (gated HF repo, no
+token); moot — engaged rows are bit-identical so decode ids cannot
+diverge. G17C: stays 0.
 Note: the 2026-09-29 negative receipt probed coopmat-family variants,
 not this comparison; the small-row chain shipped 2026-11-15 and was
 never re-raced against the batch GEMV on G13G.
