@@ -52,14 +52,42 @@ def test_select_backward_nan_inf():
 
 def test_tanh_backward():
     rng = np.random.RandomState(1)
+    # fp32 + bf16 through the dispatch table: aten.tanh_backward.default
+    # runs grad*(1-out^2) in fp32 opmath over the saved output.
     x = rng.randn(4, 8).astype(np.float32)
     g = rng.randn(4, 8).astype(np.float32)
     out = np.tanh(x)
-    spec = mlx_vulkan._FUNC_SPECS["tanh_backward"]
-    got = spec(mx.array(g), mx.array(out))
-    xt = torch.tensor(x, requires_grad=True)
-    torch.tanh(xt).backward(torch.tensor(g))
-    assert np.allclose(_np(got), xt.grad.numpy(), atol=1e-7)
+    for tag in ("fp32", "bf16"):
+        if tag == "bf16":
+            ob = torch.tensor(out, dtype=torch.bfloat16)
+            gref = torch.tensor(g, dtype=torch.bfloat16)
+            ref = torch.ops.aten.tanh_backward.default(gref, ob)
+            mine = mlx_vulkan.ATEN_TABLE["tanh_backward"](
+                mx.array(gref.float().numpy()).astype(mx.bfloat16),
+                mx.array(ob.float().numpy()).astype(mx.bfloat16))
+            assert mine.dtype == mx.bfloat16, mine.dtype
+            got = torch.from_numpy(np.array(mine.astype(mx.float32)))
+            d = float((got - ref.float()).abs().max())
+            assert d < 0.02, f"bf16: {d:.3e}"
+        else:
+            gref = torch.tensor(g)
+            oref = torch.tensor(out)
+            ref = torch.ops.aten.tanh_backward.default(gref, oref)
+            mine = mlx_vulkan.ATEN_TABLE["tanh_backward"](
+                mx.array(g), mx.array(out))
+            assert mine.dtype == mx.float32
+            assert np.allclose(_np(mine), ref.numpy(), atol=1e-6)
+    # executor path: the aten.tanh_backward.default node lowers to mx.
+    gfx = torch.fx.Graph()
+    ph_g, ph_o = gfx.placeholder("g"), gfx.placeholder("o")
+    gfx.output(gfx.call_function(torch.ops.aten.tanh_backward.default, (ph_g, ph_o)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    res = run(torch.tensor(g), torch.tensor(out))
+    ref = torch.ops.aten.tanh_backward.default(torch.tensor(g), torch.tensor(out))
+    assert np.abs(_np(res) - ref.numpy()).max() < 1e-6
+    assert "tanh_backward" in stats["mlx"], stats
+    assert "tanh_backward" not in stats["cpu"], stats
     print("test_tanh_backward PASS")
 
 
