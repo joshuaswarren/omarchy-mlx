@@ -17279,8 +17279,14 @@ void ScaledDotProductAttention::eval_gpu(
         // kv-head pass 1 with one query row. Any other variant runs the
         // skipped rope node in place first, so the ordinary dispatch below
         // reads a query with its data.
-        const bool fold_here = rope_fold_ready && split_rows == 1u &&
+        // The fold covers both width-256 four-heads-per-kv-head pass-1
+        // variants (the plain one and the value-phase one the M1 Max and
+        // the M3 Pro take by default); their Q loads are the same code.
+        const bool fold_plain =
             split_p1 == omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+        const bool fold_pv =
+            split_p1 == omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256;
+        const bool fold_here = rope_fold_ready && split_rows == 1u && (fold_plain || fold_pv);
         if (rope_fold.has_value() && !fold_here) {
           omarchy::sdpa_rope_fold_refused(outputs[0].id());
           rope_fold.reset();
@@ -17294,14 +17300,19 @@ void ScaledDotProductAttention::eval_gpu(
         const uint32_t rope_dim_stride = fold_here
             ? checked_u32(rope_fold->x.strides()[3], tag, out)
             : 0u;
-        const omarchy::ComputeKernel rope_fold_kernel = fold_here
-            ? (apple_norm_enabled(
-                   encoder.device(),
-                   static_cast<size_t>(head_dim),
-                   static_cast<size_t>(heads))
-                   ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple
-                   : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope)
-            : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+        const bool fold_apple = fold_here && apple_norm_enabled(
+            encoder.device(),
+            static_cast<size_t>(head_dim),
+            static_cast<size_t>(heads));
+        const omarchy::ComputeKernel rope_fold_kernel = !fold_here
+            ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256
+            : fold_pv
+                ? (fold_apple
+                       ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256QropeApple
+                       : omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256Qrope)
+                : (fold_apple
+                       ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple
+                       : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope);
         // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
         for (uint32_t row = 0; row < split_rows; ++row) {
           const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);

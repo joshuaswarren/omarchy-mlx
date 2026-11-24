@@ -169,7 +169,8 @@ void split_p1(
     const Stream& s,
     bool qrope,
     const array* weight,
-    const array* offsets) {
+    const array* offsets,
+    bool pv = false) {
   std::vector<omarchy::ComputeBinding> bindings{
       bind(q), bind(k), bind(v), bind(scratch)};
   omarchy::ComputeParams p;
@@ -188,7 +189,10 @@ void split_p1(
   p.in_strides[1] = static_cast<uint32_t>(v.strides()[1]);
   p.in_strides[2] = static_cast<uint32_t>(v.strides()[2]);
   p.in_strides[3] = 1;
-  const auto kernel = omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+  const auto kernel = qrope
+      ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope
+      : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+  const auto kernel_pv = omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256;
   if (qrope) {
     p.operation = std::bit_cast<uint32_t>(ROPE_EPS);
     p.lhs_size = std::bit_cast<uint32_t>(ROPE_SCALE);
@@ -201,13 +205,15 @@ void split_p1(
     bindings.push_back(bind(*offsets));
   }
   auto& encoder = omarchy::get_command_encoder(s);
-  const auto routed = qrope
-      ? (apple_norm_route(s)
-             ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple
-             : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope)
-      : kernel;
+  const bool apple = apple_norm_route(s);
+  const auto routed = !qrope ? kernel
+      : pv ? (apple ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256QropeApple
+                    : omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256Qrope)
+           : (apple ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple
+                    : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope);
+  const auto plain = pv ? kernel_pv : kernel;
   encoder.dispatch_compute(
-      routed, bindings, p, static_cast<uint32_t>(KV_HEADS), 1u, 1u);
+      qrope ? routed : plain, bindings, p, static_cast<uint32_t>(KV_HEADS), 1u, 1u);
   sync(s);
 }
 
@@ -254,22 +260,25 @@ TEST_CASE("folded split p1 scratch equals the unfused rope+split scratch") {
   sync(s);
 
   rope_rms_norm_batch(raw, roped, weight, offsets, s);
-  split_p1(roped, k, v, scratch_unfused, s, false, nullptr, nullptr);
-  split_p1(raw, k, v, scratch_folded, s, true, &weight, &offsets);
-
   const size_t words = heads * (HD + 2u);
-  const auto* unfused = scratch_unfused.data<float>();
-  const auto* folded = scratch_folded.data<float>();
-  size_t diffs = 0;
-  for (size_t i = 0; i < words; ++i) {
-    if (std::memcmp(unfused + i, folded + i, sizeof(float)) != 0) {
-      if (diffs < 8u) {
-        std::printf("word %zu: unfused %.9g folded %.9g\n", i, unfused[i], folded[i]);
+  for (const bool pv : {false, true}) {
+    split_p1(roped, k, v, scratch_unfused, s, false, nullptr, nullptr, pv);
+    split_p1(raw, k, v, scratch_folded, s, true, &weight, &offsets, pv);
+
+    const auto* unfused = scratch_unfused.data<float>();
+    const auto* folded = scratch_folded.data<float>();
+    size_t diffs = 0;
+    for (size_t i = 0; i < words; ++i) {
+      if (std::memcmp(unfused + i, folded + i, sizeof(float)) != 0) {
+        if (diffs < 8u) {
+          std::printf("pv=%d word %zu: unfused %.9g folded %.9g\n", int(pv), i, unfused[i], folded[i]);
+        }
+        ++diffs;
       }
-      ++diffs;
     }
+    CAPTURE(pv);
+    CHECK_EQ(diffs, size_t{0});
   }
-  CHECK_EQ(diffs, size_t{0});
 }
 
 TEST_CASE("the folded route leaves the attention result unchanged") {

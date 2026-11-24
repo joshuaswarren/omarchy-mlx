@@ -1196,6 +1196,10 @@ enum class ComputeKernel : uint16_t {
   // Appended so earlier profile kernel ids do not move.
   SdpaDecodeSplitP1R4BF16Hd256Qrope,
   SdpaDecodeSplitP1R4BF16Hd256QropeApple,
+  // The same fold on the value-phase width-256 pass 1 (the default
+  // route on the M1 Max and the M3 Pro).
+  SdpaDecodeSplitP1VR4BF16Hd256Qrope,
+  SdpaDecodeSplitP1VR4BF16Hd256QropeApple,
   Count,
 };
 
