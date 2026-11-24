@@ -71,17 +71,32 @@ def safetensors_bytes(payload, only=None):
     """Sum *.safetensors blob sizes; None when no matching blob exists.
 
     `only` restricts the sum to exact sibling paths (multi-variant repos
-    where the served artifact is one file, e.g. laya's root variant)."""
+    where the served artifact is one file, e.g. laya's root variant).
+    Raises ValueError for a payload that is not the API's shape: a size
+    that is not a non-negative integer, or a skipped shard, would make
+    the sum wrong."""
+    if not isinstance(payload, dict):
+        raise ValueError("revision payload is not a JSON object")
+    siblings = payload.get("siblings")
+    if siblings is None:
+        return None
+    if not isinstance(siblings, list):
+        raise ValueError("siblings is not a list")
     total = 0
     seen = False
-    for sibling in payload.get("siblings") or []:
-        name = sibling.get("rfilename") or ""
-        size = sibling.get("size")
+    for sibling in siblings:
+        if not isinstance(sibling, dict) or not isinstance(sibling.get("rfilename"), str):
+            raise ValueError("a sibling has no string rfilename")
+        name = sibling["rfilename"]
         if only is not None and name not in only:
             continue
-        if name.endswith(".safetensors") and isinstance(size, int):
-            total += size
-            seen = True
+        if not name.endswith(".safetensors"):
+            continue
+        size = sibling.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError(f"{name!r} size {size!r} is not a non-negative integer")
+        total += size
+        seen = True
     return total if seen else None
 
 
@@ -99,14 +114,23 @@ def refresh(catalog_path, fetch, validate, api_base=DEFAULT_API_BASE, timeout=20
     try:
         raw = Path(catalog_path).read_text(encoding="utf-8")
         catalog = json.loads(raw)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         return EXIT_INVALID, [f"cannot read catalog: {exc}"]
     try:
         validate(catalog)
     except Exception as exc:
         return EXIT_INVALID, [f"catalog rejected by schema validator: {exc}"]
 
-    updated = copy.deepcopy(catalog)
+    try:
+        updated = copy.deepcopy(catalog)
+    except RecursionError as exc:  # the schema leaves `extension` open
+        return EXIT_INVALID, [f"cannot copy catalog: {exc}"]
+    for entry in updated["models"]:
+        only = (entry.get("extension") or {}).get("availability_files")
+        if only is not None and not (
+                isinstance(only, list) and all(isinstance(name, str) for name in only)):
+            return EXIT_INVALID, [
+                f"{entry['id']}: extension.availability_files is not a list of strings"]
     drifted = []
     changed = False
     for entry in updated["models"]:
@@ -114,8 +138,14 @@ def refresh(catalog_path, fetch, validate, api_base=DEFAULT_API_BASE, timeout=20
         revision = entry["revision"]
         try:
             head = fetch(f"{api_base}/{repo}")
+            if not isinstance(head, dict):
+                raise ValueError("head payload is not a JSON object")
             head_sha = head.get("sha")
+            if head_sha is not None and not (isinstance(head_sha, str) and head_sha):
+                raise ValueError(f"head sha {head_sha!r} is not a non-empty string")
             pinned = fetch(f"{api_base}/{repo}?blobs=true&revision={revision}")
+            size = safetensors_bytes(
+                pinned, (entry.get("extension") or {}).get("availability_files"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 report.append(
@@ -125,12 +155,10 @@ def refresh(catalog_path, fetch, validate, api_base=DEFAULT_API_BASE, timeout=20
             else:
                 report.append(f"{entry['id']}: fetch failed: HTTP {exc.code}")
             return EXIT_FETCH_ERROR, report
-        except Exception as exc:  # network, timeout, bad JSON
+        except Exception as exc:  # network, timeout, bad JSON, bad payload shape
             report.append(f"{entry['id']}: fetch failed: {exc}")
             return EXIT_FETCH_ERROR, report
 
-        size = safetensors_bytes(
-            pinned, (entry.get("extension") or {}).get("availability_files"))
         if size is None:
             report.append(f"{entry['id']}: no safetensors sizes in API payload; abort")
             return EXIT_FETCH_ERROR, report
@@ -172,6 +200,13 @@ def refresh(catalog_path, fetch, validate, api_base=DEFAULT_API_BASE, timeout=20
         raise AssertionError("refresher mutated catalog outside models/availability")
 
     updated["generated_at"] = now
+    # The API's sizes must still fit the schema (size_bytes is 1..2**48).
+    try:
+        validate(updated)
+    except Exception as exc:
+        report.append(f"refreshed catalog rejected by schema validator: {exc}; "
+                      "catalog not written")
+        return EXIT_FETCH_ERROR, report
 
     if check:
         report.append("check mode: no write")
