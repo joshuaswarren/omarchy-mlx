@@ -1211,6 +1211,13 @@ enum class ComputeKernel : uint16_t {
   // (shaders/qmm_vec.comp, QMM_LANES=16; requiredSubgroupSize 16).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S16KCONTS16,
+  // Fused GDN decode conv + gated-delta step for unequal key/value head
+  // counts (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED
+  // -DGDN_NATIVE_GQA_INDEX): the conv prologue reads q and k channels by
+  // the key-head index, the delta body is unchanged. Appended to keep
+  // profile kernel ids stable.
+  GatedDeltaDecodeConvBF16PfGqa,
+  GatedDeltaDecodeConvNormBF16PfGqa,
   Count,
 };
 

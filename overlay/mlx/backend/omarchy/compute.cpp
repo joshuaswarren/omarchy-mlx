@@ -399,6 +399,8 @@
 #include "gated_delta_decode_perrow_pfw_conv_bf16.h"
 #include "gated_delta_decode_perrow_pf_conv_norm_bf16.h"
 #include "gated_delta_decode_perrow_pfw_conv_norm_bf16.h"
+#include "gated_delta_decode_perrow_pf_conv_gqa_bf16.h"
+#include "gated_delta_decode_perrow_pf_conv_norm_gqa_bf16.h"
 #include "gated_delta_prefill_bf16.h"
 #include "gated_delta_prefill_coopmat_bf16.h"
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
@@ -1356,6 +1358,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_perrow_pfw_conv_norm_bf16,
           gated_delta_decode_perrow_pfw_conv_norm_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvBF16PfGqa:
+      return {
+          gated_delta_decode_perrow_pf_conv_gqa_bf16,
+          gated_delta_decode_perrow_pf_conv_gqa_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16PfGqa:
+      return {
+          gated_delta_decode_perrow_pf_conv_norm_gqa_bf16,
+          gated_delta_decode_perrow_pf_conv_norm_gqa_bf16_size};
     case ComputeKernel::GatedDeltaDecodeStateBF16:
       return {gated_delta_decode_state_bf16, gated_delta_decode_state_bf16_size};
     case ComputeKernel::GatedDeltaDecodeGqaStateBF16:
