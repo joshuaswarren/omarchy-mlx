@@ -1349,7 +1349,8 @@ def _run_method(obj, name, args, kwargs):
             return obj, True
         if name == "to":
             dt = next((a for a in args if isinstance(a, torch.dtype)), kwargs.get("dtype"))
-            return obj.astype(_MX_DT.get(dt, obj.dtype)) if dt else obj, True
+            mdt = _MX_DT.get(dt, obj.dtype)
+            return obj if mdt == obj.dtype else obj.astype(mdt), True
         if name in ("float", "half", "bfloat16", "int", "long", "double", "bool", "short", "byte", "char"):
             return obj.astype(_METHOD_DT[name]), True
         if name == "item":
@@ -1664,7 +1665,7 @@ def _quantizable_phs(phs):
     """Static 2-D params used only by matmul-family ops (through transparent ops)."""
     ok = set()
     for p in phs:
-        if not str(p.target).startswith("G_"):
+        if not str(p.target).startswith(("G_", "L_self_", "l_self_")):
             continue
         good, seen, stack = True, set(), list(p.users)
         while stack and good:
@@ -1741,10 +1742,121 @@ def _fuse_rmsnorm(nodes):
     return skip, final
 
 
+def _fuse_rope(nodes):
+    """HF NeoX-style rotary: add(mul(x, cos), mul(cat(neg(x[h:]), x[:h]), sin))
+    -> mx.fast.rope(x, 2h, traditional=False, base=theta, offset=pos0).
+
+    Only fuses when the cos/sin operands provably come from cos()/sin() nodes
+    (optionally scaled by a python-float attention scaling). Returns
+    (skip, fused) where fused[add_node] = (x_node, half_dim, out_scale).
+    """
+    nm = {n: getattr(n.target, "__name__", None) or _opname(n) for n in nodes}
+
+    def _slice_get(n):
+        if nm.get(n) != "getitem" or len(n.args) != 2:
+            return None
+        idx = n.args[1]
+        if not isinstance(idx, tuple):
+            return None
+        sl = [s for s in idx if isinstance(s, slice)]
+        if len(sl) != 1 or sl[0].step is not None:
+            return None
+        return n.args[0], sl[0].start, sl[0].stop
+
+    def _rot_src(cat):
+        if nm.get(cat) != "cat":
+            return None
+        seq = cat.args[0]
+        dim = cat.kwargs.get("dim", cat.args[1] if len(cat.args) > 1 else -1)
+        if dim != -1 or not (isinstance(seq, (tuple, list)) and len(seq) == 2):
+            return None
+        nneg, x1 = seq
+        if nm.get(nneg) != "neg" or not nneg.args:
+            return None
+        g2, g1 = _slice_get(nneg.args[0]), _slice_get(x1)
+        if not g1 or not g2 or g1[0] is not g2[0]:
+            return None
+        if g1[1] in (0, None) and g2[1] == g1[2] and g2[2] is None:
+            return g1[0], g2[1], {cat, nneg, x1, nneg.args[0]}
+        return None
+
+    def _trig_root(a, want):
+        # unsqueeze/cast*(trig | mul(trig, scalar)) -> (node, scale)
+        while (nm.get(a) in ("unsqueeze", "to", "contiguous", "detach", "float")
+               and a.args and isinstance(a.args[0], torch.fx.Node)):
+            a = a.args[0]
+        if nm.get(a) == want:
+            return a, 1.0
+        if nm.get(a) == "mul" and len(a.args) == 2:
+            for t, sc in ((a.args[0], a.args[1]), (a.args[1], a.args[0])):
+                if nm.get(t) == want and isinstance(sc, (int, float)):
+                    return t, float(sc)
+        return None, None
+
+    fused = {}
+    for n in nodes:
+        if nm.get(n) != "add" or len(n.args) != 2:
+            continue
+        for m_cos, m_sin in ((n.args[0], n.args[1]), (n.args[1], n.args[0])):
+            if nm.get(m_cos) != "mul" or nm.get(m_sin) != "mul":
+                continue
+            cat = next((a for a in m_sin.args
+                        if isinstance(a, torch.fx.Node) and nm.get(a) == "cat"), None)
+            rot = _rot_src(cat) if cat is not None else None
+            if not rot:
+                continue
+            x_rot, half, chain = rot
+            sin_op = next((a for a in m_sin.args if a is not cat
+                           and isinstance(a, torch.fx.Node)), None)
+            cos_op = next((a for a in m_cos.args if a is not x_rot
+                           and isinstance(a, torch.fx.Node)), None)
+            if cos_op is None or sin_op is None:
+                break
+            cn, csc = _trig_root(cos_op, "cos")
+            sn, ssc = _trig_root(sin_op, "sin")
+            if cn is None or sn is None or csc != ssc:
+                break
+            fused[n] = (x_rot, half, csc, {m_cos, m_sin} | chain)
+            break
+    consumers = {}
+    for n in nodes:
+        for a in n.args:
+            if isinstance(a, torch.fx.Node):
+                consumers.setdefault(a, []).append(n)
+            elif isinstance(a, (tuple, list)):
+                for x in a:
+                    if isinstance(x, torch.fx.Node):
+                        consumers.setdefault(x, []).append(n)
+    skip = set()
+    final = {}
+    for out, (x_rot, half, csc, chain) in fused.items():
+        ok = all(c in chain or c in fused
+                 for x in chain - {x_rot}
+                 for c in consumers.get(x, []))
+        if ok:
+            final[out] = (x_rot, half, csc)
+            skip.update(chain)
+    return skip, final
+
+
 def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
     skip, fused = _fuse_rmsnorm(nodes)
+    rskip, rfused = _fuse_rope(nodes)
+    pos_ph = next((n for n in phs if "position_ids" in str(n.target)), None)
+    invf_ph = next((n for n in phs if "rotary" in str(n.target)
+                    or "inv_freq" in str(n.target)), None)
+    if pos_ph is None or invf_ph is None:
+        rfused = {}
+    else:
+        skip |= rskip
+    # mx.fast.rope takes base=rope_theta (this fork's freqs= is the wavelength
+    # basis, not inv_freq). theta = inv_freq[1]^(-dims/2); recovered once from
+    # the runtime tensor so no host sync lands inside the traced graph.
+    _rope = {"base": None}
+    _invf_i = phs.index(invf_ph) if invf_ph is not None else -1
+    _rope_half = next(iter(rfused.values()))[1] if rfused else 0
     fp32_params = {str(w.target) for _, w, _ in fused.values()}
     # embedding gathers feed the whole residual spine; keep their source weights
     # fp32 (a gather is not a GEMM and gains nothing from the bf16 cast).
@@ -1756,23 +1868,43 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 w = w.args[0]
             if getattr(w, "op", None) == "placeholder":
                 fp32_params.add(str(w.target))
-    state_names = {str(n.target) for n in phs if "_cache_layers_" in str(n.target)}
+    def _ph_of(n):
+        while n is not None and n.op != "placeholder":
+            if not getattr(n, "args", None) or not isinstance(n.args[0], torch.fx.Node):
+                return None
+            n = n.args[0]
+        return n
+
+    def _state_ph(t):
+        # torch>=2.15 names StaticCache buffers
+        # L_kwargs_past_key_values_layers_N_{keys,values,cumulative_length};
+        # older dynamo lifted them as *_cache_layers_*.
+        return ("_cache_layers_" in t or
+                ("past_key_values" in t and
+                 t.endswith(("_keys", "_values", "_cumulative_length"))))
+
+    state_names = {str(n.target) for n in phs if _state_ph(str(n.target))}
     # cache placeholders only count as mutated state when the graph actually
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
     _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_")
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
-            and getattr(n.args[0], "op", None) == "placeholder"
-            and str(n.args[0].target) in state_names
+            and getattr(n.args[0], "op", None)
+            and (lambda p: p is not None and str(p.target) in state_names)(
+                _ph_of(n.args[0]))
             for n in nodes):
         state_names = set()
-    static_names = {str(n.target) for n in phs if str(n.target).startswith("G_")}
+    # dynamo names: G_* (older torch lifted globals) and L_self_*/l_self_*
+    # (torch>=2.4 nn params/buffers) are the static weights; L_kwargs_* are
+    # per-call inputs and stay dynamic.
+    static_names = {str(n.target) for n in phs
+                    if str(n.target).startswith(("G_", "L_self_", "l_self_"))}
     mutated = [n for n in phs if str(n.target) in state_names]
     quant_names = _quantizable_phs(phs) if _Q_BITS else set()
     conv_static = {}
     state = {}
-    holder = {"ar": None}
+    holder = {}
 
     _dte = dt or (mx.float32
                   if return_all_outputs and not os.environ.get("MV_DT")
@@ -1822,6 +1954,13 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 xn, wn, eps = fused[n]
                 env[n] = mx.fast.rms_norm(env[xn], env[wn], eps)
                 continue
+            if n in rfused:
+                xn, half, osc = rfused[n]
+                r = mx.fast.rope(env[xn], 2 * half, traditional=False,
+                                 base=_rope["base"], scale=1.0,
+                                 offset=env[pos_ph].reshape(-1)[0])
+                env[n] = r * osc if osc != 1.0 else r
+                continue
             args = tuple(res(a) for a in n.args)
             kwargs = {k: res(v) for k, v in n.kwargs.items()}
             if any(isinstance(a, _QW) for a in args) or any(
@@ -1863,15 +2002,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 kwargs = {k: _dqall(v) for k, v in kwargs.items()}
             if name == "index_copy_":
                 t, dim, idx, src = args[0], args[1], args[2], args[3]
-                smax = t.shape[dim]
-                if holder["ar"] is None or holder["ar"].shape[0] != smax:
-                    holder["ar"] = mx.arange(smax)
-                ar = holder["ar"]
-                inrange = ((ar >= idx.min()) & (ar <= idx.max())).reshape(
-                    [1] * dim + [smax] + [1] * (t.ndim - dim - 1))
-                shift = mx.clip(ar - idx.min(), 0, max(0, int(src.shape[dim]) - 1))
-                upd = mx.where(inrange,
-                               mx.take(_cast(src, t.dtype), shift, axis=dim), t)
+                if dim < 0:
+                    dim += src.ndim
+                sh = [1] * src.ndim
+                sh[dim] = idx.shape[0] if idx.ndim else 1
+                ib = mx.broadcast_to(idx.reshape(sh), src.shape)
+                upd = mx.put_along_axis(t, ib, _cast(src).astype(t.dtype), axis=dim)
                 env[n.args[0]] = upd      # model in-place mutation
                 env[n] = upd
                 continue
@@ -1965,57 +2101,83 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
         raise RuntimeError("no output node")
 
     cfn = mx.compile(build)
-    stats = {"fused_rms": len(fused), "state": len(state_names), "quant": len(quant_names)}
-    log.warning("compiled executor: fused_rms=%d state=%d quant=%d",
-                stats["fused_rms"], stats["state"], stats["quant"])
+    stats = {"fused_rms": len(fused), "fused_rope": len(rfused),
+             "state": len(state_names), "static": len(static_names),
+             "quant": len(quant_names)}
+    log.warning("compiled executor: fused_rms=%d fused_rope=%d state=%d static=%d quant=%d",
+                stats["fused_rms"], stats["fused_rope"], stats["state"],
+                stats["static"], stats["quant"])
 
     import time as _t
     _profile = os.environ.get("MV_PROF")
     _acc = {"prep": 0.0, "cfn": 0.0, "conv": 0.0, "n": 0}
 
+    ph_names = [str(n.target) for n in phs]
+    _slots = {"flat": None, "dyn": [], "st": []}
     pcache = {}
 
     def run(*runtime_inputs):
         t0 = _t.perf_counter()
-        flat = []
-        for n, v in zip(phs, runtime_inputs):
-            name = str(n.target)
-            if name in state:
-                flat.append(state[name])
-            elif name in conv_static:
-                flat.append(conv_static[name])
-            elif name in state_names:
-                arr = _mx(v)
-                if arr.ndim >= 2:
-                    arr = _cast(arr)
-                state[name] = arr
-                flat.append(arr)
-            elif name in static_names:
-                # conv_static pins the quantized/cast array; pcache must not
-                # retain the raw full-precision source alongside it
-                arr = _mx(v)
-                if name in quant_names:
-                    try:
-                        arr = mx.quantize(arr, group_size=_Q_GS, bits=_Q_BITS)
-                        mx.eval(*arr)  # force now: lazy graphs would hold every bf16 source
-                    except Exception:
-                        quant_names.discard(name)
-                        arr = _cast(arr)
-                elif name not in fp32_params:
-                    arr = _cast(arr)
-                conv_static[name] = arr
-                flat.append(arr)
-            else:
+        flat = _slots["flat"]
+        if flat is not None:
+            # steady state: statics are resident; refresh only state slots
+            # (rebound by the mutated-tail writeback) and per-call inputs.
+            _st, _dyn = _slots["st"], _slots["dyn"]
+            for i in _st:
+                flat[i] = state[ph_names[i]]
+            for i in _dyn:
+                v = runtime_inputs[i]
                 # aot partitions re-feed the same param tensors each step:
                 # reuse the mx array unless the torch tensor was mutated
-                ent = pcache.get(n)
-                if ent is not None and ent[0] is v and ent[1] == getattr(v, "_version", None):
-                    arr = ent[2]
+                ent = pcache.get(i)
+                if (ent is not None and ent[0] is v
+                        and ent[1] == getattr(v, "_version", None)):
+                    flat[i] = ent[2]
                 else:
                     arr = _mx(v)
                     if isinstance(v, torch.Tensor):
-                        pcache[n] = (v, getattr(v, "_version", None), arr)
-                flat.append(arr)
+                        pcache[i] = (v, getattr(v, "_version", None), arr)
+                    flat[i] = arr
+        else:
+            flat, st, dyn = [], [], []
+            for i, (n, v) in enumerate(zip(phs, runtime_inputs)):
+                name = ph_names[i]
+                if name in state:
+                    flat.append(state[name])
+                elif name in conv_static:
+                    flat.append(conv_static[name])
+                elif name in state_names:
+                    arr = _mx(v)
+                    if not isinstance(arr, mx.array):
+                        arr = mx.array(arr)   # scalars must not be signature constants
+                    elif arr.ndim >= 2:
+                        arr = _cast(arr)
+                    state[name] = arr
+                    flat.append(arr)
+                    st.append(i)
+                else:
+                    arr = _mx(v)
+                    if name in static_names:
+                        if name in quant_names:
+                            try:
+                                arr = mx.quantize(arr, group_size=_Q_GS, bits=_Q_BITS)
+                                mx.eval(*arr)  # force now: lazy graphs would hold every bf16 source
+                            except Exception:
+                                quant_names.discard(name)
+                                arr = _cast(arr)
+                        elif name not in fp32_params:
+                            arr = _cast(arr)
+                        conv_static[name] = arr
+                    else:
+                        dyn.append(i)
+                        if isinstance(v, torch.Tensor):
+                            pcache[i] = (v, getattr(v, "_version", None), arr)
+                    flat.append(arr)
+            # publish only after a clean build so a mid-setup exception
+            # cannot leave a partially populated slot cache behind.
+            _slots["st"], _slots["dyn"], _slots["flat"] = st, dyn, flat
+        if rfused and _rope["base"] is None:
+            _rope["base"] = float(runtime_inputs[_invf_i].reshape(-1)[1]) ** (-_rope_half)
         t1 = _t.perf_counter()
         outs = (build if _DBG_ENV is not None else cfn)(*flat)
         outs = outs if isinstance(outs, (tuple, list)) else (outs,)
