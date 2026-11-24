@@ -133,6 +133,7 @@
 #include "copy_general_bf16.h"
 #include "copy_general_f16.h"
 #include "slice_update_pair_f16.h"
+#include "slice_update_pair_bf16.h"
 #include "copy_general_f32.h"
 #include "copy_general_u32.h"
 #include "copy_general_bool.h"
@@ -1071,6 +1072,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {copy_general_f16, copy_general_f16_size};
     case ComputeKernel::SliceUpdatePairF16:
       return {slice_update_pair_f16, slice_update_pair_f16_size};
+    case ComputeKernel::SliceUpdatePairBF16:
+      return {slice_update_pair_bf16, slice_update_pair_bf16_size};
     case ComputeKernel::CopyGeneralBF16:
       return {copy_general_bf16, copy_general_bf16_size};
     case ComputeKernel::CopyGeneralU32:

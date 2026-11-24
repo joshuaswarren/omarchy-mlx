@@ -235,6 +235,7 @@ omarchy_shader(slice_update_reduce_f16 shaders/slice_update_reduce.comp -DUSE_FP
 omarchy_shader(slice_update_reduce_bf16 shaders/slice_update_reduce.comp -DUSE_BF16=1)
 omarchy_shader(slice_update_reduce_u32 shaders/slice_update_reduce.comp -DUSE_U32=1)
 omarchy_shader(slice_update_pair_f16 shaders/slice_update_pair.comp)
+omarchy_shader(slice_update_pair_bf16 shaders/slice_update_pair.comp -DUSE_BF16=1)
 omarchy_shader(scatter_triple_u32 shaders/scatter.comp -DUSE_U32=1 -DUSE_TRIPLE_INDEX=1)
 omarchy_shader(scatter_triple_f16 shaders/scatter.comp -DUSE_FP16=1 -DUSE_TRIPLE_INDEX=1)
 omarchy_shader(scatter_triple_bf16 shaders/scatter.comp -DUSE_BF16=1 -DUSE_TRIPLE_INDEX=1)

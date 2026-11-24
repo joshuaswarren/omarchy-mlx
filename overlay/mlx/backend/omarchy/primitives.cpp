@@ -11168,8 +11168,10 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
     const Stream& stream) {
   auto& encoder = get_command_encoder(stream);
   const auto& caps = encoder.device().capabilities();
+  const bool bf16_pair = nodes[0].dtype() == bfloat16;
   if (encoder.device().compute().binding_limit() < 4 ||
-      !caps.shader_float16 || !caps.storage_buffer_16bit_access) {
+      !caps.storage_buffer_16bit_access ||
+      (bf16_pair ? !caps.shader_int16 : !caps.shader_float16)) {
     return SliceUpdatePairDispatch::unsupported;
   }
 
@@ -11186,7 +11188,8 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
   }
 
   const array& first_update = nodes[0].inputs()[1];
-  if (nodes[0].dtype() != float16 || nodes[1].dtype() != float16 ||
+  if ((nodes[0].dtype() != float16 && nodes[0].dtype() != bfloat16) ||
+      nodes[1].dtype() != nodes[0].dtype() ||
       nodes[0].shape() != nodes[1].shape() || first_update.size() == 0 ||
       first_update.ndim() == 0 || first_update.ndim() > 4 ||
       first_update.ndim() != nodes[0].ndim() ||
@@ -11237,7 +11240,7 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
     const array& base = nodes[i].inputs()[0];
     const array& update = nodes[i].inputs()[1];
     if (nodes[i].primitive().stream() != stream ||
-        base.dtype() != float16 || update.dtype() != float16 ||
+        base.dtype() != nodes[i].dtype() || update.dtype() != nodes[i].dtype() ||
         base.shape() != nodes[i].shape() ||
         update.shape() != first_update.shape() ||
         !base.flags().row_contiguous || base.size() != base.data_size() ||
@@ -11290,7 +11293,8 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
       binding(nodes[0]),
       binding(nodes[1])};
   encoder.dispatch_compute(
-      ComputeKernel::SliceUpdatePairF16,
+      nodes[0].dtype() == bfloat16 ? ComputeKernel::SliceUpdatePairBF16
+                                   : ComputeKernel::SliceUpdatePairF16,
       bindings,
       params,
       compute_dispatch_group_count(params.count));

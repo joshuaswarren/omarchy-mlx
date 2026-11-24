@@ -1207,6 +1207,10 @@ enum class ComputeKernel : uint16_t {
   // f32 8x8x8 route (shaders/qmm_intel_bf16.comp). Appended to keep
   // profile kernel ids stable.
   QmmPrefillIntelBF16,
+  // bf16 twin of the two-tensor SliceUpdate merge (slice_update_pair.comp
+  // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
+  // element type. Appended to keep profile kernel ids stable.
+  SliceUpdatePairBF16,
   Count,
 };
 
