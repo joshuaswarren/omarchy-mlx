@@ -49,8 +49,8 @@ def test_patches_once_and_keeps_prefill_compiled(tmp_path):
     assert first.returncode == 0 and "patched:" in first.stdout
     text = target.read_text()
     assert '_EAGER_SWIGLU = os.environ.get("MLX_OMARCHY_EAGER_SWIGLU", "1") != "0"' in text
-    # Decode rows only: the eager product is behind the single-row guard.
-    assert "if _EAGER_SWIGLU and x.shape[-2] == 1:" in text
+    # Decode rows only: the eager product is behind the row-count guard.
+    assert "if _EAGER_SWIGLU and x.shape[-2] <= 8:" in text
     assert "gate * mx.sigmoid(gate) * self.up_proj(x)" in text
     # Prefill keeps the compiled swiglu, unchanged.
     assert text.count("return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))") == 1
@@ -121,7 +121,7 @@ def test_qwen3_patches_once_without_needing_import_os(tmp_path):
     text = target.read_text()
     assert "import os as _os_eager_swiglu" in text
     assert '_EAGER_SWIGLU = _os_eager_swiglu.environ.get("MLX_OMARCHY_EAGER_SWIGLU", "1") != "0"' in text
-    assert "if _EAGER_SWIGLU and x.shape[-2] == 1:" in text
+    assert "if _EAGER_SWIGLU and x.shape[-2] <= 8:" in text
     assert "gate * mx.sigmoid(gate) * self.up_proj(x)" in text
     assert text.count("return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))") == 1
     py_compile.compile(str(target), doraise=True)
@@ -137,3 +137,58 @@ def test_qwen3_refuses_unrecognized_content(tmp_path):
     result = run_qwen3(venv)
     assert result.returncode != 0 and "refusing" in (result.stdout + result.stderr)
     assert target.read_text() == before
+
+
+def _prepatch_with_row1_gate(text, class_name, flag_line):
+    """Simulate a venv patched by the previous revision (single-row gate)."""
+    old_block = """    def __call__(self, x) -> mx.array:
+        # mlx-omarchy: single-token rows write silu(gate) * up as raw ops so the
+        # backend can fold it into the gate/up GEMV dispatch (the compiled
+        # swiglu is one opaque node the fold cannot match). Same operands and
+        # rounding as swiglu(); prefill keeps the compiled function.
+        # Kill switch: MLX_OMARCHY_EAGER_SWIGLU=0.
+        if _EAGER_SWIGLU and x.shape[-2] == 1:
+            gate = self.gate_proj(x)
+            return self.down_proj(gate * mx.sigmoid(gate) * self.up_proj(x))
+        return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
+"""
+    old = """    def __call__(self, x) -> mx.array:
+        return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
+"""
+    anchor = "class " + class_name + "(nn.Module):\n"
+    return text.replace(old, old_block).replace(anchor, flag_line + anchor)
+
+
+def test_qwen3_upgrades_row1_gate(tmp_path):
+    venv, target = make_qwen3_venv(
+        tmp_path,
+        _prepatch_with_row1_gate(
+            QWEN3_STUB,
+            "MLP",
+            'import os as _os_eager_swiglu\n_EAGER_SWIGLU = _os_eager_swiglu.environ.get("MLX_OMARCHY_EAGER_SWIGLU", "1") != "0"\n\n\n',
+        ),
+    )
+    result = run_qwen3(venv)
+    assert result.returncode == 0 and "repatched" in result.stdout
+    text = target.read_text()
+    assert "if _EAGER_SWIGLU and x.shape[-2] <= 8:" in text
+    assert "x.shape[-2] == 1" not in text
+    py_compile.compile(str(target), doraise=True)
+    again = run_qwen3(venv)
+    assert again.returncode == 0 and "already patched" in again.stdout
+
+
+def test_next_upgrades_row1_gate(tmp_path):
+    venv, target = make_venv(
+        tmp_path,
+        _prepatch_with_row1_gate(
+            STUB,
+            "Qwen3NextMLP",
+            '_EAGER_SWIGLU = os.environ.get("MLX_OMARCHY_EAGER_SWIGLU", "1") != "0"\n\n\n',
+        ),
+    )
+    result = run(venv)
+    assert result.returncode == 0 and "repatched" in result.stdout
+    text = target.read_text()
+    assert "if _EAGER_SWIGLU and x.shape[-2] <= 8:" in text
+    py_compile.compile(str(target), doraise=True)

@@ -5,9 +5,10 @@ mlx_lm's Qwen3 MLP (qwen3.py, Qwen3-0.6B to Qwen3-32B dense) calls the compiled 
 mlx_lm/models/activations.py, defined there as swiglu(gate, x) = nn.silu(gate) * x. The compiled function reaches the omarchy
 backend as ONE node, so the backend's SwiGLU store-epilogue fold (fused_chain.cpp: the gate and up GEMVs compute silu(gate) * up in
 one dispatch) never matches it: a standalone Swiglu dispatch runs per layer per token (36 per Qwen3-4B decode token). The fold's
-planner matches eager Sigmoid and Multiply nodes, so for single-token rows this patch writes the same product as raw ops:
-gate * sigmoid(gate) * up. silu is gate * sigmoid(gate) and the product order is (gate * sigmoid) * up, so the operands and the bf16
-rounding sequence equal the compiled swiglu. Rows > 1 (prefill) keep the compiled function unchanged.
+planner matches eager Sigmoid and Multiply nodes, so for decode rows (up to 8 tokens, covering speculative decode) this patch
+writes the same product as raw ops: gate * sigmoid(gate) * up. silu is gate * sigmoid(gate) and the product order is
+(gate * sigmoid) * up, so the operands and the bf16 rounding sequence equal the compiled swiglu. Rows > 8 (prefill, wide
+batches) keep the compiled function unchanged.
 MLX_OMARCHY_EAGER_SWIGLU=0 keeps the compiled function for decode too (the switch the Qwen3-Next patcher already uses).
 The flag line imports os under its own name, so the patch does not depend on another patcher having added `import os`.
 Idempotent; refuses unrecognized content. Usage: patch <venv>
@@ -20,6 +21,19 @@ OLD = """    def __call__(self, x) -> mx.array:
 """
 
 NEW = """    def __call__(self, x) -> mx.array:
+        # mlx-omarchy: decode rows (up to 8 tokens) write silu(gate) * up as
+        # raw ops so the backend can fold them into the gate/up dispatch (the
+        # compiled swiglu is one opaque node the fold cannot match). Same
+        # operands and rounding as swiglu(); wider batches keep the compiled
+        # function. Kill switch: MLX_OMARCHY_EAGER_SWIGLU=0.
+        if _EAGER_SWIGLU and x.shape[-2] <= 8:
+            gate = self.gate_proj(x)
+            return self.down_proj(gate * mx.sigmoid(gate) * self.up_proj(x))
+        return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
+"""
+
+# The block this script installed before the row gate covered multi-token decode.
+PREV_NEW = """    def __call__(self, x) -> mx.array:
         # mlx-omarchy: single-token rows write silu(gate) * up as raw ops so the
         # backend can fold it into the gate/up GEMV dispatch (the compiled
         # swiglu is one opaque node the fold cannot match). Same operands and
@@ -45,8 +59,14 @@ if not site:
 path = site[0] + "/qwen3.py"
 text = open(path).read()
 if MARKER in text:
-    print("already patched:", path)
-    sys.exit(0)
+    if NEW in text:
+        print("already patched:", path)
+        sys.exit(0)
+    if text.count(PREV_NEW) == 1:
+        open(path, "w").write(text.replace(PREV_NEW, NEW, 1))
+        print("repatched (rows <= 8):", path)
+        sys.exit(0)
+    sys.exit("patched content not recognized in " + path + "; refusing to patch")
 if text.count(OLD) != 1:
     sys.exit("MLP anchor not unique in " + path + "; refusing to patch")
 if text.count(FLAG_ANCHOR) != 1:
