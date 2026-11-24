@@ -182,7 +182,12 @@ submission near 78 ms (`receipts/2026-11-15-m4-pro-g16s-batch-work`). The M3 Pro
 (G15S) row is 15000, measured on the 14-core GPU: decode +5 to +7 % on
 Qwen3.8-2B and Qwen3-4B with identical greedy ids, Qwen3-4B decode submissions
 p50 3.98 ms, and a Qwen3-4B tail that matches 5000 (p99 45.2 ms against 44.8 ms;
-`receipts/2026-11-22-m3-pro-g15s-batch-work`). Scheduling only: every submission
+`receipts/2026-11-22-m3-pro-g15s-batch-work`). The M4 (G16G) row is 60000,
+measured on a MacBook Pro M4 with the system Mesa: time per token is linear in
+the submission count (19.52 ms + 0.238 ms per submission), so 60000 takes
+Qwen3.5 2B from 34 to 4 submissions per token (+35 % decode, identical greedy
+ids) while a decode submission stays near 4.9 ms of GPU time and no submission
+reaches 18.5 ms (`receipts/2026-11-24-m4-g16g-batch-work`). Scheduling only: every submission
 already waits on the stream's previous completion. Splitting preserves
 order, and results are bit-identical (greedy ids digests identical in every
 A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max
