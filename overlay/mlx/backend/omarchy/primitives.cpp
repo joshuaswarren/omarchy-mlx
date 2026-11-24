@@ -9676,16 +9676,16 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // 16x16x16 bf16 coopmat qmm prefill (RADV/RDNA WMMA shape): serves
     // the same q4-g64-transposed bf16 call when the device has
     // cooperative matrix but not the fp32 8x8x8 shape, which is exactly
-    // the gap that sent prefill to the scalar-FMA path. The kernel's A
-    // tiles load 16 rows per subgroup block, so matrix_m must be a
-    // multiple of the 32-row workgroup tile (a partial tail tile would
-    // read past the activation buffer); matrix_k must fill whole
-    // 64-wide chunks. Anything else keeps the FMA path below.
+    // the gap that sent prefill to the scalar-FMA path. The workgroup is
+    // one 64-lane subgroup owning a 16-row tile, so matrix_m must be a
+    // multiple of 16 (a partial tail tile would read past the activation
+    // buffer); matrix_k must fill whole 64-wide chunks. Anything else
+    // keeps the FMA path below.
     if (rb_enabled && out.dtype() == bfloat16 &&
         !coopmat_reachable && !coopmat_disabled && q4_g64_transpose &&
         x.ndim() >= 2 && x.shape(-2) > 1 &&
         (params.matrix_k % 64u) == 0u &&
-        (params.matrix_m % 32u) == 0u &&
+        (params.matrix_m % 16u) == 0u &&
         std::getenv("MLX_OMARCHY_NO_COOPMAT16") == nullptr) {
       const auto& rcaps = encoder.device().capabilities();
       const uint64_t out_align = std::max<uint64_t>(
@@ -9702,12 +9702,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           rcaps.max_storage_buffer_range,
           out_align);
       const bool coopmat16_reachable =
-          rcaps.subgroup_size == 32u &&
+          rcaps.subgroup_size == 64u &&
           omarchy::cooperative_matrix_advertises(
               rcaps.cooperative_matrix_shapes,
               omarchy::qmm_prefill_coopmat16_bf16_shape()) &&
           (params.shape[0] > 1u || rows_per == 0u ||
-           (rows_per % 32u) == 0u) &&
+           (rows_per % 16u) == 0u) &&
           // w_s 16x32 bf16 dequant tile + one 16x16 f32 drain block.
           (16u * 32u * 2u + 16u * 16u * 4u) <=
               rcaps.max_compute_shared_memory_size &&
@@ -9727,7 +9727,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                   cp,
                   std::min((cp.matrix_n + 31u) / 32u,
                            omarchy::kMaxComputeGroupCountX),
-                  std::min((cp.matrix_m + 31u) / 32u,
+                  std::min((cp.matrix_m + 15u) / 16u,
                            omarchy::kMaxComputeGroupCountX),
                   1u);
             });

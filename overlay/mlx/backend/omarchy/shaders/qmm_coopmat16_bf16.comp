@@ -9,18 +9,19 @@
 // bf16 x bf16 -> f32 subgroup shape RADV advertises on GFX11+ (WMMA),
 // for parts that have cooperative matrix but not the 8x8x8 fp32 shape
 // the shipped qmm_coopmat.comp requires (measured: RADV GFX1201 lists
-// only 16x16x16 shapes). A 64-lane workgroup is two subgroups at
-// subgroup size 32; each subgroup owns one 16-row block (TILE_M=32).
+// only 16x16x16 shapes). The workgroup is one 64-lane subgroup, which
+// is what RADV reports (subgroupSize 64, and the backend pins
+// required_subgroup_size to it); each workgroup owns one 16-row tile.
 // The A tile loads straight from the bf16 activation buffer as a bf16
 // matrix operand - no widen pass and no x_s staging; B is dequantized
 // 4-bit -> bf16 into shared w_s with the shipped f32 dequant math
 // (rounded on store). Accumulator and drain are f32 like the shipped
 // kernel. NOT bit-identical to the f32 route (bf16 operand rounding);
 // correctness is verified by output tolerance against the FMA path.
-// Q4 group-64 transposed bf16 only; matrix_m % 32 == 0 and
+// Q4 group-64 transposed bf16 only; matrix_m % 16 == 0 and
 // matrix_k % 64 == 0 are host gates, so every tile is full.
 
-const uint TILE_M = 32u;
+const uint TILE_M = 16u;
 const uint TILE_N = 32u;
 const uint STEP_K = 16u;
 const uint CHUNK_K = 64u;
@@ -76,7 +77,6 @@ shared bfloat16_t w_s[STEP_K * W_STRIDE]; // 16 x 32 bf16 dequant tile
 shared float drain_s[MAT_M * MAT_N];      // one 16x16 f32 acc scratch
 
 uint g_lid;
-uint g_sub_rb;
 uint g_wcol;
 uint g_wpart;
 uint g_k_chunks;
@@ -147,8 +147,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       // One matmad step: A 16x16 bf16 x B 16x16 bf16 -> acc 16x16 f32.
       coopmat<bfloat16_t, gl_ScopeSubgroup, MAT_M, MAT_K, gl_MatrixUseA>
           mat_a;
-      uint row = row_base + g_sub_rb * MAT_M;
-      row = min(row, params.matrix_m - 1u);
+      uint row = min(row_base, params.matrix_m - 1u);
       coopMatLoad(
           mat_a, input_x.values,
           x_slice + row * params.matrix_k + k_base,
@@ -167,37 +166,32 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
     }
   }
 
-  // Each subgroup stores the one 16-row block it owns (g_sub_rb == rb);
-  // lanes then scatter the f32 accumulator elements to the bf16 out.
-  for (uint rb = 0u; rb < TILE_M / MAT_M; ++rb) {
-    for (uint cb = 0u; cb < NB; ++cb) {
-      if (g_sub_rb == rb) {
-        coopMatStore(
-            acc[cb], drain_s, 0u, MAT_N,
-            gl_CooperativeMatrixLayoutRowMajor);
+  // The single subgroup stores its 16x16 accumulators to scratch, then
+  // all 64 lanes scatter the f32 elements to the bf16 output.
+  for (uint cb = 0u; cb < NB; ++cb) {
+    coopMatStore(
+        acc[cb], drain_s, 0u, MAT_N,
+        gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    for (uint idx = g_lid; idx < MAT_M * MAT_N; idx += 64u) {
+      uint r = idx / MAT_N;
+      uint c = idx % MAT_N;
+      uint out_row = row_base + r;
+      uint out_col = col_base + cb * MAT_N + c;
+      if (out_row < params.matrix_m && out_col < params.matrix_n) {
+        output_data.values[
+            out_slice + out_row * params.matrix_n + out_col] =
+            out_store(drain_s[idx]);
       }
-      barrier();
-      for (uint idx = g_lid; idx < MAT_M * MAT_N; idx += 64u) {
-        uint r = idx / MAT_N;
-        uint c = idx % MAT_N;
-        uint out_row = row_base + rb * MAT_M + r;
-        uint out_col = col_base + cb * MAT_N + c;
-        if (out_row < params.matrix_m && out_col < params.matrix_n) {
-          output_data.values[
-              out_slice + out_row * params.matrix_n + out_col] =
-              out_store(drain_s[idx]);
-        }
-      }
-      barrier();
     }
+    barrier();
   }
 }
 
 void main() {
   g_lid = gl_LocalInvocationID.x;
-  // 64 lanes = 2 subgroups at subgroup size 32; each owns one of the
-  // two 16-row blocks of the 32-row tile.
-  g_sub_rb = gl_SubgroupID;
+  // One 64-lane subgroup per workgroup; lanes split the w_s stores by
+  // 8-row parts over the same 32-column span as the shipped kernel.
   g_wcol = g_lid % 32u;
   g_wpart = g_lid / 32u;
   g_k_chunks = params.matrix_k / CHUNK_K;
