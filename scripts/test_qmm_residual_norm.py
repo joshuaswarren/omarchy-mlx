@@ -55,11 +55,11 @@ def run_plain_case(trace_fn, k, n, scalar_weight=False, iters=10):
     resid = (mx.random.normal((1, n), dtype=mx.bfloat16, key=rng) * 0.1).astype(mx.bfloat16)
     other = (mx.random.normal((1, n), dtype=mx.bfloat16, key=rng) * 0.1).astype(mx.bfloat16)
     nw = (
-        mx.array([1.25], dtype=mx.bfloat16)
+        None
         if scalar_weight
         else (1.0 + 0.1 * mx.random.normal((n,), dtype=mx.bfloat16, key=rng)).astype(mx.bfloat16)
     )
-    mx.eval(x, resid, other, nw)
+    mx.eval(x, resid, other) if nw is None else mx.eval(x, resid, other, nw)
 
     def eval_once():
         q = mx.quantized_matmul(x, wq, scales, biases, transpose=True, group_size=64, bits=4)
