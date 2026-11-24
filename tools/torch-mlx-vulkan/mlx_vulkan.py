@@ -448,18 +448,25 @@ def _embedding(a, b, *a_, **k_):
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
 
-def _log_softmax_fwd(a, dim, half_to_float=False):
+def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
     a = _mx(a)
     # aten: half_to_float computes in fp32 and returns fp32 for half inputs
     if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
         a = a.astype(mx.float32)
-    return a - mx.logsumexp(a, axis=dim, keepdims=True)
+    r = a - mx.logsumexp(a, axis=dim, keepdims=True)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"log_softmax dtype {dtype}")
+        r = r.astype(_MX_DT[dtype])
+    return r
 
 def _log_softmax_bwd(g, out, dim, input_dtype=None):
     # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)
     g, out = _mx(g), _mx(out)
     r = g - mx.exp(out) * mx.sum(g, axis=dim, keepdims=True)
-    if input_dtype is not None and input_dtype in _MX_DT:
+    if input_dtype is not None:
+        if input_dtype not in _MX_DT:
+            return _raise(f"_log_softmax_backward_data input_dtype {input_dtype}")
         r = r.astype(_MX_DT[input_dtype])
     return r
 
@@ -478,88 +485,6 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, e
         else:
             kw["mask"] = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
-
-def _gqa_expand(t, heads):
-    # aten flash_cpu passes unexpanded GQA kv heads; q-head i reads kv-head
-    # i // (q_heads/kv_heads), so repeat each kv head g times in order.
-    if t.shape[-3] == heads:
-        return t
-    g = heads // t.shape[-3]
-    b, h, s, d = t.shape[-4:]
-    t = mx.broadcast_to(t.reshape(b, h, 1, s, d), (b, h, g, s, d))
-    return t.reshape(b, h * g, s, d)
-
-def _sdpa_lse(q, k, v, attn_mask=None, is_causal=False, scale=None):
-    # (output, logsumexp) pair the aot bw graph needs: logsumexp is saved
-    # for _scaled_dot_product_flash_attention_for_cpu_backward, so it must
-    # be real. fp32 throughout - bf16 inputs break the 1e-4 CPU bound.
-    q, k, v = _mx(q), _mx(k), _mx(v)
-    if scale is None:
-        scale = 1.0 / math.sqrt(q.shape[-1])
-    if attn_mask is not None:
-        m = _mx(attn_mask)
-        bias = mx.where(m, 0.0, -mx.inf) if m.dtype == mx.bool_ else m
-    elif is_causal:
-        # aten flash_cpu causal aligns top-left; verified vs torch for sq != sk.
-        sq, sk = q.shape[-2], k.shape[-2]
-        keep = mx.less_equal(mx.arange(sk).reshape(1, sk),
-                             mx.arange(sq).reshape(sq, 1))
-        bias = mx.where(keep, 0.0, -mx.inf)
-    else:
-        bias = None
-    out = mx.fast.scaled_dot_product_attention(
-        q, k, v, scale=scale, mask=bias)
-    ke = _gqa_expand(k, q.shape[-3])
-    scores = mx.matmul(q, mx.transpose(
-        ke, axes=(*range(ke.ndim - 2), ke.ndim - 1, ke.ndim - 2))) * scale
-    if bias is not None:
-        scores = scores + bias
-    lse = mx.logsumexp(scores, axis=-1)
-    return out.astype(mx.float32), lse.astype(mx.float32)
-
-def _sdpa_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None,
-              scale=None):
-    # aten._scaled_dot_product_flash_attention_for_cpu -> (output, logsumexp)
-    if dropout_p not in (0, 0.0):
-        return _raise("flash_attention_for_cpu dropout")
-    return _sdpa_lse(q, k, v, attn_mask, is_causal, scale)
-
-def _sdpa_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
-                  attn_mask=None, scale=None):
-    # aten._scaled_dot_product_flash_attention_for_cpu_backward ->
-    # (grad_query, grad_key, grad_value). P is rebuilt from scores and the
-    # saved lse; the `out` argument is not needed.
-    if dropout_p not in (0, 0.0):
-        return _raise("flash_attention_for_cpu_backward dropout")
-    gout, q, k, v, lse = (_mx(x) for x in (gout, q, k, v, lse))
-    if scale is None:
-        scale = 1.0 / math.sqrt(q.shape[-1])
-    sq, sk = q.shape[-2], k.shape[-2]
-    if lse.shape[-1] != sq:  # aten may pad lse; keep the real sq rows
-        lse = lse[..., :sq]
-    ke = _gqa_expand(k, q.shape[-3])
-    ve = _gqa_expand(v, q.shape[-3])
-    scores = mx.matmul(q, mx.transpose(
-        ke, axes=(*range(ke.ndim - 2), ke.ndim - 1, ke.ndim - 2))) * scale
-    if attn_mask is not None:
-        m = _mx(attn_mask)
-        scores = scores + (mx.where(m, 0.0, -mx.inf) if m.dtype == mx.bool_ else m)
-    elif is_causal:
-        keep = mx.less_equal(mx.arange(sk).reshape(1, sk),
-                             mx.arange(sq).reshape(sq, 1))
-        scores = scores + mx.where(keep, 0.0, -mx.inf)
-    p = mx.exp(scores - mx.expand_dims(lse, -1))
-    tr = lambda t: mx.transpose(t, axes=(*range(t.ndim - 2), t.ndim - 1, t.ndim - 2))
-    dv = mx.matmul(tr(p), gout)
-    dp = mx.matmul(gout, tr(ve))
-    ds = p * (dp - mx.sum(dp * p, axis=-1, keepdims=True))
-    dq = mx.matmul(ds, ke) * scale
-    dk = mx.matmul(tr(ds), q) * scale
-    if k.shape[-3] != q.shape[-3]:  # sum the q-group grads back to kv heads
-        g = q.shape[-3] // k.shape[-3]
-        dk = dk.reshape(*dk.shape[:-3], k.shape[-3], g, sk, k.shape[-1]).sum(axis=-3)
-        dv = dv.reshape(*dv.shape[:-3], v.shape[-3], g, sk, v.shape[-1]).sum(axis=-3)
-    return tuple(x.astype(mx.float32) for x in (dq, dk, dv))
 
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     # torch: a NCHW, w OIHW ; mlx.conv2d: x NHWC, w (H, W, I/groups, O)
@@ -1172,8 +1097,6 @@ _FUNC_SPECS = {
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
-    "_scaled_dot_product_flash_attention_for_cpu": _sdpa_cpu,
-    "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_cpu_bwd,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
     "not_equal": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
@@ -1227,7 +1150,7 @@ _FUNC_SPECS = {
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
     "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
-    "log_softmax": lambda a, dim=-1, **k: _log_softmax_fwd(a, dim),
+    "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
     "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim, half_to_float),
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),

@@ -170,7 +170,7 @@ def t_review_fixes():
     import mlx.core as mx
     torch.manual_seed(0)
 
-    # w8F: the rebase dropped lift_fresh_copy; aot lifts module params through
+    # the rebase dropped lift_fresh_copy; aot lifts module params through
     # it, so both the spec entry and a compiled module call are covered.
     ok = "lift_fresh_copy" in mlx_vulkan._FUNC_SPECS
     RESULTS.append(("lift_fresh_copy in _FUNC_SPECS", ok, 0))
@@ -180,7 +180,7 @@ def t_review_fixes():
     f = torch.compile(lin, backend="mlx_vulkan_train")
     check("lift_fresh_copy module lift", f(x), lin(x))
 
-    # w8F: _slice crashed on open (None) bounds after the int32 clamp.
+    # _slice crashed on open (None) bounds after the int32 clamp.
     a = torch.randn(4, 8)
     f2 = torch.compile(lambda t: t[2:], backend="mlx_vulkan")
     check("slice None end", f2(a), a[2:])
@@ -189,7 +189,7 @@ def t_review_fixes():
     got = torch.from_numpy(np.array(mlx_vulkan._slice(mx.array(np.arange(8.0)), 0, None, None)))
     check("slice None-None direct", got, torch.arange(8.0))
 
-    # w8F: _log_softmax ignored half_to_float / input_dtype.
+    # _log_softmax ignored half_to_float / input_dtype.
     f4 = torch.compile(
         lambda t: torch.ops.aten._log_softmax.default(t, -1, True),
         backend="mlx_vulkan")
@@ -207,6 +207,20 @@ def t_review_fixes():
     RESULTS.append(("_log_softmax_bwd input_dtype fp32", ok, 0))
     print(f"{'PASS' if ok else 'FAIL'} _log_softmax_bwd input_dtype fp32 "
           f"(got {r.dtype})", flush=True)
+    # review: dtype= honored on log_softmax; unsupported dtypes raise
+    r2 = mlx_vulkan._log_softmax_fwd(mx.array(np.ones((2, 4))), -1, dtype=torch.float16)
+    ok = r2.dtype == mx.float16
+    RESULTS.append(("log_softmax dtype=fp16", ok, 0))
+    print(f"{'PASS' if ok else 'FAIL'} log_softmax dtype=fp16 (got {r2.dtype})",
+          flush=True)
+    try:
+        mlx_vulkan._log_softmax_bwd(g, out, -1, torch.complex64)
+        ok = False
+    except NotImplementedError:
+        ok = True
+    RESULTS.append(("_log_softmax_bwd bad input_dtype raises", ok, 0))
+    print(f"{'PASS' if ok else 'FAIL'} _log_softmax_bwd bad input_dtype raises",
+          flush=True)
     no_fallback("review_fixes")
 
 
