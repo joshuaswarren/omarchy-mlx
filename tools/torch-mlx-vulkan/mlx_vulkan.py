@@ -442,6 +442,13 @@ def _embedding(a, b, *a_, **k_):
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
 
+def _log_softmax_fwd(a, dim):
+    return a - mx.logsumexp(a, axis=dim, keepdims=True)
+
+def _log_softmax_bwd(g, out, dim, input_dtype=None):
+    # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)
+    return g - mx.exp(out) * mx.sum(g, axis=dim, keepdims=True)
+
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
     # mlx 0.32's fast binding requires scale explicitly (no default).
@@ -979,6 +986,10 @@ _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
     "baddbmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
+    "mv": lambda a, v: mx.matmul(a, v),
+    "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
+    "t": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
+    "_unsafe_view": _reshape,
     "add": lambda a, b, *k: _mx(a) + _mx(b),
     "sub": lambda a, b, *k: _mx(a) - _mx(b),
     "mul": lambda a, b, *k: _mx(a) * _mx(b),
@@ -1121,7 +1132,9 @@ _FUNC_SPECS = {
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
     "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
-    "log_softmax": lambda a, dim=-1, **k: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
+    "log_softmax": lambda a, dim=-1, **k: _log_softmax_fwd(a, dim),
+    "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim),
+    "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
