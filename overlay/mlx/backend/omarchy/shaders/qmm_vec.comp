@@ -183,6 +183,15 @@ layout(local_size_x = SLOTS_PER_GROUP * QMM_LANES) in;
 #if (defined(USE_FP16) || defined(USE_BF16)) && defined(QMM_VEC_Q4_WORD)
 // Decode x rows are 16-byte aligned by dispatch. Reading eight packed halves
 // at once keeps native's half arithmetic while avoiding eight scalar loads.
+#ifdef RMS_NORM_INPUT
+layout(set = 0, binding = 10, std430) readonly buffer NormW {
+  STORAGE_TYPE norm_w_values[];
+} norm_w;
+float norm_w_load(uint i) {
+  return LOAD_VALUE(norm_w.norm_w_values[params.aux_offset + i]);
+}
+#endif
+
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
   uvec4 values[];
 } input_x;
@@ -537,12 +546,23 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #else
 // f32 x has nothing to round; the f32 quad sum is uncaptured,
 // so f32 keeps the float chain.
+#ifdef RMS_NORM_INPUT
+#define Q4_NORM_SCALE(i) \
+  (s_inv_rms * LOAD_VALUE(norm_w.norm_w_values[params.aux_offset + (i)]))
+#define Q4_QUAD_LOAD(base, unused) \
+  float x0 = LOAD_VALUE(input_x.values[base]) * Q4_NORM_SCALE(base); \
+  float x1 = LOAD_VALUE(input_x.values[(base) + 1u]) * Q4_NORM_SCALE((base) + 1u); \
+  float x2 = LOAD_VALUE(input_x.values[(base) + 2u]) * Q4_NORM_SCALE((base) + 2u); \
+  float x3 = LOAD_VALUE(input_x.values[(base) + 3u]) * Q4_NORM_SCALE((base) + 3u); \
+  input_sum += ((x0 + x1) + x2) + x3;
+#else
 #define Q4_QUAD_LOAD(base, unused) \
   float x0 = LOAD_VALUE(input_x.values[base]); \
   float x1 = LOAD_VALUE(input_x.values[(base) + 1u]); \
   float x2 = LOAD_VALUE(input_x.values[(base) + 2u]); \
   float x3 = LOAD_VALUE(input_x.values[(base) + 3u]); \
   input_sum += ((x0 + x1) + x2) + x3;
+#endif
 #endif
 // Exact float(n) for a nibble n in [0, 15] without u32_to_f (an expensive
 // conversion op on AGX; the in-chain GEMV runs +3% without it). The nibble
@@ -945,11 +965,33 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     ROWS_PER_SLOT != 2 || defined(QMM_VEC_OUTGATE) || !defined(M_TOKENS)
 #error "QMM_VEC_TOKENS builds on the bf16 packed-x multi column only"
 #endif
+#ifdef RMS_NORM_INPUT
+  shared float s_inv_rms;
+#endif
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
   uint token_count = params.matrix_m;
+#ifdef RMS_NORM_INPUT
+  // PAR-50: compute the inverse RMS of the raw input row inline.
+  // Each lane accumulates sum(x[i]^2) over its stride, then one
+  // subgroupAdd reduces it; lane 0 stores inv_rms in shared memory.
+  {
+    float local_sq = 0.0;
+    uint x_base = params.lhs_offset;
+    for (uint k = lane; k < params.matrix_k; k += 32u * ROWS_PER_SLOT) {
+      precise float xi = LOAD_VALUE(input_x.values[x_base + k]);
+      local_sq += xi * xi;
+    }
+    float total_sq = subgroupAdd(local_sq);
+    if (lane == 0u) {
+      float mean_sq = total_sq / float(params.matrix_k);
+      s_inv_rms = inversesqrt(mean_sq + params.beta);
+    }
+  }
+  barrier();
+#endif
   // Two-pass rows 9..16: out_strides[0] is this pass's first token row
   // (0 for rows 0..7, 8 for rows 8..15); each pass runs the identical
   // token8 chain over its own half, so per-row bit-identity holds and
