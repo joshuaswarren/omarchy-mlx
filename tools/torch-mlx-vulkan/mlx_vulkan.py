@@ -1159,6 +1159,24 @@ def _coerce_index(v):
     return v
 
 
+def _local_scalar_dense(a):
+    """aten._local_scalar_dense: the .item() graph op (the whisper
+    getitem-adjacent family) - hand back the Python scalar a 0-dim tensor
+    carries so scalar branches stay Python without a torch round-trip."""
+    a = _mx(a)
+    if a.ndim != 0 and a.size != 1:
+        _raise(f"_local_scalar_dense on shape {tuple(a.shape)}")
+    return a.item()
+
+
+def _float_scalar(t, *a, **k):
+    """aten.Float (the Scalar and Tensor overloads share the opname): torch
+    .float() semantics - a Python number becomes a 0-dim fp32 tensor, any
+    tensor (0-dim or not, any dtype) is cast to fp32. Casting unconditionally
+    matters: int64 tensors previously slipped through uncast."""
+    if isinstance(t, (int, float)):
+        return mx.array(float(t))
+    return _mx(t).astype(mx.float32)
 
 _FUNC_SPECS = {
     "linear": _linear,
@@ -1333,6 +1351,8 @@ _FUNC_SPECS = {
     "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
+    "_local_scalar_dense": _local_scalar_dense,
+    "Float": _float_scalar,
 }
 
 def _raise(name):
@@ -1415,7 +1435,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
                  "_adaptive_avg_pool2d_backward", "convolution_backward",
-                 "threshold_backward", "native_batch_norm_backward"}
+                 "threshold_backward", "native_batch_norm_backward",
+                 "Float"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
