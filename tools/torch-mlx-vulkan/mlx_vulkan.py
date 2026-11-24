@@ -452,8 +452,17 @@ def _ln_native(a, normalized_shape, weight, bias, eps):
 def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
-    shape = tuple(a.shape[i] if x == -1 else x for i, x in enumerate(s))
-    return mx.broadcast_to(a, shape)
+    off = len(s) - a.ndim
+    if off < 0:
+        raise ValueError(f"expand: {len(s)} sizes < {a.ndim} dims")
+    def _d(i, x):
+        if x != -1:
+            return x
+        j = i - off  # -1 sentinel: keep input dim, right-aligned
+        if j < 0:
+            raise ValueError(f"expand: -1 in leading dim {i} has no input dim")
+        return a.shape[j]
+    return mx.broadcast_to(a, tuple(_d(i, x) for i, x in enumerate(s)))
 
 def _pad_width(a, p):
     pairs = [(0, 0)] * a.ndim
