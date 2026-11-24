@@ -1174,6 +1174,140 @@ class CatalogCommandTests(CliTestBase):
         self.assertIn("trust_remote_code", err.getvalue())
 
 
+def on_pinned_stack(fn):
+    """Run fn in a thread with a 4 MiB stack so deep-JSON RecursionError does
+    not follow the runner's ulimit -s (Python 3.14 bounds recursion by C stack)."""
+    outcome = {}
+
+    def target():
+        try:
+            outcome["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            outcome["error"] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+DEEP_JSON = b"[" * 200_000 + b"]" * 200_000
+MALFORMED_INDEX = "model.safetensors.index.json (unreadable or malformed)"
+
+
+class MalformedSnapshotJsonTests(CliTestBase):
+    """A local model.safetensors.index.json or config.json that does not
+    decode, or decodes to the wrong shape, is a reported gap (or no warning),
+    never a traceback."""
+
+    INDEXES = {
+        "invalid-utf8": b"\xff",
+        "invalid-json": b"{",
+        "top-level-list": b"[1, 2]",
+        "top-level-null": b"null",
+        "top-level-str": b'"x"',
+        "top-level-int": b"123",
+        "weight-map-missing": b'{"metadata": {}}',
+        "weight-map-null": b'{"weight_map": null}',
+        "weight-map-list": b'{"weight_map": []}',
+        "weight-map-str": b'{"weight_map": "bad"}',
+        "shard-list": b'{"weight_map": {"w": ["a"]}}',
+        "shard-int": b'{"weight_map": {"w": 123}}',
+        "shard-null": b'{"weight_map": {"w": null}}',
+        "shard-mixed": b'{"weight_map": {"w": "s.safetensors", "v": 1}}',
+        "shard-empty": b'{"weight_map": {"w": ""}}',
+        "shard-nul": b'{"weight_map": {"w": "a\\u0000b"}}',
+        "shard-high-surrogate": b'{"weight_map": {"w": "\\ud800.safetensors"}}',
+        "shard-low-surrogate": b'{"weight_map": {"w": "\\udcff.safetensors"}}',
+        "shard-parent": b'{"weight_map": {"w": "../s.safetensors"}}',
+        "shard-nested-parent": b'{"weight_map": {"w": "sub/../../s.safetensors"}}',
+        "shard-dot": b'{"weight_map": {"w": "."}}',
+        "shard-dot-slash": b'{"weight_map": {"w": "./s.safetensors"}}',
+        "shard-trailing-slash": b'{"weight_map": {"w": "s.safetensors/"}}',
+        "shard-trailing-dot": b'{"weight_map": {"w": "s.safetensors/."}}',
+    }
+
+    def model_dir(self, index=None, config=b"{}"):
+        directory = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "m"
+        directory.mkdir()
+        if index is not None:
+            (directory / "model.safetensors.index.json").write_bytes(index)
+        # the escape targets exist and are nonempty: only the name check refuses them
+        (directory.parent / "s.safetensors").write_bytes(b"x" * 32)
+        (directory / "s.safetensors").write_bytes(b"x" * 32)
+        (directory / "sub").mkdir()
+        (directory / "config.json").write_bytes(config)
+        (directory / "tokenizer.json").write_text("{}")
+        return directory
+
+    def test_malformed_index_is_a_gap(self):
+        outside = Path(self.tmp.name) / "outside.safetensors"
+        outside.write_bytes(b"x" * 32)
+        absolute = json.dumps({"weight_map": {"w": str(outside)}}).encode()
+        for label, raw in {**self.INDEXES, "shard-absolute": absolute}.items():
+            with self.subTest(label):
+                self.assertEqual(serve_cli.snapshot_gaps(self.model_dir(raw)),
+                                 [MALFORMED_INDEX])
+
+    def test_well_formed_indexes_still_resolve(self):
+        directory = self.model_dir(b'{"weight_map": {"w": "s.safetensors", "v": "sub/t.safetensors"}}')
+        self.assertEqual(serve_cli.snapshot_gaps(directory), ["sub/t.safetensors"])
+        (directory / "sub" / "t.safetensors").write_bytes(b"x")
+        self.assertEqual(serve_cli.snapshot_gaps(directory), [])
+        self.assertEqual(serve_cli.snapshot_gaps(self.model_dir(b'{"weight_map": {}}')),
+                         ["model.safetensors.index.json (no shards mapped)"])
+
+    def test_deep_index_is_a_gap(self):
+        self.assertRaises(RecursionError, on_pinned_stack, lambda: json.loads(DEEP_JSON))
+        directory = self.model_dir(DEEP_JSON)
+        self.assertEqual(on_pinned_stack(lambda: serve_cli.snapshot_gaps(directory)),
+                         [MALFORMED_INDEX])
+        # the same contract on any stack: the decoder's RecursionError itself
+        with unittest.mock.patch.object(serve_cli.json, "loads", side_effect=RecursionError):
+            self.assertEqual(serve_cli.snapshot_gaps(self.model_dir(b"{}")), [MALFORMED_INDEX])
+
+    def test_weights_must_be_a_nonempty_regular_file(self):
+        root = Path(self.tmp.name)
+        (root / "empty.safetensors").write_bytes(b"")
+        (root / "dir.safetensors").mkdir()
+        (root / "dir.safetensors" / "x").write_bytes(b"x")
+        (root / "ok.safetensors").write_bytes(b"x")
+        for name in ("gone.safetensors", "empty.safetensors", "dir.safetensors"):
+            with self.subTest(name):
+                self.assertFalse(serve_cli.nonempty_file(root / name))
+        self.assertTrue(serve_cli.nonempty_file(root / "ok.safetensors"))
+        # a non-ASCII name under an ASCII filesystem encoding (LC_ALL=C, PYTHONUTF8=0)
+        unencodable = UnicodeEncodeError("ascii", "caf\u00e9", 3, 4, "ordinal not in range(128)")
+        with unittest.mock.patch.object(Path, "stat", side_effect=unencodable):
+            self.assertFalse(serve_cli.nonempty_file(root / "caf\u00e9.safetensors"))
+
+    def test_serve_refuses_local_dir_with_malformed_index(self):
+        directory = self.model_dir(b'{"weight_map": {"w": 123}}')
+        code, _, err = self.run_cli(["serve", str(directory), "--weights-gib", "1",
+                                     "--context", "1024", "--yes"])
+        self.assertEqual(code, 2)
+        self.assertIn("is not a complete servable artifact", err)
+
+    def test_undecodable_config_skips_the_custom_code_warning(self):
+        cases = {"invalid-utf8": b"\xff", "invalid-json": b"{", "deep": DEEP_JSON}
+        for label, raw in cases.items():
+            with self.subTest(label):
+                directory = self.model_dir(config=raw)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(on_pinned_stack(
+                        lambda: serve_cli.check_custom_code(directory)))
+                self.assertEqual(err.getvalue(), "")
+        with unittest.mock.patch.object(serve_cli.json, "loads", side_effect=RecursionError):
+            self.assertIsNone(serve_cli.check_custom_code(self.model_dir()))
+
+
 if __name__ == "__main__":
     unittest.main()
 

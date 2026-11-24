@@ -29,9 +29,10 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import budget, catalog
 from . import _mlxlm_server as cap_shim
@@ -493,6 +494,42 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
     return lines, admission, disk_ok
 
 
+def nonempty_file(path: Path) -> bool:
+    try:
+        info = path.stat()  # one stat: a file swapped for a directory cannot pass
+    except (OSError, ValueError):  # ValueError: a name the filesystem encoding cannot hold
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_size > 0
+
+
+def shard_name_ok(name: str) -> bool:
+    """A relative file path inside the snapshot, written in normal form:
+    not empty, ".", absolute, "..", NUL, a lone surrogate, "./x", "x/" or "x/."."""
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:  # a JSON \ud800 escape decodes to one
+        return False
+    path = PurePosixPath(name)
+    return (str(path) == name and bool(path.parts) and not path.is_absolute()
+            and ".." not in path.parts and "\0" not in name)
+
+
+def index_shards(index: Path) -> list[str] | None:
+    """Sorted shard names of a safetensors index, or None when the file is
+    unreadable or is not {"weight_map": {tensor: shard}} with every shard a
+    name shard_name_ok accepts."""
+    try:
+        obj = json.loads(index.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    weight_map = obj.get("weight_map") if isinstance(obj, dict) else None
+    if not isinstance(weight_map, dict) or not all(
+            isinstance(shard, str) for shard in weight_map.values()):
+        return None
+    shards = sorted(set(weight_map.values()))
+    return shards if all(map(shard_name_ok, shards)) else None
+
+
 def snapshot_gaps(path: Path, patterns: list[str] | None = None,
                   hf_layout: bool = True) -> list[str]:
     """Names of the files that make this snapshot unusable: weights (index
@@ -506,19 +543,15 @@ def snapshot_gaps(path: Path, patterns: list[str] | None = None,
     gaps: list[str] = []
     index = path / "model.safetensors.index.json"
     if index.is_file():
-        try:
-            weight_map = json.loads(index.read_text(encoding="utf-8")).get("weight_map", {})
-        except (OSError, json.JSONDecodeError):
-            weight_map = {}
-        shards = sorted(set(weight_map.values()))
-        if not shards:
+        shards = index_shards(index)
+        if shards is None:
+            gaps.append("model.safetensors.index.json (unreadable or malformed)")
+        elif not shards:
             gaps.append("model.safetensors.index.json (no shards mapped)")
-        gaps.extend(shard for shard in shards
-                    if not (path / shard).is_file() or (path / shard).stat().st_size == 0)
-    else:
-        single = path / "model.safetensors"
-        if not (single.is_file() and single.stat().st_size > 0):
-            gaps.append("model.safetensors")
+        else:
+            gaps.extend(shard for shard in shards if not nonempty_file(path / shard))
+    elif not nonempty_file(path / "model.safetensors"):
+        gaps.append("model.safetensors")
     if hf_layout and not (path / "config.json").is_file():
         gaps.append("config.json")
     if hf_layout and not any((path / name).is_file() for name in
@@ -602,8 +635,8 @@ def check_custom_code(model_dir: Path) -> None:
     config = model_dir / "config.json"
     try:
         obj = json.loads(config.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
+    except (OSError, ValueError, RecursionError):
+        return  # advisory only: an unreadable config.json warns about nothing
     if isinstance(obj, dict) and "auto_map" in obj:
         warn(
             f"{config} declares auto_map (custom modeling code). mlx-omarchy never "
