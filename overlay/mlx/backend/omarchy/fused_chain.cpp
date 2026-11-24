@@ -29,6 +29,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/tape_index.h"
+#include "mlx/backend/omarchy/trace.h"
 #include "mlx/primitives.h"
 #include "mlx/utils.h"
 
@@ -1961,6 +1962,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   mix(tape.size());
   if (plan_cache && sig_ok && plan_valid && sig == plan_sig) {
     if (EagerFusionState* hit = replay_plan(tape, plan_rec)) {
+      trace::counters().eager_fusion_plan_cache_hits++;
       eager_state = hit;
       return;
     }
@@ -2980,6 +2982,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   if (plan_cache && sig_ok) {
     plan_valid = record_plan(*state, node_pos, ext_owner, plan_rec);
     plan_sig = sig;
+    if (plan_valid) {
+      trace::counters().eager_fusion_plan_cache_stores++;
+    }
   }
 }
 

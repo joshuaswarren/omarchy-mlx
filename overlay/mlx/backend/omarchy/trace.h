@@ -49,6 +49,11 @@ struct Counters {
   // Number of Compiled-tape nodes the interpreter evaluated, whether
   // they recorded a dispatch or not.
   std::atomic<uint64_t> compiled_tape_node_evaluations{0};
+  // EagerFusionScope plan cache: successful signature replays and stored
+  // plans. A decode workload replays one signature per step, so hits
+  // should track evaluations minus one.
+  std::atomic<uint64_t> eager_fusion_plan_cache_hits{0};
+  std::atomic<uint64_t> eager_fusion_plan_cache_stores{0};
   std::atomic<uint64_t> ane_models_loaded{0};
   std::atomic<uint64_t> ane_packages_compiled{0};
   std::atomic<uint64_t> ane_package_cache_hits{0};

@@ -2576,3 +2576,49 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   CHECK(t.put_if_absent(42, 8));
   CHECK(*t.find(42) == 8);
 }
+
+TEST_CASE("plan cache replays the second identical eval bit-exactly") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  array gate = astype(random::normal(Shape{24, 40}), bfloat16, stream);
+  array up = astype(random::normal(Shape{24, 40}), bfloat16, stream);
+  gate.eval();
+  up.eval();
+  sync_stream(stream);
+
+  setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  array baseline = gate * sigmoid(gate) * up;
+  baseline.eval();
+  sync_stream(stream);
+
+  unsetenv("MLX_OMARCHY_NO_PLAN_CACHE");
+  enable_fusion();
+  uint64_t hits0 = counters().eager_fusion_plan_cache_hits.load();
+  uint64_t stores0 = counters().eager_fusion_plan_cache_stores.load();
+
+  array first = gate * sigmoid(gate) * up;
+  first.eval();
+  sync_stream(stream);
+  CHECK_EQ(counters().eager_fusion_plan_cache_hits.load() - hits0, 0);
+  CHECK_EQ(counters().eager_fusion_plan_cache_stores.load() - stores0, 1);
+
+  uint64_t before = counters().vk_compute_dispatches.load();
+  array second = gate * sigmoid(gate) * up;
+  second.eval();
+  sync_stream(stream);
+  CHECK_EQ(counters().eager_fusion_plan_cache_hits.load() - hits0, 1);
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1);
+
+  array baseline32 = astype(baseline, float32, stream);
+  array second32 = astype(second, float32, stream);
+  baseline32.eval();
+  second32.eval();
+  sync_stream(stream);
+  for (size_t i = 0; i < baseline32.size(); ++i) {
+    INFO("plan-cache replay mismatch at ", i);
+    CHECK_EQ(baseline32.data<float>()[i], second32.data<float>()[i]);
+  }
+}
