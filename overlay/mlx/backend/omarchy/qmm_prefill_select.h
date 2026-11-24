@@ -1,12 +1,13 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// Pure row-tile selection for the cooperative-matrix qmm prefill
-// (shaders/qmm_prefill_coopmat.comp and its 16/32/64-row builds).
+// Pure row-tile and kernel-variant selection for the cooperative-matrix qmm
+// prefill (shaders/qmm_prefill_coopmat.comp and its 16/32/64-row builds).
 // Moved here from primitives.cpp so tests can pin the 64-row gate: the
 // 64-row default is a 4-bit group-64 transposed FullN route only
 // (review of #508); every other format and non-FullN shape keeps the
-// 32-row tile, and parts outside G16S never take 64 rows.
+// 32-row tile. G16S defaults to 64-row G4+LdsPad and G13G defaults to
+// 64-row SG4+LdsPad+STEPK=32; parts outside G16S and G13G keep 32 rows.
 
 #pragma once
 
@@ -132,18 +133,43 @@ inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
       return true;
     }
   }
-  // G16S defaults on (64-row G4+LdsPad); G14C and initial G17C (Max class) keep 32-row default pending calibration on M5.
-  return device_name.find("G16S") != std::string::npos;
+  // G16S defaults on (64-row G4+LdsPad); G13G defaults on (64-row
+  // SG4+LdsPad+STEPK=32). G14C and initial G17C (Max class) keep the
+  // 32-row default pending calibration.
+  return device_name.find("G16S") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
-inline bool qmm_coopmat_sg4_env() {
+inline bool qmm_coopmat_sg4_requested(const std::string& device_name) {
   const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
-  return env != nullptr && std::string(env) == "64sg4";
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "64sg4") {
+      return true;
+    }
+    if (v == "64" || v == "32" || v == "0" || v == "16") {
+      return false;
+    }
+  }
+  return device_name.find("G13G") != std::string::npos;
 }
 
-inline uint32_t qmm_coopmat_stepk_env() {
+inline uint32_t qmm_coopmat_stepk_requested(
+    const std::string& device_name, uint32_t rows, bool sg4) {
   const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
-  if (env != nullptr && std::string(env) == "32") {
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "32") {
+      return 32u;
+    }
+    if (v == "16") {
+      return 16u;
+    }
+  }
+  // Only 64-row SG4 on G13G defaults to STEP_K=32; standalone 32-row
+  // STEP_K=32 regressed on G13G, so fallback 32-row grids keep 16.
+  if (rows == 64u && sg4 &&
+      device_name.find("G13G") != std::string::npos) {
     return 32u;
   }
   return 16u;
