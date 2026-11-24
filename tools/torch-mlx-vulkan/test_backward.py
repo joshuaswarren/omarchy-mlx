@@ -90,6 +90,43 @@ def test_slice_backward():
     _cmp("slice_backward[max_end]", my2, ref2)
 
 
+def test_slice_backward_clamp():
+    # bounds below -N clamp to 0 (no wraparound)
+    g = torch.ones(4)
+    ref = torch.zeros(10); ref[0:4] = 1  # slice(-20, 4) -> [0:4]
+    my = mlx_vulkan.ATEN_TABLE["slice_backward"](
+        mx.array(g.numpy()), (10,), 0, -20, 4, 1)
+    _cmp("slice_backward[start<-N]", my, ref)
+    g6 = torch.ones(6)
+    ref = torch.zeros(10); ref[0:6] = 1  # slice(-25, -4) -> [0:6]
+    my = mlx_vulkan.ATEN_TABLE["slice_backward"](
+        mx.array(g6.numpy()), (10,), 0, -25, -4, 1)
+    _cmp("slice_backward[both<-N]", my, ref)
+
+
+def test_flash_cpu_causal_rect():
+    # T != S: torch causal mask is top-left aligned
+    torch.manual_seed(3)
+    q = torch.randn(2, 4, 48, 32)
+    k = torch.randn(2, 4, 64, 32)
+    v = torch.randn(2, 4, 64, 32)
+    g = torch.randn(2, 4, 48, 32)
+    out, lse, *_ = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu(
+        q, k, v, 0.0, True)
+    my_out, my_lse = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu"](
+        mx.array(q.numpy()), mx.array(k.numpy()), mx.array(v.numpy()), 0.0, True)
+    _cmp("flash_fwd causal T<S out", my_out, out)
+    _cmp("flash_fwd causal T<S lse", my_lse, lse)
+    ref = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu_backward(
+        g, q, k, v, out, lse, 0.0, True)
+    my = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu_backward"](
+        mx.array(g.numpy()), mx.array(q.numpy()), mx.array(k.numpy()),
+        mx.array(v.numpy()), mx.array(out.numpy()), mx.array(lse.numpy()),
+        0.0, True)
+    for tag, m, r in zip(("dq", "dk", "dv"), my, ref):
+        _cmp(f"flash_bwd causal T<S {tag}", m, r)
+
+
 def test_silu_backward():
     torch.manual_seed(5)
     x = torch.randn(4, 64)
@@ -125,5 +162,7 @@ if __name__ == "__main__":
     test_flash_cpu_bwd()
     test_flash_cpu_bwd_gqa()
     test_slice_backward()
+    test_slice_backward_clamp()
+    test_flash_cpu_causal_rect()
     test_silu_backward()
     print("ALL PASS")

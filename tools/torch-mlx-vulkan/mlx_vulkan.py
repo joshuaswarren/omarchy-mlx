@@ -109,20 +109,70 @@ def _unbind(a, dim):
         out.append(a[tuple(idx)])
     return tuple(out)
 
-def _ce(logits, target, weight, label_smoothing, reduction):
-    logits, target = _mx(logits), _mx(target)
-    if weight is None:
-        return _mxnn.losses.cross_entropy(
-            logits, target, label_smoothing=label_smoothing,
-            reduction=reduction)
-    w = _mx(weight)[target]
-    l = _mxnn.losses.cross_entropy(
-        logits, target, label_smoothing=label_smoothing, reduction="none")
+def _red(reduction, size_average, reduce):
+    # torch legacy kwargs: reduce=False -> "none"; else size_average picks mean/sum.
+    if isinstance(reduction, int):
+        reduction = {0: "none", 1: "mean", 2: "sum"}[reduction]
+    if reduce is not None:
+        if not reduce:
+            return "none"
+        if size_average is not None:
+            return "mean" if size_average else "sum"
+    return reduction
+
+
+def _class_last(logits):
+    # torch puts the class dim at axis 1 for N>2 shapes; gather needs it last.
+    return mx.moveaxis(logits, 1, -1) if _mx(logits).ndim > 2 else logits
+
+
+def _gather_logp(logp, t):
+    return mx.take_along_axis(_mx(logp), t[..., None].astype(mx.int32), axis=-1)[..., 0]
+
+
+def _reduce_loss(l_i, eff, keep, reduction):
+    l_i = l_i * keep
     if reduction == "none":
-        return w * l
+        return l_i
     if reduction == "sum":
-        return mx.sum(w * l)
-    return mx.sum(w * l) / mx.sum(w)
+        return mx.sum(l_i)
+    return mx.sum(l_i) / mx.maximum(mx.sum(eff * keep), 1e-12)
+
+
+def _ce(logits, target, weight=None, ignore_index=-100, label_smoothing=0.0, reduction="mean"):
+    logits, target = _mx(logits), _mx(target).astype(mx.int32)
+    logits = _class_last(logits)
+    C = logits.shape[-1]
+    lse = mx.logsumexp(logits, axis=-1)
+    keep = (target != ignore_index).astype(logits.dtype)
+    t = mx.where(target != ignore_index, target, mx.zeros_like(target))
+    nll = lse - _gather_logp(logits, t)
+    eps = float(label_smoothing or 0.0)
+    if weight is not None:
+        w = _mx(weight)
+        wt = w[t]
+        wbar = mx.sum(w) / C
+    else:
+        wt = mx.ones_like(nll)
+        wbar = 1.0
+    if eps:
+        smooth = (lse * (mx.sum(w) if weight is not None else C)
+                  - mx.sum(logits * (w[None, ...] if weight is not None else 1.0), axis=-1)) / C
+        l_i = (1 - eps) * wt * nll + eps * smooth
+        eff = wt  # torch mean denom = sum(w[t]) over non-ignored; smoothing adds nothing
+    else:
+        l_i, eff = wt * nll, wt
+    return _reduce_loss(l_i, eff, keep, reduction)
+
+
+def _nll(logp, target, weight=None, ignore_index=-100, reduction="mean"):
+    logp, target = _mx(logp), _mx(target).astype(mx.int32)
+    logp = _class_last(logp)
+    keep = (target != ignore_index).astype(logp.dtype)
+    t = mx.where(target != ignore_index, target, mx.zeros_like(target))
+    l = -_gather_logp(logp, t)
+    wt = _mx(weight)[t] if weight is not None else mx.ones_like(l)
+    return _reduce_loss(wt * l, wt, keep, reduction)
 
 
 def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mask):
@@ -168,8 +218,9 @@ def _slice_backward(g, input_shape, dim, start, end, step=1):
     g = _mx(g)
     shape = tuple(input_shape)
     dim = dim % len(shape)
-    lo = start % shape[dim] if start < 0 else min(start, shape[dim])
-    hi = end % shape[dim] if end < 0 else min(end, shape[dim])
+    N = shape[dim]
+    lo = min(max(start + N if start < 0 else start, 0), N)
+    hi = min(max(end + N if end < 0 else end, 0), N)
     if step != 1 or lo >= hi:
         _raise(f"slice_backward step={step} range={lo}:{hi}")
     parts = []
@@ -188,6 +239,8 @@ def _silu_backward(g, x):
 
 
 def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
+    if dropout_p:
+        _raise("flash_cpu dropout_p")
     q, k, v = _mx(q), _mx(k), _mx(v)
     k = _gqa_expand(k, q.shape[-3])
     v = _gqa_expand(v, q.shape[-3])
@@ -197,7 +250,7 @@ def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, sca
     scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
     if is_causal:
         T, S = scores.shape[-2], scores.shape[-1]
-        keep = mx.arange(S)[None, :] <= (mx.arange(T)[:, None] + (S - T))
+        keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
         scores = mx.where(keep, scores, -mx.inf)
     if attn_mask is not None:
         scores = scores + _mx(attn_mask)
@@ -218,7 +271,7 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
     scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
     if is_causal:
         T, S = scores.shape[-2], scores.shape[-1]
-        keep = mx.arange(S)[None, :] <= (mx.arange(T)[:, None] + (S - T))
+        keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
         scores = mx.where(keep, scores, -mx.inf)
     if attn_mask is not None:
         scores = scores + _mx(attn_mask)
@@ -282,13 +335,16 @@ def _mean(a, dim=None, keepdim=False, **k):
 def _sum(a, dim=None, keepdim=False, **k):
     return mx.sum(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
 
+_INT_DT = (mx.int8, mx.int16, mx.int32, mx.int64,
+           mx.uint8, mx.uint16, mx.uint32, mx.uint64)
+
+
 def _embedding(a, b, *a_, **k_):
     # F.embedding emits (indices, weight); aten.embedding emits (weight,
     # indices). Indices are integer dtype, weight is float.
-    _int = (mx.int8, mx.int16, mx.int32, mx.int64,
-            mx.uint8, mx.uint16, mx.uint32, mx.uint64)
-    idx, w = (a, b) if getattr(a, "dtype", None) in _int else (b, a)
-    return _mx(w)[_mx(idx).astype(mx.int32)]
+    am, bm = _mx(a), _mx(b)
+    idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
+    return w[idx.astype(mx.int32)]
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
@@ -299,7 +355,12 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, e
     if attn_mask is not None:
         kw["mask"] = _mx(attn_mask)
     elif is_causal:
-        kw["mask"] = "causal"
+        T, S = q.shape[-2], k.shape[-2]
+        if T == S:
+            kw["mask"] = "causal"
+        else:
+            keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
+            kw["mask"] = mx.where(keep, 0.0, -mx.inf)
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
 
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
@@ -821,7 +882,7 @@ _FUNC_SPECS = {
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
     "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
-    "alias": lambda a: a, "lift_fresh": lambda a: a, "lift_fresh_copy": lambda a: a, "to": lambda a, *a_, **k_: a,
+    "alias": lambda a: a, "lift_fresh": lambda a: a, "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
@@ -855,12 +916,10 @@ _FUNC_SPECS = {
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
     "_softmax": lambda a, dim, half=False: mx.softmax(a, axis=dim),
     "gelu": lambda a, approximate="none": (0.5 * a * (1.0 + mx.tanh(math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a))) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0)))),
-    "cross_entropy": lambda logits, target, weight=None, ignore_index=-100, reduction="mean", label_smoothing=0.0: (
-        _raise("cross_entropy ignore_index") if ignore_index != -100 else
-        _ce(logits, target, weight, label_smoothing, reduction)),
-    "nll_loss": lambda logp, target, weight=None, ignore_index=-100, reduction="mean", size_average=None, reduce=None: (
-        _raise("nll_loss weight/ignore_index") if (weight is not None or ignore_index != -100) else
-        _mxnn.losses.nll_loss(logp, target, reduction=reduction)),
+    "cross_entropy": lambda logits, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", label_smoothing=0.0, *a_, **k_: (
+        _ce(logits, target, weight, ignore_index, label_smoothing, _red(reduction, size_average, reduce))),
+    "nll_loss": lambda logp, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", *a_, **k_: (
+        _nll(logp, target, weight, ignore_index, _red(reduction, size_average, reduce))),
     "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=reduction),
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
@@ -1476,8 +1535,6 @@ def make_compiled_executor(gm, dt=None):
     def _cast(x, dt=_dte):
         return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
 
-    meta = {"tuple_out": True}
-
     def build(*flat):
         env = _DBG_ENV if _DBG_ENV is not None else {}
         for n, v in zip(phs, flat):
@@ -1498,8 +1555,7 @@ def make_compiled_executor(gm, dt=None):
                 out = res(n.args[0])
                 holder["n_out"] = len(out) if isinstance(out, (tuple, list)) else 0
                 tail = [env[m] for m in mutated]
-                meta["tuple_out"] = isinstance(out, (tuple, list))
-                return (*out, *tail) if meta["tuple_out"] else (out, *tail)
+                return (*out, *tail) if isinstance(out, (tuple, list)) else (out, *tail)
             if n.op == "get_attr":
                 t = gm
                 for part in str(n.target).split("."):
