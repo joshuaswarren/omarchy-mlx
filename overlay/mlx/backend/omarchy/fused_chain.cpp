@@ -1966,6 +1966,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       eager_state = hit;
       return;
     }
+    trace::counters().eager_fusion_plan_cache_replay_failures++;
     plan_valid = false;
   }
 
@@ -2984,6 +2985,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     plan_sig = sig;
     if (plan_valid) {
       trace::counters().eager_fusion_plan_cache_stores++;
+    } else {
+      trace::counters().eager_fusion_plan_cache_rec_failures++;
     }
   }
 }

@@ -54,6 +54,11 @@ struct Counters {
   // should track evaluations minus one.
   std::atomic<uint64_t> eager_fusion_plan_cache_hits{0};
   std::atomic<uint64_t> eager_fusion_plan_cache_stores{0};
+  // record_plan bail-outs (a plan payload referenced an array that is
+  // neither a tape node nor an external tape input) and replay_plan
+  // bail-outs; nonzero failures mean the cache is inert, not corrupt.
+  std::atomic<uint64_t> eager_fusion_plan_cache_rec_failures{0};
+  std::atomic<uint64_t> eager_fusion_plan_cache_replay_failures{0};
   std::atomic<uint64_t> ane_models_loaded{0};
   std::atomic<uint64_t> ane_packages_compiled{0};
   std::atomic<uint64_t> ane_package_cache_hits{0};
