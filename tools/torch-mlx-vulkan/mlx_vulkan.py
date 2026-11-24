@@ -184,6 +184,12 @@ def _reshape(a, *s):
 
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
+    n = a.shape[dim]
+    # aten clamps out-of-range bounds; mlx requires int32. None = open bound.
+    if start is not None:
+        start = max(min(start, n), -n)
+    if end is not None:
+        end = max(min(end, n), -n)
     idx = [slice(None)] * a.ndim
     idx[dim] = slice(start, end, step)
     return a[tuple(idx)]
@@ -483,6 +489,29 @@ def _embedding(a, b, *a_, **k_):
     am, bm = _mx(a), _mx(b)
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
+
+def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
+    a = _mx(a)
+    # aten casts the INPUT to dtype before the op: fp16/bf16 + dtype=fp32
+    # must compute in fp32, not compute-then-cast.
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"log_softmax dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])
+    # aten: half_to_float computes in fp32 and returns fp32 for half inputs
+    if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
+        a = a.astype(mx.float32)
+    return a - mx.logsumexp(a, axis=dim, keepdims=True)
+
+def _log_softmax_bwd(g, out, dim, input_dtype=None):
+    # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)
+    g, out = _mx(g), _mx(out)
+    r = g - mx.exp(out) * mx.sum(g, axis=dim, keepdims=True)
+    if input_dtype is not None:
+        if input_dtype not in _MX_DT:
+            return _raise(f"_log_softmax_backward_data input_dtype {input_dtype}")
+        r = r.astype(_MX_DT[input_dtype])
+    return r
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
@@ -1040,6 +1069,10 @@ _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
     "baddbmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
+    "mv": lambda a, v: mx.matmul(a, v),
+    "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
+    "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
+    "unsafe_view": _reshape,
     "add": lambda a, b, *k: _mx(a) + _mx(b),
     "sub": lambda a, b, *k: _mx(a) - _mx(b),
     "mul": lambda a, b, *k: _mx(a) * _mx(b),
@@ -1050,9 +1083,7 @@ _FUNC_SPECS = {
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
-    "t": lambda a: mx.transpose(a), "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
-    "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
-    "unsafe_view": _reshape,
+    "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
     "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
@@ -1078,7 +1109,9 @@ _FUNC_SPECS = {
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
     "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
-    "alias": lambda a: a, "lift_fresh": lambda a: a, "to": lambda a, *a_, **k_: a,
+    "alias": lambda a: a, "lift_fresh": lambda a: a,
+    "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
+    "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
@@ -1101,15 +1134,13 @@ _FUNC_SPECS = {
     "diff": _diff,
     "convolution": _convolution,
     "convolution_backward": _convolution_backward,
-    "t": _wt,
+    "t": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
     "threshold_backward": lambda g, x, t=0.0: mx.where(mx.greater(_mx(x), t), _mx(g), mx.zeros_like(_mx(g))),
     "select_backward": _select_backward,
     "tanh_backward": lambda g, out: _mx(g) * (1.0 - _mx(out) * _mx(out)),
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
     "gelu_backward": _gelu_backward,
-    "_log_softmax": lambda a, dim, half_to_float=False: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
-    "_log_softmax_backward_data": lambda go, out, dim, dt=None: _mx(go) - mx.exp(_mx(out)) * mx.sum(_mx(go), axis=dim, keepdims=True),
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
@@ -1127,7 +1158,6 @@ _FUNC_SPECS = {
     "embedding_dense_backward": _embedding_dense_backward,
     "slice_backward": _slice_backward,
     "silu_backward": _silu_backward,
-    "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
@@ -1184,7 +1214,9 @@ _FUNC_SPECS = {
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
     "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
-    "log_softmax": lambda a, dim=-1, **k: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
+    "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
+    "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim, half_to_float),
+    "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
