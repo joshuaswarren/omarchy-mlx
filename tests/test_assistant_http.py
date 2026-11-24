@@ -79,12 +79,39 @@ class HttpTests(unittest.TestCase):
         # overflow it on any host.
         self.addCleanup(threading.stack_size, threading.stack_size(4 * 1024 * 1024))
         anonymous = {'Origin': self.origin, 'Content-Type': 'application/json'}
-        for raw in (b'[' * 200000, b'{"a":' * 100000):
+        # Closed, valid documents: only the depth guard can reject them with
+        # the dedicated 400. Where the pinned stack still fits the parser's
+        # frames (the C parser's appetite varies by build and version), the
+        # body parses and the route answers on its own terms instead.
+        depth_400 = (400, {'error': 'Request JSON is nested too deeply'})
+        array = b'[' * 200000 + b'1' + b']' * 200000
+        obj = b'{"a":' * 100000 + b'1' + b'}' * 100000
+        for raw, parsed_answer in (
+                (array, (400, {'error': 'Request must be a JSON object'})),
+                (obj, (401, {'error': 'This launch link expired. Reopen MLX Chat'}))):
             status, body = self.raw_post('/api/session', raw, anonymous)
-            self.assertEqual((status, body), (400, {'error': 'Request JSON is nested too deeply'}))
+            if (status, body) != depth_400:
+                self.assertEqual((status, body), parsed_answer)
         headers = self.login()
-        status, body = self.raw_post('/api/conversations', b'[' * 200000, headers)
-        self.assertEqual((status, body), (400, {'error': 'Request JSON is nested too deeply'}))
+        status, body = self.raw_post('/api/conversations', array, headers)
+        if (status, body) != depth_400:
+            self.assertEqual((status, body), (400, {'error': 'Request must be a JSON object'}))
+
+    def test_nested_parse_recursion_maps_to_the_depth_400(self):
+        # The stack pin cannot be trusted on every build, so drive the guard
+        # directly: a RecursionError out of json.loads must surface as the
+        # dedicated 400. If _json_body's RecursionError catch is deleted,
+        # this becomes a 5xx and fails.
+        def overflowing(*args, **kwargs):
+            raise RecursionError('depth probe')
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        self.addCleanup(conn.close)
+        with mock.patch('json.loads', overflowing):
+            conn.request('POST', '/api/session', b'{}',
+                {'Origin': self.origin, 'Content-Type': 'application/json'})
+            response = conn.getresponse()
+        self.assertEqual((response.status, json.loads(response.read())),
+                         (400, {'error': 'Request JSON is nested too deeply'}))
 
     def test_recursion_inside_a_handler_is_still_a_server_error(self):
         def overflow(handler, parsed):
