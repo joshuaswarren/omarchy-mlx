@@ -135,12 +135,43 @@ def t_slice_clone_silu():
     no_fallback("slice_clone_silu")
 
 
+def t_sdpa_flash_pair():
+    # F.sdpa on fp32 CPU dispatches to _scaled_dot_product_flash_attention_for_cpu
+    # and its _backward — the pair the LoRA train step was still falling back on.
+    torch.manual_seed(0)
+    for sq, sk, causal, qh, kvh in ((64, 64, True, 4, 4), (32, 64, False, 4, 4),
+                                   (48, 64, True, 4, 4), (64, 64, True, 8, 4)):
+        q = torch.randn(2, qh, sq, 32)
+        k = torch.randn(2, kvh, sk, 32)
+        v = torch.randn(2, kvh, sk, 32)
+        g = torch.randn(2, qh, sq, 32)
+
+        def run(fn):
+            qq, kk, vv = (t.clone().requires_grad_(True) for t in (q, k, v))
+            o = fn(qq, kk, vv)
+            o.backward(g)
+            return o.detach(), qq.grad, kk.grad, vv.grad
+
+        gqa = qh != kvh  # HF emits enable_gqa=True when kv heads differ
+        ref = run(lambda a, b, c: F.scaled_dot_product_attention(
+            a, b, c, is_causal=causal, enable_gqa=gqa))
+        f = torch.compile(lambda a, b, c: F.scaled_dot_product_attention(
+            a, b, c, is_causal=causal, enable_gqa=gqa),
+            backend="mlx_vulkan_train")
+        got = run(f)
+        for i, nm in enumerate(("out", "dq", "dk", "dv")):
+            check(f"sdpa_flash sq={sq} sk={sk} causal={causal} "
+                  f"qh={qh} kvh={kvh} {nm}", got[i], ref[i], tol=5e-5)
+    no_fallback("sdpa_flash")
+
+
 if __name__ == "__main__":
     t_lsm_fwd()
     t_lsm_bwd()
     t_t_backward()
     t_unsafe_view_mv_dot()
     t_slice_clone_silu()
+    t_sdpa_flash_pair()
     fails = [n for n, ok, _ in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} pass; {len(fails)} fail", flush=True)
     sys.exit(1 if fails else 0)
