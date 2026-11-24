@@ -405,6 +405,7 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
         _raise("flash_cpu_bwd dropout_p")
     gout, q, k, v, out = _mx(gout), _mx(q), _mx(k), _mx(v), _mx(out)
     lse = _mx(lse)
+    dq_t, dk_t, dv_t = q.dtype, k.dtype, v.dtype
     hk = k.shape[-3]
     k = _gqa_expand(k, q.shape[-3])
     v = _gqa_expand(v, q.shape[-3])
@@ -416,14 +417,18 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
         scores = scores + _mx(bias).astype(mx.float32)
     if lse.ndim == scores.ndim:
         lse = lse[..., 0]
+    # backward in fp32: inputs can be bf16/fp16, so gout/out/v/k/q are
+    # promoted before the products and dq/dk/dv cast back at the end.
+    gout, out = gout.astype(mx.float32), out.astype(mx.float32)
     p = mx.exp(scores - lse[..., None])
     dv = mx.matmul(mx.swapaxes(p, -2, -1), gout)
-    dP = mx.matmul(gout, mx.swapaxes(v, -2, -1))
+    dP = mx.matmul(gout, mx.swapaxes(v.astype(mx.float32), -2, -1))
     dsum = mx.sum(gout * out, axis=-1, keepdims=True)
     dS = p * (dP - dsum)
-    dq = s * mx.matmul(dS, k)
-    dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q)
-    return (dq, _gqa_reduce(dk, hk), _gqa_reduce(dv, hk))
+    dq = s * mx.matmul(dS, k.astype(mx.float32))
+    dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q.astype(mx.float32))
+    return (dq.astype(dq_t), _gqa_reduce(dk, hk).astype(dk_t),
+            _gqa_reduce(dv, hk).astype(dv_t))
 
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
@@ -536,38 +541,50 @@ def _sdpa_eff(q, k, v, attn_bias, compute_log_sumexp, dropout_p=0.0,
 
 def _sdpa_eff_fwd(q, k, v, bias, cu_seqlens_q, cu_seqlens_k,
                   max_seqlen_q, max_seqlen_k, dropout_p, custom_mask_type,
-                  compute_log_sumexp=False, scale=None, **_):
+                  compute_log_sumexp=False, scale=None, seqlen_k=None,
+                  window_size=None):
     # aten._efficient_attention_forward -> 6-tuple
-    # (output, logsumexp, philox_seed, philox_offset,
-    #  max_seqlen_batch_q, max_seqlen_batch_k).
+    # (output[BSHD], logsumexp[BHS], philox_seed, philox_offset,
+    #  max_seqlen_batch_q:int, max_seqlen_batch_k:int).
+    # Unlike _scaled_dot_product_efficient_attention (BHSD), this op's
+    # q/k/v are BSHD (attention.cu transposes 1<->2 in and out; lse stays
+    # in BHS layout).
     if cu_seqlens_q is not None or cu_seqlens_k is not None:
         return _raise("efficient_attention_forward cu_seqlens")
+    if seqlen_k is not None or window_size is not None:
+        return _raise("efficient_attention_forward seqlen_k/window_size")
     if dropout_p not in (0, 0.0):
         return _raise("efficient_attention_forward dropout")
-    causal = {1: (True, 0), 2: (True, None)}
-    is_causal = custom_mask_type in causal
-    off = causal.get(custom_mask_type, (None, None))[1]
+    if bias is not None and custom_mask_type != 0:
+        return _raise("efficient_attention_forward bias+mask_type")
     if custom_mask_type not in (0, 1, 2):
         return _raise(f"efficient_attention_forward mask_type={custom_mask_type}")
     q, k, v = _mx(q), _mx(k), _mx(v)
+    sq, sk = q.shape[1], k.shape[1]
+    # BSHD -> BHSD for the mx sdpa / scores below.
+    q, k, v = (mx.swapaxes(t, 1, 2) for t in (q, k, v))
     k = _gqa_expand(k, q.shape[-3])
     v = _gqa_expand(v, q.shape[-3])
-    if custom_mask_type == 2:
-        off = k.shape[-2] - q.shape[-2]
+    bias = _mx(bias)
+    if bias is not None and bias.ndim == 4:
+        bias = mx.swapaxes(bias, 1, 2)  # (B, Sq, H, Sk) -> (B, H, Sq, Sk)
+    is_causal = custom_mask_type in (1, 2)
+    off = 0 if custom_mask_type == 1 else (sk - sq if custom_mask_type == 2 else 0)
     s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
-    b = _sdpa_bias(q, k, is_causal, bias, causal_off=off or 0)
+    b = _sdpa_bias(q, k, is_causal, bias, causal_off=off)
     out = mx.fast.scaled_dot_product_attention(q, k, v, scale=s,
                                                   mask=None if b is None else b.astype(q.dtype))
+    out = mx.swapaxes(out, 1, 2)  # BHSD -> BSHD
     scores = s * mx.matmul(q.astype(mx.float32),
                            mx.swapaxes(k.astype(mx.float32), -2, -1))
     if b is not None:
-        scores = scores + _mx(b).astype(mx.float32)
+        scores = scores + b.astype(mx.float32)
     lse = mx.logsumexp(scores, axis=-1)
     if not compute_log_sumexp:
         lse = mx.zeros(q.shape[:-1] + (0,), mx.float32)
     z = mx.zeros((1,), mx.int64)
-    msq = mx.array(int(max_seqlen_q) if max_seqlen_q is not None else q.shape[-2])
-    msk = mx.array(int(max_seqlen_k) if max_seqlen_k is not None else k.shape[-2])
+    msq = int(max_seqlen_q) if max_seqlen_q is not None else sq
+    msk = int(max_seqlen_k) if max_seqlen_k is not None else sk
     return (out, lse, z, z, msq, msk)
 
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):

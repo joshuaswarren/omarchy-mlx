@@ -237,16 +237,44 @@ def test_efficient_attention_arity_and_causal():
     _cmp("eff lse", my[1], ref_lse)
 
 
+def test_flash_cpu_bwd_dtype():
+    torch.manual_seed(15)
+    q32 = torch.randn(2, 4, 8, 16)
+    k32 = torch.randn(2, 4, 8, 16)
+    v32 = torch.randn(2, 4, 8, 16)
+    g32 = torch.randn(2, 4, 8, 16)
+    qb, kb, vb, gb = (t.bfloat16() for t in (q32, k32, v32, g32))
+    out32, lse32 = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu(
+        q32, k32, v32, 0.0, False)
+    ref = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu_backward(
+        g32, q32, k32, v32, out32, lse32, 0.0, False)
+    my_out, my_lse = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu"](
+        _am(qb), _am(kb), _am(vb), 0.0, False)
+    my = mlx_vulkan.ATEN_TABLE["_scaled_dot_product_flash_attention_for_cpu_backward"](
+        _am(gb), _am(qb), _am(kb), _am(vb), my_out, my_lse, 0.0, False)
+    for tag, m, r in zip(("dq", "dk", "dv"), my, ref):
+        assert m.dtype == mx.bfloat16, f"{tag} dtype {m.dtype}, want bfloat16"
+        d = float((_tm(m) - r).abs().max())
+        assert d < 2e-2, f"bwd bf16 {tag}: {d:.3e}"
+        print(f"PASS flash_bwd bf16 {tag} maxdiff={d:.3e}")
+
+
 def test_efficient_attention_forward_schema():
     torch.manual_seed(14)
-    q = torch.randn(1, 2, 5, 8)
-    k = torch.randn(1, 2, 5, 8)
-    v = torch.randn(1, 2, 5, 8)
-    ref_out, ref_lse = _eff_ref(q, k, v)
+    # aten._efficient_attention_forward takes BSHD (S != H catches swaps).
+    B, S, H, D = 1, 5, 3, 8
+    q = torch.randn(B, S, H, D)
+    k = torch.randn(B, S, H, D)
+    v = torch.randn(B, S, H, D)
+    ref_out, ref_lse = _eff_ref(q.transpose(1, 2), k.transpose(1, 2),
+                                v.transpose(1, 2))
+    ref_out = ref_out.transpose(1, 2)  # back to BSHD; lse stays BHS
     my = mlx_vulkan.ATEN_TABLE["_efficient_attention_forward"](
         mx.array(q.numpy()), mx.array(k.numpy()), mx.array(v.numpy()),
-        None, None, None, 5, 5, 0.0, 1, True)
+        None, None, None, S, S, 0.0, 1, True)
     assert len(my) == 6, f"efficient_attention_forward must return 6-tuple, got {len(my)}"
+    assert type(my[4]) is int and type(my[5]) is int,         f"max_seqlens must be SymInt, got {type(my[4])}, {type(my[5])}"
+    assert my[4] == S and my[5] == S
     _cmp("eff_fwd out", my[0], ref_out)
     _cmp("eff_fwd lse", my[1], ref_lse)
 
@@ -283,6 +311,7 @@ if __name__ == "__main__":
     test_flash_cpu_fwd_gqa()
     test_flash_cpu_mask_and_dtype()
     test_efficient_attention_arity_and_causal()
+    test_flash_cpu_bwd_dtype()
     test_efficient_attention_forward_schema()
     test_no_duplicate_table_keys()
     print("ALL PASS")
