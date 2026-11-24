@@ -1069,6 +1069,10 @@ def _run_method(obj, name, args, kwargs):
 
 def make_executor(gm):
     stats = {"mlx": [], "cpu": [], "glue": [], "crossings": 0}
+    _nprof = os.environ.get("MV_NODE_PROF")
+    if _nprof:
+        stats["node_ms"] = {}
+        import time as _nt
 
     def resolve(a, env):
         if isinstance(a, torch.fx.Node):
@@ -1096,6 +1100,13 @@ def make_executor(gm):
             if node.op == "placeholder":
                 env[node] = _mx(next(it))
                 continue
+            if _nprof:
+                _t0 = _nt.perf_counter()
+
+            def _tick(nm):
+                if _nprof:
+                    stats["node_ms"][nm] = stats["node_ms"].get(nm, 0.0) + (_nt.perf_counter() - _t0)
+
             args = tuple(resolve(a, env) for a in node.args)
             kwargs = {k: resolve(v, env) for k, v in node.kwargs.items()}
             name = _opname(node)
@@ -1108,11 +1119,13 @@ def make_executor(gm):
                 for part in str(node.target).split("."):
                     t = getattr(t, part)
                 env[node] = _mx(t)
+                _tick("get_attr")
                 continue
             if node.target is operator.getitem or name == "getitem":
                 try:
                     env[node] = args[0][_coerce_index(args[1])]
                     stats["glue"].append("getitem")
+                    _tick("getitem")
                     continue
                 except Exception as e:
                     # Mixed-domain getitem (torch source, mlx index): coerce the
@@ -1121,6 +1134,7 @@ def make_executor(gm):
                         try:
                             env[node] = _mx(args[0])[_deep_mx(_coerce_index(args[1]))]
                             stats["glue"].append("getitem")
+                            _tick("getitem")
                             continue
                         except Exception:
                             pass
@@ -1152,6 +1166,7 @@ def make_executor(gm):
                     val = node.target(*args, **kwargs)
                     stats["glue"].append(getattr(node.target, "__name__", str(node.target)))
                     env[node] = val
+                    _tick(name)
                     continue
             elif node.op == "call_method":
                 try:
@@ -1183,6 +1198,7 @@ def make_executor(gm):
             env[node] = val
             if _DBG_ENV is not None:
                 _DBG_ENV[node] = val
+            _tick(name)
         return None
 
     return run, stats
@@ -1235,9 +1251,11 @@ def _aot_compiler(gm, example_inputs):
     except ImportError:
         from functorch.compile import make_boxed_func
     # Training defaults to fp32: bf16 grads drift the loss vs CPU. Explicit
-    # MV_DT still overrides.
-    run = mlx_vulkan_backend(gm, example_inputs,
-                             _dt=None if os.environ.get("MV_DT") else mx.float32)
+    # MV_DT still overrides. MV_AOT_EAGER=1 forces the per-node interpreter
+    # (A/B against the compiled executor).
+    run = (_eager_run(gm) if os.environ.get("MV_AOT_EAGER")
+           else mlx_vulkan_backend(gm, example_inputs,
+                                   _dt=None if os.environ.get("MV_DT") else mx.float32))
 
     def unboxed(*args):
         # aot's bw runtime may deliver the arg list nested one level deep
@@ -1598,6 +1616,8 @@ def make_compiled_executor(gm, dt=None):
     _profile = os.environ.get("MV_PROF")
     _acc = {"prep": 0.0, "cfn": 0.0, "conv": 0.0, "n": 0}
 
+    pcache = {}
+
     def run(*runtime_inputs):
         t0 = _t.perf_counter()
         flat = []
@@ -1614,7 +1634,15 @@ def make_compiled_executor(gm, dt=None):
                 state[name] = arr
                 flat.append(arr)
             else:
-                arr = _mx(v)
+                # aot partitions re-feed the same param tensors each step:
+                # reuse the mx array unless the torch tensor was mutated
+                ent = pcache.get(n)
+                if ent is not None and ent[0] is v and ent[1] == getattr(v, "_version", None):
+                    arr = ent[2]
+                else:
+                    arr = _mx(v)
+                    if isinstance(v, torch.Tensor):
+                        pcache[n] = (v, getattr(v, "_version", None), arr)
                 if name in static_names:
                     if name in quant_names:
                         try:
