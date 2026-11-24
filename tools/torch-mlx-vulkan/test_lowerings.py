@@ -133,6 +133,33 @@ def test_bn_legit_functional():
     assert np.abs(_np(nrm) - trm2.numpy()).max() < 2e-5
     assert np.abs(_np(nrv) - trv2.numpy()).max() < 2e-5
     print("test_bn_legit_functional PASS")
+def test_arange():
+    cases = [
+        ((5,), {}, torch.arange(5)),
+        ((0, 5), {}, torch.arange(0, 5)),
+        ((0, 5, 2), {}, torch.arange(0, 5, 2)),
+        ((), {"end": 5}, torch.arange(5)),
+        ((), {"start": 0, "end": 5}, torch.arange(0, 5)),
+        ((), {"start": 0, "end": 8, "step": 2}, torch.arange(0, 8, 2)),
+        ((), {"start": 0, "end": 16, "dtype": torch.float32},
+         torch.arange(0, 16, dtype=torch.float32)),
+        ((), {"start": 0.5, "end": 3.0, "step": 0.5},
+         torch.arange(0.5, 3.0, 0.5)),
+        ((0, 5), {"step": 2}, torch.arange(0, 5, 2)),
+        ((1.5, 4.0), {}, torch.arange(1.5, 4.0)),
+        # dynamo normalizes arange to all-kwargs; step kwarg has no valid
+        # torch.arange spelling, so references use the positional form
+        ((5,), {"step": 2}, torch.arange(0, 5, 2)),
+        ((), {"end": 8, "step": 2}, torch.arange(0, 8, 2)),
+        ((), {"start": 3, "end": 9, "step": 2},
+         torch.arange(3, 9, 2)),
+    ]
+    for args, kw, want in cases:
+        got = _np(mlx_vulkan._arange(*args, **kw))
+        assert got.shape == want.numpy().shape, (args, kw, got.shape)
+        assert got.dtype == want.numpy().dtype, (args, kw, got.dtype)
+        assert np.allclose(got, want.numpy()), (args, kw)
+    print("test_arange PASS")
 
 
 def test_scalar_tensor_factory_lowering():
@@ -172,5 +199,6 @@ if __name__ == "__main__":
     test_t()
     test_bn_legit_functional()
     test_scalar_tensor_factory_lowering()
+    test_arange()
     test_dispatch_registered()
     print("ALL PASS")
