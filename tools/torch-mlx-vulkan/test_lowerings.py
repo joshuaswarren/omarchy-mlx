@@ -135,6 +135,26 @@ def test_bn_legit_functional():
     print("test_bn_legit_functional PASS")
 
 
+def test_scalar_tensor_factory_lowering():
+    # BERT emits scalar_tensor factory nodes (scalar arg, no tensor inputs):
+    # the eager executor only lowers call_function nodes with an mx input or
+    # a _PRODUCERS entry, so scalar_tensor used to hit the torch fallback.
+    # symbolic_trace lifts constants to get_attr, so build the fx graph the
+    # way dynamo emits it: a call_function on the aten OpOverload.
+    g = torch.fx.Graph()
+    x = g.placeholder("x")
+    st = g.call_function(torch.ops.aten.scalar_tensor.default, (3,),
+                         {"dtype": torch.float32})
+    add = g.call_function(torch.ops.aten.add.Tensor, (x, st), {})
+    g.output(add)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor([1.0, 2.0]))
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    assert np.allclose(_np(out), np.array([4.0, 5.0], dtype=np.float32))
+    print("test_scalar_tensor_factory_lowering PASS")
+
+
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
@@ -151,5 +171,6 @@ if __name__ == "__main__":
     test_threshold_backward()
     test_t()
     test_bn_legit_functional()
+    test_scalar_tensor_factory_lowering()
     test_dispatch_registered()
     print("ALL PASS")
