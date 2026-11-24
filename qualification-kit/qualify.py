@@ -163,10 +163,24 @@ def compare_receipts(paths):
                 or ('generated_ids' in left and 'generated_ids' in right
                     and left['generated_ids'] != right['generated_ids'])):
             raise ValueError('generated_ids_differ')
-    except (OSError, ValueError, OverflowError) as exc:
+    except (OSError, ValueError, OverflowError, RecursionError) as exc:
         print(f'pair refused: {exc}')
         return 1
     print(f"matched: {TOKENS} generated IDs, digest {left['ids_sha256_16']}")
+    return 0
+
+
+def print_row(path):
+    """Print the card row of a saved receipt; refuse one that does not decode or render."""
+    try:
+        receipt = json.loads(path.read_text())
+        if not isinstance(receipt, dict):
+            raise ValueError('invalid_receipt')
+        print(card_row(receipt))
+    except (OSError, ValueError, OverflowError, RecursionError,
+            AttributeError, KeyError, TypeError) as exc:
+        print(f'row refused: {type(exc).__name__}: {exc}')
+        return 1
     return 0
 
 
@@ -577,8 +591,7 @@ def main():
     if args.row:
         if any(value for key, value in vars(args).items() if key != 'row'):
             parser.error('--row cannot be combined with run options')
-        print(card_row(json.loads(args.row.read_text())))
-        return 0
+        return print_row(args.row)
     if args.compare:
         if any(value for key, value in vars(args).items() if key != 'compare'):
             parser.error('--compare cannot be combined with run options')
