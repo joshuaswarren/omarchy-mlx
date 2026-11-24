@@ -4380,8 +4380,12 @@ static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requeste
     return std::min(requested_max, static_cast<int>(std::strtol(env, nullptr, 10)));
   }
   const std::string& name = encoder.device().capabilities().device_name;
+  // Cap-8 parts: the batch-8 dispatch is a measured win at M=5..8
+  // (G16S/G13C long-standing; G13G 2026-11-24, receipts/2026-11-24-
+  // qmv-small-t-g13g.md: +4..20% vs the tile at M=8, bit-identical).
   const bool wide = name.find("G13C") != std::string::npos ||
-      name.find("G16S") != std::string::npos;
+      name.find("G16S") != std::string::npos ||
+      name.find("G13G") != std::string::npos;
   int cap = wide ? 8 : 4;
   return std::min(requested_max, cap);
 }
