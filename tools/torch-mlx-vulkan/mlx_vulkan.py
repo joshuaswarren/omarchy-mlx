@@ -1215,6 +1215,7 @@ _FUNC_SPECS = {
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
+    "numel": lambda a: int(a.size),
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     # aten.batch_norm order: (x, weight, bias, running_mean, running_var, training, momentum, eps, cudnn)
