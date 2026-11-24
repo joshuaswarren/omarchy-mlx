@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 //
 // Wave 8 FFT: one workgroup computes one power-of-two 1-D complex FFT of up
-// to 2048 samples with a radix-2 Cooley-Tukey decimation-in-time pass over
-// 16 KiB of shared state (two 2048-float arrays, the Vulkan minimum shared
-// memory guarantee). Sample k of a transform lives at element base + k *
+// to 4096 samples with a radix-2 Cooley-Tukey decimation-in-time pass over
+// 32 KiB of shared state (two 4096-float arrays; every Vulkan host in the
+// lab reports the 32 KiB minimum-plus workgroup shared limit). Sample k of a transform lives at element base + k *
 // stride of a dense row-major buffer, which reaches every transform axis of
 // a batched array without transposes.
 //
@@ -44,8 +44,8 @@ layout(push_constant) uniform Params {
   uint output_offset;
 } params;
 
-shared float sh_re[2048];
-shared float sh_im[2048];
+shared float sh_re[4096];
+shared float sh_im[4096];
 
 uint reverse_bits(uint value, uint bit_count) {
   uint result = 0u;

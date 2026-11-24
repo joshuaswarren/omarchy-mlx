@@ -6759,7 +6759,15 @@ void FFT::eval_gpu(const std::vector<array>& inputs, array& out) {
   // refuses must fail here, by name, before any allocation.
   std::vector<std::vector<FftStage>> plans;
   plans.reserve(lengths.size());
+  // Fused fast path: a power-of-two length up to 4096 samples is one
+  // whole-transform FftF32 dispatch per workgroup (the c2c kernel's
+  // in-shared-memory radix-2 pass), instead of a log2(n)-stage pipeline.
   for (uint32_t length : lengths) {
+    if (length <= 4096u && (length & (length - 1u)) == 0u) {
+      plans.push_back({{FftStage{FftStage::Kind::Pass, length, /*inner=*/1u,
+                                 /*stride_mul=*/1u}}});
+      continue;
+    }
     plans.push_back(plan_fft_axis(length, tag, out));
   }
 
