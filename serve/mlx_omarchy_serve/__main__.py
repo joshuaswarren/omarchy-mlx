@@ -176,6 +176,16 @@ def parse_weights_gib(value: str) -> int:
     return int(gib * GiB)
 
 
+def parse_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--port {value!r} is not an integer")
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"--port {port} is outside 0..65535")
+    return port
+
+
 def warn(msg: str) -> None:
     print(f"warning: {msg}", file=sys.stderr)
 
@@ -711,19 +721,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p_plan = sub.add_parser("plan", help="admission + disk check only; downloads nothing")
     common(p_plan)
     p_plan.add_argument("--host", default="127.0.0.1")
-    p_plan.add_argument("--port", type=int, default=8080)
+    p_plan.add_argument("--port", type=parse_port, default=8080)
 
     p_serve = sub.add_parser("serve", help="plan, require approval, download, launch foreground")
     common(p_serve)
     p_serve.add_argument("--host", default="127.0.0.1")
-    p_serve.add_argument("--port", type=int, default=8080)
+    p_serve.add_argument("--port", type=parse_port, default=8080)
     p_serve.add_argument("--yes", action="store_true",
                          help="noninteractive explicit opt-in; requires an explicit target")
 
     p_pull = sub.add_parser("pull", help="plan, require approval, download; never launch")
     common(p_pull)
     p_pull.add_argument("--host", default="127.0.0.1")
-    p_pull.add_argument("--port", type=int, default=8080)
+    p_pull.add_argument("--port", type=parse_port, default=8080)
     p_pull.add_argument("--yes", action="store_true",
                         help="noninteractive explicit opt-in; requires an explicit target")
 

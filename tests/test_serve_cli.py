@@ -435,6 +435,30 @@ class PlanTests(CliTestBase):
                     self.run_cli(["plan", "someone/Some-Model", "--weights-gib", bad])
                 self.assertEqual(ctx.exception.code, 2)
 
+    def test_port_outside_0_to_65535_rejected_before_any_work(self):
+        for port in ("0", "65535"):
+            with self.subTest(port=port):
+                self.stdout, self.stderr = io.StringIO(), io.StringIO()
+                code, out, err = self.run_cli(["plan", "test-chat-4b", "--port", port])
+                self.assertEqual(code, 0, err)
+                self.assertIn(f"127.0.0.1:{port}", out)
+
+        def poisoned(*a, **k):
+            raise AssertionError("a bad --port must fail before the catalog loads")
+        rejected = (("-1", "--port -1 is outside 0..65535"),
+                    ("65536", "--port 65536 is outside 0..65535"),
+                    ("70000", "--port 70000 is outside 0..65535"),
+                    ("abc", "--port 'abc' is not an integer"))
+        for command in ("plan", "serve", "pull"):
+            for bad, message in rejected:
+                with self.subTest(command=command, bad=bad):
+                    self.stdout, self.stderr = io.StringIO(), io.StringIO()
+                    with unittest.mock.patch.object(catalog, "refresh", poisoned), \
+                         self.assertRaises(SystemExit) as ctx:
+                        self.run_cli([command, "test-chat-4b", "--port", bad])
+                    self.assertEqual(ctx.exception.code, 2)
+                    self.assertIn(f"argument --port: {message}", self.stderr.getvalue())
+
     def test_unsafe_download_patterns_refused_at_plan(self):
         for bad in (["../evil"], [5], [], ["a" * 200], ["ok", "..%2Fx"]):
             with self.subTest(bad=bad):
