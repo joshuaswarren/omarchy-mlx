@@ -1,18 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Copyright 2026 Joshua Warren
 """Shared fixture: the torch-mlx-vulkan backend module loaded exactly once
-(it registers itself as a dynamo backend, so a second import collides)."""
+(it registers itself as a dynamo backend, so a second import collides).
+The conftest imports clean without torch: the skips live in the fixture
+body, so torch-less machines skip the tests instead of erroring at
+collection."""
 import importlib.util
 from pathlib import Path
 
 import pytest
 
-torch = pytest.importorskip("torch")
-mx = pytest.importorskip("mlx.core")
-
 
 @pytest.fixture(scope="session")
 def mlx_vulkan():
+    torch = pytest.importorskip("torch")
+    mx = pytest.importorskip("mlx.core")
     path = (Path(__file__).resolve().parents[1] / "tools"
             / "torch-mlx-vulkan" / "mlx_vulkan.py")
     spec = importlib.util.spec_from_file_location("mlx_vulkan_under_test",
