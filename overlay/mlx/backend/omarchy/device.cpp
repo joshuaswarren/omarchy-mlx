@@ -1887,15 +1887,6 @@ Device::TeardownOutcome Device::teardown_vulkan() {
     compute_.reset();
     outcome.compute_handles_destroyed = plan.destroy_compute_pipelines;
   }
-  if (plan.destroy_device && resnorm_ticket_ != VK_NULL_HANDLE) {
-    dt.DestroyBuffer(device_, resnorm_ticket_, nullptr);
-    dt.FreeMemory(device_, resnorm_ticket_memory_, nullptr);
-    delete resnorm_ticket_meta_;
-    resnorm_ticket_ = VK_NULL_HANDLE;
-    resnorm_ticket_memory_ = VK_NULL_HANDLE;
-    resnorm_ticket_meta_ = nullptr;
-    resnorm_ticket_ready_.store(false, std::memory_order_release);
-  }
   if (dt.DestroyDevice && plan.destroy_device) {
     dt.DestroyDevice(device_, nullptr);
     device_ = VK_NULL_HANDLE;
@@ -1907,79 +1898,6 @@ Device::TeardownOutcome Device::teardown_vulkan() {
 
 Device::~Device() {
   (void)teardown_vulkan();
-}
-
-ComputeBinding Device::resnorm_ticket_binding() {
-  if (resnorm_ticket_ready_.load(std::memory_order_acquire)) {
-    return ComputeBinding{resnorm_ticket_, 0, 256, resnorm_ticket_meta_};
-  }
-  std::lock_guard<std::mutex> lk(resnorm_ticket_mutex_);
-  if (!resnorm_ticket_ready_.load(std::memory_order_relaxed)) {
-    auto& dt = vk::device_table();
-    VkBuffer buf = VK_NULL_HANDLE;
-    VkDeviceMemory mem = VK_NULL_HANDLE;
-    VulkanBuffer* meta = nullptr;
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size = 256;
-    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VKX_CHECK(dt.CreateBuffer(device_, &bci, nullptr, &buf));
-    try {
-      VkMemoryRequirements reqs{};
-      dt.GetBufferMemoryRequirements(device_, buf, &reqs);
-      uint32_t type = UINT32_MAX;
-      for (uint32_t i = 0; i < mem_props_.memoryTypeCount; ++i) {
-        if ((reqs.memoryTypeBits & (1u << i)) &&
-            (mem_props_.memoryTypes[i].propertyFlags &
-             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
-          type = i;
-          if (mem_props_.memoryTypes[i].propertyFlags &
-              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
-            break;
-          }
-        }
-      }
-      if (type == UINT32_MAX) {
-        throw std::runtime_error(
-            "[omarchy] no compatible host-visible memory for resnorm ticket");
-      }
-      VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-      mai.allocationSize = reqs.size;
-      mai.memoryTypeIndex = type;
-      VKX_CHECK(dt.AllocateMemory(device_, &mai, nullptr, &mem));
-      VKX_CHECK(dt.BindBufferMemory(device_, buf, mem, 0));
-      void* mapped = nullptr;
-      VKX_CHECK(dt.MapMemory(device_, mem, 0, VK_WHOLE_SIZE, 0, &mapped));
-      std::memset(mapped, 0, 256);
-      const bool coherent = (mem_props_.memoryTypes[type].propertyFlags &
-                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
-      if (!coherent) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-        range.memory = mem;
-        range.size = VK_WHOLE_SIZE;
-        VKX_CHECK(dt.FlushMappedMemoryRanges(device_, 1, &range));
-      }
-      dt.UnmapMemory(device_, mem);
-      meta = new VulkanBuffer{};
-      meta->buffer = buf;
-      meta->memory = mem;
-      meta->size = 256;
-      meta->coherent = coherent;
-      meta->device_local = false;
-      resnorm_ticket_ = buf;
-      resnorm_ticket_memory_ = mem;
-      resnorm_ticket_meta_ = meta;
-      resnorm_ticket_ready_.store(true, std::memory_order_release);
-    } catch (...) {
-      delete meta;
-      if (mem != VK_NULL_HANDLE) {
-        dt.FreeMemory(device_, mem, nullptr);
-      }
-      dt.DestroyBuffer(device_, buf, nullptr);
-      throw;
-    }
-  }
-  return ComputeBinding{resnorm_ticket_, 0, 256, resnorm_ticket_meta_};
 }
 
 uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {

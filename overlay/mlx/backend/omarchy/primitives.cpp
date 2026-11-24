@@ -10401,7 +10401,7 @@ bool dispatch_quantized_gemv_group(
           binding(*members[0].epilogue),
           binding(res_norm->weight),
           binding(res_norm->out),
-          encoder.device().resnorm_ticket_binding(),
+          encoder.resnorm_ticket_binding(),
           binding(outgate->out),
           binding(outgate->gate),
           binding(outgate->x)};
@@ -10423,7 +10423,7 @@ bool dispatch_quantized_gemv_group(
           binding(*members[0].epilogue),
           binding(res_norm->weight),
           binding(res_norm->out),
-          encoder.device().resnorm_ticket_binding()};
+          encoder.resnorm_ticket_binding()};
       encoder.dispatch_compute(
           ComputeKernel::QmmVecQ4ResNormBF16,
           rn_bindings,

@@ -6,7 +6,6 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
-#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -263,8 +262,6 @@ void wait_for_timeline_progress(
 
 class CommandEncoder;
 class ComputeRuntime;
-struct ComputeBinding;
-struct VulkanBuffer;
 
 // Completion tracking for async submissions on the single Honeykrisp queue.
 // Every encoder submission signals one strictly increasing value on a
@@ -482,10 +479,6 @@ class Device {
       VkBuffer target_buffer,
       const char* direction);
 
-  // Persistent zero-initialized 256-byte storage buffer holding the
-  // atomic last-workgroup ticket for QmmVecQ4ResNorm* kernels.
-  ComputeBinding resnorm_ticket_binding();
-
   struct TeardownOutcome {
     bool device_destroyed{true};
     bool completion_handles_destroyed{true};
@@ -506,11 +499,6 @@ class Device {
   void* weight_staging_data_{nullptr};
   bool weight_staging_coherent_{false};
   bool weight_staging_in_flight_{false};
-  std::mutex resnorm_ticket_mutex_;
-  std::atomic<bool> resnorm_ticket_ready_{false};
-  VkBuffer resnorm_ticket_{VK_NULL_HANDLE};
-  VkDeviceMemory resnorm_ticket_memory_{VK_NULL_HANDLE};
-  VulkanBuffer* resnorm_ticket_meta_{nullptr};
   std::mutex transfer_mutex_;
   VkBuffer transfer_staging_{VK_NULL_HANDLE};
   VkDeviceMemory transfer_staging_memory_{VK_NULL_HANDLE};
