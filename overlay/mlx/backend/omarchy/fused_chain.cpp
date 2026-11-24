@@ -1297,7 +1297,7 @@ double* eval_phase_slots() {
 }
 
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
-    : previous_(eager_state) {
+    : previous_(eager_state), t0_(std::chrono::steady_clock::now()) {
   eager_state = nullptr;
   if (!fused_chain_enabled()) {
     return;
@@ -2554,9 +2554,12 @@ EagerFusionScope::~EagerFusionScope() {
     double* ph = eval_phase_slots();
     std::fprintf(
         stderr,
-        "[fold-time] dispatch us=%.0f n=%zu | eval us=%.0f n=%.0f "
-        "dispatch-blk us=%.0f bookkeeping us=%.0f commit us=%.0f "
+        "[fold-time] span us=%.0f | dispatch us=%.0f n=%zu | eval us=%.0f "
+        "n=%.0f dispatch-blk us=%.0f bookkeeping us=%.0f commit us=%.0f "
         "finalize us=%.0f\n",
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - t0_)
+            .count(),
         eager_dispatch_us,
         eager_dispatch_calls,
         ph[0],
