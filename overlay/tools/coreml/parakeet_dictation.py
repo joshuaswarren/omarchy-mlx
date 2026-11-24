@@ -587,6 +587,9 @@ class DictationTranscriber:
                     "slice-decode a mask with holes")
         decode_hidden = (encoder_hidden if decode_frames == window
                          else encoder_hidden[:, :decode_frames, :])
+        # Under prefetch the decoder runs on the main thread, which cannot
+        # see this thread's GPU stream, so it must not get a lazy slice.
+        mx.eval(decode_hidden)
         return decode_hidden, decode_frames
 
     def _decode_chunk(self, decode_hidden, decode_frames, hidden, cell,
