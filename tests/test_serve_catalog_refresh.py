@@ -14,9 +14,11 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -97,6 +99,43 @@ class FakeFetch:
                     ]
                 return payload
         raise AssertionError(f"unexpected url {url}")
+
+
+class PayloadFetch:
+    """Returns one head payload and one pinned-revision payload."""
+
+    def __init__(self, head, pinned):
+        self.head = head
+        self.pinned = pinned
+
+    def __call__(self, url):
+        return self.pinned if "blobs=true" in url else self.head
+
+
+def run_with_4mib_stack(fn):
+    """Run fn in a thread with a pinned 4 MiB stack and return its result.
+
+    Python 3.14 bounds JSON nesting by the C stack, not the recursion
+    limit, so a document that overflows on one runner decodes on a runner
+    with a bigger stack. A fixed thread stack makes it overflow on all."""
+    outcome = {}
+
+    def target():
+        try:
+            outcome["value"] = fn()
+        except BaseException as exc:  # re-raised in the calling thread
+            outcome["error"] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
 
 
 def ok_validate(obj):
@@ -331,6 +370,132 @@ class RefreshCoreTests(unittest.TestCase):
 
         self.assertEqual(code, refresher.EXIT_FETCH_ERROR)
         self.assertTrue(any("no safetensors sizes" in line for line in report))
+
+    def test_malformed_payload_aborts_without_write(self):
+        # Each payload used to crash with a traceback, write a wrong size
+        # (True summed as 1, a negative or skipped shard), or report a
+        # non-string head sha as DRIFT.
+        good_head = {"sha": "a" * 40}
+        shard = {"rfilename": "model.safetensors", "size": 5000}
+
+        def pinned(*siblings):
+            return {"sha": "a" * 40, "siblings": list(siblings)}
+
+        cases = {
+            "head not an object": ([], pinned(shard), "head payload is not a JSON object"),
+            "head sha an int": ({"sha": 123}, pinned(shard), "head sha 123 is not"),
+            "head sha a list": ({"sha": ["x"]}, pinned(shard), "head sha ['x'] is not"),
+            "head sha empty": ({"sha": ""}, pinned(shard), "head sha '' is not"),
+            "pinned not an object": (good_head, [], "revision payload is not"),
+            "pinned null": (good_head, None, "revision payload is not"),
+            "siblings a string": (good_head, {"siblings": "bad"}, "siblings is not a list"),
+            "siblings an object": (
+                good_head, {"siblings": {"model.safetensors": 1}}, "siblings is not a list"),
+            "sibling not an object": (
+                good_head, pinned(shard, None), "no string rfilename"),
+            "rfilename not a string": (
+                good_head, pinned(shard, {"rfilename": 123, "size": 5}), "no string rfilename"),
+            "bool size": (
+                good_head, pinned({"rfilename": "model.safetensors", "size": True}),
+                "size True is not"),
+            "negative size": (
+                good_head, pinned(shard, {"rfilename": "b.safetensors", "size": -500}),
+                "size -500 is not"),
+            "float size": (
+                good_head, pinned(shard, {"rfilename": "b.safetensors", "size": 3.5}),
+                "size 3.5 is not"),
+            "shard without size": (
+                good_head, pinned(shard, {"rfilename": "b.safetensors"}), "size None is not"),
+        }
+        for label, (head, payload, message) in cases.items():
+            with self.subTest(label):
+                self.write(seed_catalog(seed_entry()))
+                before = self.path.read_text(encoding="utf-8")
+
+                code, report = refresher.refresh(
+                    self.path, PayloadFetch(head, payload), ok_validate,
+                    now="2026-09-20T20:00:00Z")
+
+                self.assertEqual(code, refresher.EXIT_FETCH_ERROR, report)
+                self.assertEqual(self.path.read_text(encoding="utf-8"), before)
+                self.assertTrue(
+                    any("fetch failed" in line and message in line for line in report),
+                    report)
+
+    def test_availability_files_not_a_list_of_strings_is_invalid(self):
+        # A string would turn `name not in only` into a substring test and
+        # sum files outside the served variant.
+        for only in ("model.safetensors", 5, [5]):
+            with self.subTest(only=only):
+                self.write(seed_catalog(seed_entry(extension={"availability_files": only})))
+                before = self.path.read_text(encoding="utf-8")
+                fetch = FakeFetch({"org/repo": ("a" * 40, 12345)})
+
+                code, report = refresher.refresh(self.path, fetch, ok_validate)
+
+                self.assertEqual(code, refresher.EXIT_INVALID, report)
+                self.assertEqual(fetch.urls, [])
+                self.assertEqual(self.path.read_text(encoding="utf-8"), before)
+                self.assertEqual(
+                    report, ["m1: extension.availability_files is not a list of strings"])
+
+    @unittest.skipIf(catalog_module is None, "schema validator not importable")
+    def test_size_outside_schema_aborts_without_write(self):
+        for size in (0, 2**49):
+            with self.subTest(size=size):
+                self.write(seed_catalog(seed_entry()))
+                before = self.path.read_text(encoding="utf-8")
+
+                code, report = refresher.refresh(
+                    self.path, FakeFetch({"org/repo": ("a" * 40, size)}),
+                    catalog_module.validate_catalog, now="2026-09-20T20:00:00Z")
+
+                self.assertEqual(code, refresher.EXIT_FETCH_ERROR, report)
+                self.assertEqual(self.path.read_text(encoding="utf-8"), before)
+                self.assertTrue(
+                    any("refreshed catalog rejected" in line for line in report), report)
+
+    def test_too_deep_catalog_is_invalid(self):
+        self.path.write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
+
+        def run():
+            with self.assertRaises(RecursionError):  # the decoder overflows here
+                json.loads(self.path.read_text(encoding="utf-8"))
+            return refresher.refresh(self.path, FakeFetch({}), ok_validate)
+
+        code, report = run_with_4mib_stack(run)
+
+        self.assertEqual(code, refresher.EXIT_INVALID)
+        self.assertTrue(any("cannot read catalog" in line for line in report), report)
+
+    def test_recursion_error_reading_catalog_is_invalid(self):
+        # Stack-independent twin of the test above.
+        self.write(seed_catalog(seed_entry()))
+
+        with mock.patch.object(refresher.json, "loads",
+                               side_effect=RecursionError("too deep")):
+            code, report = refresher.refresh(self.path, FakeFetch({}), ok_validate)
+
+        self.assertEqual(code, refresher.EXIT_INVALID)
+        self.assertEqual(report, ["cannot read catalog: too deep"])
+
+    def test_too_deep_extension_is_invalid(self):
+        # The schema leaves `extension` open, so a catalog can parse and
+        # validate yet nest deeper than copy.deepcopy can recurse.
+        entry = seed_entry()
+        entry["extension"] = {"nest": None}
+        text = json.dumps(seed_catalog(entry)).replace(
+            '"nest": null', '"nest": ' + '{"x": ' * 700 + "1" + "}" * 700)
+        self.path.write_text(text, encoding="utf-8")
+        with self.assertRaises(RecursionError):  # parses, but cannot be copied
+            copy.deepcopy(json.loads(text))
+
+        code, report = refresher.refresh(
+            self.path, FakeFetch({"org/repo": ("a" * 40, 12345)}), ok_validate)
+
+        self.assertEqual(code, refresher.EXIT_INVALID)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), text)
+        self.assertTrue(any("cannot copy catalog" in line for line in report), report)
 
     def test_vetted_field_mutation_is_a_programming_error(self):
         class MutatingRefresher:
