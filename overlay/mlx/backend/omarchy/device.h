@@ -877,8 +877,9 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   }
   if (device_name.find("G13G") != std::string::npos) return 128;
   if (device_name.find("G13C") != std::string::npos) return 320;
-  if (device_name.find("G14C") != std::string::npos) return 320;
-  if (device_name.find("G17C") != std::string::npos) return 320;  // initial value matching G14C (same Max class) pending calibration on M5
+  // G14C: 5-pair ABBA Qwen3-4B decode (64-key value-phase split vs default) wins at ctx 128 (+1.10%), 192 (+3.02%), and 256 (+7.99%), bit-identical tokens.
+  if (device_name.find("G14C") != std::string::npos) return 128;
+  if (device_name.find("G17C") != std::string::npos) return 320;  // initial M5 placeholder pending M5 calibration
   if (device_name.find("G13S") != std::string::npos) return 192;
   if (device_name.find("G14G") != std::string::npos) return 192;
   if (device_name.find("G16S") != std::string::npos) return 320;
@@ -901,6 +902,9 @@ inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
+  // G14C head width 256: 5-pair ABBA Qwen3.8-2B decode loses at ctx 192 (-1.56%, 0/5) and wins at ctx 256 (+1.07%, 5/5), bit-identical tokens. G17C keeps 320 until M5 calibration.
+  if (device_name.find("G14C") != std::string::npos) return 256;
+  if (device_name.find("G17C") != std::string::npos) return 320;
   if (device_name.find("G16S") != std::string::npos) return 768;
   if (device_name.find("G15S") != std::string::npos) return 1408;
   return sdpa_split_min_keys(device_name);
@@ -926,7 +930,8 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  if (device_name.find("G14C") != std::string::npos) return 2048;
+  // G14C 17-block (136 workgroups at 8 KV heads) ceiling: 5-pair ABBA Qwen3-4B decode wins at ctx 2048 (+3.77%, 5/5, k_len 2057..2120) and drops at ctx 2176 (-5.89%, 0/5, 18 blocks); 17 * 128 = 2176 keys, bit-identical tokens.
+  if (device_name.find("G14C") != std::string::npos) return 2176;
   if (device_name.find("G13C") != std::string::npos) return 2048;
   if (device_name.find("G17C") != std::string::npos) return 2048;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 16384;
@@ -953,8 +958,9 @@ inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  if (device_name.find("G14C") != std::string::npos) return 512;
-  if (device_name.find("G17C") != std::string::npos) return 512;  // initial value matching G14C (same Max class) pending calibration on M5
+  // G14C 17-block (136 workgroups at 8 KV heads) ceiling: 5-pair ABBA Qwen3-4B decode wins at ctx 512 (+2.20%), 768 (+1.53%), and 1024 (+0.75%, 5/5) and drops at ctx 1088 (-4.67%, 0/5, 18 blocks); 17 * 64 = 1088 keys, bit-identical tokens.
+  if (device_name.find("G14C") != std::string::npos) return 1088;
+  if (device_name.find("G17C") != std::string::npos) return 512;  // initial M5 placeholder pending M5 calibration
   if (device_name.find("G16S") != std::string::npos) return 512;
   if (device_name.find("G15S") != std::string::npos) return 640;
   return 0;
