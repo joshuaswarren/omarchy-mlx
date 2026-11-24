@@ -245,15 +245,18 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
 }
 
 // The width-4096 subgroup-tree norm (sixteen contiguous values per lane of the
-// 256-thread workgroup) is measured on G16S only (receipts/2026-11-17-m4-pro-g16s-norm-4096);
+// 256-thread workgroup) is measured on G16S (receipts/2026-11-17-m4-pro-g16s-norm-4096)
+// and G14C (5-pair ABBA Qwen3.8-9B decode +1.69% at ctx 512, and +3.06% at ctx 512 /
+// +2.94% at ctx 2048 combined with 2x4w2, bit-identical tokens);
 // MLX_OMARCHY_NORM_APPLE_4096=1 forces it on and =0 forces it off on any chip.
 bool apple_norm_4096_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096");
   }
   const std::string& chip = device.capabilities().device_name;
-  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
-  return chip.find("G16S") != std::string::npos;
+  // G16S and G14C default on; G17C stays off pending M5 calibration.
+  return chip.find("G16S") != std::string::npos ||
+      chip.find("G14C") != std::string::npos;
 }
 
 bool apple_norm_enabled(
