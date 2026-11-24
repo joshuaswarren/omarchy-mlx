@@ -165,7 +165,7 @@ class OutputBound(unittest.TestCase):
 
 class Offline(unittest.TestCase):
     def test_reply_url_must_be_loopback(self):
-        for url in ("http://example.com/v1/chat/completions", "http://192.168.1.5:8080/v1/chat/completions"):
+        for url in ("http://example.com/v1/chat/completions", "http://192.0.2.5:8080/v1/chat/completions"):
             with self.assertRaises(ValueError):
                 list(voice_loop.stream_reply(url, [], model="m"))
 
@@ -312,6 +312,98 @@ class ReplyTransport(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "no choices"):
             list(voice_loop.stream_reply(self.serve(empty), [], model="m"))
+
+    def replies(self, *streams):
+        """One loopback reply server; request N streams the raw data lines of streams[N], then [DONE]."""
+        pending = iter(streams)
+
+        def stream(h):
+            h.send_response(200)
+            h.end_headers()
+            for event in next(pending):
+                h.wfile.write(b"data: " + event.encode() + b"\n\n")
+            h.wfile.write(b"data: [DONE]\n\n")
+
+        return self.serve(stream)
+
+    def test_role_only_and_finish_chunks_carry_no_text(self):
+        url = self.replies(('{"choices": [{"delta": {"role": "assistant", "content": ""}}]}',
+                            '{"choices": [{"delta": {"role": "assistant"}}]}',
+                            '{"choices": [{"delta": {"content": null}}]}',
+                            '{"choices": [{"delta": null}]}',
+                            '{"choices": [{}]}',
+                            '{"choices": [{"delta": {"content": "hi"}}]}',
+                            '{"choices": [{"delta": {}, "finish_reason": "stop"}]}'))
+        self.assertEqual(list(voice_loop.stream_reply(url, [], model="m")), ["hi"])
+
+    def test_a_malformed_event_fails_clearly(self):
+        """Each bad event raises a RuntimeError that names it, never a raw
+        decoder, AttributeError or TypeError, and never yields non-text."""
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        cases = (
+            ("not JSON", "{"), ("not JSON", ""), ("not JSON", "nope"),
+            ("not JSON", '{"n": ' + "1" * 5000 + "}"),  # int digit cap
+            ("no choices", "null"), ("no choices", "[]"), ("no choices", "123"),
+            ("no choices", '"x"'), ("no choices", "true"),
+            ("malformed", '{"choices": 1}'), ("malformed", '{"choices": 0}'),
+            ("malformed", '{"choices": false}'), ("malformed", '{"choices": ""}'),
+            ("malformed", '{"choices": {}}'), ("malformed", '{"choices": "x"}'),
+            ("malformed", '{"choices": {"a": 1}}'),
+            ("malformed", '{"choices": [null]}'), ("malformed", '{"choices": [1]}'),
+            ("malformed", '{"choices": [[]]}'),
+            ("malformed", '{"choices": [{"delta": 1}]}'), ("malformed", '{"choices": [{"delta": "x"}]}'),
+            ("malformed", '{"choices": [{"delta": []}]}'), ("malformed", '{"choices": [{"delta": false}]}'),
+            ("malformed", '{"choices": [{"delta": {"content": 123}}]}'),
+            ("malformed", '{"choices": [{"delta": {"content": ["a"]}}]}'),
+            ("malformed", '{"choices": [{"delta": {"content": {}}}]}'),
+            ("malformed", '{"choices": [{"delta": {"content": false}}]}'))
+        url = self.replies(*(('{"choices": [{"delta": {"content": "ok"}}]}', event) for _, event in cases))
+        for expected, event in cases:
+            with self.subTest(event=event[:40]):
+                got = []
+                with self.assertRaisesRegex(RuntimeError, expected) as caught:
+                    for delta in voice_loop.stream_reply(url, [], model="m"):
+                        got.append(delta)
+                self.assertTrue(str(caught.exception).endswith(": " + event[:200]), str(caught.exception)[:300])
+                self.assertEqual(got, ["ok"])
+
+    def test_a_deeply_nested_event_fails_clearly(self):
+        """A 200k-deep event overflows the decoder at every stack size (pinned
+        4 MiB thread stack) and must fail as a clear RuntimeError. A 30k-deep
+        content value may decode (3.14) or overflow (3.11); either way it is refused."""
+        deep = '{"choices": ' + "[" * 200_000 + "]" * 200_000 + "}"
+        deep_text = '{"choices": [{"delta": {"content": ' + '{"a": ' * 30_000 + "1" + "}" * 30_000 + "}}]}"
+        url = self.replies((deep,), (deep_text,))
+        errors = []
+
+        def run():
+            try:
+                with self.assertRaises(RecursionError):
+                    json.loads(deep)
+                for expected in ("not JSON", "not JSON|malformed"):
+                    with self.assertRaisesRegex(RuntimeError, expected):
+                        list(voice_loop.stream_reply(url, [], model="m"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        old = threading.stack_size(4 * 1024 * 1024)
+        try:
+            thread = threading.Thread(target=run)
+            thread.start()
+        finally:
+            threading.stack_size(old)
+        thread.join()
+        if errors:
+            raise errors[0]
+
+    def test_a_decoder_recursion_error_fails_clearly(self):
+        """Stack-independent twin of the deep-event test."""
+        url = self.replies(('{"choices": [{"delta": {"content": "hi"}}]}',))
+        with unittest.mock.patch.object(voice_loop.json, "loads", side_effect=RecursionError("too deep")):
+            with self.assertRaisesRegex(RuntimeError, "not JSON") as caught:
+                list(voice_loop.stream_reply(url, [], model="m"))
+        self.assertIsInstance(caught.exception.__cause__, RecursionError)
 
 
 class MainClosesWorkers(unittest.TestCase):
