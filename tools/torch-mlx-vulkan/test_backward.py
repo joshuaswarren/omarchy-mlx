@@ -437,10 +437,51 @@ def test_native_layer_norm_backward_lowered_in_training_graph():
     assert not fallbacks, f"the backward CPU-fell back: {fallbacks}"
     print(f"PASS census: {len(calls)} native_layer_norm_backward dispatches "
           f"through the MLX lowering, 0 fallback records")
+def test_embedding_dense_backward():
+    torch.manual_seed(6)
+    cases = [
+        (32, 16, 48, -1, False),
+        (32, 16, 48, 3, False),
+        (64, 32, 128, 7, True),
+        (16, 8, 24, 0, True),
+    ]
+    for num_weights, feat, rows, padding_idx, scale in cases:
+        idx = torch.randint(0, num_weights, (rows,))
+        idx[0] = padding_idx if padding_idx >= 0 else idx[0]
+        g = torch.randn(rows, feat)
+        ref = torch.ops.aten.embedding_dense_backward(
+            g, idx, num_weights, padding_idx, scale)
+        my = mlx_vulkan.ATEN_TABLE["embedding_dense_backward"](
+            mx.array(g.numpy()), mx.array(idx.numpy().astype(np.int64)),
+            num_weights, padding_idx, scale)
+        _cmp(f"emb_dense_bwd W{num_weights} f{feat} pad{padding_idx} scale={scale}",
+             my, ref)
+
+
+def test_select_backward():
+    torch.manual_seed(7)
+    cases = [
+        ((2, 8, 64), 2, 3),
+        ((4, 6), 1, 2),
+        ((10,), 0, 9),
+        ((4,), 0, 1),
+        ((3, 5), -1, 4),
+    ]
+    for shape, dim, index in cases:
+        g_shape = list(shape)
+        del g_shape[dim]
+        g = torch.randn(*g_shape) if g_shape else torch.randn(1)[0:0] + torch.zeros(())
+        g = torch.randn(*g_shape) if g_shape else torch.zeros(())
+        ref = torch.ops.aten.select_backward(g, list(shape), dim, index)
+        my = mlx_vulkan.ATEN_TABLE["select_backward"](
+            mx.array(g.numpy()), list(shape), dim, index)
+        _cmp(f"select_backward {shape} dim={dim} idx={index}", my, ref)
 
 
 if __name__ == "__main__":
     test_native_layer_norm_backward()
+    test_embedding_dense_backward()
+    test_select_backward()
     test_flash_cpu_fwd()
     test_flash_cpu_bwd()
     test_flash_cpu_bwd_gqa()
