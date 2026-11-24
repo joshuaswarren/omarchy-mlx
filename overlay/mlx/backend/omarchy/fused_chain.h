@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -108,8 +109,6 @@ class FusedChain {
 // consumer, then try_eval_eager_fusion defers those interior dispatches
 // and records the three operations as one FusedChain dispatch. With the
 // gate off this is an empty, allocation-free plan.
-#include <chrono>
-
 class EagerFusionScope {
  public:
   explicit EagerFusionScope(const std::deque<array>& tape);
