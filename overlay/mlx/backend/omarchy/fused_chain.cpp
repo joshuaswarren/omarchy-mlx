@@ -27,6 +27,7 @@
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/tape_index.h"
 #include "mlx/primitives.h"
 #include "mlx/utils.h"
 
@@ -1045,14 +1046,14 @@ DirectPlan plan_keys_window(const array& member, const array* update) {
 DirectPlan plan_values_window(
     const array& member,
     const array* update,
-    const std::unordered_map<std::uintptr_t, size_t>& uses,
+    const TapeIndex<size_t>& uses,
     const std::vector<GemvGroup>& groups,
     const std::unordered_map<std::uintptr_t, size_t>& dense_roles,
     std::vector<DenseGemvGroup>& dense_groups) {
   DirectPlan plan;
   auto use_count = [&](const array& value) {
-    auto it = uses.find(value.id());
-    return it == uses.end() ? size_t{0} : it->second;
+    auto* it = uses.find(value.id());
+    return it == nullptr ? size_t{0} : *it;
   };
   // Walk the chain of view-only ops (Transpose/Reshape) from the
   // pair's update input down to the Add sum. Every view must have
@@ -1267,18 +1268,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 
   auto* state = new EagerFusionState;
   eager_state = state;
-  std::unordered_map<std::uintptr_t, const array*> nodes;
-  std::unordered_map<std::uintptr_t, size_t> uses;
-  nodes.reserve(tape.size());
+  // Tape-index scratch is thread-local and reused across passes. The maps
+  // are only live for this planning section, so reuse is safe under nested
+  // scopes: a nested scope's eval runs after this constructor returns,
+  // never while it still holds the tables.
+  static thread_local TapeIndex<const array*> nodes;
+  static thread_local TapeIndex<size_t> uses;
+  nodes.prepare(tape.size());
+  uses.prepare(tape.size() * 2);
   for (const auto& node : tape) {
-    nodes.emplace(node.id(), &node);
+    nodes.put_if_absent(node.id(), &node);
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
     }
   }
   auto lookup = [&](const array& ref) -> const array* {
-    auto it = nodes.find(ref.id());
-    return it == nodes.end() ? nullptr : it->second;
+    auto* it = nodes.find(ref.id());
+    return it == nullptr ? nullptr : *it;
   };
   // Swiglu chains planned for the GEMV store epilogue fold: the gate
   // and up leaves plus the tail array the fold will store into.
@@ -1734,9 +1740,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       bool classifiable = true;
       for (int side = 0; side < 2 && classifiable; ++side) {
         const array* update = lookup(pair.nodes[side].inputs()[1]);
-        auto use_it =
-            update ? uses.find(update->id()) : uses.end();
-        if (!update || use_it == uses.end() || use_it->second != 1) {
+        const size_t* use_p = update ? uses.find(update->id()) : nullptr;
+        if (!update || use_p == nullptr || *use_p != 1) {
           classifiable = false;
           break;
         }
