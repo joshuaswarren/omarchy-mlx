@@ -1906,6 +1906,29 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 out = mx.fast.scaled_dot_product_attention(q, k, v, **kw)
                 env[n] = (out, mx.zeros((1,)))
                 continue
+            if name == "convolution" and n.op == "call_function":
+                inp, wt = _cast(args[0]), _cast(args[1])
+                bias = args[2]
+                stride = tuple(list(args[3]) * (2 // len(args[3])))
+                padding = tuple(list(args[4]) * (2 // len(args[4])))
+                dilation = tuple(list(args[5]) * (2 // len(args[5])))
+                transposed, groups = args[6], args[8] or 1
+                if transposed:
+                    raise NotImplementedError("aten.convolution transposed")
+                if groups != 1:
+                    raise NotImplementedError("aten.convolution groups>1")
+                x = mx.transpose(inp, (0, 2, 3, 1))
+                y = mx.conv2d(x, wt, stride=stride, padding=padding,
+                              dilation=dilation)
+                y = mx.transpose(y, (0, 3, 1, 2))
+                if bias is not None:
+                    y = y + _cast(bias).reshape(1, -1, 1, 1)
+                env[n] = y
+                continue
+            if name == "threshold_backward" and n.op == "call_function":
+                go, inp = _cast(args[0]), _cast(args[1])
+                env[n] = go * (inp > args[2])
+                continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
                 # mx.fast sdpa broadcasts fewer kv heads natively -> look through.
