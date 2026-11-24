@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -867,6 +868,8 @@ struct EagerFusionState {
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
+thread_local double eager_dispatch_us = 0.0;
+thread_local size_t eager_dispatch_calls = 0;
 
 bool is_op(const array* node, const std::type_info& op) {
   return node && node->has_primitive() && typeid(node->primitive()) == op;
@@ -1268,6 +1271,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   if (!fused_chain_enabled()) {
     return;
   }
+  static const bool fold_timing =
+      std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
+  const auto plan_t0 = std::chrono::steady_clock::now();
 
   // Prescan gate: every pass below needs an anchor primitive
   // (QuantizedMatmul or Matmul for GEMV groups, SliceUpdate for cache
@@ -2487,9 +2493,41 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         nrows,
         PrologueFold::State::pending});
   }
+  if (fold_timing) {
+    const double plan_us =
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - plan_t0)
+            .count();
+    std::fprintf(
+        stderr,
+        "[fold-time] plan tape=%zu us=%.0f gemv=%zu dense=%zu swiglu-roles=%zu "
+        "rope-pairs=%zu rope-norms=%zu prologues=%zu slice-pairs=%zu "
+        "sdpa-folds=%zu\n",
+        tape.size(),
+        plan_us,
+        state->gemv_groups.size(),
+        state->dense_gemv_groups.size(),
+        state->roles.size(),
+        state->rope_pairs.size(),
+        state->rope_norms.size(),
+        state->prologue_folds.size(),
+        state->slice_update_pairs.size(),
+        state->sdpa_transpose_folds.size());
+  }
 }
 
 EagerFusionScope::~EagerFusionScope() {
+  static const bool fold_timing =
+      std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
+  if (fold_timing && eager_state != nullptr) {
+    std::fprintf(
+        stderr,
+        "[fold-time] dispatch us=%.0f nodes-touched=%zu\n",
+        eager_dispatch_us,
+        eager_dispatch_calls);
+  }
+  eager_dispatch_us = 0.0;
+  eager_dispatch_calls = 0;
   delete eager_state;
   eager_state = static_cast<EagerFusionState*>(previous_);
 }
@@ -2890,6 +2928,25 @@ bool dispatch_prologue_fold(
 }
 
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
+  static const bool fold_timing =
+      std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
+  struct DispatchTimer {
+    bool on;
+    std::chrono::steady_clock::time_point t0;
+    explicit DispatchTimer(bool enabled)
+        : on(enabled),
+          t0(enabled ? std::chrono::steady_clock::now()
+                     : std::chrono::steady_clock::time_point{}) {}
+    ~DispatchTimer() {
+      if (on) {
+        eager_dispatch_us +=
+            std::chrono::duration<double, std::micro>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+        ++eager_dispatch_calls;
+      }
+    }
+  } dispatch_timer(fold_timing);
   if (!eager_state) {
     return false;
   }
