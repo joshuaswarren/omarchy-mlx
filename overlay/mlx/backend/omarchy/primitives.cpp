@@ -3609,6 +3609,7 @@ void dispatch_gather_qmm(
   std::optional<array> lhs_temp;
   std::optional<array> rhs_temp;
   std::optional<array> bias_temp;
+  std::optional<array> gs_temp;
   const array& x_d =
       ensure_dense(x, x.flags().row_contiguous, x_temp, encoder, s);
   const array& w_d =
@@ -3627,6 +3628,14 @@ void dispatch_gather_qmm(
       ensure_dense(lhs, lhs.flags().row_contiguous, lhs_temp, encoder, s);
   const array& rhs_d =
       ensure_dense(rhs, rhs.flags().row_contiguous, rhs_temp, encoder, s);
+  const array* gs_d = out_global_scale.has_value()
+      ? &ensure_dense(
+            *out_global_scale,
+            out_global_scale->flags().row_contiguous,
+            gs_temp,
+            encoder,
+            s)
+      : nullptr;
 
   out.set_data(allocate_omarchy(out.nbytes()));
   if (out.size() == 0) {
@@ -3871,7 +3880,13 @@ void dispatch_gather_qmm(
   auto align4 = [](size_t value) { return (value + 3) & ~size_t(3); };
   size_t bias_base = align4(scale_bytes);
   size_t index_base = align4(bias_base + bias_bytes);
-  size_t packed_bytes = index_base + 2 * index_count * 4;
+  // The nvfp4 output global scale (one float32 word per expert) stages
+  // after the index regions so the kernel reads it through the packed
+  // buffer like the indices - a bound buffer word read per output row is
+  // the access pattern that returns 0 on G18G.
+  size_t gs_bytes = gs_d ? gs_d->size() * 4 : 0;
+  size_t gs_base = index_base + 2 * index_count * 4;
+  size_t packed_bytes = gs_base + gs_bytes;
   array packed(Shape{static_cast<int>(packed_bytes / 4)}, uint32, nullptr, {});
   array::Flags packed_flags;
   packed_flags.contiguous = true;
@@ -3919,6 +3934,16 @@ void dispatch_gather_qmm(
       index_count * 4,
       static_cast<VkDeviceSize>(rhs_d.offset()),
       static_cast<VkDeviceSize>(index_base + index_count * 4));
+  if (gs_d) {
+    encoder.add_temporary(*gs_d);
+    encoder.add_temporary(packed);
+    encoder.copy_buffer(
+        binding(*gs_d).buffer,
+        binding(packed).buffer,
+        gs_bytes,
+        static_cast<VkDeviceSize>(gs_d->offset()),
+        static_cast<VkDeviceSize>(gs_base));
+  }
 
   params.shape[1] = static_cast<uint32_t>(bias_base);
   params.in_strides[0] = static_cast<uint32_t>(index_base / 4);
@@ -3926,20 +3951,30 @@ void dispatch_gather_qmm(
       static_cast<uint32_t>(index_base / 4 + index_count);
   // fp modes have no bias term; their kernels are the FP_MODE
   // no-bias variants. The bound global scale routes to the HGS
-  // variants, whose fifth binding carries the float32 word.
+  // variants, whose fifth binding carries one float32 entry per expert.
   if (fp_mode && out_global_scale) {
     std::array<omarchy::ComputeBinding, 5> hgs_bindings{
         binding(x_d),
         binding(packed),
         binding(w_d),
         binding(out),
-        binding(*out_global_scale)};
-    // binding() pins the whole buffer at word zero, so the scalar
-    // view's own storage offset rides in aux_size - the same
-    // checked_item_offset routing the quantize/dequantize global-scale
-    // siblings use. Valid aligned scalar views compute; unaligned ones
-    // refuse by name.
-    params.aux_size = checked_item_offset(*out_global_scale, 1, tag, out);
+        binding(*gs_d)};
+    // The staged scale region's word base inside the packed buffer rides
+    // in aux_size; the kernel adds the row's expert index to it - the
+    // same per-expert multiply the pinned Metal _hgs variants perform.
+    // flags bit 1 selects per-expert indexing; a scalar scale (the qqmm
+    // path accepts one) applies to every row.
+    params.aux_size = static_cast<uint32_t>(gs_base / 4);
+    if (gs_d->size() > 1) {
+      size_t experts = 1;
+      for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
+        experts *= static_cast<size_t>(w.shape(axis));
+      }
+      if (gs_d->size() < experts) {
+        omarchy::unsupported(tag + " global scale size", out);
+      }
+      params.flags |= 2u;
+    }
     omarchy::ComputeKernel hgs_kernel;
     if (out.dtype() == float32) {
       hgs_kernel = omarchy::ComputeKernel::GatherQmmNbFpHgsF32;
@@ -7465,21 +7500,24 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         right_sorted_);
     return;
   }
-  // Non-affine inputs: [x, w, scales(uint8), lhs, rhs]; no bias, no
-  // global scale reaches this primitive through gather_qmm.
+  // Non-affine inputs: [x, w, scales(uint8), (global_scale), lhs, rhs];
+  // no bias. ops.cpp inserts the optional nvfp4 output global scale
+  // ahead of the index pair, so the index slots shift by one when it is
+  // present.
+  const bool has_gs = inputs.size() == 6;
   dispatch_gather_qmm(
       tag,
       inputs[0],
       inputs[1],
       inputs[2],
       std::nullopt,
-      inputs[3],
-      inputs[4],
+      inputs[3 + (has_gs ? 1 : 0)],
+      inputs[4 + (has_gs ? 1 : 0)],
       group_size_,
       bits_,
       transpose_,
       /* fp_mode = */ true,
-      /* out global scale = */ std::nullopt,
+      has_gs ? std::optional<array>(inputs[3]) : std::nullopt,
       out,
       out.primitive().stream());
 }
