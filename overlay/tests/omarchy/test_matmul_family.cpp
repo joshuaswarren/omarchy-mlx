@@ -733,9 +733,22 @@ TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
   CHECK(coopmat_tile_rows(
             128u, n_groups, g16s, qmm_prefill_allow_rows64(true, false)) ==
         32u);
-  // Parts outside G16S never take 64 rows, gate or not.
-  CHECK(coopmat_tile_rows(128u, n_groups, "Apple M1 (G13G B1)", true) ==
+  // G13G takes 64 rows when allowed and the 64-row grid fills the part;
+  // when disallowed or under the occupancy floor, or on parts outside
+  // G16S and G13G, it stays 32 rows.
+  const std::string g13g = "Apple M1 (G13G B1)";
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, g13g, qmm_prefill_allow_rows64(true, true)) ==
+        64u);
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, g13g, qmm_prefill_allow_rows64(false, true)) ==
         32u);
+  CHECK(coopmat_tile_rows(
+            128u, 16u, g13g, qmm_prefill_allow_rows64(true, true)) == 32u);
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, "Apple M2 Max (G14C B1)", true) == 32u);
+  CHECK(coopmat_tile_rows(
+            128u, n_groups, "Apple M1 Max (G13C C0)", true) == 32u);
 }
 
 TEST_CASE("the small-M qmm prefill arm on G16S: the occupancy floor governs") {
@@ -6299,6 +6312,113 @@ TEST_CASE("gather_qmm affine and q3 subgroup decodes default off on G18G") {
   CHECK(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
   unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
   CHECK_FALSE(omarchy::gather_qmm_sub_default_part("Apple M6 (G18G B1)"));
+}
+
+TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") {
+  using mlx::core::omarchy::ComputeKernel;
+  using mlx::core::omarchy::coopmat_tile_rows;
+  using mlx::core::omarchy::qmm_coopmat_sg4_requested;
+  using mlx::core::omarchy::qmm_coopmat_stepk_requested;
+  using mlx::core::omarchy::qmm_g4_pad_ratio_kernel;
+  using mlx::core::omarchy::qmm_prefill_allow_rows64;
+
+  EnvGuard rows_guard("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  EnvGuard stepk_guard("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+
+  const std::string g13g = "Apple M1 (G13G B1)";
+  const std::string g16s = "Apple M4 Pro (G16S B1)";
+  const std::string g14c = "Apple M2 Max (G14C B1)";
+  const std::string g13c = "Apple M1 Max (G13C C0)";
+  const std::string g17c = "Apple M5 Max (G17C B1)";
+  const bool allow64 = qmm_prefill_allow_rows64(true, true);
+
+  // Default G13G (M=128, n_groups=64 fills 8 cores): 64-row SG4 + STEP_K=32.
+  uint32_t rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
+  bool sg4 = qmm_coopmat_sg4_requested(g13g);
+  uint32_t step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(sg4);
+  CHECK(step_k == 32u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32);
+
+  // When a small G13G grid falls back to 32 rows, STEP_K must stay 16.
+  rows = coopmat_tile_rows(128u, 16u, g13g, allow64);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 32u);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
+
+  // Kill switch ROWS=32 restores shipped 32-row K=16 on G13G.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
+  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g13g);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 32u);
+  CHECK_FALSE(sg4);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
+
+  // Kill switch ROWS=64 selects M64 K=16 on G13G.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "64", 1);
+  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g13g);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK_FALSE(sg4);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPad);
+
+  // Kill switch STEPK=16 keeps 64-row SG4 at K=16 on G13G.
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "16", 1);
+  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g13g);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(sg4);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPad);
+
+  // Explicit opt-in STEPK=32 overrides 32-row default when asked for A/B.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "32", 1);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
+  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g13g);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 32u);
+  CHECK(step_k == 32u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadK32);
+
+  // Other parts keep their existing defaults cleanly.
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+  rows = coopmat_tile_rows(128u, 64u, g16s, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g16s);
+  step_k = qmm_coopmat_stepk_requested(g16s, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK_FALSE(sg4);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPad);
+
+  for (const std::string& keep32 : {g14c, g13c, g17c}) {
+    rows = coopmat_tile_rows(128u, 64u, keep32, allow64);
+    sg4 = qmm_coopmat_sg4_requested(keep32);
+    step_k = qmm_coopmat_stepk_requested(keep32, rows, sg4);
+    CHECK(rows == 32u);
+    CHECK_FALSE(sg4);
+    CHECK(step_k == 16u);
+    CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+          ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
+  }
 }
 
 TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain") {

@@ -9722,7 +9722,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               : pad_bytes;
           // STEP_K=32 doubles the B-tile (32 x 36 f32); still well
           // under typical max shared. CHUNK stays the 32-row path only.
-          const uint32_t step_k = omarchy::qmm_coopmat_stepk_env();
+          const std::string qmm_dev_name =
+              encoder.device().hardware_capabilities().device_name;
+          const bool use_sg4 =
+              omarchy::qmm_coopmat_sg4_requested(qmm_dev_name);
+          const uint32_t step_k = omarchy::qmm_coopmat_stepk_requested(
+              qmm_dev_name, coopmat_rows, use_sg4);
           const uint32_t ratio_bytes = step_k * 36u * 4u;
           const uint32_t need_ratio =
               need > ratio_bytes ? need : ratio_bytes;
@@ -9738,7 +9743,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               // twin; CHUNK is 32-row-only.
               qmm_kernel = omarchy::qmm_g4_pad_ratio_kernel(
                   coopmat_rows,
-                  omarchy::qmm_coopmat_sg4_env(),
+                  use_sg4,
                   step_k,
                   omarchy::qmm_cheap_deq_env());
             }
