@@ -848,8 +848,10 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
 }
 
 TEST_CASE("submission-cap default resolves per calibrated board") {
-  // The G14C row ships calibrated (receipts/2026-11-13-g14c-batch-work).
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 100000);
+  // The G14C row ships calibrated: 200000 keeps one whole Qwen3.8-9B
+  // decode step in a single submission (the 100000 row split it mid-eval
+  // into two; receipts/2026-11-24-g14c-batch-work-200000).
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 200000);
 
   // The G13C row carries receipts/2026-10-12-submission-cap-calibration:
   // the 16-inch M1 Max keeps 40000 (both models at or under 1.6 ms p50).
@@ -874,7 +876,7 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple A18 Pro (G17P B1)") == 5000);
 
   // The M2 base row does not shadow the M2 Max row, nor the reverse.
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 100000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 200000);
 
   // The G18G row (M6) resolves to its own calibrated budget, not the
   // 5000 fallback. The budget is uncapped (UINT64_MAX): on the 4096e
@@ -918,13 +920,19 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // recalibrating the 13-inch M1 leaves the unmeasured boards alone.
   CHECK(omarchy::batch_work_fallback() == 5000);
 
-  // Every calibrated row must sit between the off switch and the old
-  // global default: a calibrated value above 40000 would loosen the
-  // shipped cap on that board without a receipt saying why. G14C is the
-  // one row above it (receipts/2026-11-13-g14c-batch-work), and G17C matches it pending M5 calibration.
+  // Every calibrated row must sit between the off switch and a receipt-
+  // bound ceiling: a calibrated value above 40000 would loosen the
+  // shipped cap on that board without a receipt saying why. G14C sits at
+  // 200000 (receipts/2026-11-24-g14c-batch-work-200000); G17C keeps the
+  // 100000 placeholder pending M5 calibration; G18G is uncapped
+  // (headless, receipts/2026-11-23-g621-batch-budget-submits) — naming
+  // its ceiling here also repairs the stale bound the row introduced.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= (row.board == "G14C" || row.board == "G17C" ? 100000 : 40000));
+      CHECK(row.budget <= (row.board == "G14C"   ? 200000
+                           : row.board == "G17C" ? 100000
+                           : row.board == "G18G" ? UINT64_MAX
+                                                 : 40000));
     }
   }
 }
@@ -961,14 +969,14 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
-  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == UINT64_MAX);
   CHECK(omarchy::batch_work_budget("Apple M3 Pro (G15S B1)") == 15000);
   CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
   // 40000 or 20000 here.
-  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 100000);
+  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 200000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
