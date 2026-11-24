@@ -126,16 +126,19 @@ def test_stats_identical_across_flags():
 
 
 def test_ties_keep_first_index_across_flags_and_composed():
-    """Duplicate rows pin tie-breaking: the smallest index must win everywhere."""
+    """Duplicate the true argmax row: the smallest index must win everywhere."""
     rng = np.random.default_rng(2)
-    args = _inputs(rng, dup_rows=[(5, 100), (7, 8), (13, 13), (13, 400)])
+    top, _ = _greedy(*_inputs(np.random.default_rng(2)), fused=False)
+    dsts = [i for i in (0, 1, N - 2, N - 1) if i != top][:2]
+    args = _inputs(rng, dup_rows=[(top, d) for d in dsts])
     token_off, _ = _greedy(*args, fused=False)
     token_on, _ = _greedy(*args, fused=True)
     composed = _composed(*args[:4])
-    assert token_off == token_on == composed, (
-        f"tie divergence: off={token_off} on={token_on} composed={composed}"
+    expected = min([top] + dsts)
+    assert token_off == token_on == composed == expected, (
+        f"tie divergence: off={token_off} on={token_on} "
+        f"composed={composed} expected={expected}"
     )
-    assert token_off in (5, 7, 13), f"unexpected tie token {token_off}"
 
 
 @pytest.mark.parametrize("seed", range(8))
