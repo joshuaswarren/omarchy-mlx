@@ -326,6 +326,7 @@
 #include "qmm_vec_q4_multi_token16_bf16.h"
 #include "qmm_vec_q4_multi_token8_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token8_bf16.h"
+#include "qmm_vec_q4_multi_token4_resnorm_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_subgroup_f16.h"
 #include "qmm_vec_q4_multi_subgroup_f32.h"
 #include "sdpa_decode_native_f16.h"
