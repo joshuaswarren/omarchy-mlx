@@ -93,7 +93,7 @@ def wheel_requires(wheels, pin):
     for wheel in sorted(Path(wheels).glob("*.whl")):
         try:
             name, found, _, tags = parse_wheel_filename(wheel.name)
-        except InvalidWheelFilename:
+        except (InvalidWheelFilename, InvalidVersion):  # packaging < 23.2 raises InvalidVersion
             continue
         if name != norm(pin.name) or found != version:
             continue

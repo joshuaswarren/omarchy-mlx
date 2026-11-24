@@ -10,6 +10,7 @@ without resolving dependencies again.
 
 import base64
 import hashlib
+import importlib.util
 import io
 import re
 import subprocess
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -218,6 +220,30 @@ class NodepsClosureCheckTest(unittest.TestCase):
                 result = self.run_raw(f"{entry}\n".encode(), lock,
                                       {filename: {f"{filename.split('-')[0]}-1.0.dist-info/METADATA": meta}})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_wheel_filename_with_an_invalid_version_is_skipped(self):
+        # packaging < 23.2 raises InvalidVersion, not InvalidWheelFilename, for
+        # aaa-badver-py3-none-any.whl, which sorts ahead of the pinned wheel.
+        spec = importlib.util.spec_from_file_location("nodeps_closure_under_test", CHECK)
+        closure = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(closure)
+        modern = closure.parse_wheel_filename
+
+        def old_parse(filename):
+            closure.Version(filename.split("-")[1])
+            return modern(filename)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wheels = Path(tmp)
+            (wheels / "aaa-badver-py3-none-any.whl").write_bytes(b"")
+            make_wheel(wheels, "voicepkg", "1.0", requires=["tqdm"])
+            with mock.patch.object(closure, "parse_wheel_filename", old_parse):
+                self.assertEqual(closure.wheel_requires(wheels, closure.Requirement("voicepkg==1.0")), ["tqdm"])
+        result = self.run_raw(b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode(),
+                              {"aaa-badver-py3-none-any.whl": b"",
+                               "voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA":
+                                                                 b"Requires-Dist: tqdm\n"}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_only_the_exact_version_with_wheel_tags_is_checked(self):
         # ==1.0 also contains 1.0+cpu, so a contains() match checked
