@@ -1372,8 +1372,7 @@ def make_compiled_executor(gm, dt=None):
         extra = outs[n_out:] if n_out else outs[1:]
         for m, arr in zip(mutated, extra):
             state[str(m.target)] = arr
-        out = (_torch(real[0]) if len(real) == 1
-               else tuple(_torch(x) for x in real))
+        out = tuple(_torch(x) for x in real)
         t3 = _t.perf_counter()
         if _profile:
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
