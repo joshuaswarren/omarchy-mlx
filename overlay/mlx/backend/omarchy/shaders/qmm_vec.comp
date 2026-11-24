@@ -1771,6 +1771,7 @@ if (stage == 9u) {
       }
     }
   }
+  barrier();
   memoryBarrierBuffer();
   if (lane == 0u) {
     greedy_done = (atomicAdd(state.values[STATE_DONE], 1u) ==
@@ -1856,6 +1857,7 @@ if (stage == 10u) {
       row_values.values[k] = value;
     }
   }
+  barrier();
   memoryBarrierBuffer();
   if (lane == 0u) {
     greedy_done = (atomicAdd(state.values[STATE_DONE2], 1u) ==
