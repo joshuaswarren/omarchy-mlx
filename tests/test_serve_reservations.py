@@ -5,6 +5,7 @@ Stdlib unittest only. Tests use a temporary MLX_OMARCHY_HOME so the real
 plausible bug would break.
 """
 
+import json
 import multiprocessing
 import os
 import subprocess
@@ -169,6 +170,27 @@ def _deep_list(depth):
     return deep
 
 
+def _raised_on_small_stack(fn):
+    """Run fn in a thread with a 4 MiB stack, so the nesting limit does not
+    depend on the host's ulimit -s. Returns the exception raised, or None."""
+    caught = []
+
+    def run():
+        try:
+            fn()
+        except BaseException as exc:  # returned for the caller to assert on
+            caught.append(exc)
+
+    old = threading.stack_size(4 * 1024 * 1024)
+    try:
+        worker = threading.Thread(target=run)
+        worker.start()
+    finally:
+        threading.stack_size(old)
+    worker.join()
+    return caught[0] if caught else None
+
+
 class UnreadableReservationsFileTests(unittest.TestCase):
     """A reservations file that is not valid UTF-8 JSON, or nests too
     deeply, is a BudgetError (CLI exit 2), never a raw traceback."""
@@ -186,24 +208,7 @@ class UnreadableReservationsFileTests(unittest.TestCase):
         return home
 
     def _load_on_small_stack(self, home):
-        """Load in a thread with a 4 MiB stack, so the nesting limit does
-        not depend on the host's ulimit -s. Returns the exception raised."""
-        caught = []
-
-        def run():
-            try:
-                budget.load_reservations(home)
-            except BaseException as exc:  # returned for the caller to assert on
-                caught.append(exc)
-
-        old = threading.stack_size(4 * 1024 * 1024)
-        try:
-            worker = threading.Thread(target=run)
-            worker.start()
-        finally:
-            threading.stack_size(old)
-        worker.join()
-        return caught[0] if caught else None
+        return _raised_on_small_stack(lambda: budget.load_reservations(home))
 
     def test_load_raises_budget_error(self):
         self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
@@ -243,6 +248,164 @@ class UnreadableReservationsFileTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, 2, proc.stderr)
                 self.assertIn("refusing to guess", proc.stderr)
                 self.assertNotIn("Traceback", proc.stderr)
+
+
+GOOD_CLAIM = {"name": "chat", "claim_token": "pid1-0123456789ab",
+              "bytes": 1024, "pair_id": "everyday"}
+
+MISTYPED_CLAIM_FIELDS = (
+    ("name", 1), ("name", ""), ("name", ["chat"]), ("name", True),
+    ("claim_token", 5), ("claim_token", ""), ("claim_token", {"t": 1}),
+    ("bytes", True), ("bytes", False), ("bytes", 1.5), ("bytes", 1024.0),
+    ("bytes", 0), ("bytes", -1), ("bytes", "1024"), ("bytes", [1024]),
+    ("pair_id", 7), ("pair_id", ["everyday"]), ("pair_id", True),
+)
+
+
+def _claim_raw(key, value):
+    payload = dict(GOOD_CLAIM)
+    payload[key] = value
+    return json.dumps(payload).encode()
+
+
+def _claim_literal(literal):
+    """A payload whose bytes field is a bare JSON literal (NaN, Infinity)."""
+    return (b'{"name": "chat", "claim_token": "pid1-0123456789ab", "bytes": '
+            + literal + b'}')
+
+
+class ClaimPipeValidationTests(unittest.TestCase):
+    """The managed child's claim pipe fails closed: a malformed fd or a
+    malformed, deep or mistyped payload is a BudgetError (the worker's
+    exit-3 path), never a raw traceback and never a coerced claim."""
+
+    def setUp(self):
+        self.home, self.cleanup = _make_home()
+        self.addCleanup(self.cleanup)
+
+    def pipe_fd(self, raw):
+        """A real OS pipe carrying raw; the writer closes its end like the
+        parent manager does. Returns the read end, closed at cleanup."""
+        r, w = os.pipe()
+
+        def write_all():
+            try:
+                view = memoryview(raw)
+                while view:
+                    view = view[os.write(w, view):]
+            except OSError:
+                pass  # reader closed early (test failure path)
+            finally:
+                os.close(w)
+
+        writer = threading.Thread(target=write_all)
+        writer.start()
+        self.addCleanup(writer.join)
+        self.addCleanup(os.close, r)
+        return r
+
+    def claim_from_pipe(self, raw):
+        """claim_from_env over a real pipe, with claim_reservation stubbed
+        so a payload that slips past validation is caught, not claimed."""
+        fd = self.pipe_fd(raw)
+        claim = unittest.mock.Mock(return_value={"claimed": True})
+        with unittest.mock.patch.dict(os.environ, {budget.CLAIM_FD_ENV: str(fd)}), \
+                unittest.mock.patch.object(budget, "claim_reservation", claim):
+            try:
+                return budget.claim_from_env(home=self.home), claim
+            except budget.BudgetError as exc:
+                return exc, claim
+
+    def test_valid_payloads_pass_through_unchanged(self):
+        no_pair = {k: v for k, v in GOOD_CLAIM.items() if k != "pair_id"}
+        for payload in (GOOD_CLAIM, no_pair, dict(GOOD_CLAIM, pair_id=None),
+                        dict(GOOD_CLAIM, pair_id=""), dict(GOOD_CLAIM, extra="kept")):
+            with self.subTest(payload=payload):
+                fd = self.pipe_fd(json.dumps(payload).encode() + b"\n")
+                self.assertEqual(budget.read_claim_fd(fd), payload)
+        # "" is forwarded as-is so claim_reservation refuses it as a pair
+        # mismatch; it must not collapse to None, which skips the pair check.
+        for payload, pair in ((GOOD_CLAIM, "everyday"), (no_pair, None),
+                              (dict(GOOD_CLAIM, pair_id=""), "")):
+            with self.subTest(pair_id=pair):
+                result, claim = self.claim_from_pipe(json.dumps(payload).encode())
+                self.assertEqual(result, {"claimed": True})
+                claim.assert_called_once_with(
+                    "chat", "pid1-0123456789ab", expected_bytes=1024,
+                    home=self.home, expected_pair=pair)
+
+    def test_mistyped_fields_raise_budget_error(self):
+        for key, value in MISTYPED_CLAIM_FIELDS:
+            with self.subTest(key=key, value=value):
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.read_claim_fd(self.pipe_fd(_claim_raw(key, value)))
+                self.assertIn(f"claim payload field {key!r}", str(cm.exception))
+
+    def test_non_finite_bytes_raise_budget_error(self):
+        for literal in (b"NaN", b"Infinity", b"-Infinity"):
+            with self.subTest(literal=literal):
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.read_claim_fd(self.pipe_fd(_claim_literal(literal)))
+                self.assertIn("claim payload field 'bytes'", str(cm.exception))
+
+    def test_deeply_nested_payload_raises_budget_error(self):
+        # 64 KiB of "[" is the largest payload the pipe accepts and nests
+        # twice past the 4 MiB stack's decode limit on 3.14 (3.11 stops at
+        # the recursion limit).
+        deep = b"[" * (64 * 1024)
+        pre = _raised_on_small_stack(lambda: json.loads(deep.decode()))
+        self.assertIsInstance(pre, RecursionError)
+        fd = self.pipe_fd(deep)
+        exc = _raised_on_small_stack(lambda: budget.read_claim_fd(fd))
+        self.assertIsInstance(exc, budget.BudgetError)
+        self.assertIn("claim payload is not valid JSON", str(exc))
+
+    def test_decoder_recursion_error_raises_budget_error(self):
+        # Stack-independent twin of the deep-payload test.
+        fd = self.pipe_fd(json.dumps(GOOD_CLAIM).encode())
+        with unittest.mock.patch.object(budget.json, "loads",
+                                        side_effect=RecursionError("deep")):
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.read_claim_fd(fd)
+        self.assertIn("claim payload is not valid JSON", str(cm.exception))
+
+    def test_non_int_fd_raises_budget_error_without_reading(self):
+        # bool is an int: True would read the process's stdout (fd 1).
+        read = unittest.mock.Mock(side_effect=AssertionError("os.read called"))
+        with unittest.mock.patch.object(budget.os, "read", read):
+            for fd in (True, False, "3", b"3", 3.0, None):
+                with self.subTest(fd=fd):
+                    with self.assertRaises(budget.BudgetError) as cm:
+                        budget.read_claim_fd(fd)
+                    self.assertIn("claim fd must be an int", str(cm.exception))
+        read.assert_not_called()
+
+    def test_out_of_range_fd_raises_budget_error(self):
+        for fd in (2**31, 2**70, -(2**70)):
+            with self.subTest(fd=fd):
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.read_claim_fd(fd)
+                self.assertIn("claim pipe unreadable", str(cm.exception))
+
+    def test_claim_from_env_rejects_mistyped_payload_before_claiming(self):
+        cases = [(key, _claim_raw(key, value)) for key, value in MISTYPED_CLAIM_FIELDS]
+        cases += [("bytes", _claim_raw("bytes", "abc")),
+                  ("bytes", _claim_raw("bytes", {})),
+                  ("bytes", _claim_literal(b"NaN")),
+                  ("bytes", _claim_literal(b"Infinity"))]
+        for key, raw in cases:
+            with self.subTest(raw=raw):
+                result, claim = self.claim_from_pipe(raw)
+                self.assertIsInstance(result, budget.BudgetError)
+                self.assertIn(f"claim payload field {key!r}", str(result))
+                claim.assert_not_called()
+
+    def test_claim_from_env_out_of_range_fd_raises_budget_error(self):
+        with unittest.mock.patch.dict(os.environ,
+                                      {budget.CLAIM_FD_ENV: str(2**70)}):
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.claim_from_env(home=self.home)
+        self.assertIn("claim pipe unreadable", str(cm.exception))
 
 
 def _install_patch(home_str):  # pragma: no cover (multiprocessing init)

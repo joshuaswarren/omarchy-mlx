@@ -756,12 +756,16 @@ def resize_reservation(name: str, byte_count: int, *, owner: str,
 
 def read_claim_fd(fd: int) -> dict:
     """Read one JSON claim payload from the inherited private pipe. The
-    parent closes its end right after writing, so EOF terminates the read."""
+    parent closes its end right after writing, so EOF terminates the read.
+    Any malformed fd or payload is a BudgetError, never a raw exception or a
+    coerced value: the claim must match the record exactly as written."""
+    if isinstance(fd, bool) or not isinstance(fd, int):
+        raise BudgetError(f"claim fd must be an int, got {type(fd).__name__}")
     chunks = []
     while True:
         try:
-            chunk = os.read(int(fd), 65536)
-        except OSError as exc:
+            chunk = os.read(fd, 65536)
+        except (OSError, OverflowError) as exc:
             raise BudgetError(f"claim pipe unreadable: {exc}") from exc
         if not chunk:
             break
@@ -770,11 +774,22 @@ def read_claim_fd(fd: int) -> dict:
             raise BudgetError("claim payload exceeds 64 KiB; refusing")
     try:
         payload = json.loads(b"".join(chunks).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
+        # ValueError covers JSONDecodeError, UnicodeDecodeError and the
+        # int-digit limit; RecursionError covers deeply nested JSON.
         raise BudgetError(f"claim payload is not valid JSON: {exc}") from exc
     required = ("name", "claim_token", "bytes")
     if not isinstance(payload, dict) or any(payload.get(k) is None for k in required):
         raise BudgetError(f"claim payload must contain {required}")
+    for key in ("name", "claim_token"):
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise BudgetError(f"claim payload field {key!r} must be a non-empty string")
+    byte_count = payload["bytes"]
+    if isinstance(byte_count, bool) or not isinstance(byte_count, int) or byte_count <= 0:
+        raise BudgetError("claim payload field 'bytes' must be a positive integer")
+    pair_id = payload.get("pair_id")
+    if pair_id is not None and not isinstance(pair_id, str):
+        raise BudgetError("claim payload field 'pair_id' must be a string or null")
     return payload
 
 
@@ -791,8 +806,8 @@ def claim_from_env(home: Path | None = None) -> dict | None:
         raise BudgetError(f"{CLAIM_FD_ENV} must be an fd number, got {raw!r}") from exc
     payload = read_claim_fd(fd)
     return claim_reservation(
-        str(payload["name"]), str(payload["claim_token"]),
-        expected_bytes=int(payload["bytes"]), home=home,
+        payload["name"], payload["claim_token"],
+        expected_bytes=payload["bytes"], home=home,
         expected_pair=payload.get("pair_id"))
 
 
