@@ -274,13 +274,41 @@ def test_compiled_executor_nonarray_outputs():
 
 def test_gelu_backward():
     rng = np.random.RandomState(2)
+    # fp32: exact formula vs the aten reference, both approximate modes.
     x = rng.randn(6, 8).astype(np.float32) * 3.0  # wide spread to hit both tails
     dy = rng.randn(6, 8).astype(np.float32)
     for approximate in ("none", "tanh"):
         tx = torch.tensor(x, requires_grad=True)
         torch.nn.functional.gelu(tx, approximate=approximate).backward(torch.tensor(dy))
-        out = mlx_vulkan._gelu_backward(mx.array(dy), mx.array(x), approximate=approximate)
+        out = mlx_vulkan.ATEN_TABLE["gelu_backward"](
+            mx.array(dy), mx.array(x), approximate=approximate)
         assert np.abs(_np(out) - tx.grad.numpy()).max() < 1e-5, approximate
+    # bf16: aten runs the formula in fp32 opmath and rounds to bf16; the
+    # lowering must do the same or the bf16 tail values drift.
+    xb = torch.tensor(x, dtype=torch.bfloat16)
+    gb = torch.tensor(dy, dtype=torch.bfloat16)
+    for approximate in ("none", "tanh"):
+        ref = torch.ops.aten.gelu_backward.default(gb, xb, approximate=approximate)
+        mine = mlx_vulkan.ATEN_TABLE["gelu_backward"](
+            mx.array(gb.float().numpy()).astype(mx.bfloat16),
+            mx.array(xb.float().numpy()).astype(mx.bfloat16),
+            approximate=approximate)
+        assert mine.dtype == mx.bfloat16, mine.dtype
+        got = torch.from_numpy(np.array(mine.astype(mx.float32)))
+        d = float((got - ref.float()).abs().max())
+        assert d < 0.02, f"bf16 {approximate}: {d:.3e}"
+    # executor path: the aten.gelu_backward.default node must land in
+    # stats["mlx"], not the CPU fallback — the census "lowered" status is
+    # exactly this fact.
+    gfx = torch.fx.Graph()
+    ph_g, ph_x = gfx.placeholder("g"), gfx.placeholder("x")
+    gfx.output(gfx.call_function(torch.ops.aten.gelu_backward.default, (ph_g, ph_x)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    ref = torch.ops.aten.gelu_backward.default(torch.tensor(dy), torch.tensor(x))
+    assert np.abs(_np(run(torch.tensor(dy), torch.tensor(x))) - ref.numpy()).max() < 1e-5
+    assert "gelu_backward" in stats["mlx"], stats
+    assert "gelu_backward" not in stats["cpu"], stats
     print("test_gelu_backward PASS")
 
 
@@ -320,7 +348,7 @@ def test_dispatch_registered():
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
                  "_native_batch_norm_legit_functional", "threshold_backward", "t",
-                 "gelu_backward", "embedding_dense_backward", "linear"):
+                 "gelu_backward", "tanh_backward", "embedding_dense_backward", "linear"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 

@@ -340,18 +340,6 @@ def _silu_backward(g, x):
     return g * sig * (1.0 + x * (1.0 - sig))
 
 
-def _gelu_backward(gout, x, approximate="none"):
-    g, x = _mx(gout), _mx(x)
-    if approximate == "tanh":
-        c = math.sqrt(2.0 / math.pi)
-        u = c * (x + 0.044715 * x * x * x)
-        t = mx.tanh(u)
-        du = c * (1.0 + 3.0 * 0.044715 * x * x)
-        return g * (0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du)
-    return g * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
-                + x * mx.exp(-(x * x) / 2.0) / math.sqrt(2.0 * math.pi))
-
-
 def _embedding_dense_backward(go, idx, num_weights, padding_idx,
                               scale_grad_by_freq):
     # aten: grad_output, indices, num_weights, padding_idx, scale_grad_by_freq
@@ -655,12 +643,23 @@ def _nll_loss_forward(a, target, weight=None, reduction=1, ignore_index=-100):
 
 
 def _gelu_backward(g, a, approximate="none"):
-    a = _mx(a)
+    # aten runs this backward in fp32 opmath and rounds to the input dtype.
+    d = a.dtype
+    g, a = _mx(g).astype(mx.float32), _mx(a).astype(mx.float32)
     if approximate == "tanh":
         u = math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a)
         t = mx.tanh(u)
-        return _mx(g) * (0.5 * (1.0 + t) + 0.5 * a * (1.0 - t * t) * math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * a * a))
-    return _mx(g) * (0.5 * (1.0 + mx.erf(a / math.sqrt(2.0))) + a * mx.exp(-0.5 * a * a) / math.sqrt(2.0 * math.pi))
+        out = _mx(g) * (0.5 * (1.0 + t) + 0.5 * a * (1.0 - t * t) * math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * a * a))
+    else:
+        out = _mx(g) * (0.5 * (1.0 + mx.erf(a / math.sqrt(2.0))) + a * mx.exp(-0.5 * a * a) / math.sqrt(2.0 * math.pi))
+    return out.astype(d)
+
+
+def _tanh_backward(g, out):
+    # aten tanh_backward: grad * (1 - output^2) in fp32 opmath.
+    d = _mx(g).dtype
+    g32, o32 = _mx(g).astype(mx.float32), _mx(out).astype(mx.float32)
+    return (g32 * (1.0 - o32 * o32)).astype(d)
 
 
 def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
@@ -1224,7 +1223,7 @@ _FUNC_SPECS = {
     "t": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
     "threshold_backward": lambda g, x, t=0.0: mx.where(mx.greater(_mx(x), t), _mx(g), mx.zeros_like(_mx(g))),
     "select_backward": _select_backward,
-    "tanh_backward": lambda g, out: _mx(g) * (1.0 - _mx(out) * _mx(out)),
+    "tanh_backward": _tanh_backward,
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
     "gelu_backward": _gelu_backward,
