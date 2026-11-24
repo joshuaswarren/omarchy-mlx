@@ -28,8 +28,39 @@ def summ(v):
             "stdev": round(statistics.stdev(v), 3) if len(v) > 1 else 0.0,
             "min": round(min(v), 3), "max": round(max(v), 3), "n": len(v)}
 
+def _patch_marker_count():
+    # Omarchy serve-patch marker count inside the imported mlx_lm tree. The
+    # vendored patches insert omarchy-only strings (fused GDN route, conv
+    # lowering); a stock mlx_lm scores 0 and its Linux decode silently takes
+    # the eager f32 fallback path, producing inflated ms/token rows.
+    import mlx_lm
+    if not getattr(mlx_lm, "__file__", None):
+        return 0
+    root = os.path.dirname(mlx_lm.__file__)
+    n = 0
+    for dp, _, fns in os.walk(root):
+        for fn in fns:
+            if not fn.endswith(".py"):
+                continue
+            try:
+                with open(os.path.join(dp, fn), encoding="utf-8",
+                          errors="ignore") as f:
+                    src = f.read()
+            except OSError:
+                continue
+            n += src.count("omarchy") + src.count("mx.fast.gated_delta_update")
+    return n
+
 
 def main():
+    markers = _patch_marker_count()
+    if (platform.system() == "Linux" and markers == 0
+            and os.environ.get("STOCK_MLX_LM") != "1"):
+        sys.exit("score_bench: mlx_lm has 0 omarchy patch markers - a Linux "
+                 "decode run would silently take the eager f32 fallback path. "
+                 "Patch the venv (install.sh --patch-venv %s) or set "
+                 "STOCK_MLX_LM=1 to run against stock mlx_lm on purpose."
+                 % sys.prefix)
     prompts = [json.loads(l)["text"] for l in open(a.prompts) if l.strip()]
     corpus_sha = hashlib.sha256(open(a.prompts, "rb").read()).hexdigest()
     t_load = time.perf_counter()
@@ -78,6 +109,7 @@ def main():
         "first_outputs": [r["out"][:16] for r in recs[: a.decode_limit]],
         "peak_mem_gb": round(mx.get_peak_memory() / 1e9, 2) if hasattr(mx, "get_peak_memory") else None,
         "env": {"platform": platform.platform(), "python": platform.python_version(), "backend": str(mx.default_device()),
+                "mlx_lm_patch_markers": markers,
                 "load1_end": os.getloadavg()[0]},
     }
     import mlx_lm
