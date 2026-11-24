@@ -204,6 +204,27 @@ def _interpolate(a, size=None, scale_factor=None, mode="nearest",
     return x[:, yi][:, :, xi].transpose(0, 3, 1, 2)
 
 
+def _topk(a, k, dim=-1, largest=True, sorted=True):
+    """torch.topk parity: returns (values, indices) sorted along dim."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    idx = mx.argsort(-at if largest else at, axis=-1)[..., :k]
+    vals = mx.take_along_axis(at, idx, axis=-1)
+    inv = [perm.index(i) for i in range(a.ndim)]
+    return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
+
+def _multinomial(probs, num_samples, replacement=False, **kw):
+    """torch.multinomial parity: draws from probability rows along the last dim.
+    replacement=False is top-k of Gumbel-perturbed log-probs (exact);
+    replacement=True is independent categorical draws on the logits."""
+    p = _mx(probs)
+    lp = mx.log(p)
+    if replacement:
+        return mx.random.categorical(lp, num_samples=num_samples).astype(mx.int64)
+    return mx.argsort(-(lp + mx.random.gumbel(p.shape)), axis=-1)[..., :num_samples].astype(mx.int64)
+
 def _bitwise_or_logical(a, b, bitop, logop):
     a, b = _mx(a), _mx(b)
     _float_dts = (mx.float32, mx.float16, mx.bfloat16)
@@ -296,6 +317,8 @@ _FUNC_SPECS = {
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
+    "topk": _topk,
+    "multinomial": _multinomial,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
