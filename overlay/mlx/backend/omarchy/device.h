@@ -784,6 +784,25 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   return device_name.find("G16S") != std::string::npos;
 }
 
+// Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T) default row cap per part.
+// G16S/G13C: 8 (measured ~3x at M=2..4 vs the coopmat tile). G13G: 8 —
+// the short-pass GEMV beat the shipped routes at every measured row
+// count on jwm1: +15..28% at M=4 vs the small-row chain, +4..20% at M=8
+// vs the coopmat tile, each row bit-identical. G14C (M2): 8 — same
+// sweep shape: +10..56% at M=8, ~+7% median at M<=4, bit-identical
+// (receipts/2026-11-24-qmv-small-t-g13g.md). M=16 keeps the tile;
+// M=5..7 ride the same single batch-8 dispatch M=8 wins with.
+// Initial G17C (Max class) keeps 0 pending calibration.
+inline int qmv_small_t_default_part(const std::string& device_name) {
+  if (device_name.find("G16S") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos) {
+    return 8;
+  }
+  return 0;
+}
+
 // gather_qmm_sub.comp subgroup routes — affine (bits 4/2, group 64/128),
 // 3-bit (group 64), and mxfp4 (-DFP_MODE, group 32) — share one kernel
 // template: a 256-lane workgroup whose subgroup-uniform SSBO reads

@@ -4380,8 +4380,13 @@ static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requeste
     return std::min(requested_max, static_cast<int>(std::strtol(env, nullptr, 10)));
   }
   const std::string& name = encoder.device().capabilities().device_name;
+  // Cap-8 parts: the batch-8 dispatch is a measured win at M=5..8
+  // (G16S/G13C long-standing; G13G/G14C 2026-11-24, receipts/2026-11-24-
+  // qmv-small-t-g13g.md: +4..56% vs the tile at M=8, bit-identical).
   const bool wide = name.find("G13C") != std::string::npos ||
-      name.find("G16S") != std::string::npos;
+      name.find("G16S") != std::string::npos ||
+      name.find("G13G") != std::string::npos ||
+      name.find("G14C") != std::string::npos;
   int cap = wide ? 8 : 4;
   return std::min(requested_max, cap);
 }
@@ -9021,15 +9026,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // x through the same 16-byte uvec4 view as the single-row route.
   int small_t_requested = qmv_small_t_max_rows();
   if (small_t_requested < 0) {
-    // Unset: default ON for the wide parts where the multi-row GEMV is a
-    // measured small-M bandwidth win (G16S ~3x at M=2..4 vs the coopmat tile;
-    // G13C); OFF elsewhere (G13G regressed, receipts/2026-09-29-jwm1-qmm-small-m-negative.md).
-    const std::string& st_dn = encoder.device().capabilities().device_name;
-    // G16S and G13C default to 8; G14C and initial G17C (Max class) keep 0 pending calibration on M5.
-    small_t_requested = (st_dn.find("G16S") != std::string::npos ||
-                         st_dn.find("G13C") != std::string::npos)
-        ? 8
-        : 0;
+    // Unset: per-part default (omarchy::qmv_small_t_default_part, device.h).
+    small_t_requested = omarchy::qmv_small_t_default_part(
+        encoder.device().capabilities().device_name);
   }
   const int small_t_max = qmv_small_t_device_cap(encoder, small_t_requested);
   const int small_t_rows = x.ndim() >= 2 ? x.shape(-2) : 1;
