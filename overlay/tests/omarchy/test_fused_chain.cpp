@@ -2208,3 +2208,155 @@ TEST_CASE("fused planner leaves CPU-stream nodes to the CPU") {
     CHECK(d.item<float>() < tolerance[i]);
   }
 }
+
+TEST_CASE("eager q4 decode gemv add plus rmsnorm epilogue is bit-exact and cuts one dispatch") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(caps.storage_buffer_16bit_access && caps.shader_int16 &&
+        caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u)) {
+    skip("QmmAddRmsNorm requires bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+
+  struct EnvReset {
+    ~EnvReset() {
+      unsetenv("MLX_OMARCHY_FUSED_GEMV");
+      unsetenv("MLX_OMARCHY_QMM_ADD_RMSNORM");
+      unsetenv("MLX_OMARCHY_NORM_APPLE_2560");
+      unsetenv("MLX_OMARCHY_OUTGATE_FOLD");
+    }
+  } env_reset;
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_NORM_APPLE_2560", "1", 1);
+  setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
+
+  for (int width : {2048, 2560}) {
+    auto proj = make_linear(width, width, bfloat16, stream);
+    array norm_w = astype(
+        random::normal(Shape{width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    array x = astype(
+        random::normal(Shape{1, 1, width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    array residual = astype(
+        random::normal(Shape{1, 1, width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    eval({norm_w, x, residual});
+    sync_stream(stream);
+
+    auto forward = [&](const array& in_x) {
+      array sum_out = add(project(in_x, proj, stream), residual, stream);
+      array norm_out = fast::rms_norm(sum_out, norm_w, 1e-6f, stream);
+      return std::vector<array>{sum_out, norm_out};
+    };
+
+    setenv("MLX_OMARCHY_QMM_ADD_RMSNORM", "0", 1);
+    auto base = forward(x);
+    uint64_t b0 = counters().vk_compute_dispatches.load();
+    eval({base[0], base[1]});
+    sync_stream(stream);
+    uint64_t base_dispatches = counters().vk_compute_dispatches.load() - b0;
+
+    setenv("MLX_OMARCHY_QMM_ADD_RMSNORM", "1", 1);
+    auto cand = forward(x);
+    uint64_t c0 = counters().vk_compute_dispatches.load();
+    eval({cand[0], cand[1]});
+    sync_stream(stream);
+    uint64_t cand_dispatches = counters().vk_compute_dispatches.load() - c0;
+
+    INFO("width=", width);
+    CHECK_EQ(base_dispatches, uint64_t{2});
+    CHECK_EQ(cand_dispatches, uint64_t{1});
+    expect_bit_exact(base[0], cand[0], stream);
+    expect_bit_exact(base[1], cand[1], stream);
+  }
+
+  // Verify outgate prologue combined with add+rmsnorm epilogue.
+  {
+    const int width = 2048;
+    auto proj = make_linear(width, width, bfloat16, stream);
+    array norm_w = astype(
+        random::normal(Shape{width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    array gate = astype(
+        random::normal(Shape{1, 1, width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    array out = astype(
+        random::normal(Shape{1, 1, width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    array residual = astype(
+        random::normal(Shape{1, 1, width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    eval({norm_w, gate, out, residual});
+    sync_stream(stream);
+
+    auto forward_og = [&] {
+      array x_og = multiply(sigmoid(gate, stream), out, stream);
+      array sum_out = add(project(x_og, proj, stream), residual, stream);
+      array norm_out = fast::rms_norm(sum_out, norm_w, 1e-6f, stream);
+      return std::vector<array>{sum_out, norm_out};
+    };
+
+    setenv("MLX_OMARCHY_QMM_ADD_RMSNORM", "0", 1);
+    auto base = forward_og();
+    uint64_t b0 = counters().vk_compute_dispatches.load();
+    eval({base[0], base[1]});
+    sync_stream(stream);
+    uint64_t base_dispatches = counters().vk_compute_dispatches.load() - b0;
+
+    setenv("MLX_OMARCHY_QMM_ADD_RMSNORM", "1", 1);
+    auto cand = forward_og();
+    uint64_t c0 = counters().vk_compute_dispatches.load();
+    eval({cand[0], cand[1]});
+    sync_stream(stream);
+    uint64_t cand_dispatches = counters().vk_compute_dispatches.load() - c0;
+
+    CHECK_EQ(base_dispatches, uint64_t{2});
+    CHECK_EQ(cand_dispatches, uint64_t{1});
+    expect_bit_exact(base[0], cand[0], stream);
+    expect_bit_exact(base[1], cand[1], stream);
+  }
+
+  // 64 back-to-back iterations verify done_counter self-reset across ring reuse.
+  {
+    const int width = 2048;
+    auto proj = make_linear(width, width, bfloat16, stream);
+    array norm_w = astype(
+        random::normal(Shape{width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    array h = astype(
+        random::normal(Shape{1, 1, width}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    eval({norm_w, h});
+    sync_stream(stream);
+
+    auto step_chain = [&](const array& init) {
+      array cur = init;
+      for (int i = 0; i < 64; ++i) {
+        array sum_out = add(project(cur, proj, stream), cur, stream);
+        cur = fast::rms_norm(sum_out, norm_w, 1e-6f, stream);
+      }
+      return cur;
+    };
+
+    setenv("MLX_OMARCHY_QMM_ADD_RMSNORM", "0", 1);
+    array base_chain = step_chain(h);
+    base_chain.eval();
+    sync_stream(stream);
+
+    setenv("MLX_OMARCHY_QMM_ADD_RMSNORM", "1", 1);
+    array cand_chain = step_chain(h);
+    uint64_t c0 = counters().vk_compute_dispatches.load();
+    cand_chain.eval();
+    sync_stream(stream);
+    CHECK_EQ(counters().vk_compute_dispatches.load() - c0, uint64_t{64});
+    expect_bit_exact(base_chain, cand_chain, stream);
+  }
+}

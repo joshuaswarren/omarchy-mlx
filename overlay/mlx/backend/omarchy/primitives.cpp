@@ -10039,11 +10039,17 @@ bool qmm_vec_q4_word_enabled() {
   return q4_word_enabled();
 }
 
+bool apple_norm_row_width_allowed(const Device& device, size_t row_length) {
+  return (row_length == 2048u || row_length == 2560u || row_length == 4096u) &&
+      apple_norm_enabled(device, row_length, 1u);
+}
+
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    AddRmsNormPlan* add_rmsnorm) {
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -10054,6 +10060,14 @@ bool dispatch_quantized_gemv_group(
   if (swiglu_out &&
       (members.size() != 2 || members[0].epilogue || members[1].epilogue ||
        members[0].node.dtype() == float32)) {
+    return false;
+  }
+  if (swiglu_out && add_rmsnorm) {
+    return false;
+  }
+  if (add_rmsnorm &&
+      (members.size() != 1 || !members[0].epilogue ||
+       members[0].sum_window)) {
     return false;
   }
   auto& encoder = get_command_encoder(stream);
@@ -10276,6 +10290,75 @@ bool dispatch_quantized_gemv_group(
   // Contract satisfied: allocate every output, then bind. Unused
   // weight slots bind the first member's output so every binding the
   // shader declares is a valid buffer.
+  if (add_rmsnorm != nullptr) {
+    const size_t n0 = static_cast<size_t>(params.shape[0]);
+    const bool valid_width = !token_route && dtype == bfloat16 &&
+        subgroup_ready &&
+        qmm_add_rmsnorm_enabled(caps.device_name) &&
+        apple_norm_row_width_allowed(encoder.device(), n0);
+    const uint32_t need_bindings = outgate != nullptr ? 13u : 10u;
+    if (!valid_width ||
+        encoder.device().compute().binding_limit() < need_bindings ||
+        (outgate == nullptr &&
+         std::strcmp(qmm_geometry().name, "2x16w2") == 0) ||
+        add_rmsnorm->norm_out.dtype() != bfloat16 ||
+        add_rmsnorm->norm_out.size() != n0 ||
+        add_rmsnorm->norm_out.ndim() < 1 ||
+        static_cast<size_t>(add_rmsnorm->norm_out.shape(-1)) != n0 ||
+        add_rmsnorm->weight.dtype() != bfloat16 ||
+        (add_rmsnorm->weight.size() != n0 &&
+         add_rmsnorm->weight.size() != 1u) ||
+        !whole_dense(add_rmsnorm->weight, add_rmsnorm->weight.size()) ||
+        !input_ready(add_rmsnorm->weight, stream)) {
+      return false;
+    }
+    VkBuffer done_buf = encoder.device().wg_done_buffer();
+    if (done_buf == VK_NULL_HANDLE) {
+      return false;
+    }
+    if (outgate != nullptr) {
+      outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
+    }
+    auto& member = members[0];
+    member.node.set_data(allocator().malloc(member.node.nbytes()));
+    member.epilogue->set_data(allocator().malloc(member.epilogue->nbytes()));
+    add_rmsnorm->norm_out.set_data(
+        allocator().malloc(add_rmsnorm->norm_out.nbytes()));
+    params.alpha = add_rmsnorm->eps;
+    params.lhs_size = static_cast<uint32_t>(add_rmsnorm->weight.size());
+    params.aux_offset = encoder.device().next_wg_done_slot();
+    std::array<ComputeBinding, 13> add_norm_bindings{};
+    add_norm_bindings[0] = binding(outgate != nullptr ? outgate->x : x);
+    add_norm_bindings[1] = binding(member.node.inputs()[1]);
+    add_norm_bindings[2] = binding(member.node.inputs()[2]);
+    add_norm_bindings[3] = binding(member.node.inputs()[3]);
+    add_norm_bindings[4] = binding(member.node);
+    add_norm_bindings[5] = binding(*member.addend);
+    add_norm_bindings[6] = binding(*member.epilogue);
+    add_norm_bindings[7] = binding(add_rmsnorm->weight);
+    add_norm_bindings[8] = binding(add_rmsnorm->norm_out);
+    add_norm_bindings[9] = ComputeBinding{done_buf, 0, 16384u, nullptr};
+    uint32_t n_bindings = 10u;
+    auto add_norm_kernel = group_columns == 32u
+        ? ComputeKernel::QmmVecQ4AddRmsNormBF16R2S16
+        : ComputeKernel::QmmVecQ4AddRmsNormBF16;
+    if (outgate != nullptr) {
+      params.flags |= 131072u;
+      add_norm_bindings[10] = binding(outgate->out);
+      add_norm_bindings[11] = binding(outgate->gate);
+      add_norm_bindings[12] = binding(outgate->x);
+      n_bindings = 13u;
+      add_norm_kernel = ComputeKernel::QmmVecQ4OutgateAddRmsNormBF16;
+    }
+    encoder.dispatch_compute(
+        add_norm_kernel,
+        std::span<const ComputeBinding>(add_norm_bindings.data(), n_bindings),
+        params,
+        total_groups,
+        1u,
+        1u);
+    return true;
+  }
   if (outgate != nullptr) {
     // The deleted Multiply's output materializes: workgroup 0 of the
     // dispatch writes the product it recomputes, so retained

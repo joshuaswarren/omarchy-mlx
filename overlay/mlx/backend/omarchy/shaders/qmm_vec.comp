@@ -89,8 +89,16 @@ uint16_t bf16_store(float value) {
 #error "QMM_VEC_GREEDY builds on the bf16 subgroup Q4 word column"
 #endif
 #if defined(QMM_VEC_OUTGATE) && \
-    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
-#error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     (!defined(QMM_VEC_MULTI) && !defined(QMM_VEC_ADD_RMSNORM)))
+#error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi or add-rmsnorm column"
+#endif
+#if defined(QMM_VEC_ADD_RMSNORM) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_Q4_WORD) || \
+     defined(QMM_VEC_MULTI) || defined(QMM_VEC_GREEDY) || \
+     defined(QMM_VEC_TOKENS) || ROWS_PER_SLOT != 2 || \
+     (SLOTS_PER_GROUP != 4 && SLOTS_PER_GROUP != 16))
+#error "QMM_VEC_ADD_RMSNORM builds on bf16 subgroup Q4 word ROWS_PER_SLOT=2 SLOTS_PER_GROUP in {4,16}"
 #endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
@@ -127,7 +135,7 @@ uint16_t bf16_store(float value) {
 #error "the tree reduction assumes 8 slots"
 #endif
 // The x fetch inside Q4_WORD / Q4_ROWS: the out-gate prologue variant
-// (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors
+// (QMM_VEC_OUTGATE, multi or add-rmsnorm) transforms the two prologue vectors
 // instead of reading the product; every other variant reads input_x.
 #if defined(QMM_VEC_OUTGATE)
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
@@ -200,24 +208,51 @@ QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#elif defined(QMM_VEC_ADD_RMSNORM)
+layout(set = 0, binding = 1, std430) readonly buffer InputW0 {
+  WVEC_T values[];
+} input_w0;
+layout(set = 0, binding = 2, std430) readonly buffer Scales0 {
+  STORAGE_TYPE values[];
+} scales0;
+layout(set = 0, binding = 3, std430) readonly buffer Biases0 {
+  STORAGE_TYPE values[];
+} biases0;
+layout(set = 0, binding = 4, std430) writeonly buffer Output0 {
+  STORAGE_TYPE values[];
+} output0;
+layout(set = 0, binding = 5, std430) readonly buffer Addend0 {
+  STORAGE_TYPE values[];
+} addend0;
+layout(set = 0, binding = 6, std430) coherent buffer Sum0 {
+  STORAGE_TYPE values[];
+} sum0;
+layout(set = 0, binding = 7, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 8, std430) writeonly buffer NormOut {
+  STORAGE_TYPE values[];
+} norm_out;
+layout(set = 0, binding = 9, std430) coherent buffer DoneCounter {
+  uint values[];
+} done_counter;
+#endif
 #if defined(QMM_VEC_OUTGATE)
-// Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
-// exact arithmetic and rounding of the two elementwise kernels the
-// prologue deletes (unary_vec.comp / elementwise.comp: float math on
-// the widened operand, one round to storage per kernel boundary —
-// sig_b = bf16(1/(1+exp(-g))), m = bf16(o * sig_b), both bf16_store
-// RNE). Every workgroup recomputes the full product from the same two
-// read-only vectors and gets identical bits; workgroup 0 stores the
-// materialized product so retained references to the deleted
-// Multiply's output stay valid (bindings 25-27; the vectors start at
-// element 0 — the host refuses otherwise).
-layout(set = 0, binding = 25, std430) readonly buffer OutgateOut {
+// Out-gate prologue: x = out * bf16(sigmoid(gate)), exact arithmetic and
+// rounding of the two deleted elementwise dispatches. Multi uses bindings
+// 25-27; add-rmsnorm uses bindings 10-12.
+#if defined(QMM_VEC_ADD_RMSNORM)
+#define OUTGATE_B0 10
+#else
+#define OUTGATE_B0 25
+#endif
+layout(set = 0, binding = OUTGATE_B0, std430) readonly buffer OutgateOut {
   uvec4 values[];
 } outgate_out;
-layout(set = 0, binding = 26, std430) readonly buffer OutgateGate {
+layout(set = 0, binding = OUTGATE_B0 + 1, std430) readonly buffer OutgateGate {
   uvec4 values[];
 } outgate_gate;
-layout(set = 0, binding = 27, std430) writeonly buffer OutgateMul {
+layout(set = 0, binding = OUTGATE_B0 + 2, std430) writeonly buffer OutgateMul {
   uvec4 values[];
 } outgate_mul;
 uint16_t outgate_sig_lane(uint g_bits) {
@@ -243,9 +278,8 @@ uvec4 outgate_quad(uint quad_index) {
   }
   return m;
 }
-#define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
 #endif
-#else
+#if !defined(QMM_VEC_MULTI) && !defined(QMM_VEC_ADD_RMSNORM)
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
 } input_w;
@@ -786,7 +820,178 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #endif
 #endif
 
-#ifdef QMM_VEC_MULTI
+#if defined(QMM_VEC_MULTI) || defined(QMM_VEC_ADD_RMSNORM)
+// Rounding and subgroup reduction helpers shared by the multi-weight GEMV
+// and single-weight Add+RMSNorm epilogue kernels.
+#ifdef USE_FP16
+#define ROUND_STORAGE(f) omarchy_round_f16(f)
+#elif defined(USE_BF16)
+#define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))
+#else
+#define ROUND_STORAGE(f) (f)
+#endif
+#define Q4_ROWS_REDUCE(total) { \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    (total)[r] = subgroupAdd(acc[r]); \
+  } \
+}
+#define Q4_ROWS_ZERO() { \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    acc[r] = 0.0; \
+  } \
+}
+#endif
+#if defined(QMM_VEC_ADD_RMSNORM)
+shared float s_partial[8u];
+shared uint s_is_last_wg;
+
+#define NORM_LOAD_SUM(BASE, ARR, SQ, START_I, END_I) \
+  for (uint i = (START_I); i < (END_I); ++i) { \
+    ARR[i] = LOAD_VALUE(sum0.values[(BASE) + i]); \
+    SQ += ARR[i] * ARR[i]; \
+  }
+#define NORM_STORE_OUT(BASE, ARR, NORM_VAL, START_I, END_I) \
+  for (uint i = (START_I); i < (END_I); ++i) { \
+    uint idx_ = (BASE) + i; \
+    float w_ = (params.lhs_size == 1u) \
+        ? LOAD_VALUE(norm_weight.values[0u]) \
+        : LOAD_VALUE(norm_weight.values[idx_]); \
+    precise float nw_ = (NORM_VAL) * w_; \
+    precise float r_ = ARR[i] * nw_; \
+    norm_out.values[idx_] = STORE_VALUE(r_); \
+  }
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n = params.shape[0];
+  uint column =
+      gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint w_base = 0u;
+  uint s_base = 0u;
+  uint b_base = 0u;
+  uint x_row = params.lhs_offset;
+  precise float acc[ROWS_PER_SLOT];
+  float total[ROWS_PER_SLOT];
+  Q4_ROWS_ZERO()
+  if (column_active) {
+    Q4_ROWS(input_w0, scales0, biases0)
+  }
+  Q4_ROWS_REDUCE(total)
+  if (lane_in_slot == 0u) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      uint col_r = column + r;
+      if (col_r < n) {
+        float rounded = ROUND_STORAGE(total[r]);
+        output0.values[col_r] = STORE_VALUE(rounded);
+        sum0.values[col_r] =
+            STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col_r]));
+      }
+    }
+  }
+
+  // Publish every workgroup's output0/sum0 writes before incrementing the
+  // completion counter; only the final completing workgroup runs phase 3.
+  memoryBarrierBuffer();
+  barrier();
+  if (lane == 0u) {
+    uint prev = atomicAdd(done_counter.values[params.aux_offset], 1u);
+    s_is_last_wg = (prev + 1u == gl_NumWorkGroups.x) ? 1u : 0u;
+  }
+  barrier();
+  if (s_is_last_wg == 0u) {
+    return;
+  }
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    atomicExchange(done_counter.values[params.aux_offset], 0u);
+  }
+
+  uint n_reads = n / 256u;
+#if SLOTS_PER_GROUP == 4
+  float reg_x0[16u];
+  float reg_x1[16u];
+  precise float sq0 = 0.0;
+  precise float sq1 = 0.0;
+  uint base0 = lane * n_reads;
+  uint base1 = (lane + 128u) * n_reads;
+  NORM_LOAD_SUM(base0, reg_x0, sq0, 0u, 8u)
+  NORM_LOAD_SUM(base1, reg_x1, sq1, 0u, 8u)
+  if (n_reads == 10u) {
+    NORM_LOAD_SUM(base0, reg_x0, sq0, 8u, 10u)
+    NORM_LOAD_SUM(base1, reg_x1, sq1, 8u, 10u)
+  } else if (n_reads == 16u) {
+    NORM_LOAD_SUM(base0, reg_x0, sq0, 8u, 16u)
+    NORM_LOAD_SUM(base1, reg_x1, sq1, 8u, 16u)
+  }
+  float sp0 = subgroupAdd(sq0);
+  float sp1 = subgroupAdd(sq1);
+  if (lane_in_slot == 0u) {
+    s_partial[column_slot] = sp0;
+    s_partial[column_slot + 4u] = sp1;
+  }
+  barrier();
+  if (column_slot == 0u) {
+    float v = (lane_in_slot < 8u) ? s_partial[lane_in_slot] : 0.0;
+    float norm_total = subgroupAdd(v);
+    if (lane_in_slot == 0u) {
+      s_partial[0] = norm_total;
+    }
+  }
+  barrier();
+  float norm = inversesqrt(s_partial[0] / float(n) + params.alpha);
+  NORM_STORE_OUT(base0, reg_x0, norm, 0u, 8u)
+  NORM_STORE_OUT(base1, reg_x1, norm, 0u, 8u)
+  if (n_reads == 10u) {
+    NORM_STORE_OUT(base0, reg_x0, norm, 8u, 10u)
+    NORM_STORE_OUT(base1, reg_x1, norm, 8u, 10u)
+  } else if (n_reads == 16u) {
+    NORM_STORE_OUT(base0, reg_x0, norm, 8u, 16u)
+    NORM_STORE_OUT(base1, reg_x1, norm, 8u, 16u)
+  }
+#else
+  // SLOTS_PER_GROUP == 16 (512 threads): virtual threads 0..255 match
+  // fast_norm_apple's 256-thread tree; all barrier() calls stay uniform.
+  float reg_x[16u];
+  uint base = lane * n_reads;
+  if (lane < 256u) {
+    precise float reg_sq = 0.0;
+    NORM_LOAD_SUM(base, reg_x, reg_sq, 0u, 8u)
+    if (n_reads == 10u) {
+      NORM_LOAD_SUM(base, reg_x, reg_sq, 8u, 10u)
+    } else if (n_reads == 16u) {
+      NORM_LOAD_SUM(base, reg_x, reg_sq, 8u, 16u)
+    }
+    float sp = subgroupAdd(reg_sq);
+    if (lane_in_slot == 0u) {
+      s_partial[column_slot] = sp;
+    }
+  }
+  barrier();
+  if (column_slot == 0u) {
+    float v = (lane_in_slot < 8u) ? s_partial[lane_in_slot] : 0.0;
+    float norm_total = subgroupAdd(v);
+    if (lane_in_slot == 0u) {
+      s_partial[0] = norm_total;
+    }
+  }
+  barrier();
+  if (lane < 256u) {
+    float norm = inversesqrt(s_partial[0] / float(n) + params.alpha);
+    NORM_STORE_OUT(base, reg_x, norm, 0u, 8u)
+    if (n_reads == 10u) {
+      NORM_STORE_OUT(base, reg_x, norm, 8u, 10u)
+    } else if (n_reads == 16u) {
+      NORM_STORE_OUT(base, reg_x, norm, 8u, 16u)
+    }
+  }
+#endif
+}
+#elif defined(QMM_VEC_MULTI)
 // Multi-weight main: workgroup ranges [0, g0), [g0, g0 + g1), [.., + g2),
 // and the rest select weight 0, 1, 2, 3; the selection is uniform per workgroup so
 // the barrier rounds of the tree reduction stay uniform. Each weight's
@@ -799,13 +1004,6 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // the rounding goes through an integer conversion, as fused_chain.comp
 // does, and both the output and the sum derive from that rounded
 // value (converting an f16-representable float to float16_t is exact).
-#ifdef USE_FP16
-#define ROUND_STORAGE(f) omarchy_round_f16(f)
-#elif defined(USE_BF16)
-#define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))
-#else
-#define ROUND_STORAGE(f) (f)
-#endif
 // Workgroup reduction of `accumulator` into `total`, both flavors.
 // The paired SwiGLU epilogue (flags bit 16) runs it twice per
 // workgroup (gate, then up); the barrier rounds stay uniform because
@@ -1048,16 +1246,6 @@ void main() {
 // Multi-row main: same workgroup -> weight partition and fold contract as
 // the single-row main below (COLUMNS_PER_GROUP now spans every slot's
 // rows), each slot owning ROWS_PER_SLOT consecutive columns.
-#define Q4_ROWS_REDUCE(total) { \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    (total)[r] = subgroupAdd(acc[r]); \
-  } \
-}
-#define Q4_ROWS_ZERO() { \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    acc[r] = 0.0; \
-  } \
-}
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;

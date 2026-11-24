@@ -1803,6 +1803,67 @@ void Device::probe_float_power(CommandEncoder& encoder) {
   });
 }
 
+VkBuffer Device::wg_done_buffer() {
+  std::lock_guard<std::mutex> lk(wg_done_mutex_);
+  if (wg_done_buf_ != VK_NULL_HANDLE) {
+    return wg_done_buf_;
+  }
+  if (device_ == VK_NULL_HANDLE) {
+    return VK_NULL_HANDLE;
+  }
+  constexpr VkDeviceSize kWgDoneBytes = 16384;
+  auto& dt = vk::device_table();
+  VkBuffer buf = VK_NULL_HANDLE;
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = kWgDoneBytes;
+  bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  if (dt.CreateBuffer(device_, &bci, nullptr, &buf) != VK_SUCCESS) {
+    return VK_NULL_HANDLE;
+  }
+  VkMemoryRequirements req{};
+  dt.GetBufferMemoryRequirements(device_, buf, &req);
+  uint32_t mem_type = UINT32_MAX;
+  constexpr VkMemoryPropertyFlags kWantFlags =
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  for (uint32_t i = 0; i < mem_props_.memoryTypeCount; ++i) {
+    if ((req.memoryTypeBits & (1u << i)) != 0u &&
+        (mem_props_.memoryTypes[i].propertyFlags & kWantFlags) == kWantFlags) {
+      mem_type = i;
+      break;
+    }
+  }
+  if (mem_type == UINT32_MAX) {
+    dt.DestroyBuffer(device_, buf, nullptr);
+    return VK_NULL_HANDLE;
+  }
+  VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  mai.allocationSize = req.size;
+  mai.memoryTypeIndex = mem_type;
+  VkDeviceMemory mem = VK_NULL_HANDLE;
+  if (dt.AllocateMemory(device_, &mai, nullptr, &mem) != VK_SUCCESS) {
+    dt.DestroyBuffer(device_, buf, nullptr);
+    return VK_NULL_HANDLE;
+  }
+  if (dt.BindBufferMemory(device_, buf, mem, 0) != VK_SUCCESS) {
+    dt.DestroyBuffer(device_, buf, nullptr);
+    dt.FreeMemory(device_, mem, nullptr);
+    return VK_NULL_HANDLE;
+  }
+  void* mapped = nullptr;
+  if (dt.MapMemory(device_, mem, 0, kWgDoneBytes, 0, &mapped) != VK_SUCCESS) {
+    dt.DestroyBuffer(device_, buf, nullptr);
+    dt.FreeMemory(device_, mem, nullptr);
+    return VK_NULL_HANDLE;
+  }
+  std::memset(mapped, 0, static_cast<size_t>(kWgDoneBytes));
+  dt.UnmapMemory(device_, mem);
+  wg_done_mem_ = mem;
+  wg_done_buf_ = buf;
+  return wg_done_buf_;
+}
+
 Device::TeardownOutcome Device::teardown_vulkan() {
   if (teardown_done_) {
     return teardown_outcome_;
@@ -1886,6 +1947,17 @@ Device::TeardownOutcome Device::teardown_vulkan() {
     }
     compute_.reset();
     outcome.compute_handles_destroyed = plan.destroy_compute_pipelines;
+  }
+  if (plan.destroy_device) {
+    std::lock_guard<std::mutex> lk(wg_done_mutex_);
+    if (wg_done_buf_ != VK_NULL_HANDLE) {
+      dt.DestroyBuffer(device_, wg_done_buf_, nullptr);
+      wg_done_buf_ = VK_NULL_HANDLE;
+    }
+    if (wg_done_mem_ != VK_NULL_HANDLE) {
+      dt.FreeMemory(device_, wg_done_mem_, nullptr);
+      wg_done_mem_ = VK_NULL_HANDLE;
+    }
   }
   if (dt.DestroyDevice && plan.destroy_device) {
     dt.DestroyDevice(device_, nullptr);

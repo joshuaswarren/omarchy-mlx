@@ -411,6 +411,9 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
+omarchy_shader(qmm_vec_q4_add_rmsnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_ADD_RMSNORM=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
+omarchy_shader(qmm_vec_q4_add_rmsnorm_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_ADD_RMSNORM=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
+omarchy_shader(qmm_vec_q4_outgate_add_rmsnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_ADD_RMSNORM=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 # Multi-token (verify / small-batch) variants: the multi column with the
 # token dimension inside the k walk; params.matrix_m carries the live
 # token count 1..M_TOKENS. Per-row bit-identical to the single-token

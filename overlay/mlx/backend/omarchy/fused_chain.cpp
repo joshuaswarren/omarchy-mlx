@@ -760,6 +760,9 @@ struct GemvGroup {
   // is the deleted Multiply(Sigmoid(gate), out) output. The one
   // dispatch reads gate and out directly and rebuilds x per workgroup.
   std::optional<OutgatePlan> outgate;
+  // Producer-epilogue Add + RMSNorm fold: single-weight decode GEMV with
+  // Add epilogue feeding a downstream Apple-tree bf16 RMSNorm.
+  std::optional<AddRmsNormPlan> add_rmsnorm;
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1570,6 +1573,84 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     state->roles.emplace(
         plan.sigmoid_id, EagerRole{gi, EagerStep::skip});
     state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
+  }
+  // Producer-epilogue Add + RMSNorm fold: single-weight decode GEMV with an
+  // Add epilogue whose sum feeds a downstream Apple-tree bf16 RMSNorm. All
+  // preconditions match dispatch_quantized_gemv_group so adopted outgate groups
+  // never hit a post-adoption refusal.
+  {
+    std::unordered_map<std::uintptr_t, const array*> add_to_norm;
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RMSNorm)) ||
+          node.inputs().size() != 2 || claimed.count(node.id()) ||
+          node.dtype() != bfloat16 || node.ndim() < 1) {
+        continue;
+      }
+      add_to_norm.try_emplace(node.inputs()[0].id(), &node);
+    }
+    if (!add_to_norm.empty()) {
+      for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+        auto& group = state->gemv_groups[gi];
+        if (group.members.size() != 1 || !group.members[0].epilogue ||
+            group.members[0].sum_window) {
+          continue;
+        }
+        auto& member = group.members[0];
+        const array& qmm = member.node;
+        const array& add = *member.epilogue;
+        auto it = add_to_norm.find(add.id());
+        if (it == add_to_norm.end()) {
+          continue;
+        }
+        const array& norm = *it->second;
+        if (claimed.count(norm.id())) {
+          continue;
+        }
+        const Stream& member_stream = qmm.primitive().stream();
+        const Device* dev = stream_device(qmm);
+        if (dev == nullptr || norm.primitive().stream() != member_stream ||
+            !qmm_add_rmsnorm_enabled(dev->capabilities().device_name)) {
+          continue;
+        }
+        const array& x = qmm.inputs()[0];
+        if (qmm.dtype() != bfloat16 || x.ndim() < 2 || x.shape(-2) != 1 ||
+            qmm.inputs()[1].ndim() != 2) {
+          continue;
+        }
+        const size_t n = static_cast<size_t>(qmm.inputs()[1].shape(0));
+        if (!apple_norm_row_width_allowed(*dev, n) || add.size() != n ||
+            norm.size() != n || static_cast<size_t>(norm.shape(-1)) != n ||
+            !qmm_vec_q4_word_enabled()) {
+          continue;
+        }
+        if (!group.outgate &&
+            std::strcmp(qmm_geometry_name(), "2x16w2") == 0) {
+          continue;
+        }
+        const array& norm_w = norm.inputs()[1];
+        if (lookup(norm_w) != nullptr || norm_w.dtype() != bfloat16 ||
+            (norm_w.size() != n && norm_w.size() != 1u) ||
+            norm_w.data_shared_ptr() == nullptr || norm_w.offset() != 0 ||
+            !norm_w.flags().row_contiguous ||
+            norm_w.data_size() != norm_w.size() ||
+            norm_w.status() == array::Status::unscheduled ||
+            (norm_w.event().valid() && !norm_w.event().is_signaled() &&
+             norm_w.event().stream() != member_stream)) {
+          continue;
+        }
+        auto& encoder = get_command_encoder(member_stream);
+        const size_t need_bindings = group.outgate ? 13u : 10u;
+        if (encoder.device().compute().binding_limit() < need_bindings ||
+            encoder.device().wg_done_buffer() == VK_NULL_HANDLE) {
+          continue;
+        }
+        const float eps =
+            static_cast<const fast::RMSNorm&>(norm.primitive()).state().second;
+        group.add_rmsnorm = AddRmsNormPlan{norm, norm_w, eps};
+        state->gemv_roles.emplace(norm.id(), gi);
+        claimed.insert(norm.id());
+      }
+    }
   }
   // SwiGLU store epilogue fold. When a planned group is exactly the
   // gate and up projections of a planned swiglu chain — two members,
@@ -2507,7 +2588,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
                         stream,
-                        group.outgate ? &*group.outgate : nullptr)
+                        group.outgate ? &*group.outgate : nullptr,
+                        group.add_rmsnorm ? &*group.add_rmsnorm : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {

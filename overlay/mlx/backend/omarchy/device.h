@@ -489,6 +489,12 @@ class Device {
   // destroyed, and again as a no-op from ~Device().
   TeardownOutcome teardown_vulkan();
 
+  VkBuffer wg_done_buffer();
+  uint32_t next_wg_done_slot() {
+    return (wg_done_cursor_.fetch_add(1u, std::memory_order_relaxed) & 255u) *
+        16u;
+  }
+
   CapabilityReport caps_;
   CapabilityReport hardware_caps_{};
   VkPhysicalDeviceMemoryProperties mem_props_{};
@@ -512,6 +518,10 @@ class Device {
   VkDevice device_{VK_NULL_HANDLE};
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;
+  std::mutex wg_done_mutex_;
+  VkBuffer wg_done_buf_{VK_NULL_HANDLE};
+  VkDeviceMemory wg_done_mem_{VK_NULL_HANDLE};
+  std::atomic<uint32_t> wg_done_cursor_{0};
   std::unique_ptr<ComputeRuntime> compute_;
   std::unique_ptr<CompletionDispatcher> completions_;
 
@@ -556,6 +566,17 @@ MLX_API const CapabilityReport& hardware_capability_report(uint32_t index);
 // to 1/on/true/yes (case-insensitive). False when unset or any other
 // value. Read on every call: nothing here caches environment state.
 bool env_flag(const char* name);
+
+// Producer-epilogue Qmm + Add + RMSNorm fusion (QmmVecQ4AddRmsNorm*).
+// MLX_OMARCHY_QMM_ADD_RMSNORM=1 enables, =0 disables; read live on each
+// eval. Off by default pending hardware ABBA.
+inline bool qmm_add_rmsnorm_enabled(const std::string& /*device_name*/) {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_ADD_RMSNORM");
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  return false;
+}
 
 // Scoped diagnostic switches for the compiled-tape defect hunt
 // (docs/install-omarchy.md, "Compiled-tape debug switches"). Between

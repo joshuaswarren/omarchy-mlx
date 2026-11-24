@@ -179,6 +179,16 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// Producer-epilogue Add + RMSNorm fold: a single-weight decode GEMV with an
+// Add epilogue whose sum feeds a downstream Apple-tree bf16 RMSNorm (widths
+// 2048, 2560, 4096) executes the residual add, tracks workgroup completion,
+// and has the final completing workgroup run the exact 256-thread RMSNorm.
+struct AddRmsNormPlan {
+  array norm_out;
+  array weight;
+  float eps{1e-6f};
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -197,7 +207,8 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
+    OutgatePlan* outgate = nullptr,
+    AddRmsNormPlan* add_rmsnorm = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -265,6 +276,7 @@ const char* qmm_geometry_name();
 // group when it is off, so the out-gate fold planner must consult it before adoption.
 // Defined in primitives.cpp.
 bool qmm_vec_q4_word_enabled();
+bool apple_norm_row_width_allowed(const Device& device, size_t row_length);
 
 bool outgate_fold_enabled();
 

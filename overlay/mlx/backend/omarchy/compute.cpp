@@ -519,6 +519,9 @@
 #include "conv_dw2d_f32.h"
 #include "conv_dw2d_f16.h"
 #include "conv_dw2d_bf16.h"
+#include "qmm_vec_q4_add_rmsnorm_bf16.h"
+#include "qmm_vec_q4_add_rmsnorm_bf16_r2s16.h"
+#include "qmm_vec_q4_outgate_add_rmsnorm_bf16.h"
 #include "matmul_f32_coopmat_qk.h"
 #include "matmul_f32_coopmat_pv.h"
 #include "clear_u32.h"
@@ -1875,6 +1878,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_outgate_bf16,
           qmm_vec_q4_multi_outgate_bf16_size};
+    case ComputeKernel::QmmVecQ4AddRmsNormBF16:
+      return {
+          qmm_vec_q4_add_rmsnorm_bf16,
+          qmm_vec_q4_add_rmsnorm_bf16_size};
+    case ComputeKernel::QmmVecQ4AddRmsNormBF16R2S16:
+      return {
+          qmm_vec_q4_add_rmsnorm_bf16_r2s16,
+          qmm_vec_q4_add_rmsnorm_bf16_r2s16_size};
+    case ComputeKernel::QmmVecQ4OutgateAddRmsNormBF16:
+      return {
+          qmm_vec_q4_outgate_add_rmsnorm_bf16,
+          qmm_vec_q4_outgate_add_rmsnorm_bf16_size};
     case ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16:
       return {
           qmm_vec_q4_multi_token4_subgroup_bf16,
