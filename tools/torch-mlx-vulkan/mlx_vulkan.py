@@ -1246,6 +1246,8 @@ ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 # aten.embedding is (weight, indices): F.embedding is (input, weight).
 ATEN_TABLE["embedding"] = _embedding_any
+ATEN_TABLE["threshold_backward"] = \
+    lambda go, inp, threshold: go * (inp > threshold)
 
 # zero-kernel bookkeeping targets: run on python values, logged GLUE
 GLUE_FNS = {len, tuple, list, dict, int, float, str, bool, slice, range, zip, torch.finfo, torch.iinfo,

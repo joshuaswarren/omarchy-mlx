@@ -13,6 +13,9 @@ mx = pytest.importorskip("mlx.core")
 
 
 def _conv_lower(inp, wt, bias, stride, padding, dilation, transposed, groups):
+    stride = tuple(stride) if not isinstance(stride, int) else stride
+    padding = tuple(padding) if not isinstance(padding, int) else padding
+    dilation = tuple(dilation) if not isinstance(dilation, int) else dilation
     x = mx.transpose(inp, (0, 2, 3, 1))
     y = mx.conv2d(x, wt, stride=stride, padding=padding, dilation=dilation)
     y = mx.transpose(y, (0, 3, 1, 2))
