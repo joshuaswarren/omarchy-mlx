@@ -334,6 +334,39 @@ def _silu_backward(g, x):
     return g * sig * (1.0 + x * (1.0 - sig))
 
 
+def _gelu_backward(gout, x, approximate="none"):
+    g, x = _mx(gout), _mx(x)
+    if approximate == "tanh":
+        c = math.sqrt(2.0 / math.pi)
+        u = c * (x + 0.044715 * x * x * x)
+        t = mx.tanh(u)
+        du = c * (1.0 + 3.0 * 0.044715 * x * x)
+        return g * (0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du)
+    return g * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
+                + x * mx.exp(-(x * x) / 2.0) / math.sqrt(2.0 * math.pi))
+
+
+def _embedding_dense_backward(go, idx, num_weights, padding_idx,
+                              scale_grad_by_freq):
+    # aten: grad_output, indices, num_weights, padding_idx, scale_grad_by_freq
+    g = _mx(go)
+    g = g.reshape(-1, g.shape[-1])
+    i = _mx(idx).astype(mx.int32).reshape(-1)
+    out = mx.zeros((num_weights, g.shape[-1]), dtype=g.dtype)
+    out = out.at[i].add(g)
+    if scale_grad_by_freq:
+        # counts in int32 keep exactness past 256 (bf16) / 65504 (fp16);
+        # the division itself runs in float32 like torch's.
+        c = mx.zeros((num_weights,), dtype=mx.int32).at[i].add(
+            mx.ones(i.shape, dtype=mx.int32))
+        out = (out.astype(mx.float32)
+               / mx.maximum(c.astype(mx.float32), 1.0)[:, None]).astype(g.dtype)
+    if padding_idx >= 0:
+        out = mx.where((mx.arange(num_weights) != padding_idx)[:, None],
+                       out, 0.0)
+    return out
+
+
 def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
     if dropout_p:
         _raise("flash_cpu dropout_p")
@@ -384,6 +417,15 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
 
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
+    """native_layer_norm with real mean/rstd.
+
+    aot_autograd saves the returned mean and rstd and feeds them to
+    aten.native_layer_norm_backward; dummies (the old lowering) make that
+    backward divide by rstd = 0 and every gradient upstream of the norm
+    turns NaN at the first training step (PT-T1 bisect). The stats reduce
+    over the trailing len(normalized_shape) axes and keep them singleton,
+    matching aten's saved shapes for any normalized_shape.
+    """
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
     axes = tuple(range(a.ndim - len(tuple(normalized_shape)), a.ndim))
@@ -957,6 +999,24 @@ def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_ma
 
 # torch-level function objects -> lowering. Built lazily below so missing
 # attributes on any given torch build can't break the import.
+def _embedding_any(a, b, *a_, **k_):
+    """Order-agnostic embedding: the weight is the float 2-D tensor, the
+    indices are the integer tensor - F.embedding and aten.embedding name
+    them in opposite orders, so take them by dtype."""
+    wa, wb = _mx(a), _mx(b)
+    idx_is_a = wa.dtype in (mx.int32, mx.int64, mx.uint32)
+    w = wb if idx_is_a else wa
+    idx = wa if idx_is_a else wb
+    return w[idx.astype(mx.int32)]
+
+def _embedding(weight, idx):
+    """aten.embedding(weight, indices) order."""
+    return _mx(weight)[_mx(idx).astype(mx.int32)]
+
+def _embedding_f(input, weight, *a_, **k_):
+    """F.embedding(input, weight) order."""
+    return _embedding(weight, input)
+
 def _coerce_index(v):
     # fx graphs under dynamic shapes carry torch.SymInt/SymBool indices;
     # mx slicing needs concrete python scalars. Coerce recursively through
@@ -973,6 +1033,7 @@ def _coerce_index(v):
     if isinstance(v, (tuple, list)):
         return type(v)(_coerce_index(x) for x in v)
     return v
+
 
 
 _FUNC_SPECS = {
@@ -1062,6 +1123,8 @@ _FUNC_SPECS = {
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
+    "gelu_backward": _gelu_backward,
+    "embedding_dense_backward": _embedding_dense_backward,
     "slice_backward": _slice_backward,
     "silu_backward": _silu_backward,
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
@@ -1125,7 +1188,7 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": _embedding,
+    "embedding": _embedding_any,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
@@ -1175,7 +1238,7 @@ def _build_func_table():
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
         ("torch.nn.functional.batch_norm", lambda x, rm, rv, w=None, b=None, training=False, momentum=0.1, eps=1e-5: _bn3(x, w, b, rm, rv, training, momentum, eps)[0]),
         ("torch.batch_norm", _FUNC_SPECS["batch_norm"]),
-        ("torch.nn.functional.embedding", _embedding),
+        ("torch.nn.functional.embedding", _embedding_any),
         ("torch.embedding", _embedding),
         ("operator.getitem", lambda t, i: t[i]),
         ("operator.matmul", mx.matmul),
@@ -1226,6 +1289,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
+# aten.embedding is (weight, indices): F.embedding is (input, weight).
+ATEN_TABLE["embedding"] = _embedding_any
 
 # zero-kernel bookkeeping targets: run on python values, logged GLUE
 GLUE_FNS = {len, tuple, list, dict, int, float, str, bool, slice, range, zip, torch.finfo, torch.iinfo,
@@ -1438,22 +1503,41 @@ def make_executor(gm):
     return run, stats
 
 
-def _eager_run(gm):
+def _eager_run(gm, return_all_outputs=False):
     run, stats = make_executor(gm)
     run._mlx_stats = stats
     return run
 
 
+def _boxed(runner):
+    """aot_autograd's runtime passes the inputs flat (some paths boxed as
+    one list). Normalize to *args for the executor, which consumes one
+    positional per placeholder."""
+    def call(*inputs):
+        flat = inputs
+        if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
+                and not isinstance(inputs[0], mx.array)
+                and all(isinstance(i, (torch.Tensor, mx.array))
+                        for i in inputs[0])):
+            flat = tuple(inputs[0])
+        return runner(*flat)
+
+    call._boxed_call = True
+    return call
+
+
 @torch._dynamo.register_backend(name="mlx_vulkan")
-def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
+def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None,
+                       return_all_outputs=False):
     if os.environ.get("MLX_VK_EAGER"):
         return _eager_run(gm)
     _record_artifact(gm)
     try:
-        run_c = make_compiled_executor(gm, dt=_dt)
+        run_c = make_compiled_executor(gm, dt=_dt,
+                                       return_all_outputs=return_all_outputs)
     except Exception as e:
         log.warning("compiled executor setup failed: %s", e)
-        return _eager_run(gm)
+        return _eager_run(gm, return_all_outputs)
     holder = {"run": None}
 
     def guarded(*args):
@@ -1470,6 +1554,7 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
         return holder["run"](*args)
 
     guarded._mlx_stats = run_c._mlx_stats
+    guarded.return_all_outputs = return_all_outputs
     return guarded
 
 
@@ -1656,7 +1741,7 @@ def _fuse_rmsnorm(nodes):
     return skip, final
 
 
-def make_compiled_executor(gm, dt=None):
+def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
     skip, fused = _fuse_rmsnorm(nodes)
@@ -1689,7 +1774,9 @@ def make_compiled_executor(gm, dt=None):
     state = {}
     holder = {"ar": None}
 
-    _dte = dt or _DT
+    _dte = dt or (mx.float32
+                  if return_all_outputs and not os.environ.get("MV_DT")
+                  else _DT)
 
     def _cast(x, dt=_dte):
         return x.astype(dt) if isinstance(x, mx.array) and x.dtype != dt else x
@@ -1701,6 +1788,16 @@ def make_compiled_executor(gm, dt=None):
 
         def res(a):
             if isinstance(a, torch.fx.Node):
+                if a not in env:
+                    order = []
+                    for n2 in nodes:
+                        order.append("%s/%s" % (n2.op, str(n2.target)[:20]))
+                        if n2 is a:
+                            break
+                    raise KeyError("node %s (%s) target=%s not in env; the "
+                                   "graph order up to it: %s"
+                                   % (a, a.op, str(a.target)[:40],
+                                      order[-8:]))
                 return env[a]
             if isinstance(a, (tuple, list)):
                 return type(a)(res(x) for x in a)
@@ -1781,6 +1878,30 @@ def make_compiled_executor(gm, dt=None):
             if name == "add_":
                 env[n.args[0]] = env[n.args[0]] + args[1]
                 env[n] = env[n.args[0]]
+                continue
+            # The aot backward graph: these ops must stay on mx or the whole
+            # training step crosses to torch per node (PT-T1 speed gate).
+            # Unmatched ops fall through to the generic handlers below; a
+            # per-op failure raises and lets the guarded wrapper fall back
+            # to the per-node eager executor, keeping the run correct.
+            if name == "t" and n.op == "call_function":
+                env[n] = mx.swapaxes(args[0], -1, -2)
+                continue
+            if name in ("transpose", "transpose.int") and n.op == "call_function":
+                a0 = args[0]
+                d0, d1 = int(args[1]), int(args[2])
+                env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
+                continue
+            if name in ("view", "_unsafe_view") and n.op == "call_function":
+                shape = args[1]
+                if isinstance(shape, torch.fx.Node):
+                    shape = env[shape]
+                if isinstance(shape, int):
+                    shape = (shape,)
+                env[n] = mx.reshape(args[0], tuple(int(s) for s in shape))
+                continue
+            if name == "detach" and n.op == "call_function":
+                env[n] = args[0]
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
@@ -1915,6 +2036,8 @@ def make_compiled_executor(gm, dt=None):
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
             if _acc["n"] % 10 == 0:
                 print(f"MV_PROF n={_acc['n']} prep={_acc['prep']/_acc['n']*1e3:.1f}ms cfn={_acc['cfn']/_acc['n']*1e3:.1f}ms conv={_acc['conv']/_acc['n']*1e3:.1f}ms", flush=True)
+        if return_all_outputs:
+            return tuple(_torch(t) for t in outs)
         return out
 
     run._mlx_stats = stats
