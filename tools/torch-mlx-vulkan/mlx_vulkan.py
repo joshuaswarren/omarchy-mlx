@@ -13,6 +13,7 @@ op-coverage evidence for the milestone.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import operator
@@ -26,6 +27,59 @@ import torch._dynamo
 
 log = logging.getLogger("mlx_vulkan")
 _DBG_ENV = None
+
+# Cross-process cache: when the user opts in (MLX_VK_DISK_CACHE=1 -> dynamo
+# caching_precompile + save_cache_artifacts at exit), dynamo stores each frame's
+# CompilePackage under <inductor-cache>/dynamo keyed on the wrapped fn. A package
+# is only loadable if every __compiled_fn_<id> it references has a registered
+# BackendCacheArtifact - we serialize the traced GraphModule (all our executors
+# need) and rebuild the backend callable in after_deserialization, so a warm
+# process skips the whole dynamo trace AND our lowering walk before first call.
+try:
+    from torch._dynamo.precompile_context import (
+        BackendCacheArtifact as _BCA,
+        PrecompileContext as _PCtx,
+    )
+except Exception:  # older torch without the precompile API
+    _BCA = None
+    _PCtx = None
+
+if _BCA is not None:
+
+    @dataclasses.dataclass
+    class _MlxVkArtifact(_BCA):
+        def after_deserialization(self):
+            return _restore_backend(self.content)
+
+
+def _restore_backend(gm):
+    return mlx_vulkan_backend(gm, [])
+
+
+def _record_artifact(gm):
+    if _PCtx is None:
+        return
+    bid = getattr(gm, "meta", {}).get("backend_id")
+    if not bid:
+        return
+    try:
+        _PCtx.record_artifact(_MlxVkArtifact(key=str(bid), content=gm))
+    except Exception as e:
+        log.debug("precompile artifact record failed: %s", e)
+
+
+if os.environ.get("MLX_VK_DISK_CACHE") and _PCtx is not None:
+    torch._dynamo.config.caching_precompile = True
+
+    import atexit
+
+    def _save_artifacts():
+        try:
+            torch.compiler.save_cache_artifacts()
+        except Exception as e:
+            log.debug("cache artifact save failed: %s", e)
+
+    atexit.register(_save_artifacts)
 
 # ---------------- conversions ----------------
 
@@ -1078,6 +1132,7 @@ def _eager_run(gm):
 def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
     if os.environ.get("MLX_VK_EAGER"):
         return _eager_run(gm)
+    _record_artifact(gm)
     try:
         run_c = make_compiled_executor(gm, dt=_dt)
     except Exception as e:
