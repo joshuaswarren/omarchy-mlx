@@ -129,6 +129,51 @@ The refusal is cheap and exact: the rope node's primitive and inputs
 are stashed at plan time, so the in-place run is the rope's own
 `eval_gpu` on its own arrays.
 
+## The planner: landed (f907bc5dc3 + 171bd51c66)
+
+The attention side and the planner are implemented on this branch, and
+the shape that landed is the one this section describes, with three
+corrections the first working version needed:
+
+- **The eval loop releases a tape node's inputs once its consumers have
+  run.** The skipped rope node's raw query, weight and offsets are read
+  at the attention node's turn, so the skip pins them to the submission
+  (`encoder.add_temporary`), the way the rope-norm fold does.
+- **`array::detach()` clears primitive and inputs on the descriptor the
+  rope node shares with this record.** The refusal path therefore cannot
+  use the rope node itself as the rope eval's output (the rope eval reads
+  `out.primitive().stream()`): it builds a fresh output from the stashed
+  primitive and inputs, runs the rope into it, and copies the bytes into
+  the rope node's descriptor - which is exactly what the attention reads
+  the query through.
+- **The fold covers both width-256 pass-1 variants** (the plain pass 1
+  and the value-phase pass 1 the M1 Max and the M3 Pro take by default):
+  their Q loads are the same code, so `sdpa_decode_split_p1v.comp` takes
+  the same `-DSDPA_QROPE` build and the fold accepts either.
+
+## Hardware proof so far (the M6, the composed route's board)
+
+The M6 does not take the split route (its decode guard refuses the
+subgroup set), so the armed nodes exercised the **refusal** path there,
+not the fold: the planner armed 35-36 attention nodes per eval
+(`[fuse3] planned=36 cand=36`), the split block declined, the skipped
+rope node ran in place, and the late safety net did not need to fire.
+The gate - the same Qwen3-4B 35+128 decode with the split route forced,
+the fold off and on on the same wheel - produced
+
+```
+arm off rc=0 dispatches=119399
+arm on  rc=0 dispatches=119399
+IDS_EQUAL True        # 128 greedy ids, fold off and on
+```
+
+identical dispatch histograms (the fold refuses on every armed node) and
+identical ids: the skip, the pinning, the in-place rope and the
+descriptor handback are sound on real hardware. The **firing** path is
+proven next on the M1 Max (`jwm1`), whose default route is the pv-wide
+split variant the fold covers; the doctest already proves the folded
+kernel bit-identical for both variants on llvmpipe.
+
 ## What the planner needs
 
 The concrete sequence, in the order that keeps every step verifiable:
