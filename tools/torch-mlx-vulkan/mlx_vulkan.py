@@ -1152,6 +1152,7 @@ def _coerce_index(v):
 
 
 _FUNC_SPECS = {
+    "linear": _linear,
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
     "baddbmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
