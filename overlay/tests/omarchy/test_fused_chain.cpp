@@ -28,6 +28,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/fused_chain.h"
+#include "mlx/backend/omarchy/tape_index.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/compile.h"
 #include "mlx/fast.h"
@@ -2482,4 +2483,61 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
     expect_view(gu_parent, 64u, 64u, 4);
     unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
   }
+}
+
+// TapeIndex scratch-map contract (EagerFusionScope): growth past the
+// prepared estimate, swap-shrink releasing capacity, and generation-wrap
+// rezeroing. TapeIndex<>, the production table, runs a 32-bit generation;
+// the 8-bit instance reaches the wrap path in 255 prepares.
+TEST_CASE("TapeIndex grows past the prepared estimate") {
+  omarchy::TapeIndex<int> t;
+  t.prepare(1);
+  CHECK(t.table_size() == 16);
+  for (std::uintptr_t k = 0; k < 64; ++k) {
+    CHECK(t.put_if_absent(k, static_cast<int>(k)));
+  }
+  CHECK(t.size() == 64);
+  CHECK(t.table_size() >= 64);
+  for (std::uintptr_t k = 0; k < 64; ++k) {
+    const int* v = t.find(k);
+    REQUIRE(v != nullptr);
+    CHECK(*v == static_cast<int>(k));
+  }
+  CHECK(!t.put_if_absent(7, 99));
+  CHECK(*t.find(7) == 7);
+}
+
+TEST_CASE("TapeIndex operator[] grows and survives a shrink") {
+  omarchy::TapeIndex<int> t;
+  t.prepare(4000);
+  CHECK(t.table_size() >= 8000);
+  for (std::uintptr_t k = 0; k < 6000; ++k) {
+    t[k] = static_cast<int>(k) + 1;
+  }
+  CHECK(t.size() == 6000);
+  for (std::uintptr_t k = 0; k < 6000; ++k) {
+    CHECK(t[k] == static_cast<int>(k) + 1);
+  }
+  t.prepare(1);
+  CHECK(t.table_size() == 16);
+  CHECK(t.find(0) == nullptr);
+  for (std::uintptr_t k = 0; k < 100; ++k) {
+    t[k] = static_cast<int>(k);
+  }
+  CHECK(t.size() == 100);
+}
+
+TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
+  omarchy::TapeIndex<int, std::uint8_t> t;
+  t.prepare(1);
+  t.put_if_absent(42, 7);
+  CHECK(*t.find(42) == 7);
+  // 254 more prepares wrap the 8-bit generation counter through the
+  // rezero path; the stale gen-255 entry must not survive.
+  for (int i = 0; i < 254; ++i) {
+    t.prepare(1);
+  }
+  CHECK(t.find(42) == nullptr);
+  CHECK(t.put_if_absent(42, 8));
+  CHECK(*t.find(42) == 8);
 }

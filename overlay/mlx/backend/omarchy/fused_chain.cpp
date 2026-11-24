@@ -27,6 +27,7 @@
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/tape_index.h"
 #include "mlx/primitives.h"
 #include "mlx/utils.h"
 
@@ -987,98 +988,6 @@ bool kv_window_in_place(const array& member) {
           env_flag("MLX_OMARCHY_KV_INPLACE")) &&
       member.inputs()[0].is_donatable();
 }
-
-// Flat open-addressed scratch map for one scope pass. eval_impl builds a
-// scope per pass, and unordered_map pays a node allocation per insert plus
-// bucket rehashing each time; here entries are POD slots and "clear" is one
-// generation bump, so a reused table allocates nothing per pass. prepare()
-// sizes for 2x the expected distinct keys and shrinks back when the table
-// is more than 4x oversized, so a rare large tape does not pin peak memory.
-template <typename V>
-class TapeIndex {
- public:
-  void prepare(std::size_t expected) {
-    std::size_t want = 16;
-    while (want < expected * 2) {
-      want <<= 1;
-    }
-    if (slots_.size() != want &&
-        (slots_.size() < want || slots_.size() > want * 4)) {
-      slots_.assign(want, Slot{});
-      gen_ = 0;
-    }
-    if (++gen_ == 0) {
-      for (auto& s : slots_) {
-        s.gen = 0;
-      }
-      gen_ = 1;
-    }
-  }
-
-  V* find(std::uintptr_t key) {
-    return const_cast<V*>(const_cast<const TapeIndex*>(this)->find(key));
-  }
-
-  const V* find(std::uintptr_t key) const {
-    std::size_t i = hash(key) & mask();
-    while (slots_[i].gen == gen_ && slots_[i].key != key) {
-      i = (i + 1) & mask();
-    }
-    return slots_[i].gen == gen_ ? &slots_[i].value : nullptr;
-  }
-
-  bool put_if_absent(std::uintptr_t key, V v) {
-    std::size_t i = hash(key) & mask();
-    while (slots_[i].gen == gen_ && slots_[i].key != key) {
-      i = (i + 1) & mask();
-    }
-    Slot& s = slots_[i];
-    if (s.gen == gen_) {
-      return false;
-    }
-    s.gen = gen_;
-    s.key = key;
-    s.value = v;
-    return true;
-  }
-
-  V& operator[](std::uintptr_t key) {
-    std::size_t i = hash(key) & mask();
-    while (slots_[i].gen == gen_ && slots_[i].key != key) {
-      i = (i + 1) & mask();
-    }
-    Slot& s = slots_[i];
-    if (s.gen != gen_) {
-      s.gen = gen_;
-      s.key = key;
-      s.value = V{};
-    }
-    return s.value;
-  }
-
-  std::size_t count(std::uintptr_t key) const {
-    return find(key) != nullptr ? 1 : 0;
-  }
-
- private:
-  struct Slot {
-    std::uintptr_t key = 0;
-    std::uint32_t gen = 0;
-    V value{};
-  };
-
-  std::size_t mask() const {
-    return slots_.size() - 1;
-  }
-
-  static std::size_t hash(std::uintptr_t key) {
-    std::size_t h = key * 0x9E3779B97F4A7C15ULL;
-    return h ^ (h >> 33);
-  }
-
-  std::vector<Slot> slots_;
-  std::uint32_t gen_ = 0;
-};
 
 // Keys: the RoPE kernel writes (matrix, time, feature) output strides,
 // so the window's (batch, kv-head) axes must form one regular matrix
