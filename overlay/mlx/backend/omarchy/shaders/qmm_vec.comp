@@ -805,13 +805,26 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // weight words load once, x quads load once per token and are shared by
 // every slot column; dot and input_sum accumulate per (column, token)
 // exactly as the single-token kernel's per-column chain does.
+// The eight nibble-to-float conversions of each weight word and slot
+// column are computed once per word and reused by every token - the same
+// sharing the batch form's Q4_NIB_WORD applies per row (defined inside
+// QMM_VEC_BATCH, so the token column gets its own copy under a distinct
+// name). Each token's fma chain takes the same values in the same order
+// as the unhoisted Q4_TOK_DOT, so every row stays bit-identical.
+#define Q4_TOK_NIB_WORD(p, n) \
+  for (uint j = 0u; j < 4u; ++j) { \
+    n[j] = Q4_NIB(p, 4u * j); \
+    n[j + 4u] = Q4_NIB((p) >> 16u, 4u * j); \
+  }
 #define Q4_TOK_BLOCK(W, S, B, words_this_step) { \
-  uint wa[ROWS_PER_SLOT]; \
-  uint wb[ROWS_PER_SLOT]; \
+  float na[ROWS_PER_SLOT][8]; \
+  float nb[ROWS_PER_SLOT][8]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+    uint wa = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+    Q4_TOK_NIB_WORD(wa, na[r]) \
     if ((words_this_step) == 2u) { \
-      wb[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w + 1u); \
+      uint wb = WLOAD(W, w_base + row_base[r] * words_per_row + w + 1u); \
+      Q4_TOK_NIB_WORD(wb, nb[r]) \
     } \
   } \
   precise float dot_t[ROWS_PER_SLOT][M_TOKENS]; \
@@ -834,14 +847,18 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
       { Q4_QUAD_LOAD_T(xa.x, xa.y, input_sum_t[r][m]) \
-        uint p = wa[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
+        dot_t[r][m] += fma(x3, na[r][3], \
+            fma(x2, na[r][2], fma(x1, na[r][1], x0 * na[r][0]))); } \
       { Q4_QUAD_LOAD_T(xa.z, xa.w, input_sum_t[r][m]) \
-        uint p = wa[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
+        dot_t[r][m] += fma(x3, na[r][7], \
+            fma(x2, na[r][6], fma(x1, na[r][5], x0 * na[r][4]))); } \
       if ((words_this_step) == 2u) { \
         { Q4_QUAD_LOAD_T(xb.x, xb.y, input_sum_t[r][m]) \
-          uint p = wb[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
+          dot_t[r][m] += fma(x3, nb[r][3], \
+              fma(x2, nb[r][2], fma(x1, nb[r][1], x0 * nb[r][0]))); } \
         { Q4_QUAD_LOAD_T(xb.z, xb.w, input_sum_t[r][m]) \
-          uint p = wb[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
+          dot_t[r][m] += fma(x3, nb[r][7], \
+              fma(x2, nb[r][6], fma(x1, nb[r][5], x0 * nb[r][4]))); } \
       } \
     } \
   } \
