@@ -258,6 +258,21 @@ full rotary width at head width 256 on the split route, and the
 refusal-path machinery (the skip, the pinning, the descriptor handback)
 is proven on hardware.
 
+## The applicability matrix (which model can use this fold)
+
+| model | head dim | rotary | GQA | fold |
+|---|---|---|---|---|
+| Qwen3.8-2B | 256 | partial 0.25 (64 dims) | 4 | **no** - needs the passthrough branch in the fold's Q load |
+| Qwen3-4B-2507 | 128 | full (128) | 4 | **yes, needs the HD=128 variant** - not built; the fold's kernel is width-256 only, and the width-128 Q load owns one dim per thread, so the rotation's partner dim comes through shared memory the same way the rope kernel's own rotation phase reads its pairs |
+| Qwen3-4B (the M6's composed route) | - | - | - | the split route does not run on the G18G's decode guard, so the fold refuses and the reference path is unchanged |
+
+The card's minus-two-percent target was the 2B decode on the M2; the 2B
+is the one shape the fold cannot serve. The next shape the fold does
+serve is the 4B's width-128 full-attention layers, which need the
+HD=128 folded build - the same Q load with one dim per thread and the
+rotation's partner read through shared memory, proven bit-identical the
+same way before the planner is trusted with it.
+
 ## The K side (the other dispatch)
 
 The keys side is the harder half: the rotated key must also reach the
