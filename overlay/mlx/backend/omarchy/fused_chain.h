@@ -300,8 +300,8 @@ bool outgate_fold_enabled();
 
 // MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0 forces folding the trailing single-row
 // bf16 fast::RMSNorm into a 1-member Qmm + ResidualAdd decode dispatch;
-// unset follows qmm_residual_norm_default_part(device_name) (on for G13C and
-// G14C, off elsewhere). MLX_OMARCHY_FUSED_CHAIN=0 turns it off on every part.
+// unset follows qmm_residual_norm_default_part(device_name) (on for G13C,
+// off elsewhere). MLX_OMARCHY_FUSED_CHAIN=0 turns it off on every part.
 bool qmm_residual_norm_enabled(const std::string& device_name);
 bool qmm_residual_norm_enabled();
 

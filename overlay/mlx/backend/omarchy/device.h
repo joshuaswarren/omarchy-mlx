@@ -1068,16 +1068,13 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, 
 
 // Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) with the variable unset: the parts where the route defaults off because
 // the per-node decode GEMV was measured faster than the fused groups:
-//   G16G (Apple M4, Honeykrisp Apple9 port): 2026-11-01 calibration.
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, bit-identical tokens, FUSED_GEMV=0 vs unset):
-//     ctx128 +3.51% (7.8867 -> 7.6186 ms/tok, 5/5), ctx512 +1.98% (7.9255 -> 7.7665 ms/tok, 5/5), ctx2048 +0.41% (8.1436 -> 8.1300 ms/tok, 5/5).
+//   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-decode-defaults.
 // The trio (MLX_OMARCHY_FUSED_TRIO) keeps its default on every part: on G16G the numerics gate found that the
-// standalone trio kernels move Qwen2.5-0.5B perplexity away from the reference.
+// standalone trio kernels move Qwen2.5-0.5B perplexity away from the reference (same receipt, numerics-gate/).
 // Keyed on the device name so an unmeasured part keeps the route on; callers pass the executing device's name
 // (fused_route_enabled). An explicit setting wins. Pure.
 inline bool fused_gemv_off_default_part(const std::string& device_name) {
-  return device_name.find("G16G") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
+  return device_name.find("G16G") != std::string::npos;
 }
 
 // Fused Qmm + ResidualAdd + RMSNorm decode epilogue
@@ -1088,36 +1085,10 @@ inline bool fused_gemv_off_default_part(const std::string& device_name) {
 //     7.689 -> 7.547 ms/tok (-0.142 ms, +1.84%, 3/3 ABBA pairs, chunk=1)
 //     and 7.699 -> 7.564 ms/tok (-0.135 ms, +1.75%, 3/3 ABBA pairs, chunk=16),
 //     -48 dispatches/tok, identical ids_sha 4784df039da0.
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, bit-identical tokens):
-//     ctx128 +1.99% (7.8896 -> 7.7281 ms/tok, 5/5), ctx512 +2.17% (8.0410 -> 7.8628 ms/tok, 5/5), ctx2048 +2.06% (8.1166 -> 7.9517 ms/tok, 5/5).
 // Other parts stay off until measured; MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0
 // overrides on any part, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
 inline bool qmm_residual_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13C") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
-}
-
-// Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):
-// the parts where greedy_quantized_argmax (8 sequential stages) defaults off because
-// full projection + argmax (as_linear) was measured faster with bit-identical tokens:
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, NO_GREEDY_PRUNE=1 vs unset):
-//     ctx128 +6.27% (7.8636 -> 7.4006 ms/tok, 5/5), ctx512 +6.68% (8.0408 -> 7.5261 ms/tok, 5/5), ctx2048 +6.89% (8.1427 -> 7.6195 ms/tok, 5/5).
-// Combined G14C 2B decode stack (NO_GREEDY_PRUNE=1 + FUSED_GEMV=0 + QMM_RESIDUAL_NORM=1):
-//   ctx128 +8.71% (7.8856 -> 7.2569 ms/tok, 5/5), ctx512 +7.05% (8.0290 -> 7.4991 ms/tok, 5/5), ctx2048 +5.45% (8.1478 -> 7.7367 ms/tok, 5/5).
-inline bool greedy_prune_off_default_part(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
-}
-
-inline bool greedy_prune_enabled(const std::string& device_name) {
-  if (const char* env = std::getenv("MLX_OMARCHY_NO_GREEDY_PRUNE")) {
-    if (std::strcmp(env, "1") == 0) {
-      return false;
-    }
-    if (std::strcmp(env, "0") == 0) {
-      return true;
-    }
-  }
-  return !greedy_prune_off_default_part(device_name);
+  return device_name.find("G13C") != std::string::npos;
 }
 
 // Dense bf16 matmul in the linear-layer orientation (row-major lhs, transposed rhs, alpha 1) where both the scalar-FMA kernel

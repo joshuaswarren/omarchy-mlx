@@ -2044,16 +2044,16 @@ TEST_CASE("token-multi q4 gemv kill switch restores the single-row fence") {
 
 TEST_CASE("fused gemv default: the part rule") {
   CHECK(omarchy::fused_gemv_off_default_part("Apple M4 (G16G B1)"));
-  CHECK(omarchy::fused_gemv_off_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::fused_gemv_off_default_part(""));
 }
 
 TEST_CASE("qmm residual norm default: the part rule and overrides") {
   CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)"));
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::qmm_residual_norm_default_part(""));
 
@@ -2069,8 +2069,8 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
   const std::string g13g = "Apple M1 (G13G B1)";
   const std::string g14c = "Apple M2 Max (G14C B1)";
   CHECK(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   CHECK(omarchy::qmm_residual_norm_enabled(g13c));
@@ -2086,7 +2086,6 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
 
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {
@@ -2094,38 +2093,6 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
     } else {
       unsetenv(names[i]);
     }
-  }
-}
-
-TEST_CASE("greedy prune default: the part rule and overrides") {
-  CHECK(omarchy::greedy_prune_off_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::greedy_prune_off_default_part(""));
-
-  const char* prev = std::getenv("MLX_OMARCHY_NO_GREEDY_PRUNE");
-  std::optional<std::string> saved =
-      prev ? std::optional<std::string>(prev) : std::nullopt;
-  unsetenv("MLX_OMARCHY_NO_GREEDY_PRUNE");
-
-  const std::string g14c = "Apple M2 Max (G14C B1)";
-  const std::string g13c = "Apple M1 Max (G13C C0)";
-  CHECK_FALSE(omarchy::greedy_prune_enabled(g14c));
-  CHECK(omarchy::greedy_prune_enabled(g13c));
-
-  setenv("MLX_OMARCHY_NO_GREEDY_PRUNE", "1", 1);
-  CHECK_FALSE(omarchy::greedy_prune_enabled(g14c));
-  CHECK_FALSE(omarchy::greedy_prune_enabled(g13c));
-
-  setenv("MLX_OMARCHY_NO_GREEDY_PRUNE", "0", 1);
-  CHECK(omarchy::greedy_prune_enabled(g14c));
-  CHECK(omarchy::greedy_prune_enabled(g13c));
-
-  if (saved) {
-    setenv("MLX_OMARCHY_NO_GREEDY_PRUNE", saved->c_str(), 1);
-  } else {
-    unsetenv("MLX_OMARCHY_NO_GREEDY_PRUNE");
   }
 }
 
