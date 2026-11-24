@@ -192,15 +192,6 @@ def _slice(a, dim, start, end, step=1):
     idx[dim] = slice(start, end, step)
     return a[tuple(idx)]
 
-def _slice_backward(g, sizes, dim, start, end, step=1):
-    if step != 1:
-        _raise("slice_backward step != 1")
-    dim = dim % len(sizes)
-    end = min(end, sizes[dim])
-    pads = [(0, 0)] * len(sizes)
-    pads[dim] = (start, max(0, sizes[dim] - end))
-    return mx.pad(g, pads)
-
 def _split_sizes(a, sizes, dim):
     idx = list(np.cumsum(sizes))[:-1]
     return tuple(mx.split(a, idx, axis=dim))
@@ -1001,8 +992,8 @@ _FUNC_SPECS = {
     "baddbmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
     "mv": lambda a, v: mx.matmul(a, v),
     "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
-    "t": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
-    "_unsafe_view": _reshape,
+    "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
+    "unsafe_view": _reshape,
     "add": lambda a, b, *k: _mx(a) + _mx(b),
     "sub": lambda a, b, *k: _mx(a) - _mx(b),
     "mul": lambda a, b, *k: _mx(a) * _mx(b),
@@ -1013,9 +1004,7 @@ _FUNC_SPECS = {
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
-    "t": lambda a: mx.transpose(a), "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
-    "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
-    "unsafe_view": _reshape,
+    "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
     "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
@@ -1064,15 +1053,13 @@ _FUNC_SPECS = {
     "diff": _diff,
     "convolution": _convolution,
     "convolution_backward": _convolution_backward,
-    "t": _wt,
+    "t": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
     "threshold_backward": lambda g, x, t=0.0: mx.where(mx.greater(_mx(x), t), _mx(g), mx.zeros_like(_mx(g))),
     "select_backward": _select_backward,
     "tanh_backward": lambda g, out: _mx(g) * (1.0 - _mx(out) * _mx(out)),
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
     "gelu_backward": _gelu_backward,
-    "_log_softmax": lambda a, dim, half_to_float=False: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
-    "_log_softmax_backward_data": lambda go, out, dim, dt=None: _mx(go) - mx.exp(_mx(out)) * mx.sum(_mx(go), axis=dim, keepdims=True),
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
@@ -1088,10 +1075,7 @@ _FUNC_SPECS = {
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
     "slice_backward": _slice_backward,
     "silu_backward": _silu_backward,
-    "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
-    "silu_backward": lambda g, x: g * mx.sigmoid(x) * (1.0 + x * (1.0 - mx.sigmoid(x))),
-    "slice_backward": _slice_backward,
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
