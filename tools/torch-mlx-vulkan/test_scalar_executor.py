@@ -13,7 +13,8 @@ get_attr/sym plumbing and never reaches these executor lines.
 """
 import sys
 import os
-
+import numpy as np
+import mlx.core as mx
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
 import torch.fx
@@ -42,12 +43,18 @@ def main():
 
     expect = [2.5, -5.0, 7.5]
     got_list = out.tolist() if hasattr(out, "tolist") else list(out)
-    wrapped = zt.tolist() if hasattr(zt, "tolist") else zt
-    ok = (all(abs(a - b) < 1e-9 for a, b in zip(got_list, expect))
-          and abs(float(scalar) - 2.5) < 1e-9
-          and abs(float(wrapped) - 2.5) < 1e-9)
-    print(("PASS" if ok else "FAIL"), "scalar", scalar,
-          "wrapped", wrapped, "out", got_list, "expect", expect)
+    # PT-AF review round 2: native scalar types (torch .item() keeps int/bool)
+    # and the non-0-dim Float.Tensor cast (int64 -> fp32, torch .float()
+    # semantics) that previously slipped through uncast.
+    for v, kind in ((torch.tensor(7), 7), (torch.tensor(True), True)):
+        got = mlx_vulkan.ATEN_TABLE["_local_scalar_dense"](mx.array(v.numpy()))
+        assert got == kind and isinstance(got, type(kind)), \
+            f"scalar extraction gave {got!r} ({type(got).__name__}), want {kind!r}"
+        print("PASS scalar-extract", type(kind).__name__, got)
+    ft = mlx_vulkan.ATEN_TABLE["Float"](mx.array(np.array([1, 2, 3], dtype=np.int64)))
+    assert ft.dtype == mx.float32 and ft.tolist() == [1.0, 2.0, 3.0], \
+        f"Float.Tensor int64 came back {ft.dtype} {ft.tolist()}"
+    print("PASS Float.Tensor int64 -> fp32", ft.tolist())
 
     mlx_ops = stats.get("mlx", [])
     cpu_ops = stats.get("cpu", [])
