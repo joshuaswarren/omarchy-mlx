@@ -1297,6 +1297,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   };
   std::vector<SwigluPlan> swiglu_plans;
   std::unordered_set<std::uintptr_t> claimed;
+  const bool swiglu_scan_trace =
+      std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
   for (const auto& tail : tape) {
     if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
         claimed.count(tail.id())) {
@@ -1306,6 +1308,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const array* right = lookup(tail.inputs()[1]);
     const array* inner = is_op(left, typeid(Multiply)) ? left :
         (is_op(right, typeid(Multiply)) ? right : nullptr);
+    if (swiglu_scan_trace) {
+      const char* ln = left && left->has_primitive()
+          ? left->primitive().name()
+          : "<none>";
+      const char* rn = right && right->has_primitive()
+          ? right->primitive().name()
+          : "<none>";
+      std::fprintf(
+          stderr,
+          "[swiglu-scan] mul in0=%s in1=%s inner=%s uses_i=%zu\n",
+          ln,
+          rn,
+          inner ? "mul" : "none",
+          inner ? uses[inner->id()] : 0ul);
+    }
     if (!inner || inner->inputs().size() != 2 || uses[inner->id()] != 1) {
       continue;
     }
@@ -1313,6 +1330,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const array* inner_right = lookup(inner->inputs()[1]);
     const array* sigmoid = is_op(inner_left, typeid(Sigmoid)) ? inner_left :
         (is_op(inner_right, typeid(Sigmoid)) ? inner_right : nullptr);
+    if (swiglu_scan_trace) {
+      const char* iln = inner_left && inner_left->has_primitive()
+          ? inner_left->primitive().name()
+          : "<none>";
+      const char* irn = inner_right && inner_right->has_primitive()
+          ? inner_right->primitive().name()
+          : "<none>";
+      std::fprintf(
+          stderr,
+          "[swiglu-scan]   inner in0=%s in1=%s sig=%s uses_s=%zu\n",
+          iln,
+          irn,
+          sigmoid ? "sig" : "none",
+          sigmoid ? uses[sigmoid->id()] : 0ul);
+    }
     if (!sigmoid || sigmoid->inputs().size() != 1 ||
         uses[sigmoid->id()] != 1) {
       continue;
