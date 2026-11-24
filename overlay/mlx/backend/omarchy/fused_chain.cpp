@@ -2060,19 +2060,24 @@ EagerFusionScope::~EagerFusionScope() {
 }
 
 // Out-gate prologue fold (sigmoid*multiply recomputed per o_proj workgroup).
-// Chip-keyed like the other decode-path defaults: it gained on G13C (the 16-inch
-// M1 Max) but every o_proj workgroup redoes the 4096-element gate on
-// G13G (T8103), where decode dropped ~1.7% versus the wheel without it
-// (H147). MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.
+// Chip-keyed like the other decode-path defaults: it gained on G13C (M1 Max),
+// whereas every o_proj workgroup redoes the gate on G13G (decode dropped
+// ~1.7%, H147) and on G14C (M2 Max B1 paired ABBA across Qwen3.8-2B and
+// Qwen3.8-9B gained +0.97% to +1.92% when disabled, 11/11 pair wins).
+// MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.
+bool outgate_fold_default_for_device(const std::string& device_name) {
+  bool legacy_g13 = device_name.find("G13") != std::string::npos &&
+      device_name.find("G13C") == std::string::npos;
+  bool g14c = device_name.find("G14C") != std::string::npos;
+  return !legacy_g13 && !g14c;
+}
+
 bool outgate_fold_enabled() {
   const char* v = std::getenv("MLX_OMARCHY_OUTGATE_FOLD");
   if (v != nullptr && *v != '\0') {
     return !(v[0] == '0' && v[1] == '\0');
   }
-  const std::string& name = device().capabilities().device_name;
-  bool legacy_g13 = name.find("G13") != std::string::npos &&
-      name.find("G13C") == std::string::npos;
-  return !legacy_g13;
+  return outgate_fold_default_for_device(device().capabilities().device_name);
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
