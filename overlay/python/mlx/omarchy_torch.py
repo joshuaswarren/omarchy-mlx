@@ -986,6 +986,7 @@ def make_compiled_executor(gm):
                 flat.append(arr)
         t1 = _t.perf_counter()
         outs = cfn(*flat)
+        outs = outs if isinstance(outs, (tuple, list)) else (outs,)
         mx.eval(*outs)
         t2 = _t.perf_counter()
         n_out = holder.get("n_out", 1)
