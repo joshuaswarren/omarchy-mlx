@@ -2444,5 +2444,4 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
     expect_view(gu_parent, 64u, 64u, 4);
     unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
   }
->>>>>>> eaf5b16c3f (tests: dual-write byte identity and flag refusal, red before the route existed)
 }
