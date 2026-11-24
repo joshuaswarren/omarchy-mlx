@@ -349,13 +349,14 @@ class ClaimPipeValidationTests(unittest.TestCase):
                 self.assertIn("claim payload field 'bytes'", str(cm.exception))
 
     def test_deeply_nested_payload_raises_budget_error(self):
-        # 64 KiB of "[" is the largest payload the pipe accepts and nests
-        # twice past the 4 MiB stack's decode limit on 3.14 (3.11 stops at
-        # the recursion limit).
-        deep = b"[" * (64 * 1024)
-        pre = _raised_on_small_stack(lambda: json.loads(deep.decode()))
-        self.assertIsInstance(pre, RecursionError)
-        fd = self.pipe_fd(deep)
+        # 64 KiB of "[" is the largest payload the pipe accepts. 3.11 and
+        # most 3.14 builds overflow the decoder on the 4 MiB stack, and that
+        # RecursionError must become a BudgetError; a 3.14 build with smaller
+        # frames decodes it all and refuses the unclosed array instead. The
+        # stack stays 4 MiB because 3.14 on musl and macOS assumes a 4 MB
+        # stack rather than reading it. The twin below injects the
+        # RecursionError on any build.
+        fd = self.pipe_fd(b"[" * (64 * 1024))
         exc = _raised_on_small_stack(lambda: budget.read_claim_fd(fd))
         self.assertIsInstance(exc, budget.BudgetError)
         self.assertIn("claim payload is not valid JSON", str(exc))
