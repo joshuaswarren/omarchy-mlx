@@ -1189,6 +1189,13 @@ enum class ComputeKernel : uint16_t {
   // (2x8, 13 bindings). Appended to keep profile kernel ids stable.
   QmmVecQ4ResNormBF16,
   QmmVecQ4OutgateResNormBF16,
+  // FUSE-3 fold 1 (sdpa_decode_split_p1.comp -DSPLIT_R=4 -DHD=256
+  // -DSDPA_QROPE=1, with and without APPLE_REDUCTION): split pass 1
+  // computes fast_rope_norm's norm + rotation of the raw query in its Q
+  // load, bit-identical to the unfused rope_rms_norm + pass 1 pair.
+  // Appended so earlier profile kernel ids do not move.
+  SdpaDecodeSplitP1R4BF16Hd256Qrope,
+  SdpaDecodeSplitP1R4BF16Hd256QropeApple,
   Count,
 };
 

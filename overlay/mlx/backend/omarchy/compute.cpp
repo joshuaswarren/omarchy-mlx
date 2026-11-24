@@ -357,6 +357,8 @@
 #include "sdpa_decode_split_p1_hd256_g1.h"
 #include "sdpa_decode_split_p1_hd256_g2.h"
 #include "sdpa_decode_split_p1_hd256_g4.h"
+#include "sdpa_decode_split_p1_hd256_g4_qrope.h"
+#include "sdpa_decode_split_p1_hd256_g4_qrope_apple.h"
 #include "sdpa_decode_split_p1_hd256_g8.h"
 #include "sdpa_decode_split_p1v_hd256_g4.h"
 #include "sdpa_decode_split_p2_hd256.h"
@@ -1966,6 +1968,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p1_hd256_g2, sdpa_decode_split_p1_hd256_g2_size};
     case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256:
       return {sdpa_decode_split_p1_hd256_g4, sdpa_decode_split_p1_hd256_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope:
+      return {
+          sdpa_decode_split_p1_hd256_g4_qrope,
+          sdpa_decode_split_p1_hd256_g4_qrope_size};
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple:
+      return {
+          sdpa_decode_split_p1_hd256_g4_qrope_apple,
+          sdpa_decode_split_p1_hd256_g4_qrope_apple_size};
     case ComputeKernel::SdpaDecodeSplitP1R8BF16Hd256:
       return {sdpa_decode_split_p1_hd256_g8, sdpa_decode_split_p1_hd256_g8_size};
     case ComputeKernel::SdpaDecodeSplitP2BF16Hd256:

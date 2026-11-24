@@ -776,6 +776,19 @@ target_link_options(omarchy_sdpa_split_tests
 add_test(NAME omarchy_sdpa_split_tests
          COMMAND omarchy_sdpa_split_tests)
 
+# FUSE-3 fold 1: the split pass 1 with the rope norm+rotation folded into
+# its Q load writes the same scratch as the unfused rope_rms_norm + pass 1
+# pair, word for word.
+add_executable(omarchy_fuse3_rope_fold_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_fuse3_rope_fold.cpp)
+target_link_libraries(omarchy_fuse3_rope_fold_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_fuse3_rope_fold_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_fuse3_rope_fold_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_fuse3_rope_fold_tests
+         COMMAND omarchy_fuse3_rope_fold_tests)
+
 # SdpaPrefillFlashBF16Hd128: the flash-style long-L prefill route agrees
 # with the f32-score composition at bf16 storage granularity, splits
 # dispatches per q tile, and refuses masks/causal to the composition.

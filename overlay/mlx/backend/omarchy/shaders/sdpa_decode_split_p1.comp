@@ -21,6 +21,15 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
+#ifdef SDPA_QROPE
+// FUSE-3 fold 1: this build computes fast_rope_norm's RMS norm and
+// rotation of the query inside the Q load (the host skips the
+// rope_rms_norm dispatch). The rope arithmetic is reproduced statement
+// for statement; see the Q load below.
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_trig.h"
+#endif
+
 #ifndef SPLIT_R
 #define SPLIT_R 4
 #endif
@@ -45,6 +54,17 @@ layout(set = 0, binding = 2, std430) readonly buffer Value {
 layout(set = 0, binding = 3, std430) writeonly buffer Scratch {
   float values[];
 } scratch_data;
+
+#ifdef SDPA_QROPE
+// The raw query rides binding 0 in place of the rope_rms_norm output;
+// the norm weight and the position offsets ride two extra bindings.
+layout(set = 0, binding = 4, std430) readonly buffer NormWeight {
+  uint values[];
+} norm_weight_data;
+layout(set = 0, binding = 5, std430) readonly buffer Offsets {
+  int values[];
+} offset_data;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -79,6 +99,32 @@ shared float s_q[SPLIT_R * D];
 shared float s_p[SPLIT_R * BK];
 shared float s_max[SPLIT_R * SUBGROUPS];
 shared float s_sum[SPLIT_R * SUBGROUPS];
+#ifdef SDPA_QROPE
+// The rope reduction: the non-Apple tree walks 128 values (one per
+// thread); the Apple path hands the eight 32-lane subgroup partials
+// through shared memory before the final subgroupAdd.
+shared float s_red[128];
+#ifdef APPLE_REDUCTION
+shared float s_part[8];
+#endif
+float rope_bf16(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+float weight_bf16(uint index) {
+  uint word = norm_weight_data.values[index >> 1u];
+  uint bits = ((index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+uint bf16_round_bits(float value) {
+  uint bits = floatBitsToUint(value);
+  return isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+}
+float rope_round(float value) {
+  return uintBitsToFloat(bf16_round_bits(value) << 16u);
+}
+#endif
 
 float bf16_load(uint16_t bits) {
   return uintBitsToFloat(uint(bits) << 16u);
@@ -92,6 +138,116 @@ void main() {
   uint nblocks = (k_len + BK - 1u) / BK;
   uint sg = gl_SubgroupID;
 
+#ifdef SDPA_QROPE
+#if HD != 256
+#error "SDPA_QROPE is built for the 256-wide full-attention layers only"
+#endif
+  // fast_rope_norm.comp reproduced in this kernel's layout. Thread t owns
+  // dims {t, t + half_dims}, which is the rope kernel's own pairing (its
+  // reduction tree adds lane t to lane t + 128 first), so both the f32
+  // reduction and the per-element chain land on the same values and the
+  // same bf16 roundings as the unfused rope_rms_norm dispatch. Push
+  // fields (all free in the split kernels): eps bits in operation, the
+  // rope scale bits in lhs_size, the freq exponent in beta, the rotation
+  // half dims in dims, the query row's time index in matrix_m, the
+  // offsets buffer offset in output_offset and the weight element offset
+  // in aux_size. Forward, non-traditional, non-passthrough only: the
+  // host refuses every other rope shape to the unfused route.
+  const float rope_eps = uintBitsToFloat(params.operation);
+  const float rope_scale = uintBitsToFloat(params.lhs_size);
+  const float position =
+      rope_scale * (float(params.matrix_m) + float(offset_data.values[params.output_offset]));
+  const uint half_dims = params.dims;
+  const uint w_off = params.aux_size;
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    uint row_base = params.lhs_offset + head * params.shape[0];
+    uint idx0 = row_base + t * params.shape[3];
+    uint idx1 = row_base + (t + half_dims) * params.shape[3];
+#ifdef APPLE_REDUCTION
+    // The rope kernel's subgroup reduction: each of its 256 threads holds
+    // one dim, its 8 subgroups each add 32 squares, and subgroup 0 adds
+    // the 8 partials. Here thread t holds dims {t, t + 128} = rope lanes
+    // {t, t + 128} of subgroups {sg, sg + 4}: two subgroupAdds over this
+    // subgroup's 32 lanes reproduce two of the rope kernel's partials
+    // bit for bit, and the shared handoff plus the final subgroupAdd in
+    // subgroup 0 is the rope kernel's second level.
+    precise float value0 = rope_bf16(query_data.values[idx0]);
+    precise float value1 = rope_bf16(query_data.values[idx1]);
+    precise float sq0 = value0 * value0;
+    precise float sq1 = value1 * value1;
+    float p0 = subgroupAdd(sq0);
+    float p1 = subgroupAdd(sq1);
+    if (gl_SubgroupInvocationID == 0u) {
+      s_part[sg] = p0;
+      s_part[sg + 4u] = p1;
+    }
+    barrier();
+    float partial = (sg == 0u && gl_SubgroupInvocationID < 8u)
+        ? s_part[gl_SubgroupInvocationID]
+        : 0.0;
+    float row_sum = subgroupAdd(partial);
+    if (t == 0u) {
+      s_red[0] = row_sum;
+    }
+    barrier();
+#else
+    // The rope kernel's shared tree, verbatim from its first step: lane t
+    // adds lane t + 128, then strides 64..1 over the remaining 128 sums.
+    float value0 = rope_bf16(query_data.values[idx0]);
+    float value1 = rope_bf16(query_data.values[idx1]);
+    precise float sq0 = value0 * value0;
+    precise float sq1 = value1 * value1;
+    precise float pair = sq0 + sq1;
+    s_red[t] = pair;
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+      if (t < stride) {
+        s_red[t] += s_red[t + stride];
+      }
+      barrier();
+    }
+#endif
+    float mean_square = s_red[0] / float(D);
+    barrier();
+    precise float norm = inversesqrt(mean_square + rope_eps);
+    // Re-load the values instead of carrying the squared register: the
+    // rope kernel documents that the carried register lets NIR fold the
+    // multiplies into an ffma that drifts one bf16 ULP at the rounding
+    // tie line.
+    precise float re0 = rope_bf16(query_data.values[idx0]);
+    precise float re1 = rope_bf16(query_data.values[idx1]);
+    precise float weight0 = weight_bf16(w_off + t);
+    precise float weight1 = weight_bf16(w_off + t + half_dims);
+    precise float wn0 = weight0 * norm;
+    precise float wn1 = weight1 * norm;
+    float x1 = rope_round(re0 * wn0);
+    float x2 = rope_round(re1 * wn1);
+    // Half-split rotation, forward: this thread's pair (x1 at dim t,
+    // x2 at dim t + half_dims) produces both rotated outputs.
+    float inv_freq = exp(-float(t) * params.beta);
+    float theta = position * inv_freq;
+    float cos_t = rope_round(omarchy_trig_cos(theta));
+    float sin_t = rope_round(omarchy_trig_sin(theta));
+    float xa = rope_round(x1 * cos_t);
+    float xb = rope_round(x2 * sin_t);
+    float xc = rope_round(x1 * sin_t);
+    float xd = rope_round(x2 * cos_t);
+    float rotated0 = xa - xb;
+    float rotated1 = xc + xd;
+    // The unfused route stores the rotation as bf16 and this kernel
+    // reloads it, so round through the same bf16 bits before the scale.
+    s_q[r * D + t] = params.alpha *
+        uintBitsToFloat(bf16_round_bits(rotated0) << 16u);
+    s_q[r * D + t + half_dims] = params.alpha *
+        uintBitsToFloat(bf16_round_bits(rotated1) << 16u);
+    // Release the shared reduction state before the next head rewrites it:
+    // without this trailing barrier a fast thread could start the next
+    // head's reduction while a slow thread still reads s_red[0]. The
+    // rope kernel ends its row loop with the same barrier.
+    barrier();
+  }
+#else
 #if HD == 128
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
@@ -107,6 +263,7 @@ void main() {
           query_data.values[params.lhs_offset + head * params.shape[0] + dim * params.shape[3]]);
     }
   }
+#endif
 #endif
   barrier();
 
