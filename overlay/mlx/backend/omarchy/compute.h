@@ -1184,6 +1184,11 @@ enum class ComputeKernel : uint16_t {
   ConvDw2dF16,
   ConvDw2dBF16,
   QmmVecQ4MultiSubgroupBF16R2S16KCONT,
+  // Fused decode QMM + ResidualAdd + Apple RMSNorm (shaders/qmm_vec.comp
+  // -DQMM_VEC_RESNORM=1), plain (2x16, 10 bindings) and out-gate prologue
+  // (2x8, 13 bindings). Appended to keep profile kernel ids stable.
+  QmmVecQ4ResNormBF16,
+  QmmVecQ4OutgateResNormBF16,
   Count,
 };
 

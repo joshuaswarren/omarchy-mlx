@@ -486,6 +486,11 @@ class MLX_API CommandEncoder {
     return last_completion_;
   }
 
+  // Return a 256-byte zero-initialized ticket buffer slice for the current
+  // open batch so QmmVecQ4ResNorm* can elect its last finishing workgroup
+  // without overlapping in-flight batches or competing encoders.
+  ComputeBinding resnorm_ticket_binding();
+
   // Distinct buffers bound to the open batch. A persistent buffer bound
   // by many dispatches counts once (pre-binding), so this stays small on
   // weight/KV-heavy graphs.
@@ -641,6 +646,10 @@ class MLX_API CommandEncoder {
   std::array<Slot, kInFlightCommandBuffers> slots_{};
   int current_slot_{0};
   VkCommandBuffer cmd_{VK_NULL_HANDLE};
+  static constexpr VkDeviceSize kResNormTicketStride = 256;
+  mlx::core::allocator::Buffer resnorm_ticket_buf_{nullptr};
+  std::array<uint64_t, kInFlightCommandBuffers> resnorm_ticket_in_flight_{};
+  int resnorm_ticket_slot_{-1};
   // Compute pipeline bound on cmd_ this recording. Reset at command
   // buffer begin; lets emit skip a redundant CmdBindPipeline when a run
   // of dispatches reuses one pipeline.

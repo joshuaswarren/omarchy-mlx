@@ -760,6 +760,9 @@ struct GemvGroup {
   // is the deleted Multiply(Sigmoid(gate), out) output. The one
   // dispatch reads gate and out directly and rebuilds x per workgroup.
   std::optional<OutgatePlan> outgate;
+  // Trailing fast::RMSNorm epilogue over the single member's Add sum.
+  std::optional<ResNormPlan> res_norm;
+  bool res_norm_done{false};
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -798,6 +801,7 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, FusedChain> chains;
   std::unordered_map<std::uintptr_t, size_t> gemv_roles;
   std::vector<GemvGroup> gemv_groups;
+  std::unordered_map<std::uintptr_t, size_t> res_norm_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
   std::unordered_map<std::uintptr_t, size_t> slice_update_roles;
@@ -1797,6 +1801,58 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       pair.direct = true;
     }
   }
+  // Backward epilogue fold (MLX_OMARCHY_QMM_RESIDUAL_NORM=1): a single-member
+  // decode Qmm + ResidualAdd group whose materialized sum feeds a single-row
+  // bf16 fast::RMSNorm runs that norm in the last finishing workgroup without
+  // an inter-dispatch barrier. Keeps Sum0 materialized so other consumers of
+  // the residual sum (e.g., skip connections) read the identical bits.
+  if (qmm_residual_norm_enabled() && !state->gemv_groups.empty()) {
+    std::unordered_map<std::uintptr_t, const array*> res_norms_by_in;
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RMSNorm)) || node.inputs().size() != 2 ||
+          claimed.count(node.id()) || node.dtype() != bfloat16 ||
+          lookup(node.inputs()[1]) != nullptr) {
+        continue;
+      }
+      res_norms_by_in.try_emplace(node.inputs()[0].id(), &node);
+    }
+    if (!res_norms_by_in.empty()) {
+      for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+        auto& group = state->gemv_groups[gi];
+        if (group.members.size() != 1 || group.swiglu_out ||
+            !group.members[0].epilogue || !group.members[0].addend ||
+            group.members[0].sum_window) {
+          continue;
+        }
+        const array& qmm = group.members[0].node;
+        const array& add = *group.members[0].epilogue;
+        if (qmm.dtype() != bfloat16 || qmm.inputs()[0].ndim() < 2 ||
+            qmm.inputs()[0].shape(-2) != 1) {
+          continue;
+        }
+        auto it = res_norms_by_in.find(add.id());
+        if (it == res_norms_by_in.end()) {
+          continue;
+        }
+        const array& norm = *it->second;
+        const array& nw = norm.inputs()[1];
+        if (claimed.count(norm.id()) ||
+            norm.primitive().stream() != qmm.primitive().stream() ||
+            norm.ndim() < 1 || norm.size() != add.size() ||
+            norm.shape(-1) != qmm.inputs()[1].shape(0) ||
+            nw.dtype() != bfloat16 ||
+            (nw.size() != 1 &&
+             nw.size() != static_cast<size_t>(norm.shape(-1)))) {
+          continue;
+        }
+        const float eps =
+            static_cast<const fast::RMSNorm&>(norm.primitive()).state().second;
+        group.res_norm = ResNormPlan{norm, nw, eps};
+        state->res_norm_skip_roles.emplace(norm.id(), gi);
+        claimed.insert(norm.id());
+      }
+    }
+  }
   // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
   // scalar offset input, one stream, float16 storage, identical rope
   // state (dims, traditional, base, scale, forward; no freqs), and no
@@ -2080,6 +2136,21 @@ bool outgate_fold_enabled() {
   return outgate_fold_default_for_device(device().capabilities().device_name);
 }
 
+bool qmm_residual_norm_enabled(const std::string& device_name) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* env = std::getenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  return qmm_residual_norm_default_part(device_name);
+}
+
+bool qmm_residual_norm_enabled() {
+  return qmm_residual_norm_enabled(device().capabilities().device_name);
+}
+
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
@@ -2343,6 +2414,10 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
   }
+  if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
+      skip != eager_state->res_norm_skip_roles.end()) {
+    return eager_state->gemv_groups[skip->second].res_norm_done;
+  }
   if (auto skip = eager_state->rope_norm_skip_roles.find(node.id());
       skip != eager_state->rope_norm_skip_roles.end()) {
     // The rope-side fold owns this norm's dispatch; a failed fold runs
@@ -2512,7 +2587,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
                         stream,
-                        group.outgate ? &*group.outgate : nullptr)
+                        group.outgate ? &*group.outgate : nullptr,
+                        group.res_norm ? &*group.res_norm : nullptr,
+                        &group.res_norm_done)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {
