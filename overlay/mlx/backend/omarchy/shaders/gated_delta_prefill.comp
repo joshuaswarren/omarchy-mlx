@@ -79,7 +79,8 @@ layout(push_constant) uniform Params {
   uint matrix_n;   // Dv
   uint matrix_k;   // Hv
   uint flags;      // bit0: per-Dk decay, bit1: mask, bit2: g is f32,
-                   // bit3: output pass
+                   // bit3: output pass, bit4: ops-order (unfused)
+                   // state update
   float alpha;
   float beta_f;
   uint dims;       // T
@@ -164,8 +165,16 @@ void token_step(
     precise float dec = st[i] * gi;
     // The ops reference stores the decayed state, then its eager-fused
     // add(state, k*delta) elementwise kernel contracts the multiply-add;
-    // mirror that with an explicit fma.
-    precise float ns = fma(delta, sk[buf][k0 + i], dec);
+    // mirror that with an explicit fma. On parts whose elementwise kernel
+    // does not contract (bit4, G18G measured), the product and the add
+    // each round instead.
+    precise float ns;
+    if ((params.flags & 16u) != 0u) {
+      precise float kupd = delta * sk[buf][k0 + i];
+      ns = dec + kupd;
+    } else {
+      ns = fma(delta, sk[buf][k0 + i], dec);
+    }
     st[i] = ns;
   }
   if (compute_o) {

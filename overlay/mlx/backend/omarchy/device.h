@@ -742,6 +742,25 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
   return gdn_conv_delta_norm_default_part(device_name) ? 2 : 0;
 }
 
+// Fused gated-delta state update order. The ops reference's eager-fused
+// add(state, k*delta) elementwise kernel contracts the multiply-add on
+// parts where the driver reassociates it, which the scan and VJP
+// kernels mirror with an explicit fma. On G18G the same eager elementwise
+// kernel leaves the multiply-add uncontracted (measured 2026-11-24 on the
+// PAR-35 bisect: the fused-vs-ops residual is exactly fma(delta,k,dec)
+// vs fl32(dec + delta*k), zero elsewhere), so the kernels there take the
+// unfused update (flag bit4 in gated_delta_prefill.comp, bit1 in
+// gated_delta_vjp.comp). MLX_OMARCHY_GDN_UPDATE_UNFUSED=0/1 overrides the
+// part default for A/B. Pure.
+inline bool gdn_update_unfused_default(const std::string& device_name) {
+  const char* env = std::getenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED");
+  if (env != nullptr && env[0] != '\0' && env[1] == '\0' &&
+      (env[0] == '0' || env[0] == '1')) {
+    return env[0] == '1';
+  }
+  return device_name.find("G18G") != std::string::npos;
+}
+
 // ArgMax, ArgMin and LogSumExp over a long row (8192 to 1048576 columns, the vocabulary row of a decode step): the parts whose default is the chunked
 // route of MLX_OMARCHY_ARGREDUCE_CHUNKED and MLX_OMARCHY_LSE_CHUNKED (one workgroup per 4096-column chunk plus a merge dispatch). Measured on G14C
 // (M2 Max, Qwen3.5-9B 4-bit decode, both on against both off, same tokens): about 3.9 percent on one boot and 3.2 percent on another,

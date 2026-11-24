@@ -408,3 +408,25 @@ TEST_CASE("batched fp16 prefill keeps the single batched fallback") {
                 " dispatches against ", single,
                 " for one row: the batch was split into per-row fallbacks");
 }
+
+// The ops-order state-update flag (prefill bit4, VJP bit1) defaults on for
+// G18G, where the ops reference's eager elementwise add does not contract,
+// and stays off elsewhere (the explicit fma mirrors the contracted ops
+// chain there). MLX_OMARCHY_GDN_UPDATE_UNFUSED=0/1 overrides the part
+// default in both directions for A/B runs.
+TEST_CASE("the ops-order state update flag defaults on G18G and follows the env") {
+  unsetenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED");
+  CHECK(omarchy::gdn_update_unfused_default("Apple M6 (G18G B1)"));
+  CHECK_FALSE(omarchy::gdn_update_unfused_default("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gdn_update_unfused_default("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gdn_update_unfused_default("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gdn_update_unfused_default(""));
+  setenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED", "1", 1);
+  CHECK(omarchy::gdn_update_unfused_default("Apple M1 (G13G B1)"));
+  setenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED", "0", 1);
+  CHECK_FALSE(omarchy::gdn_update_unfused_default("Apple M6 (G18G B1)"));
+  setenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED", "2", 1);
+  CHECK(omarchy::gdn_update_unfused_default("Apple M6 (G18G B1)"));
+  CHECK_FALSE(omarchy::gdn_update_unfused_default("Apple M1 (G13G B1)"));
+  unsetenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED");
+}

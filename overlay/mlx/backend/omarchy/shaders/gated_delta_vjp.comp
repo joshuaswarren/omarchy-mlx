@@ -95,7 +95,8 @@ layout(push_constant) uniform Params {
   uint matrix_m;     // Dk
   uint matrix_n;     // Dv
   uint matrix_k;     // Hv
-  uint flags;        // bit0: g rides f32 (GBufF)
+  uint flags;        // bit0: g rides f32 (GBufF), bit1: ops-order
+                     // (unfused) state update
   float alpha;
   float beta_f;
   uint dims;         // T
@@ -192,10 +193,20 @@ void main() {
         t_head * v_stride + head * DV + row]) - kv) * beta;
     for (uint i = 0u; i < SLICE; ++i) {
       precise float dec = st[i] * gamma;
-      precise float ns = fma(
-          delta,
-          bf16_load(k_buf.v[kt + sub * SLICE + i]),
-          dec);
+      // Same update contract as shaders/gated_delta_prefill.comp: the
+      // ops chain contracts its eager elementwise add into an fma on
+      // parts whose driver reassociates it; bit1 mirrors the
+      // uncontracted parts (G18G).
+      precise float ns;
+      if ((params.flags & 2u) != 0u) {
+        precise float kupd = delta * bf16_load(k_buf.v[kt + sub * SLICE + i]);
+        ns = dec + kupd;
+      } else {
+        ns = fma(
+            delta,
+            bf16_load(k_buf.v[kt + sub * SLICE + i]),
+            dec);
+      }
       st[i] = ns;
     }
   }
@@ -328,7 +339,14 @@ void main() {
       }
       precise float delta = (bf16_load(v_buf.v[t_base_v + t * v_stride]) - kv_total) * beta;
       for (uint i = 0u; i < NPT; ++i) {
-        precise float ns = fma(delta, k_slice[i], st[i] * gamma);
+        precise float dec = st[i] * gamma;
+        precise float ns;
+        if ((params.flags & 2u) != 0u) {
+          precise float kupd = delta * k_slice[i];
+          ns = dec + kupd;
+        } else {
+          ns = fma(delta, k_slice[i], dec);
+        }
         st[i] = ns;
       }
     }

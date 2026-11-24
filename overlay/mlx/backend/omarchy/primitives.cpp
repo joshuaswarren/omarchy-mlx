@@ -13879,6 +13879,14 @@ void GatedDeltaUpdateVJP::eval_gpu(
   state_cache.set_data(allocate_omarchy(state_cache.nbytes()));
   encoder.add_temporary(state_cache);
 
+  // VJP flag bit1: ops-order state update on parts whose eager
+  // elementwise add does not contract (gdn_update_unfused_default, G18G).
+  const uint32_t gdn_unfused_flag =
+      omarchy::gdn_update_unfused_default(
+          encoder.device().capabilities().device_name)
+      ? 2u
+      : 0u;
+
   // Save pass: one 128-thread workgroup per (head, 32-row block, batch).
   {
     omarchy::ComputeParams params;
@@ -13896,7 +13904,7 @@ void GatedDeltaUpdateVJP::eval_gpu(
     params.shape[0] = checked_item_offset(g, g.size(), tag, dq);
     params.in_strides[0] = n_ckpt;
     params.out_strides[1] = gqa;
-    params.flags = g_f32 ? 1u : 0u;
+    params.flags = (g_f32 ? 1u : 0u) | gdn_unfused_flag;
     std::array<omarchy::ComputeBinding, 8> bindings{
         binding(q),            // 0 QBuf
         binding(k),            // 1 KBuf
@@ -13940,7 +13948,7 @@ void GatedDeltaUpdateVJP::eval_gpu(
     params.out_strides[0] = checked_item_offset(dh, dh.size(), tag, dq);
     params.out_strides[1] = gqa;
     params.out_strides[2] = n_ckpt;
-    params.flags = g_f32 ? 1u : 0u;
+    params.flags = (g_f32 ? 1u : 0u) | gdn_unfused_flag;
     std::array<omarchy::ComputeBinding, 15> bindings{
         binding(q),            // 0 QBuf
         binding(k),            // 1 KBuf
@@ -14663,6 +14671,11 @@ void GatedDeltaUpdate::eval_gpu(
   params.lhs_gap = kGdnChunk;
   params.rhs_gap = chunks;
   uint32_t g_flags = (g.ndim() == 4 ? 1u : 0u) | (g.dtype() == float32 ? 4u : 0u);
+  // Bit4: ops-order state update on parts whose eager elementwise add
+  // does not contract (gdn_update_unfused_default, G18G measured).
+  if (omarchy::gdn_update_unfused_default(gdn_caps.device_name)) {
+    g_flags |= 16u;
+  }
   if (has_mask) {
     params.shape[3] =
         checked_item_offset(*mask, mask->size(), tag, out);
