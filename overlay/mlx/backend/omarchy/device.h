@@ -151,6 +151,13 @@ struct CapabilityReport {
   // shaderBFloat16CooperativeMatrix on, plus an 8x8x8 subgroup shape with
   // bf16 A/B and an fp32 accumulator. Implies cooperative_matrix_f32_8.
   bool cooperative_matrix_bf16_8{false};
+  // VK_KHR_shader_bfloat16 with both features on, plus ANY bf16 A/B
+  // subgroup non-saturating shape with an fp32 accumulator (e.g. ANV's
+  // 8x16x16 XMX shape on BMG, which advertises no f32 8x8x8 shape).
+  // Unlike cooperative_matrix_bf16_8 this does not imply the fp32
+  // shape; kernel selection still confirms the exact shape in
+  // cooperative_matrix_shapes.
+  bool cooperative_matrix_bf16{false};
   // Every cooperative-matrix shape the device advertised, recorded verbatim
   // (including mixed-operand shapes where AType != BType, which the booleans
   // above cannot express). Kernel selection confirms the exact shape a

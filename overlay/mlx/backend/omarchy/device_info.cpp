@@ -243,6 +243,8 @@ device_info(int device_index) {
         static_cast<size_t>(caps.cooperative_matrix_f16_8 ? 1 : 0);
     info["cooperative_matrix_bf16_8"] =
         static_cast<size_t>(caps.cooperative_matrix_bf16_8 ? 1 : 0);
+    info["cooperative_matrix_bf16"] =
+        static_cast<size_t>(caps.cooperative_matrix_bf16 ? 1 : 0);
     info["queue_global_priority"] =
         static_cast<size_t>(caps.queue_global_priority ? 1 : 0);
     info["max_compute_shared_memory_size"] =
