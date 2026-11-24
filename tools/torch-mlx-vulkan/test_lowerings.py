@@ -229,11 +229,24 @@ def test_compiled_executor_nonarray_outputs():
     print("test_compiled_executor_nonarray_outputs PASS")
 
 
+def test_gelu_backward():
+    rng = np.random.RandomState(2)
+    x = rng.randn(6, 8).astype(np.float32) * 3.0  # wide spread to hit both tails
+    dy = rng.randn(6, 8).astype(np.float32)
+    for approximate in ("none", "tanh"):
+        tx = torch.tensor(x, requires_grad=True)
+        torch.nn.functional.gelu(tx, approximate=approximate).backward(torch.tensor(dy))
+        out = mlx_vulkan._gelu_backward(mx.array(dy), mx.array(x), approximate=approximate)
+        assert np.abs(_np(out) - tx.grad.numpy()).max() < 1e-5, approximate
+    print("test_gelu_backward PASS")
+
+
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
-                 "_native_batch_norm_legit_functional", "threshold_backward", "t"):
+                 "_native_batch_norm_legit_functional", "threshold_backward", "t",
+                 "gelu_backward"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 
@@ -249,5 +262,6 @@ if __name__ == "__main__":
     test_arange()
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
+    test_gelu_backward()
     test_dispatch_registered()
     print("ALL PASS")
