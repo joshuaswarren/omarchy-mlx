@@ -1229,6 +1229,26 @@ bool node_gemv_enabled(const array& node) {
   return d != nullptr && fused_gemv_enabled(*d);
 }
 
+// Epilogue-only group route (MLX_OMARCHY_QMM_EPILOGUE_GEMV): on parts where
+// the multi-weight fused GEMV defaults off but the residual-norm epilogue
+// defaults on (G14C), single-member groups carrying an Add epilogue still
+// plan; multi-member x-sharing folds stay off. See device.h.
+bool gemv_epilogue_only_route_enabled(const Device& device) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* env = std::getenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  return gemv_epilogue_only_part(device.capabilities().device_name);
+}
+
+bool node_epilogue_gemv_enabled(const array& node) {
+  const Device* d = stream_device(node);
+  return d != nullptr && gemv_epilogue_only_route_enabled(*d);
+}
+
 bool node_trio_enabled(const array& node) {
   const Device* d = stream_device(node);
   return d != nullptr && fused_trio_enabled(*d);
@@ -1433,7 +1453,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(QuantizedMatmul)) ||
         node.inputs().size() != 4 || claimed.count(node.id()) ||
-        !node_gemv_enabled(node)) {
+        !(node_gemv_enabled(node) || node_epilogue_gemv_enabled(node))) {
       continue;
     }
     auto [group_size, bits, mode, transpose] =
@@ -1534,6 +1554,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         worth = worth || member.epilogue.has_value();
         group.members.push_back(std::move(member));
+      }
+      // Epilogue-only route (device.h gemv_epilogue_only_part): the
+      // multi-member fold and epilogue-free singles keep their per-node
+      // path; only single-member Add-epilogue groups plan.
+      if (!node_gemv_enabled(*nodes[start]) &&
+          (group.members.size() != 1 || !group.members[0].epilogue)) {
+        continue;
       }
       if (group.members.size() < 2 && !worth) {
         continue;
