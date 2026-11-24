@@ -316,6 +316,8 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kcont.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
+#include "qmm_vec_q4_resnorm_bf16.h"
+#include "qmm_vec_q4_outgate_resnorm_bf16.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token4_bf16.h"
@@ -2261,6 +2263,11 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_sg4_x32_fn_g4_pad_k32, qmm_coopmat_sg4_x32_fn_g4_pad_k32_size};
     case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap:
       return {qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap, qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap_size};
+    case ComputeKernel::QmmVecQ4ResNormBF16:
+      return {qmm_vec_q4_resnorm_bf16, qmm_vec_q4_resnorm_bf16_size};
+    case ComputeKernel::QmmVecQ4OutgateResNormBF16:
+      return {
+          qmm_vec_q4_outgate_resnorm_bf16, qmm_vec_q4_outgate_resnorm_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

@@ -10053,7 +10053,12 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate) {
+    OutgatePlan* outgate,
+    ResNormPlan* res_norm,
+    bool* res_norm_done) {
+  if (res_norm_done) {
+    *res_norm_done = false;
+  }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -10144,15 +10149,43 @@ bool dispatch_quantized_gemv_group(
       }
     }
   }
+  bool res_norm_active = false;
+  if (res_norm != nullptr && !token_route && !swiglu_out &&
+      members.size() == 1 && members[0].epilogue.has_value() &&
+      members[0].addend.has_value() && !members[0].sum_window &&
+      dtype == bfloat16 && subgroup_ready &&
+      members[0].node.inputs().size() == 4) {
+    const array& w = members[0].node.inputs()[1];
+    const int n_cand = w.ndim() == 2 ? w.shape(0) : 0;
+    const size_t min_bindings = outgate != nullptr ? 13u : 10u;
+    if (n_cand > 0 &&
+        encoder.device().compute().binding_limit() >= min_bindings &&
+        apple_norm_enabled(
+            encoder.device(), static_cast<size_t>(n_cand), size_t{1}) &&
+        res_norm->out.dtype() == bfloat16 &&
+        res_norm->out.size() == static_cast<size_t>(n_cand) &&
+        res_norm->out.ndim() >= 1 && res_norm->out.shape(-1) == n_cand &&
+        res_norm->out.primitive().stream() == stream &&
+        res_norm->out.data_shared_ptr() == nullptr) {
+      const array& nw = res_norm->weight;
+      if (nw.dtype() == bfloat16 &&
+          (nw.size() == 1 || nw.size() == static_cast<size_t>(n_cand)) &&
+          whole_dense(nw, nw.size()) && input_ready(nw, stream)) {
+        res_norm_active = true;
+      }
+    }
+  }
   ComputeParams params;
   uint32_t total_groups = 0;
   // Columns per workgroup of the kernel selected below: the geometry applies
-  // to the bf16 subgroup single-token multi kernel only.
-  const uint32_t group_columns =
-      (!token_route && outgate == nullptr && dtype == bfloat16 &&
-       subgroup_ready)
-      ? qmm_geometry().columns
-      : 8u;
+  // to the bf16 subgroup single-token multi kernel only (or 2x16 / 2x8 for
+  // the fused resnorm epilogue kernels).
+  const uint32_t group_columns = res_norm_active
+      ? (outgate != nullptr ? 16u : 32u)
+      : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
+          subgroup_ready)
+             ? qmm_geometry().columns
+             : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
     if (node.inputs().size() != 4 || node.inputs()[0].id() != x.id() ||
@@ -10347,6 +10380,62 @@ bool dispatch_quantized_gemv_group(
         params.flags |= 262144u;
       }
     }
+  }
+  if (res_norm_active) {
+    res_norm->out.set_data(allocator().malloc(res_norm->out.nbytes()));
+    encoder.add_temporary(res_norm->weight);
+    encoder.add_temporary(res_norm->out);
+    params.alpha = res_norm->eps;
+    params.lhs_size = static_cast<uint32_t>(res_norm->weight.size());
+    params.rhs_offset = static_cast<uint32_t>(
+        res_norm->weight.offset() / res_norm->weight.itemsize());
+    if (outgate != nullptr) {
+      params.flags |= 131072u;
+      std::array<ComputeBinding, 13> rn_bindings{
+          binding(outgate->x),
+          binding(members[0].node.inputs()[1]),
+          binding(members[0].node.inputs()[2]),
+          binding(members[0].node.inputs()[3]),
+          binding(members[0].node),
+          binding(*members[0].addend),
+          binding(*members[0].epilogue),
+          binding(res_norm->weight),
+          binding(res_norm->out),
+          encoder.device().resnorm_ticket_binding(),
+          binding(outgate->out),
+          binding(outgate->gate),
+          binding(outgate->x)};
+      encoder.dispatch_compute(
+          ComputeKernel::QmmVecQ4OutgateResNormBF16,
+          rn_bindings,
+          params,
+          total_groups,
+          1u,
+          1u);
+    } else {
+      std::array<ComputeBinding, 10> rn_bindings{
+          binding(x),
+          binding(members[0].node.inputs()[1]),
+          binding(members[0].node.inputs()[2]),
+          binding(members[0].node.inputs()[3]),
+          binding(members[0].node),
+          binding(*members[0].addend),
+          binding(*members[0].epilogue),
+          binding(res_norm->weight),
+          binding(res_norm->out),
+          encoder.device().resnorm_ticket_binding()};
+      encoder.dispatch_compute(
+          ComputeKernel::QmmVecQ4ResNormBF16,
+          rn_bindings,
+          params,
+          total_groups,
+          1u,
+          1u);
+    }
+    if (res_norm_done) {
+      *res_norm_done = true;
+    }
+    return true;
   }
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
   bindings[0] = binding(outgate != nullptr ? outgate->x : x);

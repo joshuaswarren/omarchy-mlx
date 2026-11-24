@@ -89,8 +89,17 @@ uint16_t bf16_store(float value) {
 #error "QMM_VEC_GREEDY builds on the bf16 subgroup Q4 word column"
 #endif
 #if defined(QMM_VEC_OUTGATE) && \
-    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
-#error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     (!defined(QMM_VEC_MULTI) && !defined(QMM_VEC_RESNORM)))
+#error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi or resnorm column"
+#endif
+#if defined(QMM_VEC_RESNORM) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_MULTI) || \
+     defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
+     defined(QMM_VEC_TOKENS) || defined(QMM_VEC_GREEDY) || \
+     ROWS_PER_SLOT != 2 || SLOTS_PER_GROUP < 8)
+#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row >=8-slot single weight"
 #endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
@@ -231,31 +240,53 @@ layout(set = 0, binding = 26, std430) readonly buffer OutgateGate {
 layout(set = 0, binding = 27, std430) writeonly buffer OutgateMul {
   uvec4 values[];
 } outgate_mul;
-uint16_t outgate_sig_lane(uint g_bits) {
-  float g = uintBitsToFloat(g_bits << 16u);
-  return bf16_store(1.0 / (1.0 + exp(-g)));
-}
-uint outgate_word(uint o, uint g) {
-  float sig_lo = uintBitsToFloat(
-      uint(outgate_sig_lane(g & 0xFFFFu)) << 16u);
-  float sig_hi = uintBitsToFloat(
-      uint(outgate_sig_lane(g >> 16u)) << 16u);
-  float lo = uintBitsToFloat((o & 0xFFFFu) << 16u) * sig_lo;
-  float hi = uintBitsToFloat((o & 0xFFFF0000u)) * sig_hi;
-  return uint(bf16_store(lo)) | (uint(bf16_store(hi)) << 16u);
-}
-uvec4 outgate_quad(uint quad_index) {
-  uvec4 o = outgate_out.values[quad_index];
-  uvec4 g = outgate_gate.values[quad_index];
-  uvec4 m = {outgate_word(o.x, g.x), outgate_word(o.y, g.y),
-             outgate_word(o.z, g.z), outgate_word(o.w, g.w)};
-  if (gl_WorkGroupID.x == 0u) {
-    outgate_mul.values[quad_index] = m;
-  }
-  return m;
-}
-#define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
 #endif
+#elif defined(QMM_VEC_RESNORM)
+// Single-weight Q4 word GEMV + Add epilogue + last-workgroup Apple
+// RMSNorm: bindings 0..9 (and 10..12 under QMM_VEC_OUTGATE). Sum0 carries
+// the residual sum so other consumers still read a materialized buffer,
+// and coherent atomic Ticket selects the last finishing workgroup to run
+// the 256-thread row norm once without an inter-dispatch barrier.
+layout(set = 0, binding = 1, std430) readonly buffer InputW0 {
+  WVEC_T values[];
+} input_w0;
+layout(set = 0, binding = 2, std430) readonly buffer Scales0 {
+  STORAGE_TYPE values[];
+} scales0;
+layout(set = 0, binding = 3, std430) readonly buffer Biases0 {
+  STORAGE_TYPE values[];
+} biases0;
+layout(set = 0, binding = 4, std430) writeonly buffer Output0 {
+  STORAGE_TYPE values[];
+} output0;
+layout(set = 0, binding = 5, std430) readonly buffer Addend0 {
+  STORAGE_TYPE values[];
+} addend0;
+layout(set = 0, binding = 6, std430) coherent buffer Sum0 {
+  STORAGE_TYPE values[];
+} sum0;
+layout(set = 0, binding = 7, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 8, std430) writeonly buffer NormOutput {
+  STORAGE_TYPE values[];
+} norm_output;
+layout(set = 0, binding = 9, std430) coherent buffer Ticket {
+  uint done;
+} ticket;
+#if defined(QMM_VEC_OUTGATE)
+layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
+  uvec4 values[];
+} outgate_out;
+layout(set = 0, binding = 11, std430) readonly buffer OutgateGate {
+  uvec4 values[];
+} outgate_gate;
+layout(set = 0, binding = 12, std430) writeonly buffer OutgateMul {
+  uvec4 values[];
+} outgate_mul;
+#endif
+shared uint s_resnorm_is_last;
+shared float s_resnorm_partial[8u];
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
@@ -334,6 +365,32 @@ layout(push_constant) uniform Params {
 
 #ifndef USE_SUBGROUP
 shared float reduce_scratch[256];
+#endif
+
+#if defined(QMM_VEC_OUTGATE)
+uint16_t outgate_sig_lane(uint g_bits) {
+  float g = uintBitsToFloat(g_bits << 16u);
+  return bf16_store(1.0 / (1.0 + exp(-g)));
+}
+uint outgate_word(uint o, uint g) {
+  float sig_lo = uintBitsToFloat(
+      uint(outgate_sig_lane(g & 0xFFFFu)) << 16u);
+  float sig_hi = uintBitsToFloat(
+      uint(outgate_sig_lane(g >> 16u)) << 16u);
+  float lo = uintBitsToFloat((o & 0xFFFFu) << 16u) * sig_lo;
+  float hi = uintBitsToFloat((o & 0xFFFF0000u)) * sig_hi;
+  return uint(bf16_store(lo)) | (uint(bf16_store(hi)) << 16u);
+}
+uvec4 outgate_quad(uint quad_index) {
+  uvec4 o = outgate_out.values[quad_index];
+  uvec4 g = outgate_gate.values[quad_index];
+  uvec4 m = {outgate_word(o.x, g.x), outgate_word(o.y, g.y),
+             outgate_word(o.z, g.z), outgate_word(o.w, g.w)};
+  if (gl_WorkGroupID.x == 0u) {
+    outgate_mul.values[quad_index] = m;
+  }
+  return m;
+}
 #endif
 
 // Push-constant routing: operation carries bits (2, 3, 4, 5, 6, or 8),
@@ -1293,6 +1350,161 @@ void main() {
   }
 }
 #endif
+#elif defined(QMM_VEC_RESNORM)
+#define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n = params.shape[0];
+  uint column =
+      gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint w_base = 0u;
+  uint s_base = 0u;
+  uint b_base = 0u;
+  uint x_row = params.lhs_offset;
+  precise float acc[ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    acc[r] = 0.0;
+  }
+  if (column_active) {
+    Q4_ROWS(input_w0, scales0, biases0)
+  }
+  float total[ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    total[r] = subgroupAdd(acc[r]);
+  }
+  if (lane_in_slot == 0u) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      uint col = column + r;
+      if (col < n) {
+        float rounded = ROUND_STORAGE(total[r]);
+        output0.values[col] = STORE_VALUE(rounded);
+        sum0.values[col] =
+            STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col]));
+      }
+    }
+  }
+  barrier();
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    uint prev = atomicAdd(ticket.done, 1u);
+    s_resnorm_is_last = (prev == gl_NumWorkGroups.x - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_resnorm_is_last == 0u) {
+    return;
+  }
+  if (lane == 0u) {
+    ticket.done = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+
+  // Single-row Apple RMSNorm (mirrors shaders/fast_norm_apple.comp bit-for-bit)
+  // over sum0.values[0..n-1] on threads 0..255; barriers stay workgroup-uniform.
+  uint row_length = n;
+  float eps = params.alpha;
+  uint sub_id = lane / LANES;
+  uint sub_lane = lane % LANES;
+  float reg_x[16u];
+  precise float reg_sq = 0.0;
+  uint n_reads = row_length / 256u;
+  bool reg_path =
+      (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+  if (lane < 256u) {
+    if (reg_path) {
+      uint base = lane * n_reads;
+      for (uint i = 0u; i < 8u; ++i) {
+        reg_x[i] = LOAD_VALUE(sum0.values[base + i]);
+        reg_sq += reg_x[i] * reg_x[i];
+      }
+      if (n_reads == 10u) {
+        for (uint i = 8u; i < 10u; ++i) {
+          reg_x[i] = LOAD_VALUE(sum0.values[base + i]);
+          reg_sq += reg_x[i] * reg_x[i];
+        }
+      } else if (n_reads == 16u) {
+        for (uint i = 8u; i < 16u; ++i) {
+          reg_x[i] = LOAD_VALUE(sum0.values[base + i]);
+          reg_sq += reg_x[i] * reg_x[i];
+        }
+      }
+    } else {
+      for (uint index = lane; index < row_length; index += 256u) {
+        reg_sq += LOAD_VALUE(sum0.values[index]) *
+                  LOAD_VALUE(sum0.values[index]);
+      }
+    }
+    float sub_partial = subgroupAdd(reg_sq);
+    if (sub_lane == 0u) {
+      s_resnorm_partial[sub_id] = sub_partial;
+    }
+  }
+  barrier();
+  if (sub_id == 0u) {
+    float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+    float total_sq = subgroupAdd(v);
+    if (sub_lane == 0u) {
+      s_resnorm_partial[0] = total_sq;
+    }
+  }
+  barrier();
+  float mean_square = s_resnorm_partial[0] / float(row_length);
+  float norm = inversesqrt(mean_square + eps);
+  if (lane < 256u) {
+    if (reg_path) {
+      uint base = lane * n_reads;
+      for (uint i = 0u; i < 8u; ++i) {
+        uint index = base + i;
+        float weight =
+            (params.lhs_size == 1u)
+                ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+        precise float norm_weight_v = norm * weight;
+        precise float result = reg_x[i] * norm_weight_v;
+        norm_output.values[index] = STORE_VALUE(result);
+      }
+      if (n_reads == 10u) {
+        for (uint i = 8u; i < 10u; ++i) {
+          uint index = base + i;
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+          precise float norm_weight_v = norm * weight;
+          precise float result = reg_x[i] * norm_weight_v;
+          norm_output.values[index] = STORE_VALUE(result);
+        }
+      } else if (n_reads == 16u) {
+        for (uint i = 8u; i < 16u; ++i) {
+          uint index = base + i;
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+          precise float norm_weight_v = norm * weight;
+          precise float result = reg_x[i] * norm_weight_v;
+          norm_output.values[index] = STORE_VALUE(result);
+        }
+      }
+    } else {
+      for (uint index = lane; index < row_length; index += 256u) {
+        float value = LOAD_VALUE(sum0.values[index]);
+        float weight =
+            (params.lhs_size == 1u)
+                ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+        precise float norm_weight_v = norm * weight;
+        precise float result = value * norm_weight_v;
+        norm_output.values[index] = STORE_VALUE(result);
+      }
+    }
+  }
+}
 #elif defined(QMM_VEC_GREEDY)
 // Greedy-argmax head: the token argmax(logits - logsumexp(logits)) picks
 // for one bf16 x row (K = 2048: one 64-wide group per subgroup lane)

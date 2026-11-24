@@ -179,6 +179,16 @@ struct OutgatePlan {
   std::uintptr_t sigmoid_id;
 };
 
+// Backward epilogue fold: a 1-member bf16 decode QMM + ResidualAdd group whose
+// sum output is consumed by a single-row fast::RMSNorm. The dispatch runs
+// the norm inside the last finishing workgroup without an extra launch or
+// CDM barrier while keeping the sum materialized for other consumers.
+struct ResNormPlan {
+  array out;
+  array weight;
+  float eps;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -189,7 +199,9 @@ struct OutgatePlan {
 // deleted swiglu dispatch). |outgate| plans the out-gate prologue:
 // the shared x is the deleted Multiply(Sigmoid(gate), out) output, and
 // the one dispatch reads gate and out directly, reconstructing x per
-// workgroup with the elementwise arithmetic and rounding. Returns false
+// workgroup with the elementwise arithmetic and rounding. |res_norm|
+// plans the trailing fast::RMSNorm epilogue over the single member's
+// Add sum; when it runs, |*res_norm_done| is set true. Returns false
 // having allocated nothing when any member falls outside the contract;
 // the caller then lets every node take its ordinary eval_gpu path.
 // Defined in primitives.cpp beside QuantizedMatmul::eval_gpu.
@@ -197,7 +209,9 @@ bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
     const Stream& stream,
-    OutgatePlan* outgate = nullptr);
+    OutgatePlan* outgate = nullptr,
+    ResNormPlan* res_norm = nullptr,
+    bool* res_norm_done = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -267,6 +281,11 @@ const char* qmm_geometry_name();
 bool qmm_vec_q4_word_enabled();
 
 bool outgate_fold_enabled();
+
+// MLX_OMARCHY_QMM_RESIDUAL_NORM=1 opts into folding the trailing single-row
+// bf16 fast::RMSNorm into a 1-member Qmm + ResidualAdd decode dispatch
+// (default off pending jw16 parity verification).
+bool qmm_residual_norm_enabled();
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
