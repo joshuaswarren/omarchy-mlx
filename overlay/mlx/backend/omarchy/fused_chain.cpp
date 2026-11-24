@@ -1624,6 +1624,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // member's eval fires the one dispatch and the standalone swiglu
   // dispatch never exists. Any runtime contract failure un-plans the
   // whole group onto the per-node path.
+  if (std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr) {
+    std::fprintf(
+        stderr,
+        "[swiglu-attach] plans=%zu groups=%zu\n",
+        swiglu_plans.size(),
+        state->gemv_groups.size());
+  }
   if (!swiglu_plans.empty()) {
     std::unordered_map<std::uintptr_t, std::vector<std::uintptr_t>>
         consumers;
@@ -1642,8 +1649,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       std::sort(want.begin(), want.end());
       return it->second == want;
     };
+    const bool swiglu_trace =
+        std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
     for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
       auto& group = state->gemv_groups[gi];
+      if (swiglu_trace) {
+        std::fprintf(
+            stderr,
+            "[swiglu-attach] group %zu members=%zu ep0=%d ep1=%d f32=%d\n",
+            gi,
+            group.members.size(),
+            static_cast<int>(group.members[0].epilogue.has_value()),
+            group.members.size() > 1
+                ? static_cast<int>(group.members[1].epilogue.has_value())
+                : -1,
+            static_cast<int>(
+                group.members[0].node.dtype() == float32));
+      }
       if (group.members.size() != 2 || group.members[0].epilogue ||
           group.members[1].epilogue ||
           group.members[0].node.dtype() == float32) {
@@ -1653,6 +1675,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const std::uintptr_t up_id = group.members[1].node.id();
       if (group.members[0].node.inputs()[1].shape(0) !=
           group.members[1].node.inputs()[1].shape(0)) {
+        if (swiglu_trace) {
+          std::fprintf(stderr, "[swiglu-attach] group %zu n-mismatch\n", gi);
+        }
         continue;
       }
       for (const auto& plan : swiglu_plans) {
@@ -1663,9 +1688,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         // plain multi-weight path.
         bool straight = plan.gate_id == gate_id && plan.up_id == up_id;
         bool swapped = plan.gate_id == up_id && plan.up_id == gate_id;
-        if ((!straight && !swapped) ||
-            !only_readers(plan.gate_id, {plan.sigmoid_id, plan.inner_id}) ||
-            !only_readers(plan.up_id, {plan.out.id()})) {
+        bool gate_ok =
+            only_readers(plan.gate_id, {plan.sigmoid_id, plan.inner_id});
+        bool up_ok = only_readers(plan.up_id, {plan.out.id()});
+        if (swiglu_trace && (straight || swapped)) {
+          std::fprintf(
+              stderr,
+              "[swiglu-attach] group %zu id-match straight=%d swapped=%d "
+              "gate_readers=%d up_readers=%d\n",
+              gi,
+              static_cast<int>(straight),
+              static_cast<int>(swapped),
+              static_cast<int>(gate_ok),
+              static_cast<int>(up_ok));
+        }
+        if ((!straight && !swapped) || !gate_ok || !up_ok) {
           continue;
         }
         if (swapped) {
