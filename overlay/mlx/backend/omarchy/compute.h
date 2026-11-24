@@ -1197,6 +1197,11 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1R4BF16Hd256Qrope,
   SdpaDecodeSplitP1R4BF16Hd256QropeApple,
   QmmVecQ4MultiSubgroupBF16R2S4W2,
+  // Gather + affine dequantize in one dispatch (quantized-embedding
+  // prologue fold); appended to keep profile kernel ids stable.
+  GatherDequantF32,
+  GatherDequantF16,
+  GatherDequantBF16,
   Count,
 };
 
