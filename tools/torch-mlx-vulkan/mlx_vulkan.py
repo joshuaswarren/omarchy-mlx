@@ -109,6 +109,83 @@ def _unbind(a, dim):
         out.append(a[tuple(idx)])
     return tuple(out)
 
+def _ce(logits, target, weight, label_smoothing, reduction):
+    logits, target = _mx(logits), _mx(target)
+    if weight is None:
+        return _mxnn.losses.cross_entropy(
+            logits, target, label_smoothing=label_smoothing,
+            reduction=reduction)
+    w = _mx(weight)[target]
+    l = _mxnn.losses.cross_entropy(
+        logits, target, label_smoothing=label_smoothing, reduction="none")
+    if reduction == "none":
+        return w * l
+    if reduction == "sum":
+        return mx.sum(w * l)
+    return mx.sum(w * l) / mx.sum(w)
+
+
+def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mask):
+    gout, x = _mx(gout), _mx(x)
+    mean, rstd = _mx(mean), _mx(rstd)
+    w = _mx(weight) if weight is not None else None
+    ndim = len(tuple(normalized_shape))
+    axes = tuple(range(x.ndim - ndim, x.ndim))
+    xhat = (x - mean) * rstd
+    g = gout * w if w is not None else gout
+    dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
+                 - xhat * mx.mean(g * xhat, axis=axes, keepdims=True))
+    sum_axes = tuple(range(x.ndim - ndim))
+    dw = (mx.sum(gout * xhat, axis=sum_axes) if sum_axes else gout * xhat)
+    db = (mx.sum(gout, axis=sum_axes) if sum_axes else gout)
+    mask = tuple(output_mask) if output_mask is not None else (True, True, True)
+    z = mx.zeros((1,), mx.float32)
+    return (dx if mask[0] else z,
+            dw if (weight is not None and mask[1]) else z,
+            db if (bias is not None and mask[2]) else z)
+
+
+def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
+    out = _sdpa(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
+                is_causal=is_causal, scale=scale)
+    s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
+    scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
+    if is_causal:
+        T, S = scores.shape[-2], scores.shape[-1]
+        keep = mx.arange(S)[None, :] <= (mx.arange(T)[:, None] + (S - T))
+        scores = mx.where(keep, scores, -mx.inf)
+    if attn_mask is not None:
+        scores = scores + _mx(attn_mask)
+    lse = mx.logsumexp(scores, axis=-1)
+    return (out, lse)
+
+
+def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
+                        attn_mask=None, scale=None):
+    if dropout_p:
+        _raise("flash_cpu_bwd dropout_p")
+    gout, q, k, v, out = _mx(gout), _mx(q), _mx(k), _mx(v), _mx(out)
+    lse = _mx(lse)
+    s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
+    scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
+    if is_causal:
+        T, S = scores.shape[-2], scores.shape[-1]
+        keep = mx.arange(S)[None, :] <= (mx.arange(T)[:, None] + (S - T))
+        scores = mx.where(keep, scores, -mx.inf)
+    if attn_mask is not None:
+        scores = scores + _mx(attn_mask)
+    if lse.ndim == scores.ndim:
+        lse = lse[..., 0]
+    p = mx.exp(scores - lse[..., None])
+    dv = mx.matmul(mx.swapaxes(p, -2, -1), gout)
+    dP = mx.matmul(gout, mx.swapaxes(v, -2, -1))
+    dsum = mx.sum(gout * out, axis=-1, keepdims=True)
+    dS = p * (dP - dsum)
+    dq = s * mx.matmul(dS, k)
+    dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q)
+    return (dq, dk, dv)
+
+
 def _ln_native(a, normalized_shape, weight, bias, eps):
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
@@ -731,11 +808,14 @@ _FUNC_SPECS = {
     "gelu": lambda a, approximate="none": (0.5 * a * (1.0 + mx.tanh(math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a))) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0)))),
     "cross_entropy": lambda logits, target, weight=None, ignore_index=-100, reduction="mean", label_smoothing=0.0: (
         _raise("cross_entropy ignore_index") if ignore_index != -100 else
-        _mxnn.losses.cross_entropy(logits, target, weights=weight, label_smoothing=label_smoothing, reduction=reduction)),
+        _ce(logits, target, weight, label_smoothing, reduction)),
     "nll_loss": lambda logp, target, weight=None, ignore_index=-100, reduction="mean", size_average=None, reduce=None: (
         _raise("nll_loss weight/ignore_index") if (weight is not None or ignore_index != -100) else
         _mxnn.losses.nll_loss(logp, target, reduction=reduction)),
     "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=reduction),
+    "native_layer_norm_backward": _ln_backward,
+    "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
+    "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
