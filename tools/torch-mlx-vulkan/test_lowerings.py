@@ -205,6 +205,39 @@ def test_arange():
     print("test_arange PASS")
 
 
+def test_mul():
+    # PT-A: aten.mul.default is the PAR-41 census top fallback (17,208 uses).
+    # Prove the eager executor lowers mul/mul.Scalar/mul_ (stats["mlx"]) and
+    # matches torch CPU at fp32 and bf16, including mixed-dtype promotion.
+    x32 = torch.tensor([[1.5, -2.0], [3.0, 0.25]])
+    y32 = torch.tensor([[2.0, 0.5], [-1.0, 4.0]])
+    xb, yb = x32.bfloat16(), y32.bfloat16()
+    i64 = torch.tensor([[2, 3], [-1, 4]], dtype=torch.int64)
+    cases = [
+        (torch.ops.aten.mul.default, (x32, y32), torch.mul(x32, y32)),
+        (torch.ops.aten.mul.default, (xb, yb), torch.mul(xb, yb)),
+        (torch.ops.aten.mul.Scalar, (x32,), torch.mul(x32, 2.5)),
+        (torch.ops.aten.mul_.Tensor, (x32.clone(), y32), torch.mul(x32, y32)),
+        (torch.ops.aten.mul.default, (x32, i64), torch.mul(x32, i64)),
+        (torch.mul, (x32, y32), torch.mul(x32, y32)),
+    ]
+    for target, ins, ref in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        args = tuple(phs) if target is not torch.ops.aten.mul.Scalar else (phs[0], 2.5)
+        n = g.call_function(target, args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, [str(t.target) for t in gm.graph.nodes])
+        assert any("mul" in s for s in stats["mlx"]), stats
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=2e-2), (str(target), got)
+        assert out.dtype == ref.dtype, (str(target), out.dtype, ref.dtype)
+    print("test_mul PASS")
+
+
 def test_scalar_tensor_factory_lowering():
     # BERT emits scalar_tensor factory nodes (scalar arg, no tensor inputs):
     # the eager executor only lowers call_function nodes with an mx input or
@@ -335,6 +368,7 @@ if __name__ == "__main__":
     test_bn_legit_functional()
     test_scalar_tensor_factory_lowering()
     test_arange()
+    test_mul()
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
