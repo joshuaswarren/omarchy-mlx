@@ -164,6 +164,48 @@ def run_fallback_checks(trace_fn):
     print("PASS fallbacks (M=2, NORM_APPLE=0)")
 
 
+def run_default_unset_check(trace_fn):
+    k, n = 2048, 2048
+    wq, scales, biases = make_quantized(k, n, seed=777)
+    rng = mx.random.key(55)
+    x = (mx.random.normal((1, k), dtype=mx.bfloat16, key=rng) * 0.1).astype(mx.bfloat16)
+    resid = (mx.random.normal((1, n), dtype=mx.bfloat16, key=rng) * 0.1).astype(mx.bfloat16)
+    other = (mx.random.normal((1, n), dtype=mx.bfloat16, key=rng) * 0.1).astype(mx.bfloat16)
+    nw = (1.0 + 0.1 * mx.random.normal((n,), dtype=mx.bfloat16, key=rng)).astype(mx.bfloat16)
+    mx.eval(x, resid, other, nw)
+
+    def eval_once():
+        q = mx.quantized_matmul(x, wq, scales, biases, transpose=True, group_size=64, bits=4)
+        h = resid + q
+        hn = mx.fast.rms_norm(h, nw, 1e-6)
+        h2 = h + other
+        mx.eval(hn, h2)
+        return hn, h2
+
+    os.environ["MLX_OMARCHY_QMM_RESIDUAL_NORM"] = "0"
+    ref_hn, ref_h2 = eval_once()
+    s0 = snap(trace_fn)
+    ref_hn, ref_h2 = eval_once()
+    s1 = snap(trace_fn)
+    off_dispatches = s1.vk_compute_dispatches - s0.vk_compute_dispatches
+
+    os.environ.pop("MLX_OMARCHY_QMM_RESIDUAL_NORM", None)
+    def_hn, def_h2 = eval_once()
+    t0 = snap(trace_fn)
+    def_hn, def_h2 = eval_once()
+    t1 = snap(trace_fn)
+    def_dispatches = t1.vk_compute_dispatches - t0.vk_compute_dispatches
+
+    assert mx.array_equal(def_hn, ref_hn), "default-unset hn mismatch"
+    assert mx.array_equal(def_h2, ref_h2), "default-unset h2 mismatch"
+    dev_name = str(mx.device_info().get("device_name", ""))
+    expected = off_dispatches - 1 if "G13C" in dev_name else off_dispatches
+    assert def_dispatches == expected, (
+        f"default-unset expected {expected} dispatches for {dev_name!r}, got {def_dispatches}"
+    )
+    print(f"PASS default-unset ({dev_name}) dispatches {off_dispatches} -> {def_dispatches}")
+
+
 def main():
     fn = get_trace_fn()
     d0, d1 = run_plain_case(fn, 2048, 2048)
@@ -176,6 +218,7 @@ def main():
     assert d1 == d0 - 1, f"expected -1 dispatch for outgate 2048x2048, got {d0} -> {d1}"
     run_outgate_case(fn, 4096, 2048)
     run_fallback_checks(fn)
+    run_default_unset_check(fn)
     print("ALL_QMM_RESNORM_CHECKS_PASSED")
 
 

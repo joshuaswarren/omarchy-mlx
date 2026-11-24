@@ -1001,6 +1001,20 @@ inline bool fused_gemv_off_default_part(const std::string& device_name) {
   return device_name.find("G16G") != std::string::npos;
 }
 
+// Fused Qmm + ResidualAdd + RMSNorm decode epilogue
+// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the parts where the epilogue is
+// on by default because matched ABBA decode measured faster with
+// bit-identical output and token ids:
+//   G13C (16-inch Apple M1 Max): Qwen3.8-2B 4-bit ctx 512 decode
+//     7.689 -> 7.547 ms/tok (-0.142 ms, +1.84%, 3/3 ABBA pairs, chunk=1)
+//     and 7.699 -> 7.564 ms/tok (-0.135 ms, +1.75%, 3/3 ABBA pairs, chunk=16),
+//     -48 dispatches/tok, identical ids_sha 4784df039da0.
+// Other parts stay off until measured; MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0
+// overrides on any part, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
+inline bool qmm_residual_norm_default_part(const std::string& device_name) {
+  return device_name.find("G13C") != std::string::npos;
+}
+
 // Dense bf16 matmul in the linear-layer orientation (row-major lhs, transposed rhs, alpha 1) where both the scalar-FMA kernel
 // (MatmulBf16Fma) and the bf16 cooperative-matrix tile (MatmulBF16Coopmat) qualify: the parts where the FMA kernel is the default,
 // because it was measured faster at the linear-layer shapes and in bf16 prefill:

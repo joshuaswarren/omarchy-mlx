@@ -2131,12 +2131,19 @@ bool outgate_fold_enabled() {
   return !legacy_g13;
 }
 
-bool qmm_residual_norm_enabled() {
+bool qmm_residual_norm_enabled(const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
   }
   const char* env = std::getenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
-  return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  return qmm_residual_norm_default_part(device_name);
+}
+
+bool qmm_residual_norm_enabled() {
+  return qmm_residual_norm_enabled(device().capabilities().device_name);
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
