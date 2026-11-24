@@ -294,19 +294,24 @@ def test_linear():
                                          None if bias is None else torch.tensor(bias))
         out = mlx_vulkan._linear(mx.array(x), mx.array(w), None if bias is None else mx.array(bias))
         assert np.abs(_np(out) - exp.numpy()).max() < 1e-5
-    # through the executor: aten.linear node must lower, not fall back
-    g = torch.fx.Graph()
-    px = g.placeholder("x")
-    pw = g.placeholder("w")
-    pb = g.placeholder("b")
-    n = g.call_function(torch.ops.aten.linear.default, (px, pw, pb), {})
-    g.output(n)
-    gm = torch.fx.GraphModule(torch.nn.Module(), g)
-    run = mlx_vulkan.make_compiled_executor(gm, dt=mx.float32)
+    # through the eager executor: the aten.linear node must lower, not
+    # fall back (compiled executor has its own hardcoded linear branch)
     tx, tw, tb = torch.randn(3, 8), torch.randn(6, 8), torch.randn(6)
-    out = run(tx, tw, tb)
-    exp = torch.nn.functional.linear(tx, tw, tb)
-    assert np.allclose(_np(out[0]), exp.numpy(), atol=1e-4)
+    for args, bias_kw in ((("x", "w", "b"), False), (("x", "w"), False), (("x", "w"), True)):
+        g = torch.fx.Graph()
+        needed = set(args) | ({"b"} if bias_kw else set())
+        ph = {k: g.placeholder(k) for k in ("x", "w", "b") if k in needed}
+        kw = {"bias": ph["b"]} if bias_kw else {}
+        n = g.call_function(torch.ops.aten.linear.default, tuple(ph[k] for k in args), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        ins = [tx, tw] + ([tb] if "b" in args or bias_kw else [])
+        out = run(*ins)
+        assert "linear" in stats["mlx"], stats
+        assert "linear" not in stats["cpu"], stats
+        exp = torch.nn.functional.linear(tx, tw, tb if len(ins) == 3 else None)
+        assert np.allclose(_np(out), exp.numpy(), atol=1e-4)
     print("test_linear PASS")
 
 

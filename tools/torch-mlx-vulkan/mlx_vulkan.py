@@ -171,9 +171,9 @@ def _perm_swap(a, d0, d1):
 def _wt(w):
     return mx.transpose(w, axes=_perm_swap(w, -2, -1))
 
-def _linear(x, w, b=None):
+def _linear(x, w, bias=None):
     y = mx.matmul(x, _wt(w))
-    return y + _mx(b) if b is not None else y
+    return y + _mx(bias) if bias is not None else y
 
 def _reshape(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
@@ -2249,9 +2249,10 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = mx.matmul(_cast(args[0]), _cast(args[1])).astype(mx.float32)
                 continue
             if name == "linear" and n.op == "call_function":
-                y = mx.matmul(_cast(args[0]), mx.transpose(_cast(args[1]), axes=(-1, -2)))
-                if len(args) > 2 and args[2] is not None:
-                    y = y + _cast(args[2])
+                y = mx.matmul(_cast(args[0]), _wt(_cast(args[1])))
+                bias = args[2] if len(args) > 2 else kwargs.get("bias")
+                if bias is not None:
+                    y = y + _cast(bias)
                 env[n] = y.astype(mx.float32)
                 continue
             if n.op == "call_method":
