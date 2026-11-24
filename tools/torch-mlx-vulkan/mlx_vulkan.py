@@ -14,11 +14,13 @@ op-coverage evidence for the milestone.
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import logging
 import math
 import operator
 import os
 import sys
+import types
 
 import numpy as np
 import torch
@@ -63,12 +65,27 @@ if _BCA is not None:
                 if isinstance(getattr(m, "__dict__", None), dict)
                 and self.key in m.__dict__
             ]
-            return {"key": self.key, "content": self.content, "mods": mods}
+            # The same spoofed __module__ makes torch install() plant the
+            # entry's other dynamo globals in the wrong dict; snapshot the
+            # module-valued ones (__import_* aliases, ___module_* handles)
+            # from the dicts that really ran the code.
+            imports = {}
+            for m in list(sys.modules.values()):
+                d = getattr(m, "__dict__", None)
+                if isinstance(d, dict) and self.key in d:
+                    for k, v in d.items():
+                        if isinstance(v, types.ModuleType) and (
+                                k.startswith("__import_")
+                                or k.startswith("___module_")):
+                            imports[k] = v.__name__
+            return {"key": self.key, "content": self.content, "mods": mods,
+                    "imports": imports}
 
         def __setstate__(self, state):
             self.key = state["key"]
             self.content = state["content"]
             self._mods = state.get("mods", [])
+            self._imports = state.get("imports", {})
 
         def after_deserialization(self):
             backend = _restore_backend(self.content)
@@ -76,6 +93,9 @@ if _BCA is not None:
                 mod = sys.modules.get(name)
                 if mod is not None:
                     mod.__dict__[self.key] = backend
+                    for alias, modname in self._imports.items():
+                        if alias not in mod.__dict__:
+                            mod.__dict__[alias] = importlib.import_module(modname)
             return backend
 
 
