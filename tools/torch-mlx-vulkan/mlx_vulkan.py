@@ -497,6 +497,15 @@ def _nll_loss_forward(a, target, weight=None, reduction=1, ignore_index=-100):
     return (-mx.sum(mx.where(m, lp, 0.0)) / (tw if reduction == 1 else 1.0), tw)
 
 
+def _gelu_backward(g, a, approximate="none"):
+    a = _mx(a)
+    if approximate == "tanh":
+        u = math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a)
+        t = mx.tanh(u)
+        return _mx(g) * (0.5 * (1.0 + t) + 0.5 * a * (1.0 - t * t) * math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * a * a))
+    return _mx(g) * (0.5 * (1.0 + mx.erf(a / math.sqrt(2.0))) + a * mx.exp(-0.5 * a * a) / math.sqrt(2.0 * math.pi))
+
+
 def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
     if weight is not None:
         return _raise("nll_loss_backward weight")
@@ -1022,6 +1031,7 @@ _FUNC_SPECS = {
     "threshold_backward": lambda g, x, t=0.0: mx.where(mx.greater(_mx(x), t), _mx(g), mx.zeros_like(_mx(g))),
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
+    "gelu_backward": _gelu_backward,
     "_log_softmax": lambda a, dim, half_to_float=False: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
     "_log_softmax_backward_data": lambda go, out, dim, dt=None: _mx(go) - mx.exp(_mx(out)) * mx.sum(_mx(go), axis=dim, keepdims=True),
     "group_norm": _group_norm,
