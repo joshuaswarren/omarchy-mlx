@@ -46,6 +46,9 @@ class TapeIndex {
   }
 
   const V* find(std::uintptr_t key) const {
+    if (slots_.empty()) {
+      return nullptr;
+    }
     std::size_t i = hash(key) & mask();
     while (slots_[i].gen == gen_ && slots_[i].key != key) {
       i = (i + 1) & mask();

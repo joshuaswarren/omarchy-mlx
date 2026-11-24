@@ -2488,9 +2488,11 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
 // TapeIndex scratch-map contract (EagerFusionScope): growth past the
 // prepared estimate, swap-shrink releasing capacity, and generation-wrap
 // rezeroing. TapeIndex<>, the production table, runs a 32-bit generation;
-// the 8-bit instance reaches the wrap path in 255 prepares.
+// the 8-bit instance reaches the wrap path in 256 prepares.
 TEST_CASE("TapeIndex grows past the prepared estimate") {
   omarchy::TapeIndex<int> t;
+  CHECK(t.find(0) == nullptr);
+  CHECK(t.count(0) == 0);
   t.prepare(1);
   CHECK(t.table_size() == 16);
   for (std::uintptr_t k = 0; k < 64; ++k) {
@@ -2532,9 +2534,9 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   t.prepare(1);
   t.put_if_absent(42, 7);
   CHECK(*t.find(42) == 7);
-  // 254 more prepares wrap the 8-bit generation counter through the
-  // rezero path; the stale gen-255 entry must not survive.
-  for (int i = 0; i < 254; ++i) {
+  // 255 more prepares wrap the 8-bit generation counter 255->0 through
+  // the rezero path; the stale gen-1 entry must not survive.
+  for (int i = 0; i < 255; ++i) {
     t.prepare(1);
   }
   CHECK(t.find(42) == nullptr);
