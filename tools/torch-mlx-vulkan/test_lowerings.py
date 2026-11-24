@@ -325,6 +325,66 @@ def test_dispatch_registered():
     print("test_dispatch_registered PASS")
 
 
+def test_numel():
+    rng = np.random.RandomState(9)
+    for shape in ((), (0,), (5,), (2, 4, 8), (1, 1)):
+        x = np.asarray(rng.randn(*shape), dtype=np.float32)
+        exp = torch.numel(torch.tensor(x))
+        got = mlx_vulkan._FUNC_SPECS["numel"](mx.array(x))
+        assert got == exp, (shape, got, exp)
+        assert isinstance(got, int), (shape, type(got))
+    # through the eager executor: the aten.numel node must lower (glue),
+    # not fall back to the CPU op
+    t = torch.randn(3, 5, 2)
+    g = torch.fx.Graph()
+    ph = g.placeholder("x")
+    n = g.call_function(torch.ops.aten.numel.default, (ph,))
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(mx.array(t.numpy()))
+    assert out == t.numel(), (out, t.numel())
+    assert "numel" in stats["mlx"], stats
+    assert "numel" not in stats["cpu"], stats
+    print("test_numel PASS")
+
+
+def test_slice():
+    rng = np.random.RandomState(11)
+    x = rng.randn(6, 16, 9).astype(np.float32)
+    tx = torch.tensor(x)
+    a = mx.array(x)
+    cases = [
+        (1, 2, 10, 1),      # basic
+        (1, None, None, 1),  # full dim
+        (0, 3, None, 1),     # open stop
+        (1, None, 5, 1),     # open start
+        (2, -4, -1, 1),      # negative bounds
+        (1, 30, 40, 1),      # clamped out-of-range
+        (2, 0, 9, 2),        # positive step
+    ]
+    for dim, start, end, step in cases:
+        exp = torch.ops.aten.slice.Tensor(tx, dim, start, end, step).numpy()
+        got = mlx_vulkan._slice(a, dim, start, end, step)
+        assert np.array_equal(_np(got), exp), (dim, start, end, step)
+    # through the eager executor: the aten.slice node must lower
+    t = torch.randn(4, 12)
+    for dim, start, end, step in ((0, 1, 3, 1), (1, None, 7, 2)):
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch.ops.aten.slice.Tensor,
+                            (ph, dim, start, end, step))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch.ops.aten.slice.Tensor(t, dim, start, end, step).numpy()
+        assert np.array_equal(_np(out), exp), (dim, start, end, step)
+        assert "slice" in stats["mlx"], stats
+        assert "slice" not in stats["cpu"], stats
+    print("test_slice PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -340,4 +400,6 @@ if __name__ == "__main__":
     test_gelu_backward()
     test_linear()
     test_dispatch_registered()
+    test_numel()
+    test_slice()
     print("ALL PASS")
