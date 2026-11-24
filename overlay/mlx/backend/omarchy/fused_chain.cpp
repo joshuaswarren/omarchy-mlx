@@ -1877,8 +1877,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   for (size_t i = 0; i < tape.size(); ++i) {
     node_pos[tape[i].id()] = i;
   }
+  const bool node_debug =
+      std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG2") != nullptr;
   for (size_t i = 0; i < tape.size() && sig_ok; ++i) {
     const array& node = tape[i];
+    const uint64_t sig_in = sig;
     mix(node.has_primitive() ? typeid(node.primitive()).hash_code()
                             : 0x517cc1b727220a95ull);
     mix(static_cast<uint64_t>(node.dtype().val()));
@@ -2005,6 +2008,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           mix(static_cast<uint64_t>(d) + 1);
         }
       }
+    }
+    if (node_debug) {
+      std::fprintf(
+          stderr,
+          "[pcnode] i=%zu prim=%s in=%016llx out=%016llx\n",
+          i,
+          node.has_primitive() ? typeid(node.primitive()).name() : "leaf",
+          (unsigned long long)sig_in,
+          (unsigned long long)sig);
     }
   }
   mix(outgate_fold_enabled());
