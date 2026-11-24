@@ -12,7 +12,8 @@ A/B gating and qualification, not for normal operation.
 | `MLX_OMARCHY_KV_DIRECT` | on (`1`) | Direct decode KV window storage in fused chains. `0` composes ops; output-neutral. |
 | `MLX_OMARCHY_KV_INPLACE` | on (`1`) | A direct decode KV window writes new rows into the cache buffer when the update holds the last handle to it, so a decode token no longer copies the whole cache. `0` always copies; output-neutral. |
 | `MLX_OMARCHY_QMM_GEOM` | unset (2x16 on G13G and G13C, 2x4 elsewhere) | Read once. Selects the columns-per-workgroup geometry of the bf16 subgroup 4-bit/group-64 single and multi decode kernels (`<rows>x<slots>`: `<rows>` columns per 32-lane slot, `<slots>` slots per 128- or 512-thread workgroup). Every column runs the same per-lane chain, so the bytes are identical to the shipped 2x4 kernels; only the columns and threads per workgroup change. Accepted values: `2x4` (base) and `2x16`. Interleaved A/B rows, five balanced pairs, fresh process per run, tokens identical in every run, 2026-11-03: 13-inch M1 (G13G), 2x16 is +3.59 percent on the 2B at 512 tokens of context, +3.98 percent at 2048 tokens of context and +1.41 percent on the 4B; 16-inch M1 Max (G13C), +4.12 percent on the 2B at 512 tokens of context. The 4x8 geometry measured -1.28 percent (13-inch) and -3.60 percent (16-inch) and is gone. Per shape (isolated, distinct weights, 13-inch): 6144x2048 130.7 -> 119.7 us, 4096x2048 88.0 -> 80.7 us, 2048x2048 dependent chain 51.0 -> 48.1 us, 2048x6144 unchanged. Byte identity: 63 arrays x 8 geometries, 0 differing, on the 13-inch and the 16-inch (`tests/omarchy/test_qmm_geometry.cpp`). |
-| `MLX_OMARCHY_FUSED_GEMV`, `MLX_OMARCHY_FUSED_TRIO` | on; `FUSED_GEMV` off on G16G | Read live, per call, for the device that executes the work. `0` keeps every decode QuantizedMatmul, dense bf16 decode GEMV group and Add on the per-node path (`FUSED_GEMV`), and f16 RMSNorm rows, the SwiGLU chain and RoPE pairs on their standalone kernels (`FUSED_TRIO`; the RMSNorm and SwiGLU legs apply at any row count, so f16 prefill too); the two are independent, and `MLX_OMARCHY_FUSED_CHAIN=0` covers both. Unset, `FUSED_GEMV` is off on the parts of `omarchy::fused_gemv_off_default_part` (G16G, Apple M4), where the per-node decode GEMV is faster, and `FUSED_TRIO` is on on every part (on G16G turning the trio off moved perplexity away from the reference; receipts/2026-11-01-m4-decode-defaults, `numerics-gate/`); `1` forces `FUSED_GEMV` on there. |
+| `MLX_OMARCHY_FUSED_GEMV`, `MLX_OMARCHY_FUSED_TRIO` | on; `FUSED_GEMV` off on G16G and G14C | Read live, per call, for the device that executes the work. `0` keeps every decode QuantizedMatmul, dense bf16 decode GEMV group and Add on the per-node path (`FUSED_GEMV`), and f16 RMSNorm rows, the SwiGLU chain and RoPE pairs on their standalone kernels (`FUSED_TRIO`; the RMSNorm and SwiGLU legs apply at any row count, so f16 prefill too); the two are independent, and `MLX_OMARCHY_FUSED_CHAIN=0` covers both. Unset, `FUSED_GEMV` is off on the parts of `omarchy::fused_gemv_off_default_part` (G16G Apple M4 and G14C Apple M2 Max), where the per-node decode GEMV is faster, and `FUSED_TRIO` is on on every part (on G16G turning the trio off moved perplexity away from the reference; receipts/2026-11-01-m4-decode-defaults, `numerics-gate/`); `1` forces `FUSED_GEMV` on there. |
+| `MLX_OMARCHY_QMM_RESIDUAL_NORM` | on for G13C and G14C, unset (off) elsewhere | Read live. Folds trailing single-row `ResidualAdd` + `RMSNorm` epilogue on quantized decode QMM when enabled; `0` disables and `1` enables anywhere (`MLX_OMARCHY_FUSED_CHAIN=0` also disables). Unset follows `omarchy::qmm_residual_norm_default_part` (G13C Apple M1 Max and G14C Apple M2 Max). |
 | `MLX_OMARCHY_NO_MLXLM_WARNING` | unset (warning on) | `1` silences the one-time stderr warning printed at the first GPU open when the mlx-lm beside the loaded libmlx has no omarchy serve patches (no `mx.fast.gated_delta_update` route in `mlx_lm/models/gated_delta.py`). No effect on results. |
 | `MLX_OMARCHY_NO_COOPMAT` | unset (route on) | `1` disables the bf16 coopmat qmm-prefill route; output-neutral. |
 | `MLX_OMARCHY_NO_MATMUL_RB_F32` | unset (route on) | Read once. A float32 matmul with `matrix_m >= 32` and no bias that neither cooperative-matrix route takes (a driver without `VK_KHR_cooperative_matrix`, or an f32 product the coopmat gates decline) runs the f32 build of the 64x64 register-blocked tile (`shaders/matmul_rb.comp -DUSE_F32=1`, `MatmulRbF32`) instead of the 16x16 tile. Same per-output arithmetic, so the stored bits are unchanged. `1` restores the 16x16 tile. |
@@ -98,16 +99,17 @@ A/B gating and qualification, not for normal operation.
 - `mlx-lm-convring.patch` — **default OFF.** Rolling conv-state ring; enable
   per venv with `MLX_OMARCHY_CONV_RING=1 scripts/apply-mlx-lm-patches.sh
   /path/to/venv`.
-- `mlx-lm-greedy-prune.patch` — **default ON** (13-inch M1 A/B in
-  receipts/2026-09-23-vocab-prune.md). Greedy decode steps
+- `mlx-lm-greedy-prune.patch` — **default ON (OFF on G14C).** Greedy decode steps
   (default sampler, no logits processors, one input token) of tied
   4-bit/group-64 Qwen3.5-family heads take `mx.fast.greedy_quantized_argmax`:
   a certified bound on a 3-bit code sketch skips the rows that cannot hold
   the argmax, so the token equals `argmax(logits - logsumexp(logits))`
   bit for bit while most of the vocabulary projection is never read.
   `logprobs` stay lazy and run the full projection only when a consumer
-  evaluates them. Kill switch: `MLX_OMARCHY_NO_GREEDY_PRUNE=1` at run
-  time restores the upstream step exactly. The sketch holds 3 bits per
+  evaluates them. On G14C (Apple M2 Max) this defaults off because full
+  projection + argmax was measured faster; override with
+  `MLX_OMARCHY_NO_GREEDY_PRUNE=0` (force on) or `=1` (force off) at run time.
+  The sketch holds 3 bits per
   code, three quarters of the packed codes (190.7 MB for Qwen3.8-2B's
   248320-row head), built once per process at the first greedy call.
 - `mlx-lm-server-skip-logprob-read.patch` (0.32 series only) — **default
