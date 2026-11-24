@@ -20,8 +20,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 import sys
@@ -64,8 +66,19 @@ def fetch_jsonl_capped(url, max_bytes):
     return data[:cut + 1], True
 
 
+def _typed(value, types):
+    """value when it is an instance of types (never a bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, types):
+        return None
+    return value
+
+
 def fetch_index(base):
-    """({generated_at, schema_version, count}, or None on any trouble)."""
+    """({generated_at, schema_version, count}, or None on any trouble).
+
+    A field of the wrong type reads as None: a nested list or object
+    would bloat index.json and SUMMARY.md, or overflow the stack.
+    """
     url = f"{base}/v1/results"
     try:
         request = urllib.request.Request(
@@ -83,13 +96,34 @@ def fetch_index(base):
         return None
     if not isinstance(index, dict):
         return None
-    return {"generated_at": index.get("generated_at"),
-            "schema_version": index.get("schema_version"),
-            "count": index.get("count")}
+    return {"generated_at": _typed(index.get("generated_at"), str),
+            "schema_version": _typed(index.get("schema_version"), (str, int)),
+            "count": _typed(index.get("count"), int)}
 
 
 def fmt(value):
     return "-" if value is None else str(value)
+
+
+# "&" too: an entity such as &#64; would otherwise decode to "@".
+_CELL_ESCAPES = str.maketrans({c: "\\" + c for c in "\\|[]<&"})
+# Where GitHub would autolink a bare URL, www. host or email address.
+_AUTOLINK = re.compile(
+    r"(?<=:)(?=//)|(?<=www)(?=\.)|(?<=[\w.+-])(?=@[\w.-])", re.IGNORECASE)
+
+
+def cell(value):
+    """value as one line of table text: no new row, cell, link or tag."""
+    text = " ".join(fmt(value).split()).translate(_CELL_ESCAPES)
+    return _AUTOLINK.sub("\u200b", text)
+
+
+def read_field(accessor, record):
+    """accessor(record), or None when a value is too deep or too large."""
+    try:
+        return accessor(record)
+    except (RecursionError, OverflowError):
+        return None
 
 
 def has_archive(record):
@@ -108,7 +142,7 @@ def write_summary(path, base, records, index):
         "# Community hardware data snapshot",
         "",
         f"Records: {len(records)}"
-        f" | dataset generated_at: {fmt(index and index.get('generated_at'))}"
+        f" | dataset generated_at: {cell(index and index.get('generated_at'))}"
         f" | source: {base}",
         "",
         "Mirrored by `.github/workflows/community-data.yml` from the public",
@@ -118,19 +152,24 @@ def write_summary(path, base, records, index):
         "|---|---|---|---|---|---|---|",
     ]
     for record in records:
-        sha = q.record_sha(record) or "unknown"
-        short = sha[:12]
-        bench_count = len(q.record_benchmarks(record))
+        sha = q.record_sha(record)
+        if sha in (None, ".", ".."):  # "." and ".." are URL dot segments
+            sha = "unknown"
+        url = (f"{base}/v1/results/"
+               f"{urllib.parse.quote(sha, safe='', errors='replace')}")
+        benchmarks = read_field(q.record_benchmarks, record)
+        bench_count = "-" if benchmarks is None else len(benchmarks)
         bench = (
-            f"[{bench_count}]({base}/v1/results/{sha}/archive)"
+            f"[{bench_count}]({url}/archive)"
             if has_archive(record) else str(bench_count)
         )
         lines.append(
-            f"| [{short}]({base}/v1/results/{sha}) "
-            f"| {q.record_kind(record)} | {fmt(q.record_chip(record))} "
-            f"| {fmt(q.record_kernel(record))} "
-            f"| {fmt(q.record_mesa(record))} "
-            f"| {fmt(q.record_mlx_version(record))} "
+            f"| [{cell(sha[:12]) or 'unknown'}]({url}) "
+            f"| {cell(q.record_kind(record))} "
+            f"| {cell(read_field(q.record_chip, record))} "
+            f"| {cell(read_field(q.record_kernel, record))} "
+            f"| {cell(read_field(q.record_mesa, record))} "
+            f"| {cell(read_field(q.record_mlx_version, record))} "
             f"| {bench} |")
     lines += [
         "",
@@ -148,7 +187,8 @@ def write_summary(path, base, records, index):
         " github-actions[bot].",
         "",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    # errors="replace": a JSON string may hold a lone surrogate.
+    path.write_text("\n".join(lines), encoding="utf-8", errors="replace")
 
 
 def build_snapshot(base, out_dir):
