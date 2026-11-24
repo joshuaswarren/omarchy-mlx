@@ -984,9 +984,6 @@ def make_compiled_executor(gm):
         # (w7R CHANGES): normalize to a tuple first, then restore the rank
         # the input placeholder declared (wAW's outs[0] squeeze)
         outs = outs if isinstance(outs, (tuple, list)) else (outs,)
-        rank = phs[0].meta["example_value"].ndim
-        if outs[0].ndim != rank:
-            outs = (mx.reshape(outs[0], tuple(outs[0].shape) + (1,) * (rank - outs[0].ndim)),)
         mx.eval(*outs)
         t2 = _t.perf_counter()
         n_out = holder.get("n_out", 1)
