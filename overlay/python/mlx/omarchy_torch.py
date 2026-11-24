@@ -994,7 +994,9 @@ def make_compiled_executor(gm):
         extra = outs[n_out:] if n_out else outs[1:]
         for m, arr in zip(mutated, extra):
             state[str(m.target)] = arr
-        out = _torch(logits)
+        # return as a tuple: dynamo's unflatten indexes [0] on the bare
+        # tensor run() returns and collapses the batch dim (w7R's trace)
+        out = tuple(_torch(o) for o in (logits, *extra))
         t3 = _t.perf_counter()
         if _profile:
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
