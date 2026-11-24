@@ -8999,15 +8999,6 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // MLX_OMARCHY_NO_QMM_FMA_BF16=1 restores the tile route for A/B.
   static const bool qmm_fma_bf16_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA_BF16");
-#ifdef MLX_OMARCHY_BF16_DIRECT
-  // Intel-shaped bf16 coopmat prefill pilot
-  // (shaders/qmm_intel_bf16.comp): opt-in for drivers that advertise
-  // the 8x16x16 bf16 x bf16 -> f32 subgroup shape at subgroup size 32
-  // (ANV/Xe2); on such devices the shipped f32 8x8x8 route is
-  // unreachable, so this is additive over the FMA route.
-  static const bool qmm_intel_env =
-      omarchy::env_flag("MLX_OMARCHY_QMM_INTEL");
-#endif
   const char* tile_env = std::getenv("MLX_OMARCHY_QMM_TILE");
   bool tile_path = tile_env == nullptr || std::strcmp(tile_env, "0") != 0;
   const char* rb_env = std::getenv("MLX_OMARCHY_QMM_TILE_RB");
@@ -9535,7 +9526,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // route only takes calls whose matrix_m is a multiple of the tile
     // height; other rows keep the FMA path below. !coopmat_disabled
     // keeps MLX_OMARCHY_NO_COOPMAT a kill switch for this route too.
-    if (rb_enabled && out.dtype() == bfloat16 && qmm_intel_env &&
+    // qmm_intel_default_part is default-on for the measured Intel Arc
+    // parts only, so Apple and NVIDIA paths are unchanged; the
+    // shape/subgroup gate below still confines actual dispatch.
+    if (rb_enabled && out.dtype() == bfloat16 &&
+        omarchy::qmm_intel_default_part(coopmat_caps.device_name) &&
         !coopmat_disabled && !coopmat_reachable && q4_g64_transpose &&
         x.ndim() >= 2 && x.shape(-2) > 1 && (params.matrix_k % 64u) == 0u &&
         (params.matrix_m % 16u) == 0u) {
