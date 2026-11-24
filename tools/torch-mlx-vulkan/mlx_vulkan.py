@@ -479,6 +479,9 @@ def _shape_of(a, k):
 def _cat_impl(t, dim=0):
     xs = [_mx(x) for x in t]
     nd = max(x.ndim for x in xs)
+    if not -nd <= dim < nd:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of [{-nd}, {nd - 1}], but got {dim})")
     keep = [x for x in xs if x.size != 0 or x.ndim == nd]
     if not keep:
         keep = xs
@@ -1205,7 +1208,7 @@ _FUNC_SPECS = {
     "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
-    "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
+    "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a.clone() if isinstance(a, torch.Tensor) else a, "contiguous": lambda a, *a_, **k_: a,
     "alias": lambda a: a, "lift_fresh": lambda a: a,
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "to": lambda a, *a_, **k_: a,

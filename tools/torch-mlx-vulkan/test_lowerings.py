@@ -234,7 +234,15 @@ def test_mul():
         assert any("mul" in s for s in stats["mlx"]), stats
         got = out.float().numpy()
         assert np.allclose(got, ref.float().numpy(), atol=2e-2), (str(target), got)
-        assert out.dtype == ref.dtype, (str(target), out.dtype, ref.dtype)
+        # the executor's _torch output widens bf16 -> fp32 (numpy has no
+        # bf16 buffer); dtype fidelity lives at the lowering, so the bf16
+        # case also checks the spec result dtype directly
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), out.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            low = mlx_vulkan._FUNC_SPECS["mul"](mlx_vulkan._mx(xb), mlx_vulkan._mx(yb))
+            assert low.dtype == mx.bfloat16, low.dtype
     print("test_mul PASS")
 
 
@@ -376,12 +384,136 @@ def test_linear():
     print("test_linear PASS")
 
 
+def test_cat_clone():
+    # PT-AC: aten.cat.default (PAR-41 rank 13, 16,632 receipts) and
+    # aten.clone.default (rank 97, op_db-only) were already registered —
+    # the gap was coverage plus two edge defects fixed here: out-of-range
+    # cat dims silently wrapped via `dim % nd` (torch IndexErrors), and
+    # identity clone on a torch-tensor env value let a downstream in-place
+    # op mutate the source's storage.
+    rng = np.random.RandomState(5)
+
+    def fx_run(nodes_fn, ins):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        out = nodes_fn(g, phs)
+        g.output(out)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        return run(*ins), stats
+
+    # multi-input cat, dim=1, fp32 + bf16
+    for dt in (torch.float32, torch.bfloat16):
+        xs = [torch.tensor(rng.randn(2, n).astype(np.float32), dtype=dt)
+              for n in (3, 4, 1)]
+        out, stats = fx_run(
+            lambda g, phs: g.call_function(torch.ops.aten.cat.default,
+                                           ([phs[0], phs[1], phs[2]], 1), {}),
+            xs)
+        ref = torch.cat(xs, 1)
+        assert stats["cpu"] == [], stats
+        assert "cat" in stats["mlx"], stats
+        assert np.allclose(_np(out), ref.float().numpy(), atol=2e-2)
+        # dtype fidelity at the lowering: bf16 stays bf16 (the executor's
+        # _torch output widens bf16 -> fp32, numpy has no bf16 buffer)
+        got = mlx_vulkan.ATEN_TABLE["cat"]([mlx_vulkan._mx(x) for x in xs], 1)
+        assert got.dtype == (mx.bfloat16 if dt == torch.bfloat16 else mx.float32), got.dtype
+
+    # non-contiguous inputs on the cat axis
+    xa = torch.tensor(rng.randn(4, 3).astype(np.float32)).t()
+    xb = torch.tensor(rng.randn(4, 3).astype(np.float32)).t()
+    assert not xa.is_contiguous() and not xb.is_contiguous()
+    out, stats = fx_run(
+        lambda g, phs: g.call_function(torch.ops.aten.cat.default,
+                                       ([phs[0], phs[1]], 0), {}),
+        [xa, xb])
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), torch.cat([xa, xb], 0).numpy())
+
+    # negative dim + empty-tensor filtering
+    ea = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    eb = torch.empty(2, 0)
+    out, stats = fx_run(
+        lambda g, phs: g.call_function(torch.ops.aten.cat.default,
+                                       ([phs[0], phs[1]], -1), {}),
+        [ea, eb])
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), torch.cat([ea, eb], -1).numpy())
+
+    # out-of-range dim: torch IndexErrors, the executor must not silently
+    # wrap to another axis
+    try:
+        torch.cat([ea, ea], 5)
+        raise AssertionError("torch.cat accepted dim=5 on 2-D")
+    except IndexError:
+        pass
+    try:
+        fx_run(lambda g, phs: g.call_function(torch.ops.aten.cat.default,
+                                              ([phs[0], phs[1]], 5), {}),
+               [ea, ea])
+        raise AssertionError("cat dim=5 on 2-D lowered silently")
+    except IndexError:
+        pass
+
+    # clone lowers and returns equal values; clone-then-mul_ leaves the
+    # source unmutated, and mul_ on the source leaves the clone unchanged
+    z = torch.tensor([2.0, 3.0, 4.0])
+    out, stats = fx_run(
+        lambda g, phs: g.call_function(torch.ops.aten.clone.default,
+                                       (phs[0],), {}),
+        [z])
+    assert stats["cpu"] == [], stats
+    assert "clone" in stats["mlx"], stats
+    assert np.allclose(_np(out), z.numpy())
+
+    def clone_mul_graph(mutate_clone):
+        def f(g, phs):
+            cl = g.call_function(torch.ops.aten.clone.default, (phs[0],), {})
+            tgt, operand = (cl, phs[0]) if mutate_clone else (phs[0], cl)
+            g.call_function(torch.ops.aten.mul_.Tensor, (tgt, operand), {})
+            return g.call_function(torch.ops.aten.cat.default,
+                                   ([cl, phs[0]], 0), {})
+        return f
+
+    out, stats = fx_run(clone_mul_graph(True), [z])
+    ref = torch.cat([z * z, z], 0)          # b = z.clone(); b *= z
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), ref.numpy()), _np(out)
+
+    out, stats = fx_run(clone_mul_graph(False), [z])
+    ref = torch.cat([z, z * z], 0)          # b = z.clone(); z *= z
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), ref.numpy()), _np(out)
+
+    # compiled executor: same alias semantics
+    g = torch.fx.Graph()
+    a = g.placeholder("a")
+    cl = g.call_function(torch.ops.aten.clone.default, (a,), {})
+    g.call_function(torch.ops.aten.mul_.Tensor, (a, cl), {})
+    g.output(g.call_function(torch.ops.aten.cat.default, ([cl, a], 0), {}))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run = mlx_vulkan.make_compiled_executor(gm, dt=mx.float32)
+    out = run(z)
+    o = out[0] if isinstance(out, (tuple, list)) else out
+    assert np.allclose(_np(o), torch.cat([z, z * z], 0).numpy()), _np(o)
+
+    # clone of a torch-tensor env value (post-fallback crossing) must be a
+    # real duplicate: an in-place op on the clone cannot reach the source
+    src = torch.tensor([1.0, 2.0])
+    dup = mlx_vulkan._FUNC_SPECS["clone"](src)
+    assert dup is not src
+    dup.mul_(5)
+    assert src.tolist() == [1.0, 2.0], src.tolist()
+    print("test_cat_clone PASS")
+
+
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
                  "_native_batch_norm_legit_functional", "threshold_backward", "t",
-                 "gelu_backward", "tanh_backward", "embedding_dense_backward", "linear"):
+                 "gelu_backward", "tanh_backward", "embedding_dense_backward", "linear",
+                 "cat", "clone"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 
@@ -513,4 +645,5 @@ if __name__ == "__main__":
     test_numel()
     test_slice()
     test_transpose_expand()
+    test_cat_clone()
     print("ALL PASS")
