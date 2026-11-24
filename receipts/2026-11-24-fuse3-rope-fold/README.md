@@ -258,6 +258,36 @@ full rotary width at head width 256 on the split route, and the
 refusal-path machinery (the skip, the pinning, the descriptor handback)
 is proven on hardware.
 
+## The width-128 fold on the M1 Max: fires, bit-identical, and a regression
+
+jwm1 (the M1 Max), wheel `dev202611241409+diag.8998a02` (the width-128
+fold), split route forced, Qwen3-4B-2507, 35+128 greedy tokens:
+
+```
+IDS_EQUAL True digest 5cebca4a0aaefb83 5cebca4a0aaefb83
+kernel 261 off 9790 on 4966 delta -4824   # FastRopeNormBF16: halved
+kernel 643 off 5454 on  630 delta -4824   # the unfused pass 1: replaced
+kernel 716 off    0 on 4824 delta +4824   # the folded pass 1: new
+```
+
+The fold fires exactly as designed: the 4824 rope-norm dispatches
+disappear, the folded pass 1 takes their place, and the 128 greedy ids
+are identical. But the ABBA rate (one window per arm, untraced) reads
+**off 23.09 tok/s, on 22.24 tok/s - a 3.7 percent regression, not a
+saving**. The width-128 fold's shared-memory rotation exchange and the
+extra serialization cost more on this board than the saved dispatch
+returns; one noisy window per arm is thin evidence, but the direction is
+against the fold, not for it.
+
+Consequences: the flag stays off by default; the width-128 folded
+kernels stay registered but unreachable; and the K side and the
+passthrough branch should not be started until a real ABBA on an idle
+M1 Max explains the regression or a variant removes the exchange.
+The ABBA collection in this gate also overwrote its middle windows
+(the ids file is keyed by arm), so the number above is one window per
+arm - a proper interleaved ABBA with per-window files is the next
+measurement.
+
 ## The applicability matrix (which model can use this fold)
 
 | model | head dim | rotary | GQA | fold |
