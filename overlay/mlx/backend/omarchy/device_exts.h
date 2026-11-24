@@ -20,6 +20,7 @@ struct DeviceExtInput {
   bool shader_atomic_float_add{false};
   bool cooperative_matrix_f32_8{false};
   bool cooperative_matrix_bf16_8{false};
+  bool cooperative_matrix_bf16{false};
   // VK_EXT_memory_priority and VK_EXT_pageable_device_local_memory:
   // enabled only as a pair, matching lily's device init on
   // Honeykrisp-M5 - pageable memory is what the priority hint acts on.

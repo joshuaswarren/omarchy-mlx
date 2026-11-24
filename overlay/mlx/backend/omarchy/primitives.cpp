@@ -8999,6 +8999,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // MLX_OMARCHY_NO_QMM_FMA_BF16=1 restores the tile route for A/B.
   static const bool qmm_fma_bf16_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA_BF16");
+#ifdef MLX_OMARCHY_BF16_DIRECT
+  // Intel-shaped bf16 coopmat prefill pilot
+  // (shaders/qmm_intel_bf16.comp): opt-in for drivers that advertise
+  // the 8x16x16 bf16 x bf16 -> f32 subgroup shape at subgroup size 32
+  // (ANV/Xe2); on such devices the shipped f32 8x8x8 route is
+  // unreachable, so this is additive over the FMA route.
+  static const bool qmm_intel_env =
+      omarchy::env_flag("MLX_OMARCHY_QMM_INTEL");
+#endif
   const char* tile_env = std::getenv("MLX_OMARCHY_QMM_TILE");
   bool tile_path = tile_env == nullptr || std::strcmp(tile_env, "0") != 0;
   const char* rb_env = std::getenv("MLX_OMARCHY_QMM_TILE_RB");
@@ -9521,6 +9530,78 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // memory or MLX_OMARCHY_NO_COOPMAT rules the route out), so the
     // coopmat block below is unaffected. Same alignment, grid and
     // contraction-class split as the f16 route.
+#ifdef MLX_OMARCHY_BF16_DIRECT
+    // The kernel's global A-tile loads read whole 16-row blocks, so the
+    // route only takes calls whose matrix_m is a multiple of the tile
+    // height; other rows keep the FMA path below. !coopmat_disabled
+    // keeps MLX_OMARCHY_NO_COOPMAT a kill switch for this route too.
+    if (rb_enabled && out.dtype() == bfloat16 && qmm_intel_env &&
+        !coopmat_disabled && !coopmat_reachable && q4_g64_transpose &&
+        x.ndim() >= 2 && x.shape(-2) > 1 && (params.matrix_k % 64u) == 0u &&
+        (params.matrix_m % 16u) == 0u) {
+      const auto& icaps = encoder.device().capabilities();
+      omarchy::CoopmatShape intel_shape;
+      intel_shape.m = 8u;
+      intel_shape.n = 16u;
+      intel_shape.k = 16u;
+      intel_shape.a = omarchy::CoopmatType::BFloat16;
+      intel_shape.b = omarchy::CoopmatType::BFloat16;
+      intel_shape.c = omarchy::CoopmatType::Float32;
+      intel_shape.result = omarchy::CoopmatType::Float32;
+      intel_shape.scope = omarchy::CoopmatScope::Subgroup;
+      intel_shape.saturating = false;
+      // dispatch_qmm_out_rows below can split a large call into
+      // rows_per-row chunks whose tail keeps the remainder, so the
+      // per-chunk matrix_m can stop being a multiple of the 16-row
+      // tile even when the call's is. The route is safe only when no
+      // split applies or every chunk stays a whole number of tiles
+      // (batched calls never split).
+      const uint64_t out_align = std::max<uint64_t>(
+          16ull, icaps.min_storage_buffer_offset_alignment);
+      const uint64_t out_byte_start =
+          bindings.empty()
+              ? 0u
+              : bindings.back().offset +
+                    uint64_t(params.output_offset) * out.itemsize();
+      const uint32_t rows_per = omarchy::qmm_out_row_split(
+          params.matrix_m,
+          uint64_t(params.matrix_n) * out.itemsize(),
+          out_byte_start,
+          icaps.max_storage_buffer_range,
+          out_align);
+      const bool intel_reachable =
+          icaps.cooperative_matrix_bf16 && icaps.subgroup_size == 32u &&
+          omarchy::cooperative_matrix_advertises(
+              icaps.cooperative_matrix_shapes, intel_shape) &&
+          (params.shape[0] > 1u || rows_per == 0u ||
+           (rows_per % 16u) == 0u) &&
+          // w_s 16x32 bf16 dequant tile + one 8x16 f32 drain block.
+          (16u * 32u * 2u + 8u * 16u * 4u) <=
+              icaps.max_compute_shared_memory_size &&
+          (params.lhs_offset & 7u) == 0u &&
+          (params.output_offset & 1u) == 0u;
+      if (intel_reachable) {
+        dispatch_qmm_out_rows(
+            encoder,
+            out,
+            bindings,
+            params,
+            [&](std::span<const omarchy::ComputeBinding> cb,
+                const omarchy::ComputeParams& cp) {
+              encoder.dispatch_compute(
+                  omarchy::ComputeKernel::QmmPrefillIntelBF16,
+                  cb,
+                  cp,
+                  std::min((cp.matrix_n + 31u) / 32u,
+                           omarchy::kMaxComputeGroupCountX),
+                  std::min((cp.matrix_m + 15u) / 16u,
+                           omarchy::kMaxComputeGroupCountX),
+                  1u);
+            });
+        return;
+      }
+    }
+#endif
     if (rb_enabled && out.dtype() == bfloat16 && qmm_fma_reachable) {
       if ((params.lhs_offset & 7u) != 0u ||
           (params.output_offset & 1u) != 0u) {

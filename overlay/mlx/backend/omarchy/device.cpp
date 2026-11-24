@@ -684,6 +684,7 @@ CapabilityReport collect_capabilities(
   // only when the driver lists the extension.
 #ifdef OMARCHY_BF16_CMAT
   bool bf16_cmat_features = false;
+  bool bf16_cmat_shape = false;
   if (has_bf16_ext && has_coopmat_ext) {
     VkPhysicalDeviceShaderBfloat16FeaturesKHR bf{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
@@ -736,6 +737,16 @@ CapabilityReport collect_capabilities(
               to_coopmat_type(p.BType), to_coopmat_type(p.CType),
               to_coopmat_type(p.ResultType), to_coopmat_scope(p.scope),
               p.saturatingAccumulation != VK_FALSE});
+#if defined(VK_KHR_shader_bfloat16) && defined(OMARCHY_BF16_CMAT)
+          if (p.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+              p.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+              p.saturatingAccumulation == VK_FALSE &&
+              p.scope == VK_SCOPE_SUBGROUP_KHR &&
+              p.AType == p.BType &&
+              p.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR) {
+            bf16_cmat_shape = true;
+          }
+#endif
           if (p.MSize != 8 || p.NSize != 8 || p.KSize != 8 ||
               p.CType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
               p.ResultType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
@@ -757,9 +768,13 @@ CapabilityReport collect_capabilities(
     }
   }
   // Device creation chains the bf16 features behind the cooperative-matrix
-  // features, which it enables only with the fp32 shape.
+  // features, which it enables when the device advertises any usable
+  // cooperative-matrix shape (fp32 8x8x8 or a bf16 subgroup shape).
   caps.cooperative_matrix_bf16_8 =
       caps.cooperative_matrix_bf16_8 && caps.cooperative_matrix_f32_8;
+#if defined(VK_KHR_shader_bfloat16) && defined(OMARCHY_BF16_CMAT)
+  caps.cooperative_matrix_bf16 = bf16_cmat_features && bf16_cmat_shape;
+#endif
   return caps;
 }
 
@@ -1481,7 +1496,9 @@ Device::Device(uint32_t physical_device_index) {
   VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabled_cm{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
   enabled_cm.cooperativeMatrix =
-      hw.cooperative_matrix_f32_8 ? VK_TRUE : VK_FALSE;
+      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16)
+          ? VK_TRUE
+          : VK_FALSE;
   VkPhysicalDevice16BitStorageFeatures enabled16{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
   enabled16.storageBuffer16BitAccess =
@@ -1501,13 +1518,13 @@ Device::Device(uint32_t physical_device_index) {
   enabled16.pNext = &enabled12;
   enabled12.pNext = &enabled13;
   enabled13.pNext = &enabled_fa;
-  if (hw.cooperative_matrix_f32_8) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
     enabled_fa.pNext = &enabled_cm;
   }
 #ifdef OMARCHY_BF16_CMAT
   VkPhysicalDeviceShaderBfloat16FeaturesKHR enabled_bf16{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
-  if (hw.cooperative_matrix_bf16_8) {
+  if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
     enabled_bf16.shaderBFloat16Type = VK_TRUE;
     enabled_bf16.shaderBFloat16CooperativeMatrix = VK_TRUE;
     enabled_cm.pNext = &enabled_bf16;
@@ -1528,10 +1545,10 @@ Device::Device(uint32_t physical_device_index) {
   // tail exists when both bits are set, matching the extension pair in
   // device_extension_names.
   void** tail = &enabled_fa.pNext;
-  if (hw.cooperative_matrix_f32_8) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
     tail = &enabled_cm.pNext;
 #ifdef OMARCHY_BF16_CMAT
-    if (hw.cooperative_matrix_bf16_8) {
+    if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
       tail = &enabled_bf16.pNext;
     }
 #endif
@@ -1612,6 +1629,7 @@ Device::Device(uint32_t physical_device_index) {
   ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
 #ifdef OMARCHY_BF16_CMAT
   ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
+  ext_in.cooperative_matrix_bf16 = hw.cooperative_matrix_bf16;
 #endif
   ext_in.memory_priority = hw.memory_priority;
   ext_in.pageable_device_local_memory = hw.pageable_device_local_memory;

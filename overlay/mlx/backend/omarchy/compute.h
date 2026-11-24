@@ -1202,6 +1202,11 @@ enum class ComputeKernel : uint16_t {
   GatherDequantF32,
   GatherDequantF16,
   GatherDequantBF16,
+  // bf16-operand 8x16x16 build for Intel/ANV parts whose driver
+  // advertises bf16 x bf16 -> f32 subgroup shapes but not the shipped
+  // f32 8x8x8 route (shaders/qmm_intel_bf16.comp). Appended to keep
+  // profile kernel ids stable.
+  QmmPrefillIntelBF16,
   Count,
 };
 

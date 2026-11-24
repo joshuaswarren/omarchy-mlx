@@ -13,12 +13,13 @@ std::vector<const char*> device_extension_names(
   if (in.shader_atomic_float_add) {
     names.push_back("VK_EXT_shader_atomic_float");
   }
-  if (in.cooperative_matrix_f32_8) {
+  if (in.cooperative_matrix_f32_8 || in.cooperative_matrix_bf16) {
     names.push_back("VK_KHR_cooperative_matrix");
   }
-  // cooperative_matrix_bf16_8 reaches the input only when the caller
-  // compiled with OMARCHY_BF16_CMAT and the device advertises it.
-  if (in.cooperative_matrix_bf16_8) {
+  // cooperative_matrix_bf16 reaches the input only when the caller
+  // compiled with OMARCHY_BF16_CMAT and the device advertises a bf16
+  // subgroup cooperative-matrix shape (not necessarily the 8x8x8 one).
+  if (in.cooperative_matrix_bf16_8 || in.cooperative_matrix_bf16) {
     names.push_back("VK_KHR_shader_bfloat16");
   }
   if (in.memory_priority && in.pageable_device_local_memory) {
