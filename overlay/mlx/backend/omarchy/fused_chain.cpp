@@ -1862,6 +1862,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   auto mix = [&sig](uint64_t v) {
     sig ^= v + 0x9e3779b97f4a7c15ull + (sig << 6) + (sig >> 2);
   };
+  const bool pc_time =
+      std::getenv("MLX_OMARCHY_PLAN_CACHE_TIME") != nullptr;
+  const auto pc_t0 = std::chrono::steady_clock::now();
   node_pos.prepare(tape.size());
   ext_owner.prepare(tape.size() * 2);
   ext_ord.prepare(64);
@@ -1897,6 +1900,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   }
   const bool node_debug =
       std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG2") != nullptr;
+  auto pc_elapsed = [&]() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - pc_t0)
+        .count();
+  };
   for (size_t i = 0; i < tape.size() && sig_ok; ++i) {
     const array& node = tape[i];
     const uint64_t sig_in = sig;
@@ -2045,12 +2053,20 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   mix(std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") != nullptr);
   mix(std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") != nullptr);
   mix(tape.size());
+  const int64_t pc_sig_us = pc_time ? pc_elapsed() : 0;
   const bool plan_debug =
       std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG") != nullptr;
   if (plan_cache && sig_ok && plan_valid && sig == plan_sig) {
     if (EagerFusionState* hit = replay_plan(tape, plan_rec)) {
       trace::counters().eager_fusion_plan_cache_hits++;
       eager_state = hit;
+      if (pc_time) {
+        std::fprintf(
+            stderr,
+            "[pc-time] HIT sig=%lldus replay=%lldus\n",
+            (long long)pc_sig_us,
+            (long long)(pc_elapsed() - pc_sig_us));
+      }
       if (plan_debug) {
         std::fprintf(stderr, "[plan-cache] HIT sig=%016llx\n", (unsigned long long)sig);
       }
@@ -2072,6 +2088,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 
   auto* state = new EagerFusionState;
   eager_state = state;
+  if (pc_time) {
+    std::fprintf(
+        stderr,
+        "[pc-time] PLAN sig=%lldus\n",
+        (long long)pc_sig_us);
+  }
   // Tape-index scratch is thread-local and reused across passes. The maps
   // are only live for this planning section, so reuse is safe under nested
   // scopes: a nested scope's eval runs after this constructor returns,
@@ -3089,6 +3111,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           "[plan-cache] %s sig=%016llx\n",
           plan_valid ? "STORE" : "REC-FAIL",
           (unsigned long long)sig);
+    }
+    if (pc_time) {
+      std::fprintf(
+          stderr,
+          "[pc-time] PLAN-TOTAL %lldus\n",
+          (long long)pc_elapsed());
     }
     if (plan_valid) {
       trace::counters().eager_fusion_plan_cache_stores++;
