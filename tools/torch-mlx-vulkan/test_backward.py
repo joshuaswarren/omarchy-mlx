@@ -4,6 +4,8 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import torch
+from torch import nn
+import torch.nn.functional as F
 import mlx.core as mx
 import mlx_vulkan
 
@@ -45,6 +47,66 @@ def test_native_layer_norm_backward():
             mx.array(w.numpy()), mx.array(b.numpy()), [True, True, True])
         for tag, m, r in zip(("dx", "dw", "db"), my, ref):
             _cmp(f"ln_bwd{ns_shape}.{tag}", m, r)
+
+
+def test_native_layer_norm_backward_bf16_and_fp32():
+    """PT-C: the training-path backward at both dtypes, including the
+    weightless/biasless graph shapes aot_autograd emits when the norm has no
+    affine parameters, and the output_maskFalse arms for the grads torch
+    does not need. The bf16 reference runs the aten op in fp32 (torch 2.4
+    has no bf16 CPU kernel for this backward - it raises a device error)
+    and compares upcast with a tolerance that covers the bf16 mantissa;
+    mean/rstd stay fp32, which is what aot_autograd saves for bf16 inputs."""
+    torch.manual_seed(0)
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        for ns_shape, xshape in [((64,), (8, 64)), ((32,), (4, 6, 32))]:
+            for affine in (True, False):
+                x = torch.randn(*xshape, dtype=dtype)
+                w = torch.randn(*ns_shape, dtype=dtype) if affine else None
+                b = torch.randn(*ns_shape, dtype=dtype) if affine else None
+                out, mean, rstd = torch.native_layer_norm(
+                    x.float(), list(ns_shape), None if w is None else w.float(),
+                    None if b is None else b.float(), 1e-5)
+                out = out.to(dtype)
+                g = torch.randn_like(out)
+
+                def mx_or_none(t):
+                    if t is None:
+                        return None
+                    if t.dtype == torch.bfloat16:
+                        return mx.array(t.float().numpy()).astype(mx.bfloat16)
+                    return mx.array(t.numpy())
+
+                for mask in ([True, True, True], [True, False, False]):
+                    my = mlx_vulkan.ATEN_TABLE["native_layer_norm_backward"](
+                        mx_or_none(g), mx_or_none(x), list(ns_shape),
+                        mx_or_none(mean), mx_or_none(rstd),
+                        mx_or_none(w), mx_or_none(b), mask)
+                    # torch 2.4 CPU has no kernel for weight=None on this
+                    # backward ("tensor does not have a device"), so the
+                    # weightless reference is autograd's dx through
+                    # F.layer_norm; dw/db have no CPU reference and torch
+                    # never requests them for an affine-free norm, so only
+                    # dx is compared there.
+                    if affine:
+                        ref_m = torch.ops.aten.native_layer_norm_backward(
+                            g.float(), x.float(), list(ns_shape), mean, rstd,
+                            w.float(), b.float(), mask)
+                        pairs = [(tag, my[i], ref_m[i])
+                                 for i, tag in enumerate(("dx", "dw", "db"))
+                                 if mask[i]]
+                    else:
+                        xg = x.float().clone().requires_grad_(True)
+                        F.layer_norm(xg, list(ns_shape), None, None, 1e-5) \
+                            .backward(g.float())
+                        pairs = [("dx", my[0], xg.grad)]
+                    for tag, m, r in pairs:
+                        m32 = m.astype(mx.float32) if m.dtype == mx.bfloat16 else m
+                        d = float((_tm(m32) - r).abs().max())
+                        assert torch.allclose(_tm(m32), r, atol=tol, rtol=tol), \
+                            f"ln_bwd {dtype} {ns_shape} affine={affine} {tag}: {d:.3e}"
+                        print(f"PASS ln_bwd {dtype} {ns_shape} affine={affine} "
+                              f"mask={mask}.{tag} maxdiff={d:.3e}")
 
 
 def test_flash_cpu_fwd():
@@ -311,6 +373,72 @@ def test_no_duplicate_table_keys():
         mlx_vulkan._sdpa_flash_cpu
 
 
+def test_native_layer_norm_backward_lowered_in_training_graph():
+    """PT-C census rerun: a LayerNorm training step through aot_autograd
+    must dispatch native_layer_norm_backward through the MLX lowering -
+    the wrapped ATEN_TABLE entry counts the calls and no
+    'FALLBACK native_layer_norm_backward' record may appear."""
+    import logging
+    from torch._dynamo.backends.common import aot_autograd
+
+    class TinyLN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ln = nn.LayerNorm(8)
+            self.fc = nn.Linear(8, 4)
+
+        def forward(self, x):
+            return self.fc(self.ln(x))
+
+    torch.manual_seed(0)
+    model = TinyLN()
+    calls = []
+    real = mlx_vulkan.ATEN_TABLE["native_layer_norm_backward"]
+
+    def counting(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+
+    mlx_vulkan.ATEN_TABLE["native_layer_norm_backward"] = counting
+    records = []
+    handler = logging.Handler()
+    handler.emit = lambda record: records.append(record.getMessage())
+    log = logging.getLogger("mlx_vulkan")
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    try:
+        def lower(gm, ex):
+            runner = mlx_vulkan.mlx_vulkan_backend(gm, ex,
+                                                   return_all_outputs=True)
+
+            def call(*inputs):
+                flat = inputs
+                if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
+                        and not torch.is_tensor(inputs[0])):
+                    flat = tuple(inputs[0])
+                return runner(*flat)
+
+            call._boxed_call = True
+            return call
+
+        step_fn = torch.compile(model, backend=aot_autograd(
+            fw_compiler=lower, bw_compiler=lower))
+        x = torch.randn(2, 8)
+        target = torch.randn(2, 4)
+        loss = torch.nn.functional.mse_loss(step_fn(x), target)
+        loss.backward()
+    finally:
+        mlx_vulkan.ATEN_TABLE["native_layer_norm_backward"] = real
+        log.removeHandler(handler)
+
+    assert calls, "native_layer_norm_backward never reached the MLX lowering"
+    fallbacks = [r for r in records
+                 if "FALLBACK" in r and "native_layer_norm_backward" in r]
+    assert not fallbacks, f"the backward CPU-fell back: {fallbacks}"
+    print(f"PASS census: {len(calls)} native_layer_norm_backward dispatches "
+          f"through the MLX lowering, 0 fallback records")
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_flash_cpu_fwd()
@@ -327,3 +455,5 @@ if __name__ == "__main__":
     test_efficient_attention_forward_schema()
     test_no_duplicate_table_keys()
     print("ALL PASS")
+
+
