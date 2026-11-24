@@ -524,6 +524,8 @@ CapabilityReport collect_capabilities(
   const auto& props = props2.properties;
   const auto& limits = props.limits;
   caps.device_name = props.deviceName;
+  caps.submission_timestamps =
+      submission_timestamps_supported(caps.device_name);
   caps.vendor_id = props.vendorID;
   caps.device_id = props.deviceID;
   caps.driver_version = props.driverVersion;

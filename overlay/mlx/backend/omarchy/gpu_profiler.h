@@ -595,6 +595,14 @@ class GpuProfiler {
         dispatch_env == nullptr || std::strcmp(dispatch_env, "0") != 0;
     valid_bits_ = device.capabilities().queue_timestamp_valid_bits;
     period_ns_ = device.capabilities().timestamp_period;
+    board_blocks_ticks_ = !device.capabilities().submission_timestamps;
+    if (board_blocks_ticks_) {
+      // The board's compute admission check refuses a timestamp-bearing
+      // submit (#526: -EINVAL surfaced as VK_ERROR_DEVICE_LOST). No
+      // timestamp means no GPU ticks: host costs only, and no query pool
+      // is created, so no submit carries a timestamp command.
+      valid_bits_ = 0;
+    }
     device_ = device.handle();
     host_t0_ = host_ns();
     const char* label = std::getenv("MLX_OMARCHY_GPU_PROFILE_LABEL");
@@ -607,7 +615,11 @@ class GpuProfiler {
           kPoolQueries,
           label != nullptr ? label : "",
           host_t0_);
-    if (valid_bits_ == 0) {
+    if (board_blocks_ticks_) {
+      std::fprintf(
+          stderr,
+          "[prof] board cannot carry per-submission timestamps; host costs only\n");
+    } else if (valid_bits_ == 0) {
       std::fprintf(
           stderr,
           "[prof] queue reports no timestamp support; host costs only\n");
@@ -725,6 +737,7 @@ class GpuProfiler {
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
   bool dispatch_enabled_{true};
+  bool board_blocks_ticks_{false};
   uint64_t floor_ns_{0};
   bool calibrated_{false};
   uint64_t dispatches_{0};

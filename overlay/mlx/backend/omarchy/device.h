@@ -201,6 +201,14 @@ struct CapabilityReport {
   // Timestamp valid bits of the compute queue family; 0 when the queue
   // reports no timestamp query support. Read by the GPU profiling harness.
   uint32_t queue_timestamp_valid_bits{0};
+  // Whether a per-submission timestamp compute submit can reach the device
+  // on this board. False on boards whose admission check refuses such a
+  // submit: the G18G (M6) check answers -EINVAL for a timestamp-bearing
+  // compute submit, which the driver surfaces as VK_ERROR_DEVICE_LOST
+  // (issue #526). The queue still advertises timestamp support there, so
+  // the advertisement is not the gate. The GPU profiling harness reads
+  // this and runs host-costs-only when it is false.
+  bool submission_timestamps{true};
   // Subgroup properties from VkPhysicalDeviceSubgroupProperties (Vulkan
   // 1.1+, queried at init via GetPhysicalDeviceProperties2 pNext chain).
   // Used by primitives.cpp to gate subgroup-reduction variants; see
@@ -219,6 +227,28 @@ struct CapabilityReport {
   std::string simulation_profile;
   std::string simulated_driver_variant;
 };
+
+// Boards whose compute submits cannot carry a per-submission timestamp.
+// G18G (M6): the 7.1.12-aurora-m6usb-ARCH G18 compute admission check
+// refuses a timestamp-bearing submit ("check d value 0", then "invalid
+// resource metadata"), so the submit fails with -EINVAL and the driver
+// reports VK_ERROR_DEVICE_LOST (issue #526). This board has no
+// per-submission timestamp wheel at all
+// (receipts/2026-11-13-g18g-batch-work).
+inline constexpr std::string_view kBoardsWithoutSubmissionTimestamps[] = {
+    "G18G",
+};
+
+// Pure board lookup: whether a per-submission timestamp compute submit can
+// reach the device on the board with this device name.
+inline bool submission_timestamps_supported(std::string_view device_name) {
+  for (const auto board : kBoardsWithoutSubmissionTimestamps) {
+    if (device_name.find(board) != std::string_view::npos) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // A pending wait fails after 10 seconds with neither completion progress nor
 // a submission that reached device execution. Recorded submissions set a
