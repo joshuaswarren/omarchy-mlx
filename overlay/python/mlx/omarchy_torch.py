@@ -980,12 +980,13 @@ def make_compiled_executor(gm):
                 flat.append(arr)
         t1 = _t.perf_counter()
         outs = cfn(*flat)
-        # wAW's outs[0] shape bug (w7R CHANGES): mx.compile hands the
-        # first output as a squeezed view when the symbolic placeholder
-        # disagrees with the concrete shape; restore the rank the graph
-        # actually produced
-        if isinstance(outs, tuple) and len(outs) == 1 and outs[0].ndim != phs[0].meta["example_value"].ndim:
-            outs = (mx.reshape(outs[0], phs[0].meta["example_value"].shape),)
+        # mx.compile returns the bare array for single-output builds
+        # (w7R CHANGES): normalize to a tuple first, then restore the rank
+        # the input placeholder declared (wAW's outs[0] squeeze)
+        outs = outs if isinstance(outs, (tuple, list)) else (outs,)
+        rank = phs[0].meta["example_value"].ndim
+        if outs[0].ndim != rank:
+            outs = (mx.reshape(outs[0], tuple(outs[0].shape) + (1,) * (rank - outs[0].ndim)),)
         mx.eval(*outs)
         t2 = _t.perf_counter()
         n_out = holder.get("n_out", 1)
