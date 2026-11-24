@@ -489,8 +489,19 @@ def _cat_impl(t, dim=0):
 def _mean(a, dim=None, keepdim=False, **k):
     return mx.mean(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
 
-def _sum(a, dim=None, keepdim=False, **k):
-    return mx.sum(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
+def _sum(a, dim=None, keepdim=False, dtype=None, **k):
+    a = _mx(a)
+    # aten casts the INPUT to dtype before the reduction
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"sum dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])
+    # torch tolerates dim 0/-1 on a 0-d tensor and reduces nothing
+    if a.ndim == 0:
+        return a
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    # an empty dim list reduces all dims in aten
+    return mx.sum(a, axis=None if axis == () else axis, keepdims=keepdim)
 
 _INT_DT = (mx.int8, mx.int16, mx.int32, mx.int64,
            mx.uint8, mx.uint16, mx.uint32, mx.uint64)
