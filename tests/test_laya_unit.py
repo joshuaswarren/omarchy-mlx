@@ -511,6 +511,257 @@ class ManagedCoServingTests(unittest.TestCase):
         self.assertNotIn("managed co-serving", (out + err).lower())
 
 
+class ClaimModeFailClosedTests(unittest.TestCase):
+    """A managed pair child whose claim cannot bind (malformed fd or payload,
+    no --managed, a record for another model or allocation, a refusal under
+    the budget lock) exits 3 with one `laya:` line before any weight loads.
+    Runs without mlx: the mlx, engine and encoder-config imports are stubs."""
+
+    def setUp(self):
+        import contextlib
+        import io
+        import tempfile
+        import types
+        import unittest.mock as mock
+
+        from mlx_omarchy_laya import server as srv
+        from mlx_omarchy_serve import budget
+
+        self.srv, self.budget, self.mock = srv, budget, mock
+        self.contextlib, self.io = contextlib, io
+        self.tmp = tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.ckpt = tmp / "ckpt"
+        (self.ckpt / "encoder").mkdir(parents=True)
+        manifest = {"catalog_id": "laya-test", "context_max_tokens": 16,
+                    "weights_header": {"param_elements": 1000}}
+        (self.ckpt / "manifest.json").write_text(json.dumps(manifest))
+        cfg = types.SimpleNamespace(hidden_size=8, num_attention_heads=2, intermediate_size=16)
+        self.total = srv.total_estimate_bytes(manifest, cfg, "float16", 64)
+        self.claim = {"name": "laya-test", "claim_token": "tok", "bytes": self.total,
+                      "pair_id": "pair"}
+
+        core = types.ModuleType("mlx.core")
+        core.float16, core.bfloat16, core.float32 = "float16", "bfloat16", "float32"
+        mlx_pkg = types.ModuleType("mlx")
+        mlx_pkg.core = core
+        api = types.ModuleType("mlx_omarchy_laya.api")
+        api.LayaEngine = self.engine = mock.Mock(side_effect=AssertionError("weights loaded"))
+        model = types.ModuleType("mlx_omarchy_laya.model")
+        model.load_encoder_config = lambda path: cfg
+        self.enterContext(mock.patch.dict(sys.modules, {
+            "mlx": mlx_pkg, "mlx.core": core,
+            "mlx_omarchy_laya.api": api, "mlx_omarchy_laya.model": model}))
+        self.enterContext(mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(tmp / "home")}))
+        os.environ.pop(budget.LIFETIME_FD_ENV, None)
+        self.enterContext(mock.patch.object(srv.signal, "signal"))
+        self.claim_reservation = self.enterContext(
+            mock.patch.object(budget, "claim_reservation", wraps=budget.claim_reservation))
+
+    def serve(self, payload=None, raw_fd=None, managed=True, expect=SystemExit):
+        """serve_main as a claimed child; returns (raised exception, stderr)."""
+        self.claim_reservation.reset_mock()
+        if payload is not None:
+            r, w = os.pipe()
+            self.addCleanup(os.close, r)
+            os.write(w, payload if isinstance(payload, bytes) else json.dumps(payload).encode())
+            os.close(w)
+            raw_fd = str(r)
+        os.environ[self.budget.CLAIM_FD_ENV] = raw_fd
+        argv = ["--model", str(self.ckpt), "--allow-cpu"] + (["--managed"] if managed else [])
+        err = self.io.StringIO()
+        with self.contextlib.redirect_stderr(err), self.assertRaises(expect) as ctx:
+            self.srv.serve_main(argv)
+        return ctx.exception, err.getvalue()
+
+    def assertRefused(self, outcome, expected, *, reached_lock=False):
+        exc, err = outcome
+        self.assertEqual(exc.code, 3, err)
+        lines = err.splitlines()
+        self.assertEqual(len(lines), 1, err)
+        self.assertTrue(lines[0].startswith("laya: "), err)
+        self.assertIn(expected, lines[0])
+        if reached_lock:
+            self.claim_reservation.assert_called_once()
+        else:
+            self.claim_reservation.assert_not_called()
+        self.engine.assert_not_called()
+
+    def test_malformed_claim_fd_exits_3(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        for raw in ("abc", " ", "x" * 500, "9" * 5000):
+            with self.subTest(raw=raw[:12]):
+                outcome = self.serve(raw_fd=raw)
+                expected = ("laya: claim refused: MLX_OMARCHY_CLAIM_FD=%.40r "
+                            "is not an fd number" % raw)
+                self.assertRefused(outcome, expected)
+                self.assertEqual(outcome[1].rstrip("\n"), expected)
+        for raw in ("-1", str(2 ** 40)):
+            with self.subTest(raw=raw[:12]):
+                self.assertRefused(self.serve(raw_fd=raw),
+                                   "claim refused: cannot read the claim from "
+                                   "MLX_OMARCHY_CLAIM_FD=")
+
+    def test_unreadable_claim_payload_exits_3(self):
+        for payload in (b"not json", b"\xff", b"[]", {"name": "laya-test"}):
+            with self.subTest(payload=payload):
+                self.assertRefused(self.serve(payload=payload),
+                                   "claim refused: cannot read the claim from")
+
+    def test_unwrapped_read_errors_exit_3(self):
+        # A budget module that lets OverflowError or RecursionError escape
+        # read_claim_fd (huge fd, deeply nested payload) still fails closed.
+        for exc in (OverflowError("fd too large"), RecursionError("deep")):
+            with self.subTest(exc=type(exc).__name__), \
+                    self.mock.patch.object(self.budget, "read_claim_fd", side_effect=exc):
+                self.assertRefused(self.serve(raw_fd="3"), str(exc))
+
+    def test_claim_without_managed_exits_3(self):
+        self.assertRefused(self.serve(payload=self.claim, managed=False),
+                           "claim mode (managed pair child) requires --managed")
+
+    def test_claim_without_budget_module_exits_3(self):
+        cases = (
+            (True, "laya: claim mode requires mlx_omarchy_serve.budget on PYTHONPATH"),
+            (False, "claim mode (managed pair child) requires --managed"),
+        )
+        with self.mock.patch.object(self.srv, "_budget_or_none", return_value=None):
+            for managed, expected in cases:
+                with self.subTest(managed=managed):
+                    self.assertRefused(self.serve(raw_fd="3", managed=managed), expected)
+
+    def test_claim_fd_env_matches_budget_module(self):
+        self.assertEqual(self.srv._CLAIM_FD_ENV, self.budget.CLAIM_FD_ENV)
+
+    def test_record_for_another_model_exits_3(self):
+        self.assertRefused(self.serve(payload=dict(self.claim, name="other")),
+                           "does not match this checkpoint's catalog_id 'laya-test'")
+
+    def test_non_string_record_fields_exit_3(self):
+        # Shared contract through the real pipe: either read_claim_fd (hardened
+        # budget) or _claim_reserved (main budget) refuses before the lock.
+        cases = (
+            dict(self.claim, name=["laya-test"]),
+            dict(self.claim, claim_token={"k": "v"}),
+            dict(self.claim, pair_id=["pair"]),
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertRefused(self.serve(payload=payload), "claim refused")
+
+    def test_record_allocation_mismatch_exits_3(self):
+        # An int passes both budget readers, so _claim_reserved's exact wording holds.
+        self.assertRefused(
+            self.serve(payload=dict(self.claim, bytes=self.total + 1)),
+            "claim refused: batch record 'laya-test' reserves %d bytes" % (self.total + 1))
+        # Mistyped bytes may be refused by read_claim_fd or _claim_reserved.
+        cases = (
+            dict(self.claim, bytes=self.total + 0.5),
+            dict(self.claim, bytes=float(self.total)),
+            dict(self.claim, bytes="abc"),
+            dict(self.claim, bytes=[self.total]),
+            dict(self.claim, bytes=True),
+            b'{"name": "laya-test", "claim_token": "tok", "bytes": Infinity}',
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertRefused(self.serve(payload=payload), "claim refused")
+
+    def test_claim_reserved_refusal_wording_exits_3(self):
+        # Patch read_claim_fd so _claim_reserved's own checks and wording are
+        # exercised regardless of whether budget.read_claim_fd validates fields.
+        cases = (
+            ("name list", dict(self.claim, name=["laya-test"]),
+             "claim refused: batch record name and claim_token must be strings, got list and str"),
+            ("claim_token dict", dict(self.claim, claim_token={"k": "v"}),
+             "claim refused: batch record name and claim_token must be strings, got str and dict"),
+            ("bytes mismatch", dict(self.claim, bytes=self.total + 1),
+             "claim refused: batch record 'laya-test' reserves %d bytes" % (self.total + 1)),
+            ("bytes float", dict(self.claim, bytes=self.total + 0.5),
+             "claim refused: batch record 'laya-test' bytes must be an int, got float"),
+            ("bytes exact float", dict(self.claim, bytes=float(self.total)),
+             "claim refused: batch record 'laya-test' bytes must be an int, got float"),
+            ("bytes str", dict(self.claim, bytes="abc"),
+             "claim refused: batch record 'laya-test' bytes must be an int, got str"),
+            ("bytes list", dict(self.claim, bytes=[self.total]),
+             "claim refused: batch record 'laya-test' bytes must be an int, got list"),
+            ("bytes bool", dict(self.claim, bytes=True),
+             "claim refused: batch record 'laya-test' bytes must be an int, got bool"),
+            ("bytes inf", dict(self.claim, bytes=float("inf")),
+             "claim refused: batch record 'laya-test' bytes must be an int, got float"),
+            ("pair_id list", dict(self.claim, pair_id=["pair"]),
+             "claim refused: batch record 'laya-test' pair_id must be a string or None, got list"),
+        )
+        for label, payload, expected in cases:
+            with self.subTest(case=label), \
+                    self.mock.patch.object(self.budget, "read_claim_fd", return_value=payload):
+                self.assertRefused(self.serve(raw_fd="3"), expected)
+
+    def test_unprintable_claim_fields_do_not_format_values(self):
+        # Stack-independent check: refusal paths must never call str() or
+        # repr() on untrusted claim values.
+        class Unprintable:
+            def __str__(self):
+                raise RecursionError("deep str")
+
+            def __repr__(self):
+                raise RecursionError("deep repr")
+
+        cases = (
+            ("bytes", dict(self.claim, bytes=Unprintable()),
+             "claim refused: batch record 'laya-test' bytes must be an int, got Unprintable"),
+            ("name", dict(self.claim, name=Unprintable()),
+             "claim refused: batch record name and claim_token must be strings, got Unprintable and str"),
+            ("claim_token", dict(self.claim, claim_token=Unprintable()),
+             "claim refused: batch record name and claim_token must be strings, got str and Unprintable"),
+            ("pair_id", dict(self.claim, pair_id=Unprintable()),
+             "claim refused: batch record 'laya-test' pair_id must be a string or None, got Unprintable"),
+        )
+        for field, payload, expected in cases:
+            with self.subTest(field=field), \
+                    self.mock.patch.object(self.budget, "read_claim_fd", return_value=payload):
+                self.assertRefused(self.serve(raw_fd="3"), expected)
+
+    def test_refusal_under_budget_lock_exits_3(self):
+        # the registry under MLX_OMARCHY_HOME is empty: no record to claim
+        self.assertRefused(self.serve(payload=self.claim),
+                           "claim refused: no reservation named 'laya-test'",
+                           reached_lock=True)
+
+    def test_registry_oserror_under_budget_lock_exits_3(self):
+        not_a_dir = self.tmp / "not-a-dir"
+        not_a_dir.write_text("file")
+        with self.mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(not_a_dir)}):
+            self.assertRefused(self.serve(payload=self.claim), "laya: claim refused",
+                               reached_lock=True)
+
+    def test_valid_claim_binds_before_weights_load(self):
+        # control: a matching claim binds, then the engine loads
+        class Loaded(Exception):
+            pass
+
+        self.engine.side_effect = Loaded
+        self.enterContext(self.mock.patch.object(self.srv, "_clear_memory"))
+        claim = self.enterContext(self.mock.patch.object(
+            self.budget, "claim_reservation",
+            return_value={"claimed": [1, 2], "owner": "tok"}))
+        no_pair = {k: v for k, v in self.claim.items() if k != "pair_id"}
+        cases = (
+            ("pair", self.claim, "pair"),
+            ("omitted", no_pair, None),
+            ("null", dict(self.claim, pair_id=None), None),
+        )
+        for label, payload, expected_pair in cases:
+            with self.subTest(pair_id=label):
+                claim.reset_mock()
+                self.engine.reset_mock()
+                self.serve(payload=payload, expect=Loaded)
+                claim.assert_called_once_with(
+                    "laya-test", "tok", expected_bytes=self.total,
+                    home=self.budget.default_home(), expected_pair=expected_pair)
+                self.engine.assert_called_once()
+
+
 class _RecordFile(str):
     """A RECORD entry: importlib.metadata's PackagePath carries .hash."""
 
