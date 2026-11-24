@@ -279,14 +279,21 @@ extra serialization cost more on this board than the saved dispatch
 returns; one noisy window per arm is thin evidence, but the direction is
 against the fold, not for it.
 
+A proper interleaved ABBA (four windows, off/on/on/off, per-window
+files) on an otherwise idle jwm1 reads off 17.07 / on 18.35 / on 16.69 /
+off 23.39 tok/s - median off 20.23, on 17.52, **-13.4 percent** - with
+every window sharing the one ids digest. The four windows also span a
+17.07-to-23.39 range *within the same arm*, so the board's own variance
+is as large as the measured delta and no fold-vs-no-fold conclusion
+about the rate can be drawn from it. What the gate does establish at
+ABBA quality: the ids are identical in all four windows, and the
+dispatch histograms differ only in the three expected kernels. The rate
+question needs more windows than a canary-grade run provides.
+
 Consequences: the flag stays off by default; the width-128 folded
-kernels stay registered but unreachable; and the K side and the
-passthrough branch should not be started until a real ABBA on an idle
-M1 Max explains the regression or a variant removes the exchange.
-The ABBA collection in this gate also overwrote its middle windows
-(the ids file is keyed by arm), so the number above is one window per
-arm - a proper interleaved ABBA with per-window files is the next
-measurement.
+kernels stay registered but unreachable; and neither the K side nor the
+passthrough branch should start until the rate question is answered with
+a longer interleaved ABBA on an idle board.
 
 ## The applicability matrix (which model can use this fold)
 
