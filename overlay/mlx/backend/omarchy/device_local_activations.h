@@ -144,6 +144,15 @@ inline bool select_qmm_g14c_2x4w2(std::string_view device_name) {
   return device_name.find("G14C") != std::string_view::npos;
 }
 
+// PAR-1 port: the same 2x4w2 geometry default for the G13C (16-inch M1 Max)
+// and G13G (13-inch M1) parts, pending their paired ABBA screens. The G14C
+// gate stays so an unmeasured part is never silently flipped.
+inline bool select_qmm_par1_2x4w2(std::string_view device_name) {
+  return device_name.find("G14C") != std::string_view::npos ||
+         device_name.find("G13C") != std::string_view::npos ||
+         device_name.find("G13G") != std::string_view::npos;
+}
+
 // Dispatch-only hazards take a COMPUTE_SHADER to COMPUTE_SHADER barrier
 // instead of the full ALL_COMMANDS one (encoder.cpp record_dispatch_barrier).
 // Default on for discrete GPUs: on the RTX 5060 Ti Qwen3-4B decode went from
