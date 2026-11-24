@@ -10145,12 +10145,24 @@ bool dispatch_quantized_gemv_group(
     const Stream& stream,
     OutgatePlan* outgate,
     ResNormPlan* res_norm,
-    bool* res_norm_done) {
+    bool* res_norm_done,
+    RopeEpiPlan* rope_epi,
+    bool* rope_epi_done) {
   if (res_norm_done) {
     *res_norm_done = false;
   }
+  if (rope_epi_done) {
+    *rope_epi_done = false;
+  }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
+    return false;
+  }
+  if (rope_epi != nullptr) {
+    // The fused RMSNorm+RoPE epilogue kernel is not landed yet: refuse
+    // the whole group so the ropes and members evaluate ordinarily.
+    // An attached plan that returns true without the epilogue would
+    // leave the skipped ropes unmaterialized.
     return false;
   }
   // SwiGLU store epilogue: exactly the gate and up projections, no

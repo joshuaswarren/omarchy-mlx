@@ -794,6 +794,10 @@ struct GemvGroup {
   // Trailing fast::RMSNorm epilogue over the single member's Add sum.
   std::optional<ResNormPlan> res_norm;
   bool res_norm_done{false};
+  // Fused RMSNorm+RoPE q/k epilogue over two member outputs; the keys
+  // side stores through the pair's producer-direct window.
+  std::optional<RopeEpiPlan> rope_epi;
+  bool rope_epi_done{false};
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -2025,6 +2029,157 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
   }
+  // Fused RMSNorm+RoPE q/k epilogue fold (MLX_OMARCHY_ROPE_EPI): a
+  // decode group's member outputs feed the two norm-fused fast::RoPE
+  // nodes (query, keys) of one attention head set through
+  // single-consumer view chains. The group's Token4 dispatch runs
+  // both norms and rotations in its last finishing workgroup: the
+  // query rows store into the rope node's own buffer, the keys rows
+  // store through the slice pair's producer-direct window. The rope
+  // nodes and their view chains are deleted, so every contract item
+  // is decided here; a group of at most three members keeps the six
+  // epilogue bindings inside the free weight slots.
+  if (rope_epi_enabled() && !state->gemv_groups.empty()) {
+    auto use_count = [&](const array& value) {
+      auto* it = uses.find(value.id());
+      return it == nullptr ? size_t{0} : *it;
+    };
+    // member node id -> (group index, member index); only groups that
+    // can host the epilogue are indexed.
+    std::unordered_map<std::uintptr_t, std::pair<size_t, size_t>>
+        member_of;
+    for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+      auto& group = state->gemv_groups[gi];
+      if (group.members.size() > 3 || group.swiglu_out || group.outgate ||
+          group.res_norm) {
+        continue;
+      }
+      for (size_t mi = 0; mi < group.members.size(); ++mi) {
+        member_of.try_emplace(group.members[mi].node.id(), {gi, mi});
+      }
+    }
+    // group index -> rope candidates; each entry carries the node and
+    // the resolved view chain + member index.
+    struct RopeCand {
+      const array* node;
+      std::vector<array> chain;
+      size_t member_index;
+    };
+    std::unordered_map<size_t, std::vector<RopeCand>> cands;
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RoPE)) || claimed.count(node.id()) ||
+          node.dtype() != bfloat16) {
+        continue;
+      }
+      const auto& rp =
+          static_cast<const fast::RoPE&>(node.primitive());
+      const auto& st = rp.state();
+      // Norm-fused ropes ride three inputs (x, offset, weight); the
+      // fused-norm kernel route only covers forward non-traditional.
+      if (!rp.has_norm() || node.inputs().size() != 3 ||
+          !std::get<5>(st) || std::get<2>(st) ||
+          node.inputs()[1].size() != 1 ||
+          node.inputs()[2].dtype() != bfloat16) {
+        continue;
+      }
+      std::vector<array> chain;
+      const array* cur = &node.inputs()[0];
+      bool ok = cur->dtype() == bfloat16;
+      while (ok &&
+             (is_op(cur, typeid(Reshape)) ||
+              is_op(cur, typeid(Transpose)))) {
+        if (use_count(*cur) != 1 || claimed.count(cur->id())) {
+          ok = false;
+          break;
+        }
+        chain.push_back(*cur);
+        cur = &cur->inputs()[0];
+      }
+      if (!ok || cur->dtype() != bfloat16) {
+        continue;
+      }
+      auto mit = member_of.find(cur->id());
+      if (mit == member_of.end()) {
+        continue;
+      }
+      if (cur->primitive().stream() != node.primitive().stream()) {
+        continue;
+      }
+      cands[mit->second.first].push_back(
+          RopeCand{&node, std::move(chain), mit->second.second});
+    }
+    for (auto& entry : cands) {
+      const size_t gi = entry.first;
+      auto& sides = entry.second;
+      if (sides.size() != 2) {
+        continue;
+      }
+      // The keys side is the rope the slice pair redirect claimed;
+      // the query side is the other. Exactly one of each.
+      const RopeCand* qc = nullptr;
+      const RopeCand* kc = nullptr;
+      for (const auto& side : sides) {
+        if (state->rope_redirect_roles.count(side.node->id())) {
+          if (kc != nullptr) {
+            qc = nullptr;
+            break;
+          }
+          kc = &side;
+        } else {
+          qc = &side;
+        }
+      }
+      if (qc == nullptr || kc == nullptr ||
+          qc->member_index == kc->member_index ||
+          qc->node->inputs()[1].id() != kc->node->inputs()[1].id() ||
+          // The keys rope's only consumer is the deleted slice update;
+          // a second consumer would read an unmaterialized buffer.
+          use_count(*kc->node) != 1) {
+        continue;
+      }
+      // The keys window must already be planned producer-direct on
+      // the pair that claimed the rope's output.
+      const size_t pair_index =
+          state->rope_redirect_roles.at(kc->node->id());
+      const auto& pair = state->slice_update_pairs[pair_index];
+      if (!pair.direct || !pair.windows[0]) {
+        continue;
+      }
+      // Both ropes share state: same dims/base/scale/traditional by
+      // the scan above and the shared scalar offset input.
+      const auto& st =
+          static_cast<const fast::RoPE&>(qc->node->primitive()).state();
+      auto& group = state->gemv_groups[gi];
+      group.rope_epi = RopeEpiPlan{
+          RopeEpiSide{
+              *qc->node,
+              qc->member_index,
+              qc->chain,
+              std::nullopt,
+              pair_index},
+          RopeEpiSide{
+              *kc->node,
+              kc->member_index,
+              kc->chain,
+              pair.windows[0],
+              pair_index},
+          std::get<1>(st),
+          std::get<2>(st),
+          std::get<3>(st),
+          std::get<4>(st),
+          static_cast<const fast::RoPE&>(qc->node->primitive())
+              .norm_eps()};
+      for (const auto* side : {qc, kc}) {
+        state->roles.emplace(
+            side->node->id(), EagerRole{gi, EagerStep::skip});
+        claimed.insert(side->node->id());
+        for (const auto& view : side->chain) {
+          state->roles.emplace(view.id(), EagerRole{gi, EagerStep::skip});
+          claimed.insert(view.id());
+        }
+      }
+    }
+  }
   // Decode-rows SDPA out-transpose fold: a materializing Reshape whose
   // single-consumer view chain bottoms out at a bf16
   // ScaledDotProductAttention is exactly the (1,H,S,D) -> (1,S,H*D)
@@ -2660,6 +2815,12 @@ bool kv_direct_enabled() {
        env_flag("MLX_OMARCHY_KV_DIRECT"));
 }
 
+bool rope_epi_enabled() {
+  return fused_chain_enabled() &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI") != nullptr &&
+      env_flag("MLX_OMARCHY_ROPE_EPI");
+}
+
 bool rope_norm_fold_enabled() {
   return fused_chain_enabled() &&
       (std::getenv("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
@@ -3217,7 +3378,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         stream,
                         group.outgate ? &*group.outgate : nullptr,
                         group.res_norm ? &*group.res_norm : nullptr,
-                        &group.res_norm_done)
+                        &group.res_norm_done,
+                        group.rope_epi ? &*group.rope_epi : nullptr,
+                        &group.rope_epi_done)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {

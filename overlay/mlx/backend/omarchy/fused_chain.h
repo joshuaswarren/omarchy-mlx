@@ -209,6 +209,43 @@ struct ResNormPlan {
   float eps;
 };
 
+// Forward epilogue fold: a decode group's member outputs feed the two
+// fused RMSNorm+RoPE nodes (q, k) of one attention head set. The last
+// finishing workgroup of the group's dispatch runs both norms and
+// rotations inline: the query rows store into the rope node's own
+// fresh buffer, the keys rows store through the slice pair's planned
+// producer-direct KV window. Both RoPE nodes and their input view
+// chains are deleted, so every contract item is decided at plan time;
+// a dispatch-time refusal leaves the ropes unmaterialized and is a
+// plan error, never a fallback.
+struct RopeEpiSide {
+  // The fast::RoPE node (3 inputs: view of member out, offset, norm
+  // weight); its eval is deleted. |member_index| picks the group's
+  // member whose raw output row is the norm+rope source. |view_chain|
+  // holds the Reshape/Transpose nodes between the member output and
+  // the rope input, also deleted.
+  array rope;
+  size_t member_index;
+  std::vector<array> view_chain;
+  // Keys side only: the pair's planned producer-direct window; the
+  // epilogue stores the rotated keys rows through it. The query side
+  // leaves |window| empty and writes |rope|'s own buffer.
+  std::optional<KvDirectWindow> window;
+  size_t pair_index;
+};
+
+struct RopeEpiPlan {
+  RopeEpiSide q;
+  RopeEpiSide k;
+  // Rope scalar contract shared by both sides, copied out of the
+  // primitive state at plan time.
+  int dims;
+  bool traditional;
+  float base;
+  float scale;
+  float norm_eps;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -221,9 +258,11 @@ struct ResNormPlan {
 // the one dispatch reads gate and out directly, reconstructing x per
 // workgroup with the elementwise arithmetic and rounding. |res_norm|
 // plans the trailing fast::RMSNorm epilogue over the single member's
-// Add sum; when it runs, |*res_norm_done| is set true. Returns false
-// having allocated nothing when any member falls outside the contract;
-// the caller then lets every node take its ordinary eval_gpu path.
+// Add sum; when it runs, |*res_norm_done| is set true. |rope_epi|
+// plans the fused RMSNorm+RoPE q/k epilogue over two member outputs;
+// when it runs, |*rope_epi_done| is set true. Returns false having
+// allocated nothing when any member falls outside the contract; the
+// caller then lets every node take its ordinary eval_gpu path.
 // Defined in primitives.cpp beside QuantizedMatmul::eval_gpu.
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
@@ -231,7 +270,9 @@ bool dispatch_quantized_gemv_group(
     const Stream& stream,
     OutgatePlan* outgate = nullptr,
     ResNormPlan* res_norm = nullptr,
-    bool* res_norm_done = nullptr);
+    bool* res_norm_done = nullptr,
+    RopeEpiPlan* rope_epi = nullptr,
+    bool* rope_epi_done = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
@@ -271,6 +312,9 @@ bool kv_direct_enabled();
 // MLX_OMARCHY_ROPE_NORM_FOLD=0 keeps the RMSNorm -> RoPE fold off (the
 // MLX_OMARCHY_FUSED_CHAIN gate also covers it); on by default.
 bool rope_norm_fold_enabled();
+// MLX_OMARCHY_ROPE_EPI=1 opts the fused RMSNorm+RoPE q/k epilogue into
+// the group's Token4 dispatch (off by default until measured).
+bool rope_epi_enabled();
 
 // find_sdpa_transpose_out returns the materializing Reshape node a
 // decode-rows SDPA should store into directly (the planned
