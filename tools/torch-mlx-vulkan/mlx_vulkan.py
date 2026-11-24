@@ -185,9 +185,11 @@ def _reshape(a, *s):
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
-    # aten clamps out-of-range bounds; mlx requires int32
-    start = max(min(start, n), -n)
-    end = max(min(end, n), -n)
+    # aten clamps out-of-range bounds; mlx requires int32. None = open bound.
+    if start is not None:
+        start = max(min(start, n), -n)
+    if end is not None:
+        end = max(min(end, n), -n)
     idx = [slice(None)] * a.ndim
     idx[dim] = slice(start, end, step)
     return a[tuple(idx)]
@@ -446,12 +448,20 @@ def _embedding(a, b, *a_, **k_):
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
 
-def _log_softmax_fwd(a, dim):
+def _log_softmax_fwd(a, dim, half_to_float=False):
+    a = _mx(a)
+    # aten: half_to_float computes in fp32 and returns fp32 for half inputs
+    if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
+        a = a.astype(mx.float32)
     return a - mx.logsumexp(a, axis=dim, keepdims=True)
 
 def _log_softmax_bwd(g, out, dim, input_dtype=None):
     # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)
-    return g - mx.exp(out) * mx.sum(g, axis=dim, keepdims=True)
+    g, out = _mx(g), _mx(out)
+    r = g - mx.exp(out) * mx.sum(g, axis=dim, keepdims=True)
+    if input_dtype is not None and input_dtype in _MX_DT:
+        r = r.astype(_MX_DT[input_dtype])
+    return r
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
@@ -1112,7 +1122,9 @@ _FUNC_SPECS = {
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
     "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
-    "alias": lambda a: a, "lift_fresh": lambda a: a, "to": lambda a, *a_, **k_: a,
+    "alias": lambda a: a, "lift_fresh": lambda a: a,
+    "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
+    "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
@@ -1216,7 +1228,7 @@ _FUNC_SPECS = {
     "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
     "log_softmax": lambda a, dim=-1, **k: _log_softmax_fwd(a, dim),
-    "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim),
+    "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim, half_to_float),
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),

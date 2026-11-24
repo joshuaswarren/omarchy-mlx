@@ -165,6 +165,51 @@ def t_sdpa_flash_pair():
     no_fallback("sdpa_flash")
 
 
+def t_review_fixes():
+    import numpy as np
+    import mlx.core as mx
+    torch.manual_seed(0)
+
+    # w8F: the rebase dropped lift_fresh_copy; aot lifts module params through
+    # it, so both the spec entry and a compiled module call are covered.
+    ok = "lift_fresh_copy" in mlx_vulkan._FUNC_SPECS
+    RESULTS.append(("lift_fresh_copy in _FUNC_SPECS", ok, 0))
+    print(f"{'PASS' if ok else 'FAIL'} lift_fresh_copy in _FUNC_SPECS", flush=True)
+    lin = nn.Linear(16, 8)
+    x = torch.randn(4, 16)
+    f = torch.compile(lin, backend="mlx_vulkan_train")
+    check("lift_fresh_copy module lift", f(x), lin(x))
+
+    # w8F: _slice crashed on open (None) bounds after the int32 clamp.
+    a = torch.randn(4, 8)
+    f2 = torch.compile(lambda t: t[2:], backend="mlx_vulkan")
+    check("slice None end", f2(a), a[2:])
+    f3 = torch.compile(lambda t: t[:3], backend="mlx_vulkan")
+    check("slice None start", f3(a), a[:3])
+    got = torch.from_numpy(np.array(mlx_vulkan._slice(mx.array(np.arange(8.0)), 0, None, None)))
+    check("slice None-None direct", got, torch.arange(8.0))
+
+    # w8F: _log_softmax ignored half_to_float / input_dtype.
+    f4 = torch.compile(
+        lambda t: torch.ops.aten._log_softmax.default(t, -1, True),
+        backend="mlx_vulkan")
+    xh = torch.randn(4, 8).half()
+    got4, want4 = f4(xh), F.log_softmax(xh.float(), dim=-1)
+    check("_log_softmax half_to_float", got4, want4, tol=5e-4)
+    ok = got4.dtype == torch.float32
+    RESULTS.append(("_log_softmax half_to_float dtype fp32", ok, 0))
+    print(f"{'PASS' if ok else 'FAIL'} _log_softmax half_to_float dtype fp32 "
+          f"(got {got4.dtype})", flush=True)
+    g = torch.randn(2, 8).half()
+    out = torch.randn(2, 8).half()
+    r = mlx_vulkan._log_softmax_bwd(g, out, -1, torch.float32)
+    ok = r.dtype == mx.float32
+    RESULTS.append(("_log_softmax_bwd input_dtype fp32", ok, 0))
+    print(f"{'PASS' if ok else 'FAIL'} _log_softmax_bwd input_dtype fp32 "
+          f"(got {r.dtype})", flush=True)
+    no_fallback("review_fixes")
+
+
 if __name__ == "__main__":
     t_lsm_fwd()
     t_lsm_bwd()
@@ -172,6 +217,7 @@ if __name__ == "__main__":
     t_unsafe_view_mv_dot()
     t_slice_clone_silu()
     t_sdpa_flash_pair()
+    t_review_fixes()
     fails = [n for n, ok, _ in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} pass; {len(fails)} fail", flush=True)
     sys.exit(1 if fails else 0)
