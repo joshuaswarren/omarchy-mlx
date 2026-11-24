@@ -1501,8 +1501,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           if (fold_ok && is_op(add, typeid(Add)) &&
               add->inputs().size() == 2 &&
               add->dtype() == node.dtype() &&
-              add->size() ==
-                  static_cast<size_t>(x_rows) * node.size() &&
+              add->size() == node.size() &&
               add->primitive().stream() == node.primitive().stream() &&
               !claimed.count(add->id())) {
             const array* other = add->inputs()[0].id() == node.id()
@@ -1516,9 +1515,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             // itself.
             if (is_op(other_node, typeid(Broadcast)) &&
                 other_node->inputs().size() == 1 &&
-                other_node->inputs()[0].size() == node.size() &&
-                other_node->size() ==
-                    static_cast<size_t>(x_rows) * node.size() &&
+                other_node->inputs()[0].size() *
+                        static_cast<size_t>(x_rows) ==
+                    node.size() &&
+                other_node->size() == node.size() &&
                 other_node->inputs()[0].dtype() == other_node->dtype()) {
               other = &other_node->inputs()[0];
               other_node = lookup(*other);
