@@ -632,11 +632,6 @@ enum class ComputeKernel : uint16_t {
   // Affine quantize/dequantize bfloat16; append-only profile id.
   QuantizeBF16,
   DequantBF16,
-  // Gather + affine dequantize in one dispatch (quantized-embedding
-  // prologue fold); append-only profile ids.
-  GatherDequantF32,
-  GatherDequantF16,
-  GatherDequantBF16,
   // Same shader compiled with -DBF16_IO=1 (uint16 word view, exact
   // widening, RNE stores, f32 internals, composition-exact arm); appended
   // to keep profile kernel ids stable.
@@ -1202,6 +1197,11 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1R4BF16Hd256Qrope,
   SdpaDecodeSplitP1R4BF16Hd256QropeApple,
   QmmVecQ4MultiSubgroupBF16R2S4W2,
+  // Gather + affine dequantize in one dispatch (quantized-embedding
+  // prologue fold); appended to keep profile kernel ids stable.
+  GatherDequantF32,
+  GatherDequantF16,
+  GatherDequantBF16,
   Count,
 };
 

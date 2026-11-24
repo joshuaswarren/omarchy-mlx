@@ -2228,7 +2228,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         elems_per_row % group_size != 0 ||
         groups_per_row * group_size != elems_per_row ||
         node.size() != nrows * elems_per_row || nrows <= 0 ||
-        (ids->dtype() != int32 && ids->dtype() != uint32) ||
+        ids->dtype() != int32 ||
         w.dtype() != uint32 || scales.dtype() != node.dtype() ||
         biases.dtype() != node.dtype() ||
         (node.dtype() != float32 && node.dtype() != float16 &&
@@ -2595,6 +2595,18 @@ bool dispatch_prologue_fold(
       w.offset() % w.itemsize() != 0 ||
       scales.offset() % scales.itemsize() != 0 ||
       biases.offset() % biases.itemsize() != 0) {
+    return false;
+  }
+  const uint64_t total = fold.nrows * fold.words_per_row;
+  const uint64_t max32 = std::numeric_limits<uint32_t>::max();
+  if (total > max32 || fold.bits > max32 || w.size() > max32 ||
+      scales.size() > max32 || fold.group_size > max32 ||
+      node.size() > max32 || w.offset() / w.itemsize() > max32 ||
+      scales.offset() / scales.itemsize() > max32 ||
+      biases.size() > max32 || biases.offset() / biases.itemsize() > max32 ||
+      w.shape(0) > max32 || fold.words_per_row > max32 ||
+      fold.groups_per_row > max32 ||
+      ids.offset() / ids.itemsize() > max32) {
     return false;
   }
   node.set_data(allocator().malloc(node.nbytes()));
