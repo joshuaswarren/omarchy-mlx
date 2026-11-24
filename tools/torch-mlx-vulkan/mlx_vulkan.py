@@ -266,12 +266,12 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
-    "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k)),
-    "zeros_like": lambda a: mx.zeros(a.shape),
-    "ones": lambda *a, **k: mx.ones(_shape_of(a, k)),
-    "ones_like": lambda a: mx.ones(a.shape),
-    "full": lambda s, v, **k: mx.full(tuple(s), v),
-    "full_like": lambda a, v, **k: mx.full(a.shape, v),
+    "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
+    "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
+    "ones_like": lambda a, **k: mx.ones(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "full": lambda s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"))),
+    "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
     "detach": lambda a: a, "clone": lambda a: a, "contiguous": lambda a: a,
@@ -346,12 +346,12 @@ _FUNC_SPECS = {
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
-    "empty": lambda *a, **k: mx.zeros(_shape_of(a, k)),
-    "empty_like": lambda a, **k: mx.zeros(a.shape),
-    "new_zeros": lambda a, s, **k: mx.zeros(tuple(s), dtype=_mx(a).dtype),
-    "new_ones": lambda a, s, **k: mx.ones(tuple(s), dtype=_mx(a).dtype),
-    "new_empty": lambda a, s, **k: mx.zeros(tuple(s), dtype=_mx(a).dtype),
-    "new_full": lambda a, s, v, **k: mx.full(tuple(s), v, dtype=_mx(a).dtype),
+    "empty": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
+    "empty_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_zeros": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_ones": lambda a, s, **k: mx.ones(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_empty": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "new_full": lambda a, s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "scalar_tensor": lambda v, **k: mx.array(v, _MX_DT.get(k.get("dtype"), mx.int64 if type(v) is int else None)),
     "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
@@ -365,8 +365,9 @@ FUNC_TABLE = {}
 _FN_SOURCES = [torch, F, torch.special, operator]
 
 def _resolve(dotted):
-    obj = _FN_SOURCES[0]
-    for part in dotted.split("."):
+    parts = dotted.split(".")
+    obj = globals()[parts[0]]
+    for part in parts[1:]:
         obj = getattr(obj, part)
     return obj
 
@@ -465,14 +466,14 @@ def _run_method(obj, name, args, kwargs):
             return obj.dtype, True
         if name == "numel":
             return int(np.prod(obj.shape)), True
-        if name == "new_empty":
-            return mx.zeros(tuple(args[0])), True
-        if name == "new_zeros":
-            return mx.zeros(tuple(args[0])), True
-        if name == "new_ones":
-            return mx.ones(tuple(args[0])), True
-        if name == "new_full":
-            return mx.full(tuple(args[0]), args[1]), True
+        if name in ("new_empty", "new_zeros", "new_ones", "new_full"):
+            dt = _MX_DT.get(kwargs.get("dtype"), obj.dtype)
+            shape = tuple(args[0])
+            if name == "new_ones":
+                return mx.ones(shape, dtype=dt), True
+            if name == "new_full":
+                return mx.full(shape, args[1], dtype=dt), True
+            return mx.zeros(shape, dtype=dt), True
         if name in ("cpu", "detach", "type", "cuda"):
             return obj, True
         if name == "to":
@@ -901,9 +902,10 @@ def make_compiled_executor(gm):
                 scale = kwargs.get("scale")
                 if scale is None:
                     scale = 1.0 / math.sqrt(q.shape[-1])
+                if isinstance(mask, mx.array) and mask.dtype != getattr(mx, "bool_", mx.uint8):
+                    mask = _cast(mask)
                 env[n] = mx.fast.scaled_dot_product_attention(
-                    q, k, v, scale=scale,
-                    mask=_cast(mask) if isinstance(mask, mx.array) else mask).astype(mx.float32)
+                    q, k, v, scale=scale, mask=mask).astype(mx.float32)
                 continue
             if name in ("matmul", "mm", "bmm") and n.op == "call_function":
                 env[n] = mx.matmul(_cast(args[0]), _cast(args[1])).astype(mx.float32)
