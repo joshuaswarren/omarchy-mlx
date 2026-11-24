@@ -17713,14 +17713,22 @@ void ScaledDotProductAttention::eval_gpu(
     // G13G (13-inch M1) dispatches the same causal flash kernel and measures
     // +7.1% prefill at ctx2048 / +1.1% at ctx512 with identical outputs on
     // the 4B (jwm1 ABBA, receipts 2026-11-23). Repo convention: only the
-    // measured part flips; G13C/G13S keep the composed default until they
-    // have their own ABBA rows.
+    // measured part flips; G13S keeps the composed default until it has
+    // its own ABBA rows.
+    // G13C (16-inch M1 Max) has its own rows now (receipts
+    // 2026-11-24-g13c-sdpa-causal-flash-abba): Qwen3-4B-4bit pure prefill
+    // +9.05% at ctx2048 (563.3 vs 516.6 tps, all 5 ABBA blocks +8-9%),
+    // +1.11% at ctx512, 2B pf512 and 4B decode ctx2048 flat, every run
+    // ids-identical. jwm1 re-measure on the same build agrees: +8.28% at
+    // ctx2048, +3.09% at ctx512, decode flat.
     const bool cf_is_g13g =
         cf_caps.device_name.find("G13G") != std::string::npos;
+    const bool cf_is_g13c =
+        cf_caps.device_name.find("G13C") != std::string::npos;
     const bool cf_forced_on = cf_env != nullptr && cf_env[0] == '1';
     const bool cf_forced_off = cf_env != nullptr && cf_env[0] == '0';
     const bool cf_on = cf_forced_on ||
-        ((cf_is_g16s || cf_is_g13g) && !cf_forced_off);
+        ((cf_is_g16s || cf_is_g13g || cf_is_g13c) && !cf_forced_off);
     if (cf_on &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
