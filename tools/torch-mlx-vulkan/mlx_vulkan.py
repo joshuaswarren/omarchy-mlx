@@ -26,6 +26,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import mlx.core as mx
+import mlx.nn as _mxnn
 import torch._dynamo
 
 log = logging.getLogger("mlx_vulkan")
@@ -181,7 +182,7 @@ def _reshape(a, *s):
         s = tuple(s[0])
     return mx.reshape(a, tuple(s))
 
-def _slice(a, dim, start, end, step):
+def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
     idx = [slice(None)] * a.ndim
     idx[dim] = slice(start, end, step)
@@ -209,11 +210,192 @@ def _unbind(a, dim):
         out.append(a[tuple(idx)])
     return tuple(out)
 
+def _red(reduction, size_average, reduce):
+    # torch legacy kwargs: reduce=False -> "none"; else size_average picks mean/sum.
+    if isinstance(reduction, int):
+        reduction = {0: "none", 1: "mean", 2: "sum"}[reduction]
+    if reduce is not None and not reduce:
+        return "none"
+    if size_average is not None:
+        return "mean" if size_average else "sum"
+    return reduction
+
+
+def _class_last(logits):
+    # torch puts the class dim at axis 1 for N>2 shapes; gather needs it last.
+    return mx.moveaxis(logits, 1, -1) if _mx(logits).ndim > 2 else logits
+
+
+def _gather_logp(logp, t):
+    return mx.take_along_axis(_mx(logp), t[..., None].astype(mx.int32), axis=-1)[..., 0]
+
+
+def _reduce_loss(l_i, eff, keep, reduction):
+    l_i = l_i * keep
+    if reduction == "none":
+        return l_i
+    if reduction == "sum":
+        return mx.sum(l_i)
+    return mx.sum(l_i) / mx.maximum(mx.sum(eff * keep), 1e-12)
+
+
+def _ce(logits, target, weight=None, ignore_index=-100, label_smoothing=0.0, reduction="mean"):
+    logits, target = _mx(logits), _mx(target).astype(mx.int32)
+    logits = _class_last(logits)
+    C = logits.shape[-1]
+    lse = mx.logsumexp(logits, axis=-1)
+    keep = (target != ignore_index).astype(logits.dtype)
+    t = mx.where(target != ignore_index, target, mx.zeros_like(target))
+    nll = lse - _gather_logp(logits, t)
+    eps = float(label_smoothing or 0.0)
+    if weight is not None:
+        w = _mx(weight)
+        wt, wsum = w[t], mx.sum(w)
+    else:
+        w, wt, wsum = 1.0, mx.ones_like(nll), C
+    l_i = wt * nll
+    if eps:
+        smooth = (lse * wsum - mx.sum(logits * w, axis=-1)) / C
+        l_i = (1 - eps) * l_i + eps * smooth
+    # torch mean denom = sum(w[t]) over non-ignored; smoothing adds nothing
+    return _reduce_loss(l_i, wt, keep, reduction)
+
+
+def _nll(logp, target, weight=None, ignore_index=-100, reduction="mean"):
+    logp, target = _mx(logp), _mx(target).astype(mx.int32)
+    logp = _class_last(logp)
+    keep = (target != ignore_index).astype(logp.dtype)
+    t = mx.where(target != ignore_index, target, mx.zeros_like(target))
+    l = -_gather_logp(logp, t)
+    wt = _mx(weight)[t] if weight is not None else mx.ones_like(l)
+    return _reduce_loss(wt * l, wt, keep, reduction)
+
+
+def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mask):
+    gout, x = _mx(gout), _mx(x)
+    mean, rstd = _mx(mean), _mx(rstd)
+    w = _mx(weight) if weight is not None else None
+    ndim = len(tuple(normalized_shape))
+    axes = tuple(range(x.ndim - ndim, x.ndim))
+    xhat = (x - mean) * rstd
+    g = gout * w if w is not None else gout
+    dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
+                 - xhat * mx.mean(g * xhat, axis=axes, keepdims=True))
+    sum_axes = tuple(range(x.ndim - ndim))
+    dw = (mx.sum(gout * xhat, axis=sum_axes) if sum_axes else gout * xhat)
+    db = (mx.sum(gout, axis=sum_axes) if sum_axes else gout)
+    mask = tuple(output_mask) if output_mask is not None else (True, True, True)
+    z = mx.zeros((1,), mx.float32)
+    return (dx if mask[0] else z,
+            dw if (weight is not None and mask[1]) else z,
+            db if (bias is not None and mask[2]) else z)
+
+
+def _gqa_expand(a, hq):
+    hk = a.shape[-3]
+    if hk == hq:
+        return a
+    rep = hq // hk
+    a = mx.broadcast_to(mx.expand_dims(a, axis=-3),
+                        a.shape[:-3] + (hk, rep) + a.shape[-2:])
+    return mx.reshape(a, a.shape[:-4] + (hq,) + a.shape[-2:])
+
+
+def _gqa_reduce(d, hk):
+    hq = d.shape[-3]
+    if hq == hk:
+        return d
+    rep = hq // hk
+    d = mx.reshape(d, d.shape[:-3] + (hk, rep) + d.shape[-2:])
+    return mx.sum(d, axis=-3)
+
+
+def _slice_backward(g, input_shape, dim, start, end, step=1):
+    g = _mx(g)
+    shape = tuple(input_shape)
+    dim = dim % len(shape)
+    N = shape[dim]
+    lo = min(max(start + N if start < 0 else start, 0), N)
+    hi = min(max(end + N if end < 0 else end, 0), N)
+    if step != 1 or lo >= hi:
+        _raise(f"slice_backward step={step} range={lo}:{hi}")
+    parts = []
+    if lo:
+        parts.append(mx.zeros(shape[:dim] + (lo,) + shape[dim + 1:], g.dtype))
+    parts.append(g)
+    if shape[dim] - hi:
+        parts.append(mx.zeros(shape[:dim] + (shape[dim] - hi,) + shape[dim + 1:], g.dtype))
+    return parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=dim)
+
+
+def _silu_backward(g, x):
+    g, x = _mx(g), _mx(x)
+    sig = mx.sigmoid(x)
+    return g * sig * (1.0 + x * (1.0 - sig))
+
+
+def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
+    if dropout_p:
+        _raise("flash_cpu dropout_p")
+    q, k, v = _mx(q), _mx(k), _mx(v)
+    k = _gqa_expand(k, q.shape[-3])
+    v = _gqa_expand(v, q.shape[-3])
+    out = _sdpa(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
+                is_causal=is_causal, scale=scale)
+    s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
+    scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
+    if is_causal:
+        T, S = scores.shape[-2], scores.shape[-1]
+        keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
+        scores = mx.where(keep, scores, -mx.inf)
+    if attn_mask is not None:
+        scores = scores + _mx(attn_mask)
+    lse = mx.logsumexp(scores, axis=-1)
+    return (out, lse)
+
+
+def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
+                        attn_mask=None, scale=None):
+    if dropout_p:
+        _raise("flash_cpu_bwd dropout_p")
+    gout, q, k, v, out = _mx(gout), _mx(q), _mx(k), _mx(v), _mx(out)
+    lse = _mx(lse)
+    hk = k.shape[-3]
+    k = _gqa_expand(k, q.shape[-3])
+    v = _gqa_expand(v, q.shape[-3])
+    s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
+    scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
+    if is_causal:
+        T, S = scores.shape[-2], scores.shape[-1]
+        keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
+        scores = mx.where(keep, scores, -mx.inf)
+    if attn_mask is not None:
+        scores = scores + _mx(attn_mask)
+    if lse.ndim == scores.ndim:
+        lse = lse[..., 0]
+    p = mx.exp(scores - lse[..., None])
+    dv = mx.matmul(mx.swapaxes(p, -2, -1), gout)
+    dP = mx.matmul(gout, mx.swapaxes(v, -2, -1))
+    dsum = mx.sum(gout * out, axis=-1, keepdims=True)
+    dS = p * (dP - dsum)
+    dq = s * mx.matmul(dS, k)
+    dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q)
+    return (dq, _gqa_reduce(dk, hk), _gqa_reduce(dv, hk))
+
+
 def _ln_native(a, normalized_shape, weight, bias, eps):
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
-    dummy = mx.array(np.zeros(1, np.float32))
-    return (mx.fast.layer_norm(a, w, b, eps), dummy, dummy)
+    axes = tuple(range(a.ndim - len(tuple(normalized_shape)), a.ndim))
+    mu = mx.mean(a, axis=axes, keepdims=True)
+    xc = a - mu
+    rstd = 1.0 / mx.sqrt(mx.mean(xc * xc, axis=axes, keepdims=True) + eps)
+    out = xc * rstd
+    if w is not None:
+        out = out * w
+    if b is not None:
+        out = out + b
+    return (out, mu, rstd)
 
 def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
@@ -249,6 +431,17 @@ def _mean(a, dim=None, keepdim=False, **k):
 def _sum(a, dim=None, keepdim=False, **k):
     return mx.sum(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
 
+_INT_DT = (mx.int8, mx.int16, mx.int32, mx.int64,
+           mx.uint8, mx.uint16, mx.uint32, mx.uint64)
+
+
+def _embedding(a, b, *a_, **k_):
+    # F.embedding emits (indices, weight); aten.embedding emits (weight,
+    # indices). Indices are integer dtype, weight is float.
+    am, bm = _mx(a), _mx(b)
+    idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
+    return w[idx.astype(mx.int32)]
+
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
     # mlx 0.32's fast binding requires scale explicitly (no default).
@@ -258,7 +451,11 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, e
     if attn_mask is not None:
         kw["mask"] = _mx(attn_mask)
     elif is_causal:
-        kw["mask"] = "causal"
+        T, S = q.shape[-2], k.shape[-2]
+        if T == S:
+            kw["mask"] = "causal"
+        else:
+            kw["mask"] = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
 
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
@@ -772,6 +969,7 @@ _FUNC_SPECS = {
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
     "t": lambda a: mx.transpose(a), "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
+    "unsafe_view": _reshape,
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
     "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
@@ -796,8 +994,8 @@ _FUNC_SPECS = {
     "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
-    "detach": lambda a: a, "clone": lambda a: a, "contiguous": lambda a: a,
-    "alias": lambda a: a, "lift_fresh": lambda a: a, "lift_fresh_copy": lambda a: a, "to": lambda a, *a_, **k_: a,
+    "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
+    "alias": lambda a: a, "lift_fresh": lambda a: a, "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
@@ -830,7 +1028,18 @@ _FUNC_SPECS = {
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
     "_softmax": lambda a, dim, half=False: mx.softmax(a, axis=dim),
-    "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
+    "gelu": lambda a, approximate="none": (0.5 * a * (1.0 + mx.tanh(math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a))) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0)))),
+    "cross_entropy": lambda logits, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", label_smoothing=0.0, *a_, **k_: (
+        _ce(logits, target, weight, ignore_index, label_smoothing, _red(reduction, size_average, reduce))),
+    "nll_loss": lambda logp, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", *a_, **k_: (
+        _nll(logp, target, weight, ignore_index, _red(reduction, size_average, reduce))),
+    "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=_red(reduction, size_average, reduce)),
+    "native_layer_norm_backward": _ln_backward,
+    "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
+    "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
+    "slice_backward": _slice_backward,
+    "silu_backward": _silu_backward,
+    "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
@@ -891,7 +1100,7 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": lambda w, idx, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
+    "embedding": _embedding,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
@@ -941,8 +1150,8 @@ def _build_func_table():
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
         ("torch.nn.functional.batch_norm", lambda x, rm, rv, w=None, b=None, training=False, momentum=0.1, eps=1e-5: _bn3(x, w, b, rm, rv, training, momentum, eps)[0]),
         ("torch.batch_norm", _FUNC_SPECS["batch_norm"]),
-        ("torch.nn.functional.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
-        ("torch.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
+        ("torch.nn.functional.embedding", _embedding),
+        ("torch.embedding", _embedding),
         ("operator.getitem", lambda t, i: t[i]),
         ("operator.matmul", mx.matmul),
         ("operator.add", _FUNC_SPECS["add"]),
