@@ -445,6 +445,24 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
 
+def _arange(*a, **k):
+    # torch.arange(end) | (start, end[, step]); dynamo may pass everything
+    # as kwargs (start/end/step/dtype/device) — fold them into positional.
+    args = list(a)
+    if not args and "start" in k:
+        args.append(k["start"])
+    if "end" in k and len(args) < 2:
+        args.append(k["end"])
+    if "step" in k and len(args) < 3:
+        if len(args) == 1:
+            args.insert(0, 0)
+        args.append(k["step"])
+    dtype = _MX_DT.get(k.get("dtype"))
+    if dtype is None and all(type(v) is int for v in args):
+        dtype = mx.int64   # torch.arange defaults to int64 for integral args
+    return mx.arange(*args, dtype=dtype)
+
+
 def _multinomial(probs, num_samples, replacement=False, **kw):
     """torch.multinomial parity: draws from probability rows along the last dim.
     replacement=False is top-k of Gumbel-perturbed log-probs (exact);
@@ -845,7 +863,7 @@ _FUNC_SPECS = {
     "negative": mx.negative, "isnan": mx.isnan, "isinf": mx.isinf,
     "isfinite": lambda a: mx.logical_not(mx.isinf(a)),
     "linspace": lambda s, e, n, **k: mx.linspace(s, e, n),
-    "arange": lambda *a, **k: mx.arange(*a),
+    "arange": lambda *a, **k: _arange(*a, **k),
     "eye": lambda n, m=None, **k: mx.eye(n, m) if m else mx.eye(n),
     "ge": lambda a, b: mx.greater_equal(_mx(a), _mx(b)),
     "le": lambda a, b: mx.less_equal(_mx(a), _mx(b)),
