@@ -231,8 +231,18 @@ def _pool_out(in_sz, k, s, p, dil, ceil_mode):
     return max(int(o), 0)
 
 
-def _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw):
-    # (N,C,Hp,Wp) -> (N,C,oh,ow,K), K = kh*kw row-major window offsets
+def _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw, pad_value=0.0):
+    # (N,C,Hp,Wp) -> (N,C,oh,ow,K), K = kh*kw row-major window offsets.
+    # ceil_mode lets the last window start inside the pad and overrun the
+    # padded extent; grow the array on the bottom/right so those positions
+    # read pad_value instead of slicing ragged.
+    need_h = (oh - 1) * sh + (kh - 1) * dh + 1
+    need_w = (ow - 1) * sw + (kw - 1) * dw + 1
+    if need_h > xp.shape[2] or need_w > xp.shape[3]:
+        xp = mx.pad(xp, ((0, 0), (0, 0),
+                         (0, max(need_h - xp.shape[2], 0)),
+                         (0, max(need_w - xp.shape[3], 0))),
+                    constant_values=pad_value)
     cols = [xp[:, :, i * dh: i * dh + (oh - 1) * sh + 1: sh,
                j * dw: j * dw + (ow - 1) * sw + 1: sw]
             for i in range(kh) for j in range(kw)]
@@ -282,7 +292,8 @@ def _max_pool2d(a, kernel_size, stride=None, padding=0, dilation=1,
     (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, dh, dw) = \
         _pool_shape(x, kernel_size, stride, padding, dilation, ceil_mode)
     xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)), constant_values=-mx.inf)
-    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw)
+    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw,
+                        pad_value=-mx.inf)
     out = win.max(axis=-1)
     if not return_indices:
         return out
@@ -299,7 +310,8 @@ def _max_pool2d_bwd(grad_output, a, kernel_size, stride=None, padding=0,
     (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, dh, dw) = \
         _pool_shape(x, kernel_size, stride, padding, dilation, ceil_mode)
     xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)), constant_values=-mx.inf)
-    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw)
+    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw,
+                        pad_value=-mx.inf)
     idx = win.argmax(axis=-1)
     mask = mx.equal(idx[..., None], mx.arange(kh * kw)).astype(g.dtype)
     contrib = g[..., None] * mask
@@ -316,11 +328,13 @@ def _avg_pool2d(a, kernel_size, stride=None, padding=0, ceil_mode=False,
     s = _pool_windows(xp, oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
     if divisor_override is not None:
         return s / float(divisor_override)
-    if count_include_pad:
-        return s / float(kh * kw)
+    # Divisor = window positions inside the padded input; ceil overrun
+    # never counts. include_pad counts the p-pad region itself.
     ones = mx.ones((n, c, h, w), dtype=x.dtype)
-    cnt = _pool_windows(mx.pad(ones, ((0, 0), (0, 0), (ph, ph), (pw, pw))),
-                        oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
+    cnt = _pool_windows(
+        mx.pad(ones, ((0, 0), (0, 0), (ph, ph), (pw, pw)),
+               constant_values=1.0 if count_include_pad else 0.0),
+        oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
     return s / cnt
 
 
@@ -332,12 +346,12 @@ def _avg_pool2d_backward(grad_output, a, kernel_size, stride=None, padding=0,
         _pool_shape(x, kernel_size, stride, padding, (1, 1), ceil_mode)
     if divisor_override is not None:
         div = float(divisor_override)
-    elif count_include_pad:
-        div = float(kh * kw)
     else:
         ones = mx.ones((n, c, h, w), dtype=x.dtype)
-        div = _pool_windows(mx.pad(ones, ((0, 0), (0, 0), (ph, ph), (pw, pw))),
-                            oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
+        div = _pool_windows(
+            mx.pad(ones, ((0, 0), (0, 0), (ph, ph), (pw, pw)),
+                   constant_values=1.0 if count_include_pad else 0.0),
+            oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
     contrib = mx.broadcast_to((g / div)[..., None],
                               (n, c, oh, ow, kh * kw))
     acc = _pool_scatter(contrib, h + 2 * ph, w + 2 * pw, kh, kw, sh, sw, 1, 1)
@@ -346,8 +360,15 @@ def _avg_pool2d_backward(grad_output, a, kernel_size, stride=None, padding=0,
 
 def _adaptive_avg_pool2d(a, output_size):
     x = _mx(a)
-    oh, ow = _pool_hw(output_size)
     n, c, h, w = x.shape
+    if output_size is None:
+        output_size = (h, w)
+    elif isinstance(output_size, (list, tuple)):
+        output_size = tuple(h if s is None else s for s in output_size[:1]) + \
+            tuple(w if s is None else s for s in output_size[1:2])
+    oh, ow = _pool_hw(output_size)
+    if oh == h and ow == w:
+        return x
     rows = []
     for i in range(oh):
         hs = i * h // oh
@@ -365,6 +386,8 @@ def _adaptive_avg_pool2d_backward(grad_output, a):
     g, x = _mx(grad_output), _mx(a)
     n, c, h, w = x.shape
     oh, ow = g.shape[2], g.shape[3]
+    if oh == h and ow == w:
+        return g
     acc = mx.zeros((n, c, h, w), dtype=g.dtype)
     for i in range(oh):
         hs = i * h // oh
