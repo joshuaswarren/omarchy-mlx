@@ -1902,6 +1902,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name == "detach" and n.op == "call_function":
                 env[n] = args[0]
+
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
