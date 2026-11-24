@@ -162,10 +162,11 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
 // context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
 // identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
-// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4 on
-// every other chip until its paired A/B lands (G14C: 2x16 is 1.16 percent
-// slower on the 2B decode, five of five pairs, tokens identical, so 2x4
-// stays). The accepted overrides are 2x4 and 2x16.
+// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4w2 on
+// G14C (uvec2 weight loads in the 2x4 multi kernel: 2B ctx=512 +1.35% 5/5,
+// 2B short +1.69% 3/3, 9B ctx=512 +1.18% 3/3 atop OUTGATE_FOLD=0, tokens
+// identical), and 2x4 on every other chip until its paired A/B lands.
+// The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -202,6 +203,11 @@ const QmmGeometry& qmm_geometry() {
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
       }
+      if (omarchy::select_qmm_g14c_2x4w2(caps.device_name)) {
+        return QmmGeometry{
+            8u, K::QmmVecQ4WordSubgroupBF16,
+            K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
+      }
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
@@ -228,8 +234,13 @@ const QmmGeometry& qmm_geometry() {
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
     }
+    if (v == "2x4w2") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16,
+          K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
+    }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16 2x16w2 2x16kcont");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont");
   }();
   return geometry;
 }
