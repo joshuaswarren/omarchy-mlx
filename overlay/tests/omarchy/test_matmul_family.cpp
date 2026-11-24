@@ -7774,7 +7774,7 @@ TEST_CASE("short-pass GEMV: per-part default row cap") {
   CHECK(omarchy::qmv_small_t_default_part("Apple M4 Pro (G16S B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M3 (G13C B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M1 (G13G B1)") == 8);
-  CHECK(omarchy::qmv_small_t_default_part("Apple M2 Max (G14C B1)") == 0);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M2 Max (G14C B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M5 Max (G17C B1)") == 0);
   CHECK(omarchy::qmv_small_t_default_part("Apple M4 (G16G B1)") == 0);
   CHECK(omarchy::qmv_small_t_default_part("") == 0);
