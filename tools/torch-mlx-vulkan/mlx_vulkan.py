@@ -858,7 +858,8 @@ for _fn, _low in FUNC_TABLE.items():
 # ops that produce arrays from scalars/shapes — lower even with no mx inputs
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
-              "rand", "randn", "randint", "randperm", "new_zeros", "new_ones"}
+              "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
+              "new_empty", "new_full", "scalar_tensor"}
 
 # ops that must never CPU-fallback: lower even when upstream nodes produced
 # torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)
