@@ -1894,17 +1894,18 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
     mix(0x2000000000000000ull | (dim_ord[v] + 1));
   };
-  bool sig_ok = true;
-  for (size_t i = 0; i < tape.size(); ++i) {
-    node_pos[tape[i].id()] = i;
-  }
-  const bool node_debug =
-      std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG2") != nullptr;
+  bool sig_ok = plan_cache;
   auto pc_elapsed = [&]() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now() - pc_t0)
         .count();
   };
+  if (plan_cache) {
+  for (size_t i = 0; i < tape.size(); ++i) {
+    node_pos[tape[i].id()] = i;
+  }
+  const bool node_debug =
+      std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG2") != nullptr;
   for (size_t i = 0; i < tape.size() && sig_ok; ++i) {
     const array& node = tape[i];
     const uint64_t sig_in = sig;
@@ -2053,6 +2054,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   mix(std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") != nullptr);
   mix(std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") != nullptr);
   mix(tape.size());
+  }
   const int64_t pc_sig_us = pc_time ? pc_elapsed() : 0;
   const bool plan_debug =
       std::getenv("MLX_OMARCHY_PLAN_CACHE_DEBUG") != nullptr;
