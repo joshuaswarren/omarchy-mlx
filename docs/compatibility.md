@@ -91,6 +91,13 @@ nothing about Linux execution.
   in f16 decodes at 44.95 / 41.43 tokens per second at 64 / 512 context
   tokens, against 37.28 / 23.91 before, with identical token ids
   ([2026-11-22 receipt](../receipts/2026-11-22-m3-pro-g15s-sdpa-f16/README.md)).
+  bf16 single-query attention runs the split-K route by default from
+  192 keys (head width 256 from 1408). Qwen3-4B-Instruct-2507 4-bit
+  decodes at 46.66 / 45.20 / 41.73 / 35.53 tokens per second at
+  443 / 1024 / 2048 / 4000 context tokens, against 39.79 / 32.73 /
+  25.10 / 17.47 before; Qwen3.8-2B 4-bit decodes at
+  77.33 / 73.73 / 77.17 / 75.34 against 77.37 / 73.92 / 68.83 / 60.90
+  ([2026-11-22 split-K receipt](../receipts/2026-11-22-m3-pro-g15s-sdpa-split/README.md)).
   ANE: Untested.
 - M4 (Mac mini, J773g / T8132, GPU G16G). GPU: Experimental. Requires the out-of-tree G16G GPU kernel driver (kernel 7.1.13, `asahi_m4`) and Mesa Honeykrisp with the Apple9 compute port (techmore/mesa `m4-honeykrisp-compute`), with `AGX_APPLE9_MAX_SHARED=32768`. With the M4 changes of #316-#321 the standing battery runs every suite and every capability-simulation profile; 34 of 800 cases fail, the same 34 that fail on `main` there, 32 of them compute pipelines the driver rejects (complex ops, eig, wide-row partition). Decode, 64 greedy tokens, mlx-lm 0.31.3: granite-4.0-1b-4bit 51.3 tok/s, Qwen2.5-1.5B-Instruct-4bit 63.2, gemma-3-1b-it-4bit 54.0, Qwen3.5-4B-MLX-4bit 15.7, Mistral-7B-Instruct-v0.3-4bit 18.6 ([receipt](../receipts/2026-11-01-m4-g16g-part1/README.md)). The receipt covers the numerical battery, the dispatch trace and device reopen. No qualification row is posted on #537 for this machine yet; its machine id is unassigned. ANE: Data-only; h16 bring-up module.
 - M4 Air (MacBook Air, J713 / T8132, GPU G16G B0). GPU: Experimental, on a bring-up Borealis build (kernel 7.3.0-bj713b7+). Its qualification-r4 row on #537 (machine id `729c0299075fafa2`) completed all 34 suite files: the only new failure over the M1 Max reference is `test_export_unique`, which the r7 wheel fixes, and one reference failure (`test_sdpa_long_masked_sequence`) passes on this machine. Qwen3-4B 4-bit decode 25.68 tok/s, prefill 94.98 tok/s — bring-up driver rates, not final. ANE: Data-only; h16 bring-up module (the row's ANE step reported `unavailable`: no `omarchy-ane-smoke` on the run's image).

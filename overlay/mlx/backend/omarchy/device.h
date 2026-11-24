@@ -841,7 +841,7 @@ inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
   return n <= max_elems / k;
 }
 
-// Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128, width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256): the smallest cache length, in keys, from which the route is the default on a part.
+// Split-K bf16 decode attention, head width 128 and 256 (MLX_OMARCHY_SDPA_DECODE_SPLIT unset; the thresholds were measured at head width 128; width 256 uses the same rule, receipts/2026-10-28-sdpa-split-hd256, except on the parts with their own sdpa_split_wide_min_keys row): the smallest cache length, in keys, from which the route is the default on a part.
 // 0 means the fused kernel stays the default. The route costs 79 to 90 microseconds per call up to 512 keys (two dispatches) and 89 to 113 at 1024 keys, and it wins by more as the cache grows,
 // so a short cache keeps the fused kernel. Per part, the smallest length of the measured sweep (128 to 1024 keys, 36-call chains and 36 independent
 // calls, default against split on one tree, receipts/2026-10-23-sdpa-split-decode) where the split route is faster in both shapes of work, except G14C, which starts where it is faster in the chain shape of a decode step:
@@ -859,12 +859,18 @@ inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
 //   chain 61.6 against 56.2; two sweeps of 224 to 6144 keys, receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k); the plain pass 1 first wins at 1024 keys (147.9 against 84.2).
 //   Qwen3-8B 4-bit decode, 128 generated, two rounds, default against the route with the value-phase pass 1: 443-token prompt 39.8 and 39.7 to 40.9 and 40.9 tokens
 //   per second (+2.9 percent), 2048 tokens 31.5 to 38.2 (+21.6), 4000 tokens 25.2 to 35.5 and 35.0 (+39.6), tokens identical. Head width 256 starts later on this
-//   part, sdpa_split_wide_min_keys. Pure.
+//   part, sdpa_split_wide_min_keys.
 //   BMG G21 (Intel Arc Pro B60 eGPU, xe driver): 512 keys. The fused kernel runs a fixed 32-workgroup grid on this part (one group per query
 //   head) and reaches about 2 GB/s of 456 at ctx 512 — an occupancy wall, not bandwidth (EG-1 profile receipt). Qwen3-4B 4-bit decode,
 //   128 generated, ABBA env-forced against default on one wheel: 512 keys 104.4 to 42.2 ms per token (+148 percent), 8192 keys 223.4 to 54.0 (+314 percent),
 //   tokens identical (EG-2 receipt). The RTX 5060 Ti on the same host dispatches the same fused kernel but holds 112 tok/s against the
 //   split route's 114 at 512 keys — parity, so it keeps the fused kernel.
+//   G15S (Apple M3 Pro, 14-core GPU): 192 keys with the 64-key block pass 1 (176: independent 38.3 to 38.4 against 38.5 to 38.6, chain 66.0 to 66.1 against 41.2 to 41.3;
+//   192: independent 40.2 to 40.3 against 38.6 to 38.8, chain 69.6 to 70.0 against 41.2 to 41.3; the same order in three sweeps spanning 128 to 16384 keys,
+//   receipts/2026-11-22-m3-pro-g15s-sdpa-split); the plain pass 1 first wins at 448 keys (chain 136.4 to 137.0 against 79.6 to 83.0). The 64-key blocks need four
+//   query heads per key-value head; other groups run the value-phase pass 1 from 192 keys and win the chain shape of a decode step there (192 keys, 8 key-value heads,
+//   chain, the fused kernel against the route: one query head per key-value head 41.9 against 26.7, two 41.6 against 35.0) except eight (97.8 against 98.8, faster from
+//   256 keys), and the independent shape from 320 keys (one query head per key-value head: from 640). Pure.
 inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
@@ -877,6 +883,7 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G14G") != std::string::npos) return 192;
   if (device_name.find("G16S") != std::string::npos) return 320;
   if (device_name.find("BMG") != std::string::npos) return 512;
+  if (device_name.find("G15S") != std::string::npos) return 192;
   return 0;
 }
 
@@ -885,12 +892,17 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
 //   G16S (Apple M4 Pro): 768 keys. Width 256 runs the plain pass 1 there (the width-256 value-phase pass 1 has no default on this part), and Qwen3.5-4B 4-bit decode
 //   with the route forced, 128 generated, two rounds: 443-token prompt 64.0 and 64.1 against 64.7 and 65.1 tokens per second; 562 tokens 64.3 and 57.0 against
 //   64.4 and 64.9; 749 tokens 64.3 and 64.3 against 63.5 and 64.0; 1038 tokens 64.3 and 64.3 against 61.7 and 62.4; 2048 tokens 63.4 and 63.5 against 58.0 and 57.9; 4000 tokens
-//   59.9 and 60.1 against 51.6 and 51.6 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), tokens identical. Pure.
+//   59.9 and 60.1 against 51.6 and 51.6 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), tokens identical.
+//   G15S (Apple M3 Pro, 14-core GPU): 1408 keys with the width-256 value-phase pass 1 (8 query and 2 key-value heads; 1344: independent 88.7 to 89.1 against 88.6 to 89.3;
+//   1408: independent 90.9 to 91.8 against 89.2 to 89.9, chain 253.6 to 254.6 against 97.6 to 99.6; receipts/2026-11-22-m3-pro-g15s-sdpa-split). With 4 or 8 key-value
+//   heads the width-256 value-phase limit is passed at 1408 keys and the plain pass 1 runs; it wins both shapes there too (16 query / 4 key-value heads, the fused
+//   kernel against the route: independent 170.2 against 136.8, chain 254.9 against 145.7). Pure.
 inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
   if (device_name.find("G16S") != std::string::npos) return 768;
+  if (device_name.find("G15S") != std::string::npos) return 1408;
   return sdpa_split_min_keys(device_name);
 }
 
@@ -907,6 +919,8 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len, i
 //   G13G (Apple M1): 128 and 512 keys 78 and 88 against 57 and 73, but 1024 keys 113 against 130 and 2048 keys 239 against 268, and decode of Qwen3-4B reads -0.5 percent at 477 prompt tokens and -2.4 percent at 1888, so the default stays off.
 //   G16S (Apple M4 Pro): the variant is faster at every measured length, 224 to 16384 keys (2048 keys 145.8 against 109.8 independent, 4096 keys 212.4 against 164.5,
 //   6144 keys 278.5 against 226.6, 16384 keys 633.4 against 507.8; receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), so the limit is the longest length measured.
+//   G15S (Apple M3 Pro, 14-core GPU), independent: 1280 keys 84.8 to 85.5 against 72.9 to 73.4, 1281 keys 87.2 to 87.3 against 106.8 to 107.0 (8 key-value heads, 80 workgroups of
+//   128-key blocks against 88), so the limit is 1280 (receipts/2026-11-22-m3-pro-g15s-sdpa-split).
 // Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated, one tree, default against the variant: +4.6 percent on G14C (63.1 to 66.0 tokens per second), +2.8 percent at 1888 tokens. An unmeasured part keeps the plain pass 1. Pure.
 inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS")) {
@@ -916,6 +930,7 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (device_name.find("G13C") != std::string::npos) return 2048;
   if (device_name.find("G17C") != std::string::npos) return 2048;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 16384;
+  if (device_name.find("G15S") != std::string::npos) return 1280;
   return 0;
 }
 
@@ -931,6 +946,8 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
 //   1024 keys 60.8 to 69.3 against 70.4 to 77.0; so the limit is 512 (receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k). Qwen3-8B 4-bit decode, 128 generated, two rounds, 128-key against 64-key blocks:
 //   426-token prompt 41.6 and 41.5 against 41.9 and 42.6 tokens per second; past the limit the 64-key blocks lose (664 tokens 41.3 and 41.3 against 40.8 and 41.2,
 //   970 tokens 41.1 and 41.1 against 39.6 and 40.3), tokens identical.
+//   G15S (Apple M3 Pro, 14-core GPU), independent, value-phase 128-key blocks against 64-key blocks: 640 keys 59.3 to 59.6 against 49.1 to 50.7, 641 keys 59.2 to 60.2 against
+//   67.3 to 67.7 (8 key-value heads, 80 workgroups of 64-key blocks against 88), so the limit is 640 (receipts/2026-11-22-m3-pro-g15s-sdpa-split).
 // An unmeasured part keeps the 128-key blocks. Pure.
 inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS")) {
@@ -939,6 +956,7 @@ inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (device_name.find("G14C") != std::string::npos) return 512;
   if (device_name.find("G17C") != std::string::npos) return 512;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 512;
+  if (device_name.find("G15S") != std::string::npos) return 640;
   return 0;
 }
 
@@ -962,6 +980,8 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
 //   G14C (M2 Max): 68. Op rows on the M2 Max (receipts/2026-11-14-g14c-sdpa-hd256-pv-limit) win +19 to +29 percent from 32 workgroups up to 68 and lose -10 to -16 percent
 //   from 69 up. The edge is one block wide at 1 key-value head (+19.03 percent at 8704 keys, 68 workgroups, then -12.79 at 8832, 69); 4 key-value heads win at 64 and 68, 2 key-value
 //   heads win at 64 (and 34 and 66 in the model rows) and both lose at 76, the first count tried above 68. The 68 is not two workgroups per core; it is the measured edge. Models: Qwen3.8-2B +3.4 percent at 512 and +4.66 at 2048 context, Qwen3.8-9B +1.57 and +1.47.
+//   G15S (M3 Pro, 14-core GPU): 36. Op rows at 2 key-value heads (8 query heads): the variant is faster than the old pass 1 through 2304 keys (18 blocks, 36 workgroups;
+//   independent 94.8 to 103.2 against 132.9 to 138.9) and slower from 2305 (19 blocks, 38 workgroups; 156.8 to 160.1 against 132.8 to 139.0) (receipts/2026-11-22-m3-pro-g15s-sdpa-split).
 //   Every other part: no default (the width-128 variant's default is measured; the width-256 one is not).
 inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_HD256_PV_LIMIT")) {
@@ -971,6 +991,7 @@ inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name
   if (device_name.find("G13C") != std::string::npos) return 64u;
   if (device_name.find("G14C") != std::string::npos) return 68u;
   if (device_name.find("G17C") != std::string::npos) return 68u;  // initial value matching G14C (same Max class) pending calibration on M5
+  if (device_name.find("G15S") != std::string::npos) return 36u;
   return 0u;
 }
 
