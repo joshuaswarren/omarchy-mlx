@@ -18,6 +18,7 @@ import logging
 import math
 import operator
 import os
+import sys
 
 import numpy as np
 import torch
@@ -48,8 +49,34 @@ if _BCA is not None:
 
     @dataclasses.dataclass
     class _MlxVkArtifact(_BCA):
+        def __getstate__(self):
+            # torch re-binds this artifact's backend as
+            # module.__dict__[backend_id] for the frame's recorded
+            # python_module - which comes from fn.__module__ and is spoofed by
+            # @functools.wraps wrappers (HF deprecate_kwarg): the compiled code
+            # then runs under the *wrapper* module's globals and LOAD_GLOBAL
+            # misses. At save time the name is bound in the real dicts, so
+            # snapshot those module names and restore them at load.
+            mods = [
+                m.__name__
+                for m in list(sys.modules.values())
+                if isinstance(getattr(m, "__dict__", None), dict)
+                and self.key in m.__dict__
+            ]
+            return {"key": self.key, "content": self.content, "mods": mods}
+
+        def __setstate__(self, state):
+            self.key = state["key"]
+            self.content = state["content"]
+            self._mods = state.get("mods", [])
+
         def after_deserialization(self):
-            return _restore_backend(self.content)
+            backend = _restore_backend(self.content)
+            for name in getattr(self, "_mods", ()):
+                mod = sys.modules.get(name)
+                if mod is not None:
+                    mod.__dict__[self.key] = backend
+            return backend
 
 
 def _restore_backend(gm):
