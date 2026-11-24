@@ -712,17 +712,18 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
 }
 
 // The fused GatedDelta conv + delta + gated norm op (fast::gdn_conv_delta_update with the gated norm folded in, the MLX_OMARCHY_GDN_CONV_DELTA value 2)
-// runs by default on the 13-inch (Apple M1, G13G) and the 14-inch (Apple M2 Max, G14C). The 13-inch 2B decode measured +0.51 percent (5 of 5 pairs faster,
-// identical tokens, dispatches per token 251 to 215, 5 pairs x 128 tokens at ctx 512).
-// The 14-inch (receipts/2026-11-14-g14c-gdn-conv-delta, ABBA, 128 tokens, identical tokens in every pair): Qwen3.8-2B +2.00 percent at ctx 512 and +1.22 at
-// ctx 2048; Qwen3.8-9B -0.08 (flat) and -0.14 (0.03 ms per token; both flag arms slower than both default arms: a small steady loss, not noise). The 2B gain is
-// larger and one rule covers both models.
+// runs by default on the 13-inch (Apple M1, G13G) only. The 13-inch 2B decode measured +0.51 percent (5 of 5 pairs faster,
+// identical tokens, dispatches per token 251 to 215, 5 pairs x 128 tokens at ctx 512), and the mode-2 ABBA on 2026-11-24 measured
+// +0.70 percent (2B) there.
+// The 14-inch flipped OFF on 2026-11-24: the earlier ON receipts (2026-11-14-g14c-gdn-conv-delta: 2B +2.00 at ctx 512, +1.22 at 2048,
+// 9B flat) are superseded by a 5-pair ABBA per ctx on the 0.7.50rc2 wheel (boot 59cee24b) where mode 0 beat the mode-2 default on
+// Qwen3.8-2B decode at every context: +2.53 percent at ctx 128, +2.37 at 512, +2.55 at 2048, ordered_records_sha256 identical on all
+// 30 arms (~/t7/results/w9c-m2-gdncd0-confirm-{128,512,2048}-20261124t190158 on the M2; the PAR-11 one-switch screen found the lever,
+// w88's 2B wave independently skipped it). G17C leaves with G14C: it was an unmeasured copy of the G14C default.
 // The 16-inch (G13C) is unmeasured, so it keeps the stock route until its own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this
 // everywhere.
 inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13G") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
+  return device_name.find("G13G") != std::string::npos;
 }
 
 // The one resolver for the fused GatedDelta conv + delta op's mode: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated
