@@ -749,9 +749,11 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
 // kernel leaves the multiply-add uncontracted (measured 2026-11-24 on the
 // PAR-35 bisect: the fused-vs-ops residual is exactly fma(delta,k,dec)
 // vs fl32(dec + delta*k), zero elsewhere), so the kernels there take the
-// unfused update (flag bit4 in gated_delta_prefill.comp, bit1 in
-// gated_delta_vjp.comp). MLX_OMARCHY_GDN_UPDATE_UNFUSED=0/1 overrides the
-// part default for A/B. Pure.
+// unfused update (flag bit4 in gated_delta_prefill.comp and
+// gated_delta_decode.comp, bit1 in gated_delta_vjp.comp; in the decode
+// kernel bit4 selects the ops-order walk arithmetic bit9 already has, the
+// gate prologue untouched). MLX_OMARCHY_GDN_UPDATE_UNFUSED=0/1 overrides
+// the part default for A/B. Pure.
 inline bool gdn_update_unfused_default(const std::string& device_name) {
   const char* env = std::getenv("MLX_OMARCHY_GDN_UPDATE_UNFUSED");
   if (env != nullptr && env[0] != '\0' && env[1] == '\0' &&

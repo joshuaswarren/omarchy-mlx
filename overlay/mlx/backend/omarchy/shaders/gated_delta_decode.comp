@@ -29,6 +29,15 @@
 // `#ifndef GDN_COMPOSED_ORDER` branches untouched. bf16-A_log models
 // (Qwen3.8 2B/4B) depend on their exact codegen, and restructuring shared
 // code changed their greedy output on G13 Mesa even with the same math.
+//
+// Flag bit 4 (16u, gdn_update_unfused_default; G18G, or
+// MLX_OMARCHY_GDN_UPDATE_UNFUSED=1) selects the same composed-order walk
+// arithmetic bit 9 selects, without touching the gate prologue: the ops
+// chain's eager elementwise kernels leave state*g, (state*g)*k and
+// delta*k uncontracted on parts whose driver does not reassociate, so the
+// default association (k*g table, fma-contracted decay add) is a 1-ulp
+// miscompute there. The gate prologue keeps its own bit-9 checks - bf16
+// A_log models keep their shipped rounding sites either way.
 
 #version 460
 
@@ -323,7 +332,7 @@ void main() {
   if (lane < ROWS) {
     uint row = row0 + lane;
     uint trow = lane * TILE_STRIDE;
-    bool mlx_order = (params.flags & 512u) != 0u;
+    bool mlx_order = (params.flags & (512u | 16u)) != 0u;
     float kv_acc = gdn_kv_walk(trow, dk, g, mlx_order);
     precise float delta =
         (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;

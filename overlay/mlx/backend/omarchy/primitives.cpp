@@ -14346,6 +14346,14 @@ void GatedDeltaUpdate::eval_gpu(
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
+    // Flag bit 4 (16u): ops-order walk arithmetic on the parts whose driver
+    // does not contract the eager chain's products (G18G; see
+    // gdn_update_unfused_default). Same walk order bit 9 selects, gate
+    // prologue untouched.
+    if (omarchy::gdn_update_unfused_default(
+            encoder.device().capabilities().device_name)) {
+      params.flags |= 16u;
+    }
     // The untiled prefetch kernel with thirty-two state words in flight per round trip (default order only, Dk a multiple of 32).
     // MLX_OMARCHY_GDN_PF_WIDE (read live): 1 selects it, any other set value selects the plain prefetch kernel; unset, it is the
     // default on the (part, head ratio) pairs of gdn_pf_wide_default (equal head counts on G14C and G13C). Other shapes keep the plain kernel.
