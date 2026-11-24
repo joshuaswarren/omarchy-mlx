@@ -1834,68 +1834,59 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             # The aot backward graph: these ops must stay on mx or the whole
             # training step crosses to torch per node (PT-T1 speed gate).
-            # Any lowering failure falls through to the generic torch path
-            # for this node (counted), so the step still completes.
-            _v2_lowered = False
-            try:
-                if name == "t" and n.op == "call_function":
-                    env[n] = mx.swapaxes(args[0], -1, -2)
-                    continue
-                if name in ("transpose", "transpose.int") and n.op == "call_function":
-                    a0 = args[0]
-                    d0, d1 = int(args[1]), int(args[2])
-                    env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
-                    continue
-                if name in ("t", "transpose", "transpose.int", "view",
-                            "_unsafe_view", "detach", "gelu_backward",
-                            "native_layer_norm_backward", "split") \
-                        and n.op == "call_function":
-                    shape = args[1]
-                    if isinstance(shape, torch.fx.Node):
-                        shape = env[shape]
-                    if isinstance(shape, int):
-                        shape = (shape,)
-                    env[n] = mx.reshape(args[0], tuple(int(s) for s in shape))
-                    continue
-                if name == "detach" and n.op == "call_function":
-                    env[n] = args[0]
-                    continue
-                if name == "gelu_backward" and n.op == "call_function":
-                    go, x = _cast(args[0]), _cast(args[1])
-                    approx = args[2] if len(args) > 2 else "none"
-                    if approx == "tanh":
-                        inner = math.sqrt(2.0 / math.pi) * (x + 0.044715 * x * x * x)
-                        phi = 0.5 * (1.0 + mx.tanh(inner))
-                        dphi = math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * x * x) \
-                            * (1.0 - mx.tanh(inner) * mx.tanh(inner))
-                        env[n] = go * (phi + x * dphi)
-                    else:
-                        env[n] = go * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
-                                       + x * mx.exp(-(x * x) / 2.0)
-                                       / math.sqrt(2.0 * math.pi))
-                    continue
-                if name == "native_layer_norm_backward" and n.op == "call_function":
-                    go, inp = _cast(args[0]), _cast(args[1])
-                    nshape = args[2]
-                    mean, rstd, weight = _cast(args[3]), _cast(args[4]), args[5]
-                    out_mask = args[7] if len(args) > 7 else [True, True, True]
-                    w = _cast(weight) if weight is not None else None
-                    inp_nd = inp.ndim
-                    red = tuple(range(inp_nd - len(nshape), inp_nd))
-                    xhat = (inp - mean) * rstd
-                    dw = (go * xhat).sum(axis=red) if 1 in out_mask else None
-                    db = go.sum(axis=red) if 2 in out_mask else None
-                    dx = rstd * (go - go.mean(axis=red, keepdims=True)
-                                 - xhat * (go * xhat).mean(axis=red,
-                                                           keepdims=True))
-                    if w is not None:
-                        dx = dx * w
-                    env[n] = (dx, dw, db)
-                    continue
-                _v2_lowered = True
-            except Exception as exc:
-                log.info("V2-LOWER-FAIL\t%s\t%s", name, exc)
-            if _v2_lowered:
+            # Unmatched ops fall through to the generic handlers below; a
+            # per-op failure raises and lets the guarded wrapper fall back
+            # to the per-node eager executor, keeping the run correct.
+            if name == "t" and n.op == "call_function":
+                env[n] = mx.swapaxes(args[0], -1, -2)
+                continue
+            if name in ("transpose", "transpose.int") and n.op == "call_function":
+                a0 = args[0]
+                d0, d1 = int(args[1]), int(args[2])
+                env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
+                continue
+            if name in ("view", "_unsafe_view") and n.op == "call_function":
+                shape = args[1]
+                if isinstance(shape, torch.fx.Node):
+                    shape = env[shape]
+                if isinstance(shape, int):
+                    shape = (shape,)
+                env[n] = mx.reshape(args[0], tuple(int(s) for s in shape))
+                continue
+            if name == "detach" and n.op == "call_function":
+                env[n] = args[0]
+                continue
+            if name == "gelu_backward" and n.op == "call_function":
+                go, x = _cast(args[0]), _cast(args[1])
+                approx = args[2] if len(args) > 2 else "none"
+                if approx == "tanh":
+                    inner = math.sqrt(2.0 / math.pi) * (x + 0.044715 * x * x * x)
+                    phi = 0.5 * (1.0 + mx.tanh(inner))
+                    dphi = math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * x * x) \
+                        * (1.0 - mx.tanh(inner) * mx.tanh(inner))
+                    env[n] = go * (phi + x * dphi)
+                else:
+                    env[n] = go * (0.5 * (1.0 + mx.erf(x / math.sqrt(2.0)))
+                                   + x * mx.exp(-(x * x) / 2.0)
+                                   / math.sqrt(2.0 * math.pi))
+                continue
+            if name == "native_layer_norm_backward" and n.op == "call_function":
+                go, inp = _cast(args[0]), _cast(args[1])
+                nshape = args[2]
+                mean, rstd, weight = _cast(args[3]), _cast(args[4]), args[5]
+                out_mask = args[7] if len(args) > 7 else [True, True, True]
+                w = _cast(weight) if weight is not None else None
+                inp_nd = inp.ndim
+                red = tuple(range(inp_nd - len(nshape), inp_nd))
+                xhat = (inp - mean) * rstd
+                dw = (go * xhat).sum(axis=red) if out_mask[1] else None
+                db = go.sum(axis=red) if out_mask[2] else None
+                dx = rstd * (go - go.mean(axis=red, keepdims=True)
+                             - xhat * (go * xhat).mean(axis=red,
+                                                       keepdims=True))
+                if w is not None:
+                    dx = dx * w
+                env[n] = tuple(v for v in (dx, dw, db) if v is not None)
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
