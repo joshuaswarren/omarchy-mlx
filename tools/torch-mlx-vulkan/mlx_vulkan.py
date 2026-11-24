@@ -450,15 +450,16 @@ def _embedding(a, b, *a_, **k_):
 
 def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
     a = _mx(a)
-    # aten: half_to_float computes in fp32 and returns fp32 for half inputs
-    if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
-        a = a.astype(mx.float32)
-    r = a - mx.logsumexp(a, axis=dim, keepdims=True)
+    # aten casts the INPUT to dtype before the op: fp16/bf16 + dtype=fp32
+    # must compute in fp32, not compute-then-cast.
     if dtype is not None:
         if dtype not in _MX_DT:
             return _raise(f"log_softmax dtype {dtype}")
-        r = r.astype(_MX_DT[dtype])
-    return r
+        a = a.astype(_MX_DT[dtype])
+    # aten: half_to_float computes in fp32 and returns fp32 for half inputs
+    if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
+        a = a.astype(mx.float32)
+    return a - mx.logsumexp(a, axis=dim, keepdims=True)
 
 def _log_softmax_bwd(g, out, dim, input_dtype=None):
     # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)

@@ -213,6 +213,14 @@ def t_review_fixes():
     RESULTS.append(("log_softmax dtype=fp16", ok, 0))
     print(f"{'PASS' if ok else 'FAIL'} log_softmax dtype=fp16 (got {r2.dtype})",
           flush=True)
+    # bf16 input + dtype=fp32 must cast before the logsumexp (torch semantics),
+    # not compute in bf16 then cast: *10 scale makes the difference ~4e-3 vs 1e-6
+    xw = (torch.randn(4, 64) * 10).bfloat16()
+    r3 = mlx_vulkan._log_softmax_fwd(
+        mx.array(np.array(xw.float().numpy())).astype(mx.bfloat16), -1,
+        dtype=torch.float32)
+    check("log_softmax bf16 dtype=fp32 pre-cast",
+          torch.from_numpy(np.array(r3)), F.log_softmax(xw.float(), -1), tol=1e-4)
     try:
         mlx_vulkan._log_softmax_bwd(g, out, -1, torch.complex64)
         ok = False
