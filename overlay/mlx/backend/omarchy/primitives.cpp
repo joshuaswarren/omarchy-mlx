@@ -36,6 +36,7 @@
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
+#include "mlx/backend/omarchy/sdpa_prefill_select.h"
 // Per-operation i64/u64 elementwise blobs for the G18G packer
 // fallback in dispatch_int_elementwise_to (aurora-silicon/mesa#739).
 #include "elementwise_i64_g18_op0.h"
@@ -17292,10 +17293,13 @@ void ScaledDotProductAttention::eval_gpu(
   // first, so this arm is prefill-shaped traffic only.
   bool bf16_fast = false;
   if (q.dtype() == bfloat16) {
-    if (const char* env = std::getenv("MLX_OMARCHY_SDPA_BF16_FAST");
-        env != nullptr && std::strcmp(env, "0") != 0) {
-      bf16_fast = true;
-    }
+    const auto& sel_caps = encoder.device().capabilities();
+    const bool coopmat_composed_capable =
+        sel_caps.cooperative_matrix_f32_8 &&
+        sel_caps.subgroup_size == 32u &&
+        !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+    bf16_fast = omarchy::sdpa_bf16_fast_enabled(
+        std::getenv("MLX_OMARCHY_SDPA_BF16_FAST"), coopmat_composed_capable);
   }
 
   // Decode uses native Metal's 32-key online-softmax order directly over

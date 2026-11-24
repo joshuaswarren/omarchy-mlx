@@ -1,3 +1,8 @@
+add_executable(omarchy_sdpa_prefill_select_tests test_sdpa_prefill_select.cpp)
+target_include_directories(omarchy_sdpa_prefill_select_tests PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+add_test(NAME omarchy_sdpa_prefill_select_tests COMMAND omarchy_sdpa_prefill_select_tests)
+
 add_executable(omarchy_inference_weight_tests test_inference_weights.cpp)
 target_include_directories(omarchy_inference_weight_tests PRIVATE
                            ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy

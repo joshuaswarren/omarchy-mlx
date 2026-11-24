@@ -262,7 +262,8 @@ float32, including grouped-query attention (`n_q_heads != n_kv_heads`,
 which emits rank-5 matmuls over stride-0 broadcast batch views), causal
 masks, and cache offsets (`k_len > q_len`). Sinks, the training logsumexp
 output, and `force_fused=True` stay named rejections or the composed
-fallback. float16 inputs (and bfloat16 under `MLX_OMARCHY_SDPA_BF16_FAST`)
+fallback. float16 inputs (and bfloat16 under `MLX_OMARCHY_SDPA_BF16_FAST`, which
+defaults on where the device has no f32 cooperative-matrix shape)
 keep the scores, probabilities, and result in the storage dtype with float
 accumulation inside the shaders, and never materialize the causal mask:
 the softmax runs in causal mode (keys past `k_len - q_len + position` are
