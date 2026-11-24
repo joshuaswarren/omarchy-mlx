@@ -13,9 +13,12 @@ mx = pytest.importorskip("mlx.core")
 
 
 def _conv_lower(inp, wt, bias, stride, padding, dilation, transposed, groups):
-    stride = tuple(stride) if not isinstance(stride, int) else stride
-    padding = tuple(padding) if not isinstance(padding, int) else padding
-    dilation = tuple(dilation) if not isinstance(dilation, int) else dilation
+    stride = (stride, stride) if isinstance(stride, int) else \
+        (tuple(stride) * 2 if len(stride) == 1 else tuple(stride))
+    padding = (padding, padding) if isinstance(padding, int) else \
+        (tuple(padding) * 2 if len(padding) == 1 else tuple(padding))
+    dilation = (dilation, dilation) if isinstance(dilation, int) else \
+        (tuple(dilation) * 2 if len(dilation) == 1 else tuple(dilation))
     x = mx.transpose(inp, (0, 2, 3, 1))
     y = mx.conv2d(x, wt, stride=stride, padding=padding, dilation=dilation)
     y = mx.transpose(y, (0, 3, 1, 2))
@@ -90,7 +93,13 @@ def test_conv_training_step_matches_cpu(mlx_vulkan):
             if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
                     and not torch.is_tensor(inputs[0])):
                 flat = tuple(inputs[0])
-            return runner(*flat)
+            out = runner(*flat)
+            if isinstance(out, tuple):
+                out = tuple(t.requires_grad_(True) if torch.is_tensor(t)
+                            and t.is_floating_point() else t for t in out)
+            elif torch.is_tensor(out) and out.is_floating_point():
+                out = out.requires_grad_(True)
+            return out
 
         call._boxed_call = True
         return call

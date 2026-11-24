@@ -1902,7 +1902,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 if kwargs.get("attn_mask") is not None:
                     kw["mask"] = _cast(kwargs["attn_mask"])
                 elif is_causal:
-                    kw["mask"] = "causal"
+                    # jwm1's mlx rejects the "causal" str overload; build
+                    # the additive causal mask from the q/k seq lengths.
+                    neg = mx.full((q.shape[-2], k.shape[-2]), -mx.inf)
+                    causal = mx.tril(mx.zeros_like(neg) + 0.0) * 0 + \
+                        mx.triu(neg, 1)
+                    kw["mask"] = causal
                 if kwargs.get("scale") is not None:
                     kw["scale"] = kwargs["scale"]
                 out = mx.fast.scaled_dot_product_attention(q, k, v, **kw)

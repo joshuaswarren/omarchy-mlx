@@ -56,7 +56,13 @@ def _aot(mlx_vulkan, gm, example_inputs):
             if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
                     and not torch.is_tensor(inputs[0])):
                 flat = tuple(inputs[0])
-            return runner(*flat)
+            out = runner(*flat)
+            if isinstance(out, tuple):
+                out = tuple(t.requires_grad_(True) if torch.is_tensor(t)
+                            and t.is_floating_point() else t for t in out)
+            elif torch.is_tensor(out) and out.is_floating_point():
+                out = out.requires_grad_(True)
+            return out
 
         call._boxed_call = True
         return call
