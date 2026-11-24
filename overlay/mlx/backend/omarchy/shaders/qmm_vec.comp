@@ -827,41 +827,6 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       Q4_TOK_NIB_WORD(wb, nb[r]) \
     } \
   } \
-  precise float dot_t[ROWS_PER_SLOT][M_TOKENS]; \
-  precise float input_sum_t[ROWS_PER_SLOT][M_TOKENS]; \
-  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    for (uint m = 0u; m < M_TOKENS; ++m) { \
-      dot_t[r][m] = 0.0; \
-      input_sum_t[r][m] = 0.0; \
-    } \
-  } \
-  for (uint m = 0u; m < M_TOKENS; ++m) { \
-    if (m >= token_count) { \
-      continue; \
-    } \
-    uint x_row_m = params.lhs_offset + m * params.matrix_k; \
-    uvec4 xa = input_x.values[(x_row_m + w * 8u) / 8u]; \
-    uvec4 xb; \
-    if ((words_this_step) == 2u) { \
-      xb = input_x.values[(x_row_m + w * 8u + 8u) / 8u]; \
-    } \
-    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-      { Q4_QUAD_LOAD_T(xa.x, xa.y, input_sum_t[r][m]) \
-        dot_t[r][m] += fma(x3, na[r][3], \
-            fma(x2, na[r][2], fma(x1, na[r][1], x0 * na[r][0]))); } \
-      { Q4_QUAD_LOAD_T(xa.z, xa.w, input_sum_t[r][m]) \
-        dot_t[r][m] += fma(x3, na[r][7], \
-            fma(x2, na[r][6], fma(x1, na[r][5], x0 * na[r][4]))); } \
-      if ((words_this_step) == 2u) { \
-        { Q4_QUAD_LOAD_T(xb.x, xb.y, input_sum_t[r][m]) \
-          dot_t[r][m] += fma(x3, nb[r][3], \
-              fma(x2, nb[r][2], fma(x1, nb[r][1], x0 * nb[r][0]))); } \
-        { Q4_QUAD_LOAD_T(xb.z, xb.w, input_sum_t[r][m]) \
-          dot_t[r][m] += fma(x3, nb[r][7], \
-              fma(x2, nb[r][6], fma(x1, nb[r][5], x0 * nb[r][4]))); } \
-      } \
-    } \
-  } \
   uint group = w / 8u; \
   float scale_r[ROWS_PER_SLOT]; \
   float bias_r[ROWS_PER_SLOT]; \
@@ -875,9 +840,46 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     if (m >= token_count) { \
       continue; \
     } \
+    uint x_row_m = params.lhs_offset + m * params.matrix_k; \
+    uvec4 xa = input_x.values[(x_row_m + w * 8u) / 8u]; \
+    uvec4 xb; \
+    if ((words_this_step) == 2u) { \
+      xb = input_x.values[(x_row_m + w * 8u + 8u) / 8u]; \
+    } \
+    precise float dot_t[ROWS_PER_SLOT]; \
+    precise float input_sum_t = 0.0; \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-      precise float bias_term = input_sum_t[r][m] * bias_r[r]; \
-      acc_t[m][r] += fma(scale_r[r], dot_t[r][m], bias_term); \
+      dot_t[r] = 0.0; \
+    } \
+    { Q4_QUAD_LOAD_T(xa.x, xa.y, input_sum_t) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot_t[r] += fma(x3, na[r][3], \
+            fma(x2, na[r][2], fma(x1, na[r][1], x0 * na[r][0]))); \
+      } \
+    } \
+    { Q4_QUAD_LOAD_T(xa.z, xa.w, input_sum_t) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot_t[r] += fma(x3, na[r][7], \
+            fma(x2, na[r][6], fma(x1, na[r][5], x0 * na[r][4]))); \
+      } \
+    } \
+    if ((words_this_step) == 2u) { \
+      { Q4_QUAD_LOAD_T(xb.x, xb.y, input_sum_t) \
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+          dot_t[r] += fma(x3, nb[r][3], \
+              fma(x2, nb[r][2], fma(x1, nb[r][1], x0 * nb[r][0]))); \
+        } \
+      } \
+      { Q4_QUAD_LOAD_T(xb.z, xb.w, input_sum_t) \
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+          dot_t[r] += fma(x3, nb[r][7], \
+              fma(x2, nb[r][6], fma(x1, nb[r][5], x0 * nb[r][4]))); \
+        } \
+      } \
+    } \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      precise float bias_term = input_sum_t * bias_r[r]; \
+      acc_t[m][r] += fma(scale_r[r], dot_t[r], bias_term); \
     } \
   } \
 }
