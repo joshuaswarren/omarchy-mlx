@@ -793,6 +793,10 @@ struct GemvGroup {
   // Trailing fast::RMSNorm epilogue over the single member's Add sum.
   std::optional<ResNormPlan> res_norm;
   bool res_norm_done{false};
+  // Wide sibling route: members are epilogue-free and the dispatch is a
+  // single weight-concatenated WordSubgroup pass whose wide output slab
+  // every member aliases (dispatch_quantized_gemv_wide).
+  bool wide{false};
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1110,8 +1114,13 @@ DirectPlan plan_values_window(
     // Raw-terminal: the sum is a fused GEMV group member's own output
     // row (v projections carry no Add epilogue). The dispatch stores
     // the rounded output into the window directly; the member's own
-    // buffer stays a scratch write nothing reads.
+    // buffer stays a scratch write nothing reads. A wide group's member
+    // output aliases the shared slab — it cannot double as the
+    // producer-direct store target, so wide groups stay out.
     for (size_t gi = 0; gi < groups.size() && !found; ++gi) {
+      if (groups[gi].wide) {
+        continue;
+      }
       for (size_t mi = 0; mi < groups[gi].members.size(); ++mi) {
         if (groups[gi].members[mi].node.id() == sum->id()) {
           if (use_count(*sum) != 1) {
@@ -1247,6 +1256,24 @@ bool gemv_epilogue_only_route_enabled(const Device& device) {
 bool node_epilogue_gemv_enabled(const array& node) {
   const Device* d = stream_device(node);
   return d != nullptr && gemv_epilogue_only_route_enabled(*d);
+}
+
+// Wide sibling route (MLX_OMARCHY_QMM_WIDE_GEMV): on parts where the
+// multi-weight fused GEMV defaults off, same-x sibling projections
+// (qkvz, ba, gate/up) merge into one weight-concatenated WordSubgroup
+// dispatch with aliased split outputs — the fast single-kernel column
+// instead of the measured-slower Multi kernel. Default follows the
+// epilogue-only part rule; the env overrides on any part where the
+// full gemv route is off. The testable string overload lives beside
+// qmm_residual_norm_enabled.
+bool gemv_wide_route_enabled(const Device& device) {
+  return omarchy::gemv_wide_route_enabled(
+      device.capabilities().device_name);
+}
+
+bool node_wide_gemv_enabled(const array& node) {
+  const Device* d = stream_device(node);
+  return d != nullptr && gemv_wide_route_enabled(*d);
 }
 
 bool node_trio_enabled(const array& node) {
@@ -1453,7 +1480,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(QuantizedMatmul)) ||
         node.inputs().size() != 4 || claimed.count(node.id()) ||
-        !(node_gemv_enabled(node) || node_epilogue_gemv_enabled(node))) {
+        !(node_gemv_enabled(node) || node_epilogue_gemv_enabled(node) ||
+          node_wide_gemv_enabled(node))) {
       continue;
     }
     auto [group_size, bits, mode, transpose] =
@@ -1507,16 +1535,27 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const bool fold_ok =
         x_rows == 1 ||
         (token_fold_env != nullptr && std::strcmp(token_fold_env, "0") != 0);
-    for (size_t start = 0; start < nodes.size();
-         start += kQmmVecMultiWeights) {
+    // Wide sibling route: where the full gemv fold is off, every same-x
+    // sibling (no member cap beyond the sanity bound) becomes one
+    // weight-concatenated dispatch; members carry no epilogue so the
+    // Add-epilogue attach below is skipped and their consumers still
+    // evaluate. Single-row tapes only (no token multi, no out-gate).
+    const bool wide_route =
+        x_rows == 1 && !x_has_plan && nodes.size() >= 2 &&
+        !node_gemv_enabled(*nodes.front()) &&
+        node_wide_gemv_enabled(*nodes.front());
+    const size_t chunk =
+        wide_route ? std::min<size_t>(nodes.size(), 8) : kQmmVecMultiWeights;
+    for (size_t start = 0; start < nodes.size(); start += chunk) {
       GemvGroup group;
+      group.wide = wide_route && nodes.size() - start >= 2;
       bool worth = x_has_plan && start == 0;
-      for (size_t i = start; i < nodes.size() && i < start + kQmmVecMultiWeights;
+      for (size_t i = start; i < nodes.size() && i < start + chunk;
            ++i) {
         const array& node = *nodes[i];
         GemvFusionMember member{node, std::nullopt, std::nullopt};
         if (auto consumer = single_consumer.find(node.id());
-            consumer != single_consumer.end()) {
+            !group.wide && consumer != single_consumer.end()) {
           const array* add = consumer->second;
           if (fold_ok && is_op(add, typeid(Add)) &&
               add->inputs().size() == 2 &&
@@ -1557,12 +1596,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       // Epilogue-only route (device.h gemv_epilogue_only_part): the
       // multi-member fold and epilogue-free singles keep their per-node
-      // path; only single-member Add-epilogue groups plan.
-      if (!node_gemv_enabled(*nodes[start]) &&
+      // path; only single-member Add-epilogue groups plan. Wide-route
+      // groups plan on member count alone.
+      if (!node_gemv_enabled(*nodes[start]) && !group.wide &&
           (group.members.size() != 1 || !group.members[0].epilogue)) {
         continue;
       }
-      if (group.members.size() < 2 && !worth) {
+      if (!group.wide && group.members.size() < 2 && !worth) {
         continue;
       }
       if (worth && start == 0 && x_has_plan) {
@@ -1671,8 +1711,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     };
     for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
       auto& group = state->gemv_groups[gi];
-      if (group.members.size() != 2 || group.members[0].epilogue ||
-          group.members[1].epilogue ||
+      if (group.members.size() != 2 || group.wide ||
+          group.members[0].epilogue || group.members[1].epilogue ||
           group.members[0].node.dtype() == float32) {
         continue;
       }
@@ -2345,6 +2385,17 @@ bool qmm_residual_norm_enabled() {
   return qmm_residual_norm_enabled(device().capabilities().device_name);
 }
 
+bool gemv_wide_route_enabled(const std::string& device_name) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* env = std::getenv("MLX_OMARCHY_QMM_WIDE_GEMV");
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  return gemv_epilogue_only_part(device_name);
+}
+
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
@@ -2897,13 +2948,16 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       gemv != eager_state->gemv_roles.end()) {
     auto& group = eager_state->gemv_groups[gemv->second];
     if (group.state == GemvGroup::State::pending) {
-      group.state = dispatch_quantized_gemv_group(
-                        group.members,
-                        group.swiglu_out ? &*group.swiglu_out : nullptr,
-                        stream,
-                        group.outgate ? &*group.outgate : nullptr,
-                        group.res_norm ? &*group.res_norm : nullptr,
-                        &group.res_norm_done)
+      group.state =
+          (group.wide
+               ? dispatch_quantized_gemv_wide(group.members, stream)
+               : dispatch_quantized_gemv_group(
+                     group.members,
+                     group.swiglu_out ? &*group.swiglu_out : nullptr,
+                     stream,
+                     group.outgate ? &*group.outgate : nullptr,
+                     group.res_norm ? &*group.res_norm : nullptr,
+                     &group.res_norm_done))
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {
