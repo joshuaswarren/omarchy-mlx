@@ -136,6 +136,14 @@ inline bool select_qmm_wide_2x16(
   return false;
 }
 
+// G14C (M2 Max) default Qmm decode geometry: 2x4w2 (uvec2 weight loads
+// in the 2-row x 4-subgroup multi kernel). Paired ABBA on G14C B1 atop
+// OUTGATE_FOLD=0: 2B ctx=512 +1.35% (5/5), 2B short +1.69% (3/3),
+// 9B ctx=512 +1.18% (3/3), token digests identical.
+inline bool select_qmm_g14c_2x4w2(std::string_view device_name) {
+  return device_name.find("G14C") != std::string_view::npos;
+}
+
 // Dispatch-only hazards take a COMPUTE_SHADER to COMPUTE_SHADER barrier
 // instead of the full ALL_COMMANDS one (encoder.cpp record_dispatch_barrier).
 // Default on for discrete GPUs: on the RTX 5060 Ti Qwen3-4B decode went from

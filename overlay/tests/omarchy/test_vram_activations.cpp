@@ -124,7 +124,28 @@ int main() {
       "G13C Apple default stays 2x16");
   fails += check(
       !select_qmm_wide_2x16("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
-      "uncalibrated Apple chips stay 2x4 even when opt-in env is set");
+      "Apple G14C does not select 2x16 even when opt-in env is set");
+  fails += check(
+      select_qmm_g14c_2x4w2("Apple M2 Max (G14C B1)"),
+      "Apple G14C B1 selects 2x4w2");
+  fails += check(
+      select_qmm_g14c_2x4w2("Apple M2 Max (G14C C0)"),
+      "Apple G14C C0 selects 2x4w2");
+  fails += check(
+      !select_qmm_g14c_2x4w2("Apple M2 (G14G B0)"),
+      "Apple G14G does not select 2x4w2");
+  fails += check(
+      !select_qmm_g14c_2x4w2("Apple M2 Pro (G14S B1)"),
+      "Apple G14S does not select 2x4w2");
+  fails += check(
+      !select_qmm_g14c_2x4w2("Apple M1 Max (G13C C0)"),
+      "Apple G13C does not select 2x4w2");
+  fails += check(
+      !select_qmm_g14c_2x4w2("Apple M1 (G13G B1)"),
+      "Apple G13G does not select 2x4w2");
+  fails += check(
+      !select_qmm_g14c_2x4w2("llvmpipe (LLVM 19.1.7, 256 bits)"),
+      "llvmpipe does not select 2x4w2");
 
   // 4. Host/device coherence state machine.
   {
