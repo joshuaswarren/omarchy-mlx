@@ -113,11 +113,10 @@ def _red(reduction, size_average, reduce):
     # torch legacy kwargs: reduce=False -> "none"; else size_average picks mean/sum.
     if isinstance(reduction, int):
         reduction = {0: "none", 1: "mean", 2: "sum"}[reduction]
-    if reduce is not None:
-        if not reduce:
-            return "none"
-        if size_average is not None:
-            return "mean" if size_average else "sum"
+    if reduce is not None and not reduce:
+        return "none"
+    if size_average is not None:
+        return "mean" if size_average else "sum"
     return reduction
 
 
@@ -150,19 +149,15 @@ def _ce(logits, target, weight=None, ignore_index=-100, label_smoothing=0.0, red
     eps = float(label_smoothing or 0.0)
     if weight is not None:
         w = _mx(weight)
-        wt = w[t]
-        wbar = mx.sum(w) / C
+        wt, wsum = w[t], mx.sum(w)
     else:
-        wt = mx.ones_like(nll)
-        wbar = 1.0
+        w, wt, wsum = 1.0, mx.ones_like(nll), C
+    l_i = wt * nll
     if eps:
-        smooth = (lse * (mx.sum(w) if weight is not None else C)
-                  - mx.sum(logits * (w[None, ...] if weight is not None else 1.0), axis=-1)) / C
-        l_i = (1 - eps) * wt * nll + eps * smooth
-        eff = wt  # torch mean denom = sum(w[t]) over non-ignored; smoothing adds nothing
-    else:
-        l_i, eff = wt * nll, wt
-    return _reduce_loss(l_i, eff, keep, reduction)
+        smooth = (lse * wsum - mx.sum(logits * w, axis=-1)) / C
+        l_i = (1 - eps) * l_i + eps * smooth
+    # torch mean denom = sum(w[t]) over non-ignored; smoothing adds nothing
+    return _reduce_loss(l_i, wt, keep, reduction)
 
 
 def _nll(logp, target, weight=None, ignore_index=-100, reduction="mean"):
@@ -359,8 +354,7 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, e
         if T == S:
             kw["mask"] = "causal"
         else:
-            keep = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
-            kw["mask"] = mx.where(keep, 0.0, -mx.inf)
+            kw["mask"] = mx.arange(S)[None, :] <= mx.arange(T)[:, None]
     return mx.fast.scaled_dot_product_attention(q, k, v, **kw)
 
 def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
@@ -920,7 +914,7 @@ _FUNC_SPECS = {
         _ce(logits, target, weight, ignore_index, label_smoothing, _red(reduction, size_average, reduce))),
     "nll_loss": lambda logp, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", *a_, **k_: (
         _nll(logp, target, weight, ignore_index, _red(reduction, size_average, reduce))),
-    "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=reduction),
+    "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=_red(reduction, size_average, reduce)),
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
