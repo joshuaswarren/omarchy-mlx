@@ -1238,6 +1238,13 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4SwigluBF16R2S8W2,
   QmmVecQ4ResNormBF16R2S8W2,
   QmmVecQ4OutgateResNormBF16R2S8W2,
+  // Fused GDN decode conv + gated-delta step for unequal key/value head
+  // counts (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED
+  // -DGDN_NATIVE_GQA_INDEX): the conv prologue reads q and k channels by
+  // the key-head index, the delta body is unchanged. Appended to keep
+  // profile kernel ids stable.
+  GatedDeltaDecodeConvBF16PfGqa,
+  GatedDeltaDecodeConvNormBF16PfGqa,
   Count,
 };
 

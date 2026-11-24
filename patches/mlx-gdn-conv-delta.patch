@@ -123,7 +123,7 @@
 +// Fused GDN decode conv + gated-delta step. The caller decides whether to use it (the mlx-lm patch reads the mode from the
 +// backend's single resolver: MLX_OMARCHY_GDN_CONV_DELTA overrides the per-chip default); the op itself fuses whenever its
 +// geometry allows, in the form its inputs select: conv + delta (8 inputs) or conv + delta + the gated norm (10 inputs).
-+// Qwen3.8-2B geometry only: B == 1, bf16, head dim 128, equal key and value head counts, 4 conv taps. Everything else
++// Decode geometry only: B == 1, bf16, head dim 128, 4 conv taps, q and k sharing one head count and v another. Everything else
 +// and non-GPU streams compose gdn_conv_update + gated_delta_update_raw (+ rms_norm_gated).
 +class GdnConvDeltaUpdate : public Custom {
 + public:
@@ -178,7 +178,7 @@
 +    return in[7].dtype() != float32 || x.shape(0) != 1 || x.shape(1) != 1 ||
 +        state.shape(0) != 1 || state.shape(2) != C ||
 +        weight.shape(0) != C || weight.shape(1) != 4 || weight.shape(2) != 1 ||
-+        state.shape(1) != 3 || C != 3 * key_dim || Hv != key_dim / 128 ||
++        state.shape(1) != 3 || C != 2 * key_dim + Hv * 128 || Hv <= 0 ||
 +        in[3].shape(2) != Hv || in[4].shape(2) != Hv || in[5].shape(0) != Hv ||
 +        in[6].shape(0) != Hv || in[7].shape(1) != Hv || in[7].shape(2) != 128 ||
 +        in[7].shape(3) != 128;

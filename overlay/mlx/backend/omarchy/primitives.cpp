@@ -16377,13 +16377,15 @@ void GdnConvDeltaUpdate::eval_gpu(
   const int C = inputs.at(1).shape(2);
   const int K = inputs.at(2).shape(1);
   const int Hv = inputs.at(3).shape(2);
+  const int Hk = key_dim() / 128;
+  const bool equal_heads = Hv == Hk;
   const uint32_t dk = 128;
   // The unfused route's kernel choice (GatedDeltaUpdate::eval_gpu), restated for this geometry.
   const std::string& device_name = encoder.device().capabilities().device_name;
   const bool tile_on = gdn_decode_tile_enabled(encoder);
   const bool bf16a_untiled_default =
       decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
-      omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
+      omarchy::gdn_bf16a_untiled_default(device_name, Hk, Hv);
   const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
   const bool dense_inputs = [&] {
@@ -16400,7 +16402,11 @@ void GdnConvDeltaUpdate::eval_gpu(
   const bool gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
   const bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
   const bool apple_norm = apple_norm_enabled(encoder.device(), size_t{128}, size_t{static_cast<size_t>(B) * C});
-  const bool supported = B == 1 && K == 4 && decode_tile == false && gdn_pf && !apple_norm &&
+  // Equal heads: the fused kernel must byte-match the unfused pair, so it only runs where the
+  // unfused route picks the same untiled prefetch delta kernel. Unequal heads: the GQA fused
+  // variant is the only fused build and the unfused route's kernel choice does not bind it.
+  const bool supported = B == 1 && K == 4 && gdn_pf && !apple_norm &&
+      (equal_heads ? decode_tile == false : true) &&
       encoder.device().compute().binding_limit() >= (with_norm ? 13u : 11u);
   if (!supported) {
     auto result = fallback_(inputs);
@@ -16428,12 +16434,12 @@ void GdnConvDeltaUpdate::eval_gpu(
   hf.set_data(allocate_omarchy(hf.nbytes()));
   conv_state_out.set_data(allocate_omarchy(conv_state_out.nbytes()));
   const bool wide_default = bf16a_untiled_default &&
-      omarchy::gdn_pf_wide_default(device_name, Hv, Hv);
+      omarchy::gdn_pf_wide_default(device_name, Hk, Hv);
   const char* pf_wide_env = omarchy::env_str("MLX_OMARCHY_GDN_PF_WIDE");
   const bool pf_wide_want = pf_wide_env != nullptr
       ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
       : wide_default;
-  const bool pf_wide = pf_wide_want && (dk % 32u) == 0u;
+  const bool pf_wide = pf_wide_want && equal_heads && (dk % 32u) == 0u;
   omarchy::ComputeParams params;
   params.count = dk;
   params.operation = checked_u32(K, tag, out);
@@ -16451,13 +16457,14 @@ void GdnConvDeltaUpdate::eval_gpu(
   params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
   params.dims = 1u;
   // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
-  // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads.
+  // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads,
+  // otherwise it carries Hk and the conv prologue reads q/k channels by the key-head index.
   params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
   params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
   params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
   params.in_strides[1] = checked_item_offset(dt_bias, dt_bias.size(), tag, out);
   params.in_strides[2] = checked_u32(Hv, tag, out);
-  params.in_strides[3] = 0u;
+  params.in_strides[3] = equal_heads ? 0u : checked_u32(static_cast<size_t>(Hk), tag, out);
   params.flags |= 8u;
   params.out_strides[0] = checked_item_offset(conv_state_out, conv_state_out.size(), tag, out);
   params.out_strides[1] = std::bit_cast<uint32_t>(qk_eps());
@@ -16485,7 +16492,10 @@ void GdnConvDeltaUpdate::eval_gpu(
       binding(conv_state_out),
       binding(norm_gate),
       binding(norm_weight)};
-  const omarchy::ComputeKernel kernel = with_norm
+  const omarchy::ComputeKernel kernel = !equal_heads
+      ? (with_norm ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfGqa
+                   : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfGqa)
+      : with_norm
       ? (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfWide
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Pf)
       : (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
