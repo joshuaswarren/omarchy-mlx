@@ -110,6 +110,9 @@ def t_slice_clone_silu():
     a = torch.randn(4, 16, 32, 128)
     f = torch.compile(lambda t: t[:, :, :, :64], backend="mlx_vulkan")
     check("slice implicit step", f(a), a[:, :, :, :64])
+    # open-ended slice lowers to end=INT64_MAX — must clamp to dim size
+    f2 = torch.compile(lambda t: t[:, :, :, 64:], backend="mlx_vulkan")
+    check("slice INT64_MAX end", f2(a), a[:, :, :, 64:])
     # clone(memory_format=...) kwarg — peft/rope emits it
     c = torch.randn(4, 8, 16)
     fc = torch.compile(lambda t: t.clone(memory_format=torch.contiguous_format),

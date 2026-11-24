@@ -184,6 +184,10 @@ def _reshape(a, *s):
 
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
+    n = a.shape[dim]
+    # aten clamps out-of-range bounds; mlx requires int32
+    start = max(min(start, n), -n)
+    end = max(min(end, n), -n)
     idx = [slice(None)] * a.ndim
     idx[dim] = slice(start, end, step)
     return a[tuple(idx)]
