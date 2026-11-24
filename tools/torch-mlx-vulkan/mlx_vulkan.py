@@ -81,7 +81,7 @@ def _reshape(a, *s):
         s = tuple(s[0])
     return mx.reshape(a, tuple(s))
 
-def _slice(a, dim, start, end, step):
+def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
     idx = [slice(None)] * a.ndim
     idx[dim] = slice(start, end, step)
@@ -145,7 +145,52 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
             db if (bias is not None and mask[2]) else z)
 
 
+def _gqa_expand(a, hq):
+    hk = a.shape[-3]
+    if hk == hq:
+        return a
+    rep = hq // hk
+    a = mx.broadcast_to(mx.expand_dims(a, axis=-3),
+                        a.shape[:-3] + (hk, rep) + a.shape[-2:])
+    return mx.reshape(a, a.shape[:-4] + (hq,) + a.shape[-2:])
+
+
+def _gqa_reduce(d, hk):
+    hq = d.shape[-3]
+    if hq == hk:
+        return d
+    rep = hq // hk
+    d = mx.reshape(d, d.shape[:-3] + (hk, rep) + d.shape[-2:])
+    return mx.sum(d, axis=-3)
+
+
+def _slice_backward(g, input_shape, dim, start, end, step=1):
+    g = _mx(g)
+    shape = tuple(input_shape)
+    dim = dim % len(shape)
+    lo = start % shape[dim] if start < 0 else min(start, shape[dim])
+    hi = end % shape[dim] if end < 0 else min(end, shape[dim])
+    if step != 1 or lo >= hi:
+        _raise(f"slice_backward step={step} range={lo}:{hi}")
+    parts = []
+    if lo:
+        parts.append(mx.zeros(shape[:dim] + (lo,) + shape[dim + 1:], g.dtype))
+    parts.append(g)
+    if shape[dim] - hi:
+        parts.append(mx.zeros(shape[:dim] + (shape[dim] - hi,) + shape[dim + 1:], g.dtype))
+    return parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=dim)
+
+
+def _silu_backward(g, x):
+    g, x = _mx(g), _mx(x)
+    sig = mx.sigmoid(x)
+    return g * sig * (1.0 + x * (1.0 - sig))
+
+
 def _sdpa_flash_cpu(q, k, v, dropout_p=0.0, is_causal=False, attn_mask=None, scale=None):
+    q, k, v = _mx(q), _mx(k), _mx(v)
+    k = _gqa_expand(k, q.shape[-3])
+    v = _gqa_expand(v, q.shape[-3])
     out = _sdpa(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
                 is_causal=is_causal, scale=scale)
     s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
@@ -166,6 +211,9 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
         _raise("flash_cpu_bwd dropout_p")
     gout, q, k, v, out = _mx(gout), _mx(q), _mx(k), _mx(v), _mx(out)
     lse = _mx(lse)
+    hk = k.shape[-3]
+    k = _gqa_expand(k, q.shape[-3])
+    v = _gqa_expand(v, q.shape[-3])
     s = scale if scale is not None else 1.0 / math.sqrt(q.shape[-1])
     scores = s * mx.matmul(q, mx.swapaxes(k, -2, -1))
     if is_causal:
@@ -183,7 +231,7 @@ def _sdpa_flash_cpu_bwd(gout, q, k, v, out, lse, dropout_p, is_causal,
     dS = p * (dP - dsum)
     dq = s * mx.matmul(dS, k)
     dk = s * mx.matmul(mx.swapaxes(dS, -2, -1), q)
-    return (dq, dk, dv)
+    return (dq, _gqa_reduce(dk, hk), _gqa_reduce(dv, hk))
 
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
@@ -747,6 +795,7 @@ _FUNC_SPECS = {
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
     "t": lambda a: mx.transpose(a), "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
+    "unsafe_view": _reshape,
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
     "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
@@ -771,7 +820,7 @@ _FUNC_SPECS = {
     "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
-    "detach": lambda a: a, "clone": lambda a: a, "contiguous": lambda a: a,
+    "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
     "alias": lambda a: a, "lift_fresh": lambda a: a, "lift_fresh_copy": lambda a: a, "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
@@ -816,6 +865,9 @@ _FUNC_SPECS = {
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,
+    "slice_backward": _slice_backward,
+    "silu_backward": _silu_backward,
+    "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
