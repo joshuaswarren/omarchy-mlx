@@ -1940,5 +1940,92 @@ class PairManagerTests(BasePairTest):
         self.assertTrue(stopped["stopped"])
 
 
+def _on_pinned_stack(fn):
+    """Run fn on a 4 MiB thread stack, so the JSON nesting limit does not
+    follow the runner's ulimit -s (Python 3.14 bounds recursion by C stack)."""
+    outcome = {}
+
+    def target():
+        try:
+            outcome["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            outcome["error"] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+DEEP_JSON = b"[" * 200_000 + b"]" * 200_000
+
+
+class UndecodablePairFileTests(BasePairTest):
+    """A pair lock or decision manifest that does not decode is the
+    documented PairError (or {}), never a raw traceback."""
+
+    PAYLOADS = {
+        "invalid-utf8": b'{"version": 1, "pair_id": "everyday\xff"}',
+        "huge-int": b'{"version": ' + b"1" * 5000 + b"}",
+        "deep-nesting": DEEP_JSON,
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        with self.assertRaises(RecursionError):
+            _on_pinned_stack(lambda: json.loads(DEEP_JSON))
+
+    def _write_lock_bytes(self, data: bytes) -> None:
+        path = pairs.pair_lock_path(self.home, "everyday")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def test_undecodable_lock_is_pair_error(self):
+        for name, data in self.PAYLOADS.items():
+            with self.subTest(name):
+                self._write_lock_bytes(data)
+                with self.assertRaisesRegex(pairs.PairError, "is unreadable"):
+                    _on_pinned_stack(lambda: pairs.load_pair_lock(self.home, "everyday"))
+
+    def test_start_falls_back_past_undecodable_lock(self):
+        manager = pairs.PairManager(self.home)
+        for name, data in self.PAYLOADS.items():
+            with self.subTest(name):
+                self._write_lock_bytes(data)
+                with self.assertRaisesRegex(pairs.PairError, "no prepared pair"):
+                    _on_pinned_stack(lambda: manager.start("everyday"))
+
+    def test_lock_model_needs_string_revision(self):
+        def lock(models):
+            return {"version": 1, "pair_id": "everyday", "models": models}
+
+        pairs.write_pair_lock(self.home, "everyday",
+                              lock({"chat": {"revision": "a" * 40}}))
+        self.assertIsNotNone(pairs.load_pair_lock(self.home, "everyday"))
+        for name, models in {"list-revision": {"chat": {"revision": [["a"]]}},
+                             "no-revision": {"chat": {"id": "x"}},
+                             "model-not-object": {"chat": "x"}}.items():
+            with self.subTest(name):
+                pairs.write_pair_lock(self.home, "everyday", lock(models))
+                with self.assertRaisesRegex(pairs.PairError, "not a valid v1 lock"):
+                    pairs.load_pair_lock(self.home, "everyday")
+
+    def test_undecodable_manifest_reads_as_empty(self):
+        model_dir = self.home / "models" / DECISION_ID
+        model_dir.mkdir(parents=True)
+        for name, data in self.PAYLOADS.items():
+            with self.subTest(name):
+                (model_dir / "manifest.json").write_bytes(data)
+                self.assertEqual(_on_pinned_stack(lambda: pairs._read_manifest(model_dir)), {})
+
+
 if __name__ == "__main__":
     unittest.main()
