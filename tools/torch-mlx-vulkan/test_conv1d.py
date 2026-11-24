@@ -106,8 +106,40 @@ def test_conv1d_refuses_groups():
     raise AssertionError("grouped conv1d did not refuse")
 
 
+def test_conv1d_census_lowered():
+    """torch.compile on a functional conv1d call lowers conv1d (no CPU fallback).
+
+    Uses the gen_qwen logging pattern (basicConfig to a file before the
+    backend import) so the LOWERED lines land where the runtime emits them.
+    """
+    import logging
+    import torch.nn.functional as F
+
+    logging.basicConfig(level=logging.INFO,
+                        filename="/tmp/w7y-conv1d-census.log", filemode="w")
+    import torch  # noqa: F401  (imported after basicConfig like gen_qwen)
+    import torch.nn.functional as F
+    import mlx_vulkan
+
+    def f(x, w, b):
+        return F.conv1d(x, w, b, stride=2, padding=2)
+
+    cf = torch.compile(backend="mlx_vulkan", dynamic=False)(f)
+    x = torch.zeros(1, 6, 23)
+    w = torch.zeros(5, 6, 4)
+    b = torch.zeros(5)
+    cf(x, w, b)
+    with open("/tmp/w7y-conv1d-census.log") as fh:
+        out = fh.read()
+    assert "unlowerable" not in out, out[-800:]
+    assert "FALLBACK\tconv1d" not in out, out[-800:]
+    assert "compiled executor" in out, out[-800:]
+    print("test_conv1d_census_lowered PASS")
+
+
 if __name__ == "__main__":
     test_conv1d_fp32_configs()
     test_conv1d_fp32_shapes()
     test_conv1d_bf16()
     test_conv1d_refuses_groups()
+    test_conv1d_census_lowered()
