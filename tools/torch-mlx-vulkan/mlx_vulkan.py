@@ -1420,7 +1420,8 @@ def mlx_vulkan_backend(gm: torch.fx.GraphModule, example_inputs, _dt=None):
             try:
                 out = run_c(*args)
             except Exception as e:
-                log.warning("compiled executor failed (%s); falling back to eager", e)
+                log.warning("compiled executor failed (%s); falling back to eager", e,
+                            exc_info=True)
                 holder["run"] = _eager_run(gm)
             else:
                 holder["run"] = run_c
@@ -1729,7 +1730,8 @@ def make_compiled_executor(gm, dt=None):
                 inrange = ((ar >= idx.min()) & (ar <= idx.max())).reshape(
                     [1] * dim + [smax] + [1] * (t.ndim - dim - 1))
                 shift = mx.clip(ar - idx.min(), 0, max(0, int(src.shape[dim]) - 1))
-                upd = mx.where(inrange, mx.take(_cast(src), shift, axis=dim), t)
+                upd = mx.where(inrange,
+                               mx.take(_cast(src, t.dtype), shift, axis=dim), t)
                 env[n.args[0]] = upd      # model in-place mutation
                 env[n] = upd
                 continue
@@ -1756,7 +1758,7 @@ def make_compiled_executor(gm, dt=None):
                 v = _cast(uv) if uv is not None else _cast(args[2])
                 mask = kwargs.get("attn_mask")
                 if mask is None and kwargs.get("is_causal"):
-                    mask = "causal"
+                    mask = "causal"  # prefill graphs emit is_causal instead of a mask
                 scale = kwargs.get("scale")
                 if scale is None:
                     scale = 1.0 / math.sqrt(q.shape[-1])
