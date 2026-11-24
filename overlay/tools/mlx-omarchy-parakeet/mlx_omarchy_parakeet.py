@@ -32,6 +32,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -226,6 +227,88 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _shared_bundle_roots() -> list[Path]:
+    """Candidate host-shared bundle stores, most preferred first."""
+    roots = []
+    env = os.environ.get("MLX_OMARCHY_SHARED_BUNDLES")
+    if env:
+        roots.append(Path(env))
+    roots.append(Path("/var/lib/mlx-omarchy/parakeet-1/bundles"))
+    roots.append(Path.home() / ".local/share/mlx-omarchy/parakeet-1/bundles")
+    return roots
+
+
+def _shared_bundle_store() -> Path:
+    """The first writable shared store, created on demand."""
+    tried = []
+    for root in _shared_bundle_roots():
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            probe = root / ".write-probe"
+            probe.write_bytes(b"ok")
+            probe.unlink()
+            return root
+        except OSError as error:
+            tried.append(f"{root}: {error}")
+    raise TranscribeRefusal(
+        "no writable shared bundle store (tried "
+        + "; ".join(tried) + ")")
+
+
+def _bundle_files(root: Path) -> list[Path]:
+    """Real files under any bundles/<name>/ directory of `root`."""
+    found = []
+    for bundles in sorted(root.glob("**/bundles")):
+        if not bundles.is_dir():
+            continue
+        for path in sorted(bundles.glob("*/*")):
+            if path.is_file() and not path.is_symlink():
+                found.append(path)
+    return found
+
+
+def dedupe_bundles(roots: list[Path], dry_run: bool = False) -> dict:
+    """Keep one host-shared copy per content hash and point every other
+    venv at it with a symlink. Lossless: a symlink target holds the
+    identical bytes, so every sha check reads the same content."""
+    store = _shared_bundle_store()
+    groups: dict[str, list[Path]] = {}
+    seen: set[Path] = set()
+    for root in roots:
+        for path in _bundle_files(root):
+            if path in seen:
+                continue
+            seen.add(path)
+            groups.setdefault(_sha256_file(path), []).append(path)
+    moved = linked = 0
+    bytes_freed = 0
+    entries = []
+    for sha, paths in sorted(groups.items()):
+        keep = min(paths, key=lambda p: (len(p.parts), str(p)))
+        store_file = store / f"{sha[:16]}-{keep.name}"
+        copied = False
+        if not store_file.exists() and not dry_run:
+            store_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(keep, store_file)
+            copied = True
+        freed = sum(p.stat().st_size for p in paths
+                    if p != keep and not p.is_symlink())
+        bytes_freed += freed
+        linked += len(paths) - 1
+        entries.append({"sha256": sha, "copies": len(paths),
+                        "kept": str(store_file), "bytes_freed": freed})
+        if dry_run:
+            continue
+        if copied:
+            moved += 1
+        for path in paths:
+            path.unlink()
+            path.symlink_to(store_file)
+    return {"store": str(store), "dry_run": dry_run, "moved": moved,
+            "linked": linked, "bytes_freed": bytes_freed,
+            "entries": entries}
+
+
 def _receipt(lock: ReferenceLock, cache_dir: Path, elapsed_ms: int,
              fixture_path: Path | None) -> dict:
     return {
@@ -293,6 +376,22 @@ def _download(args) -> int:
             indent=2,
         ))
     return code
+
+
+def _dedupe_bundles(args) -> int:
+    report = dedupe_bundles([Path(r) for r in args.roots],
+                            dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print("store=%s dry_run=%s moved=%d linked=%d freed=%.1f GB"
+              % (report["store"], report["dry_run"], report["moved"],
+                 report["linked"], report["bytes_freed"] / 1073741824))
+        for entry in report["entries"]:
+            print("  %s copies=%d linked=%d freed=%.1f MB"
+                  % (entry["sha256"][:16], entry["copies"], entry["linked"],
+                     entry["bytes_freed"] / 1048576))
+    return 0
 
 
 def _verify(args) -> int:
@@ -1595,6 +1694,24 @@ def main(argv=None) -> int:
              "golden e2e (pinned fixture) where the ANE runtime exists",
     )
     verify.set_defaults(handler=_verify)
+
+    dedupe = sub.add_parser(
+        "dedupe-bundles",
+        help="keep one host-shared copy per content hash and point every "
+             "venv at it with symlinks (lossless)",
+    )
+    dedupe.add_argument(
+        "--roots", nargs="+", required=True,
+        help="directories to scan for bundles/<name>/ files",
+    )
+    dedupe.add_argument(
+        "--dry-run", action="store_true",
+        help="report what would move and link without touching anything",
+    )
+    dedupe.add_argument(
+        "--json", action="store_true", help="emit a machine-readable receipt"
+    )
+    dedupe.set_defaults(handler=_dedupe_bundles)
 
     transcribe = sub.add_parser(
         "transcribe",
