@@ -1888,6 +1888,24 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                     dx = dx * w
                 env[n] = tuple(v for v in (dx, dw, db) if v is not None)
                 continue
+            if name in ("_scaled_dot_product_flash_attention_for_cpu",
+                        "_scaled_dot_product_efficient_attention_forward") \
+                    and n.op == "call_function":
+                # aten CPU flash attention: (q, k, v, dropout_p, is_causal,
+                # kw: attn_mask, scale) -> (output, logsumexp); the decode
+                # graph consumes output via getitem.
+                q, k, v = _cast(args[0]), _cast(args[1]), _cast(args[2])
+                is_causal = bool(args[4]) if len(args) > 4 else False
+                kw = {}
+                if kwargs.get("attn_mask") is not None:
+                    kw["mask"] = _cast(kwargs["attn_mask"])
+                elif is_causal:
+                    kw["mask"] = "causal"
+                if kwargs.get("scale") is not None:
+                    kw["scale"] = kwargs["scale"]
+                out = mx.fast.scaled_dot_product_attention(q, k, v, **kw)
+                env[n] = (out, mx.zeros((1,)))
+                continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
                 # mx.fast sdpa broadcasts fewer kv heads natively -> look through.
