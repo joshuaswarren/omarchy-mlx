@@ -10258,12 +10258,31 @@ bool dispatch_quantized_gemv_group(
       x.size() != static_cast<size_t>(rows) * static_cast<size_t>(k)) {
     return false;
   }
-  // The multi-token kernel has no producer-direct KV window contract.
+  // Producer-direct KV windows ride the token column only for a single
+  // raw member (no Add epilogue: the token store has no free per-member
+  // slot for both the addend row stride and the window row gap) on the
+  // single-pass range (rows <= 8: the two-pass row0 slot would collide
+  // with the window offset), whose update region's seq stride is the
+  // head dim (a row-contiguous cache guarantees it). The token kernel
+  // scatters row m to window offset + m * head_dim + (c/head_dim) *
+  // row_gap + c % head_dim; aux_offset/matrix_n carry the offset and
+  // head dim because out_strides[0]/matrix_m already carry the row0 and
+  // token_count contract.
   if (token_route) {
+    size_t window_members = 0;
     for (auto& member : members) {
-      if (member.sum_window) {
+      if (!member.sum_window) {
+        continue;
+      }
+      const auto& window = *member.sum_window;
+      ++window_members;
+      if (member.epilogue || rows > 8u || window.head_dim == 0u ||
+          window.strides[2] != window.head_dim) {
         return false;
       }
+    }
+    if (window_members > 1) {
+      return false;
     }
   }
   bool res_norm_active = false;
@@ -10542,9 +10561,17 @@ bool dispatch_quantized_gemv_group(
       }
       const auto& window = *members[i].sum_window;
       params.in_strides[i] = window.row_gap;
-      params.out_strides[i] = window.offset;
       params.flags |= 4096u << i;
-      params.matrix_m = window.head_dim;
+      if (token_route) {
+        // The token column's out_strides[0]/matrix_m already carry
+        // row0/token_count, so the window offset and head dim arrive
+        // on spare scalars instead.
+        params.aux_offset = window.offset;
+        params.matrix_n = window.head_dim;
+      } else {
+        params.out_strides[i] = window.offset;
+        params.matrix_m = window.head_dim;
+      }
       if (!members[i].epilogue) {
         // Raw member: the kernel stores the rounded output into the
         // window without reading an addend (shader flags bit 18).

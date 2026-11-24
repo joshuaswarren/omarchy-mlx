@@ -1149,7 +1149,8 @@ DirectPlan plan_values_window(
   const auto& base = member.inputs()[0];
   const auto& upd = member.inputs()[1];
   if (upd.ndim() != 4 || upd.shape(0) != 1 || base.shape(0) != 1 ||
-      static_cast<size_t>(upd.shape(1)) * upd.shape(3) != sum->size()) {
+      static_cast<size_t>(upd.shape(1)) * upd.shape(2) * upd.shape(3) !=
+          sum->size()) {
     return plan;
   }
   auto geometry = direct_window_geometry(member);
@@ -1205,8 +1206,15 @@ DirectPlan plan_values_window(
       map_strides = contiguous_strides(map_shape);
     }
   }
+  // The seq axis must map onto contiguous sum rows: element (head, m,
+  // dim) of the update reads the sum buffer at m * n_kv*head_dim +
+  // head * head_dim + dim, which is the multi-token window store the
+  // rows kernel emits.
   if (map_shape != upd.shape() || map_strides[3] != 1 ||
-      map_strides[1] != static_cast<ptrdiff_t>(head_dim)) {
+      map_strides[1] != static_cast<ptrdiff_t>(head_dim) ||
+      map_strides[2] !=
+          static_cast<ptrdiff_t>(
+              static_cast<uint64_t>(upd.shape(1)) * head_dim)) {
     return plan;
   }
   for (const array* view : chain) {

@@ -1151,7 +1151,26 @@ void main() {
           } else {
             output3.values[out_index] = STORE_VALUE(rounded);
           }
-          if ((params.flags & (256u << which)) != 0u) {
+          if ((params.flags & (4096u << which)) != 0u) {
+            // Producer-direct KV window on the token column (raw
+            // members only): token row m scatters its n columns into
+            // the updated cache copy at seq position offset + m *
+            // head_dim. aux_offset/matrix_n carry the window offset
+            // and head dim; in_strides[which] the head row gap.
+            uint win_index = params.aux_offset +
+                m * params.matrix_n +
+                (column_r / params.matrix_n) * params.in_strides[which] +
+                (column_r % params.matrix_n);
+            if (which == 0u) {
+              sum0.values[win_index] = STORE_VALUE(rounded);
+            } else if (which == 1u) {
+              sum1.values[win_index] = STORE_VALUE(rounded);
+            } else if (which == 2u) {
+              sum2.values[win_index] = STORE_VALUE(rounded);
+            } else {
+              sum3.values[win_index] = STORE_VALUE(rounded);
+            }
+          } else if ((params.flags & (256u << which)) != 0u) {
             // Add epilogue: sum = rounded output + addend; the addend
             // row stride is params.in_strides[which] (n for a full
             // (tokens, n) addend, 0 for a broadcast bias vector). The
