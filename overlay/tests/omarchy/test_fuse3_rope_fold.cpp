@@ -46,7 +46,13 @@ using namespace mlx::core;
 
 namespace {
 
-constexpr uint32_t HD = 256;    // head width of the routed split kernels
+// Head width of the routed split kernels: 256 (the Qwen3.5/3.8
+// full-attention layers) or 128 (the Qwen3-4B). The 128 build is the
+// second executable in tests/omarchy/CMakeLists.txt.
+#ifndef FUSE3_TEST_HD
+#define FUSE3_TEST_HD 256
+#endif
+constexpr uint32_t HD = FUSE3_TEST_HD;
 constexpr uint32_t SPLIT_R = 4; // query heads sharing the kv head
 constexpr uint32_t KV_HEADS = 2; // 8 query heads over 2 kv heads
 constexpr uint32_t K_LEN = 35;  // the decode prompt step
@@ -54,7 +60,8 @@ constexpr float ROPE_SCALE = 1.0f;
 constexpr float ROPE_EPS = 1e-6f;
 // The half-split freq exponent: the rope host passes log(base) / half_dims
 // (base 1000000, half dims 128 for the full-width rotation).
-constexpr float ROPE_BETA = 13.815510558f / 128.0f;
+// log(base) / half_dims, the rope host's freq exponent at this width.
+constexpr float ROPE_BETA = 13.815510558f / float(HD / 2u);
 constexpr float SDPA_SCALE = 0.0625f; // 1/sqrt(256)
 
 bool compute_available() {
@@ -147,7 +154,9 @@ void rope_rms_norm_batch(
   std::array<omarchy::ComputeBinding, 5> bindings{
       bind(raw), bind(out), bind(offsets), bind(offsets), bind(weight)};
   auto& encoder = omarchy::get_command_encoder(s);
-  const auto kernel = apple_norm_route(s)
+  // The rope host's selection: the Apple reduction only at the widths
+  // apple_norm_shape_selected admits (256 here; never 128).
+  const auto kernel = HD == 256 && apple_norm_route(s)
       ? omarchy::ComputeKernel::FastRopeNormAppleBF16
       : omarchy::ComputeKernel::FastRopeNormBF16;
   encoder.dispatch_compute(
@@ -189,10 +198,13 @@ void split_p1(
   p.in_strides[1] = static_cast<uint32_t>(v.strides()[1]);
   p.in_strides[2] = static_cast<uint32_t>(v.strides()[2]);
   p.in_strides[3] = 1;
-  const auto kernel = qrope
-      ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope
-      : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
+#if FUSE3_TEST_HD == 256
+  const auto kernel = omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256;
   const auto kernel_pv = omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256;
+#else
+  const auto kernel = omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128;
+  const auto kernel_pv = omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128;
+#endif
   if (qrope) {
     p.operation = std::bit_cast<uint32_t>(ROPE_EPS);
     p.lhs_size = std::bit_cast<uint32_t>(ROPE_SCALE);
@@ -205,12 +217,20 @@ void split_p1(
     bindings.push_back(bind(*offsets));
   }
   auto& encoder = omarchy::get_command_encoder(s);
+#if FUSE3_TEST_HD == 256
   const bool apple = apple_norm_route(s);
   const auto routed = !qrope ? kernel
       : pv ? (apple ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256QropeApple
                     : omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256Qrope)
            : (apple ? omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple
                     : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope);
+#else
+  // At width 128 the rope host never takes the Apple reduction, so both
+  // arms ride the shared tree and the fold mirrors it.
+  const auto routed = !qrope ? kernel
+      : pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128Qrope
+           : omarchy::ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128Qrope;
+#endif
   const auto plain = pv ? kernel_pv : kernel;
   encoder.dispatch_compute(
       qrope ? routed : plain, bindings, p, static_cast<uint32_t>(KV_HEADS), 1u, 1u);
@@ -303,12 +323,15 @@ TEST_CASE("the folded route leaves the attention result unchanged") {
         x, HD, w, ROPE_EPS, false, 1000000.0f, 1.0f, off, s);
     array out = fast::scaled_dot_product_attention(
         roped, k, v, SDPA_SCALE, "", std::nullopt, std::nullopt, false, s);
-    out.eval();
+    // The repo's readback pattern (test_sdpa_split.cpp): a device copy
+    // into a fresh array, then eval and synchronize before the host read.
+    // Reading the attention output's buffer directly raced on llvmpipe
+    // once in six runs (garbage in both arms, so not the fold).
+    array copy = astype(out, float32, s);
+    copy.eval();
     omarchy::get_command_encoder(s).synchronize();
-    std::vector<float> values(out.size());
-    std::memcpy(
-        values.data(), out.data<float>(), values.size() * sizeof(float));
-    return values;
+    const float* p = copy.data<float>();
+    return std::vector<float>(p, p + copy.size());
   };
 
   auto unfused = run(false);

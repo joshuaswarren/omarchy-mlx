@@ -139,20 +139,23 @@ void main() {
   uint sg = gl_SubgroupID;
 
 #ifdef SDPA_QROPE
-#if HD != 256
-#error "SDPA_QROPE is built for the 256-wide full-attention layers only"
+#if HD != 128 && HD != 256
+#error "SDPA_QROPE is built for the 128- and 256-wide full-attention layers"
 #endif
-  // fast_rope_norm.comp reproduced in this kernel's layout. Thread t owns
-  // dims {t, t + half_dims}, which is the rope kernel's own pairing (its
-  // reduction tree adds lane t to lane t + 128 first), so both the f32
-  // reduction and the per-element chain land on the same values and the
-  // same bf16 roundings as the unfused rope_rms_norm dispatch. Push
-  // fields (all free in the split kernels): eps bits in operation, the
-  // rope scale bits in lhs_size, the freq exponent in beta, the rotation
-  // half dims in dims, the query row's time index in matrix_m, the
-  // offsets buffer offset in output_offset and the weight element offset
-  // in aux_size. Forward, non-traditional, non-passthrough only: the
-  // host refuses every other rope shape to the unfused route.
+  // fast_rope_norm.comp reproduced in this kernel's layout. At width 256
+  // thread t owns dims {t, t + half_dims}, the rope kernel's own pairing
+  // (its reduction tree adds lane t to lane t + 128 first). At width 128
+  // thread t owns dim t, the rope kernel's lane-to-dim map for a 128-wide
+  // row, whose stride-128 step adds an idle lane's 0.0; the rotation
+  // pairs then live in different threads and go through shared memory.
+  // Either way the f32 reduction and the per-element chain land on the
+  // same values and the same bf16 roundings as the unfused rope_rms_norm
+  // dispatch. Push fields (all free in the split kernels): eps bits in
+  // operation, the rope scale bits in lhs_size, the freq exponent in
+  // beta, the rotation half dims in dims, the query row's time index in
+  // matrix_m, the offsets buffer offset in output_offset and the weight
+  // element offset in aux_size. Forward, non-traditional, full-row
+  // rotation only: the host refuses every other rope shape.
   const float rope_eps = uintBitsToFloat(params.operation);
   const float rope_scale = uintBitsToFloat(params.lhs_size);
   const float position =
@@ -162,6 +165,7 @@ void main() {
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
     uint row_base = params.lhs_offset + head * params.shape[0];
+#if HD == 256
     uint idx0 = row_base + t * params.shape[3];
     uint idx1 = row_base + (t + half_dims) * params.shape[3];
 #ifdef APPLE_REDUCTION
@@ -241,10 +245,86 @@ void main() {
         uintBitsToFloat(bf16_round_bits(rotated0) << 16u);
     s_q[r * D + t + half_dims] = params.alpha *
         uintBitsToFloat(bf16_round_bits(rotated1) << 16u);
-    // Release the shared reduction state before the next head rewrites it:
-    // without this trailing barrier a fast thread could start the next
-    // head's reduction while a slow thread still reads s_red[0]. The
-    // rope kernel ends its row loop with the same barrier.
+#else
+    // Width 128: one dim per thread.
+    uint idx = row_base + t * params.shape[3];
+#ifdef APPLE_REDUCTION
+    // The rope kernel's 8 subgroups over a 128-wide row: its subgroups
+    // 4..7 are idle lanes (0.0), so the second level adds four real
+    // partials to four zeros. Here the 4 subgroups each add their 32
+    // squares and the final subgroupAdd reads {P[0..3], 0, 0, 0, 0}.
+    precise float value = rope_bf16(query_data.values[idx]);
+    precise float sq = value * value;
+    float p = subgroupAdd(sq);
+    if (gl_SubgroupInvocationID == 0u) {
+      s_part[sg] = p;
+      if (sg == 0u) {
+        s_part[4u] = 0.0;
+        s_part[5u] = 0.0;
+        s_part[6u] = 0.0;
+        s_part[7u] = 0.0;
+      }
+    }
+    barrier();
+    float partial = (sg == 0u && gl_SubgroupInvocationID < 8u)
+        ? s_part[gl_SubgroupInvocationID]
+        : 0.0;
+    float row_sum = subgroupAdd(partial);
+    if (t == 0u) {
+      s_red[0] = row_sum;
+    }
+    barrier();
+#else
+    // The rope kernel's shared tree from its first step: lane t adds lane
+    // t + 128, an idle lane for a 128-wide row, so the sum is the square
+    // itself; then strides 64..1.
+    float value = rope_bf16(query_data.values[idx]);
+    precise float sq = value * value;
+    precise float pair = sq;
+    s_red[t] = pair;
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+      if (t < stride) {
+        s_red[t] += s_red[t + stride];
+      }
+      barrier();
+    }
+#endif
+    float mean_square = s_red[0] / float(D);
+    barrier();
+    precise float norm = inversesqrt(mean_square + rope_eps);
+    // Re-load the value (the rope kernel's re-load, see the width-256 arm).
+    precise float re = rope_bf16(query_data.values[idx]);
+    precise float weight = weight_bf16(w_off + t);
+    precise float wn = weight * norm;
+    float x = rope_round(re * wn);
+    // The rotation pairs (t, t + half_dims) live in different threads:
+    // the normed value goes through shared memory, as the rope kernel's
+    // own rotation phase reads its pairs from shared memory.
+    s_q[r * D + t] = x;
+    barrier();
+    if (t < half_dims) {
+      float x1 = s_q[r * D + t];
+      float x2 = s_q[r * D + t + half_dims];
+      float inv_freq = exp(-float(t) * params.beta);
+      float theta = position * inv_freq;
+      float cos_t = rope_round(omarchy_trig_cos(theta));
+      float sin_t = rope_round(omarchy_trig_sin(theta));
+      float xa = rope_round(x1 * cos_t);
+      float xb = rope_round(x2 * sin_t);
+      float xc = rope_round(x1 * sin_t);
+      float xd = rope_round(x2 * cos_t);
+      s_q[r * D + t] = params.alpha *
+          uintBitsToFloat(bf16_round_bits(xa - xb) << 16u);
+      s_q[r * D + t + half_dims] = params.alpha *
+          uintBitsToFloat(bf16_round_bits(xc + xd) << 16u);
+    }
+#endif
+    // Release the shared state before the next head rewrites it: without
+    // this trailing barrier a fast thread could start the next head's
+    // reduction while a slow thread still reads s_red[0] (width 256) or
+    // the rotated pair (width 128). The rope kernel ends its row loop
+    // with the same barrier.
     barrier();
   }
 #else

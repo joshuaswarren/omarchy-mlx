@@ -789,6 +789,19 @@ target_link_options(omarchy_fuse3_rope_fold_tests
 add_test(NAME omarchy_fuse3_rope_fold_tests
          COMMAND omarchy_fuse3_rope_fold_tests)
 
+# The same proof at head width 128 (the Qwen3-4B shape).
+add_executable(omarchy_fuse3_rope_fold_128_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_fuse3_rope_fold.cpp)
+target_compile_definitions(omarchy_fuse3_rope_fold_128_tests
+                           PRIVATE FUSE3_TEST_HD=128)
+target_link_libraries(omarchy_fuse3_rope_fold_128_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_fuse3_rope_fold_128_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_fuse3_rope_fold_128_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_fuse3_rope_fold_128_tests
+         COMMAND omarchy_fuse3_rope_fold_128_tests)
+
 # SdpaPrefillFlashBF16Hd128: the flash-style long-L prefill route agrees
 # with the f32-score composition at bf16 storage granularity, splits
 # dispatches per q tile, and refuses masks/causal to the composition.

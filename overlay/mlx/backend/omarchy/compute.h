@@ -1200,6 +1200,11 @@ enum class ComputeKernel : uint16_t {
   // route on the M1 Max and the M3 Pro).
   SdpaDecodeSplitP1VR4BF16Hd256Qrope,
   SdpaDecodeSplitP1VR4BF16Hd256QropeApple,
+  // The same fold at width 128 (the Qwen3-4B shape): the shared-tree
+  // build only, since the rope host never takes the Apple reduction at
+  // that width.
+  SdpaDecodeSplitP1R4BF16Hd128Qrope,
+  SdpaDecodeSplitP1VR4BF16Hd128Qrope,
   Count,
 };
 
