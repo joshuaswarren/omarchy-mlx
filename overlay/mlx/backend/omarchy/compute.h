@@ -1183,6 +1183,7 @@ enum class ComputeKernel : uint16_t {
   ConvDw2dF32,
   ConvDw2dF16,
   ConvDw2dBF16,
+  QmmVecQ4MultiSubgroupBF16R2S16KCONT,
   Count,
 };
 

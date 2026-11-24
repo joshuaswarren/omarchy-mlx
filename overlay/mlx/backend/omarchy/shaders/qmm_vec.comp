@@ -145,6 +145,17 @@ uint16_t bf16_store(float value) {
 #define WLOAD(W, I) W.values[I]
 #define WLOAD_PAIR(W, I, A, B) { (A) = WLOAD(W, I); (B) = WLOAD(W, (I) + 1u); }
 #endif
+
+// K-contiguous: lane owns one contiguous chunk of words instead of pairs.
+#ifdef QMM_KCONT
+#define Q4_FAST_ITERS(wpr) ((wpr) / (LANES * 2u))
+#define Q4_FAST_W(it, wpr) (lane_in_slot * ((wpr) / LANES) + (it) * 2u)
+#define Q4_KCONT_OK(wpr) ((wpr) % (LANES * 2u) == 0u)
+#else
+#define Q4_FAST_ITERS(wpr) (((wpr) + LANES * 2u - 1u) / (LANES * 2u))
+#define Q4_FAST_W(it, wpr) (lane_in_slot * 2u + (it) * LANES * 2u)
+#define Q4_KCONT_OK(wpr) true
+#endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
 
@@ -656,9 +667,11 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
     row_base[r] = min(column + r, n - 1u); \
   } \
-  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
-    for (uint w = lane_in_slot * 2u; w < words_per_row; \
-         w += LANES * 2u) { \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u && \
+      Q4_KCONT_OK(words_per_row)) { \
+    for (uint wi_ = 0u; wi_ < Q4_FAST_ITERS(words_per_row); ++wi_) { \
+      uint w = Q4_FAST_W(wi_, words_per_row); \
+      if (w >= words_per_row) break; \
       precise float dot[ROWS_PER_SLOT]; \
       precise float input_sum = 0.0; \
       uint wa[ROWS_PER_SLOT]; \
