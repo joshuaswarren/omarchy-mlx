@@ -2,35 +2,27 @@ name: Community collectors
 
 on:
   pull_request:
-    paths:
+    # The code and workflows the steps below run or read. docs/ and receipts/
+    # stay out so a docs- or receipt-only PR does not start the matrix; the
+    # tests/ checks on them run with the next code change.
+    paths: &collector-paths
       - 'install.sh'
-      - 'scripts/apply-mlx-lm-patches.sh'
-      - 'patches/mlx-lm-kv-host-offset.patch'
-      - 'scripts/patch-mlx-lm-*.py'
-      - 'scripts/collect*.py'
-      - 'scripts/test_collect*.py'
-      - 'scripts/mlx_provenance.py'
-      - 'scripts/bench_matrix.py'
+      - 'requirements-dev.txt'
+      - 'patches/**'
+      - 'scripts/**'
+      - 'serve/**'
+      - 'tools/**'
+      - 'overlay/**'
+      - 'harness/**'
       - 'tests/**'
       - 'packaging/**'
       - 'qualification-kit/**'
       - 'services/community-data/schema/**'
       - '.github/workflows/collectors.yml'
+      - '.github/workflows/community-data.yml'
+      - '.github/workflows/serve-catalog-refresh.yml'
   push:
-    paths:
-      - 'install.sh'
-      - 'scripts/apply-mlx-lm-patches.sh'
-      - 'patches/mlx-lm-kv-host-offset.patch'
-      - 'scripts/patch-mlx-lm-*.py'
-      - 'scripts/collect*.py'
-      - 'scripts/test_collect*.py'
-      - 'scripts/mlx_provenance.py'
-      - 'scripts/bench_matrix.py'
-      - 'tests/**'
-      - 'packaging/**'
-      - 'qualification-kit/**'
-      - 'services/community-data/schema/**'
-      - '.github/workflows/collectors.yml'
+    paths: *collector-paths
 
 permissions:
   contents: read
@@ -54,7 +46,7 @@ jobs:
       - run: python scripts/test_collect_macos.py
       - run: python -m unittest discover -s tests -p test_mlx_provenance.py
       - run: python scripts/bench_matrix.py --self-test
-      - run: python -m pytest -q qualification-kit/test_receipt.py qualification-kit/test_reference.py qualification-kit/test_m5_kit.py qualification-kit/test_decode_harness.py
+      - run: python -m pytest -q qualification-kit/test_receipt.py qualification-kit/test_reference.py qualification-kit/test_m5_kit.py qualification-kit/test_decode_harness.py qualification-kit/test_decode_pair.py
       # tests/ covers the serve, assistant and ANE stack, which runs on Linux
       # only (/proc, /usr/bin/bash, process start times). The macOS legs keep
       # the collector steps above.
