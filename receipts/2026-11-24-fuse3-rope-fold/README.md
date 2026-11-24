@@ -232,6 +232,32 @@ fold, so a half-armed state cannot skip the rope without folding it.
   decode run, and the dispatch-count check that the folded route is one
   dispatch lighter per attention layer.
 
+## The applicability finding: the target models are partial-rotary
+
+The Qwen3.8-2B config carries `"partial_rotary_factor": 0.25` with
+`head_dim: 256` - the rope rotates **64 of the 256 dims**, and the rope
+host passes `dims = 64` (the rotary width), not the head dim. The fold
+as built requires `dims == head_dim` (the full-row rotation, whose
+pairs are `(i, i + 128)` - the pairing this kernel's thread layout
+already owns). On the Qwen3.8-2B the fold therefore refuses on every
+armed node, and the M6's ids gate shows exactly that: identical ids,
+identical dispatch histograms, fold on and off.
+
+Making the fold fire for the Qwen3.8 family needs the passthrough
+branch of the rope kernel reproduced in the fold's Q load: the rotation
+pairs are `(i, i + 32)` (half dims 32), which the thread layout does
+not own, so the rotation reads the normed-rounded values through shared
+memory (the rope kernel's own rotation phase already does this for its
+pairs). The reduction stays untouched. It is doable and it is a second
+kernel contract to prove bit-identical; until it lands, the fold's
+saving is zero for the Qwen3.8 family, and the card's minus-two-percent
+target on the 2B decode is not reachable by this fold.
+
+The fold remains correct and useful as landed for any future model with
+full rotary width at head width 256 on the split route, and the
+refusal-path machinery (the skip, the pinning, the descriptor handback)
+is proven on hardware.
+
 ## The K side (the other dispatch)
 
 The keys side is the harder half: the rotated key must also reach the
