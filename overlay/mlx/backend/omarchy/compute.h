@@ -1196,6 +1196,7 @@ enum class ComputeKernel : uint16_t {
   // Appended so earlier profile kernel ids do not move.
   SdpaDecodeSplitP1R4BF16Hd256Qrope,
   SdpaDecodeSplitP1R4BF16Hd256QropeApple,
+  QmmVecQ4MultiSubgroupBF16R2S4W2,
   Count,
 };
 

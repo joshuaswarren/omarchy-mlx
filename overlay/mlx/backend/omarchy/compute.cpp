@@ -315,6 +315,7 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kcont.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_resnorm_bf16.h"
 #include "qmm_vec_q4_outgate_resnorm_bf16.h"
@@ -1876,6 +1877,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16kcont,
           qmm_vec_q4_multi_subgroup_bf16_r2s16kcont_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s4w2,
+          qmm_vec_q4_multi_subgroup_bf16_r2s4w2_size};
     case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
       return {
           qmm_vec_q4_multi_subgroup_bf16,
