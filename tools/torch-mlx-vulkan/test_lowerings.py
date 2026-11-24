@@ -109,6 +109,49 @@ def test_t():
     print("test_t PASS")
 
 
+def test_embedding_dense_backward():
+    rng = np.random.RandomState(7)
+    V, D = 9, 4
+    for (shape, pad, scale) in (
+            ((7,), -1, False), ((2, 5), -1, False), ((2, 5), 3, False),
+            ((2, 5), -1, True), ((2, 5), 3, True), ((3, 4, 6), 0, False)):
+        go = rng.randn(*shape, D).astype(np.float32)
+        idx = rng.randint(0, V, size=shape).astype(np.int64)
+        got = mlx_vulkan._embedding_dense_backward(
+            mx.array(go), mx.array(idx), V, pad, scale)
+        tw = torch.zeros(V, D, requires_grad=True)
+        tidx = torch.tensor(idx)
+        ty = torch.nn.functional.embedding(
+            tidx, tw, padding_idx=pad if pad >= 0 else None,
+            scale_grad_by_freq=scale)
+        ty.backward(torch.tensor(go))
+        assert np.abs(_np(got) - tw.grad.numpy()).max() < 1e-5, (shape, pad, scale)
+    # duplicate indices accumulate; unused rows stay zero
+    go = rng.randn(5, D).astype(np.float32)
+    idx = np.array([4, 4, 4, 0, 8])
+    got = _np(mlx_vulkan._embedding_dense_backward(
+        mx.array(go), mx.array(idx), V, -1, False))
+    exp = np.zeros((V, D), np.float32)
+    np.add.at(exp, idx, go)
+    assert np.abs(got - exp).max() < 1e-5
+    # padding_idx with a NaN/Inf grad row must still produce an exact 0 row
+    # (a mask multiply would turn 0*NaN into NaN)
+    go = np.full((2, D), np.nan, dtype=np.float32)
+    got = _np(mlx_vulkan._embedding_dense_backward(
+        mx.array(go), mx.array(np.array([3, 3])), V, 3, False))
+    assert np.array_equal(got, np.zeros((V, D), np.float32)), got[3]
+    # scale_grad_by_freq counts must accumulate in int32: at 65536 dups an
+    # fp16 count overflows to inf and out*1/inf collapses the row to 0
+    n_dup = 65536
+    go = np.zeros((n_dup, D), np.float16)
+    go[0] = 1.0
+    got = _np(mlx_vulkan._embedding_dense_backward(
+        mx.array(go), mx.array(np.full(n_dup, 5)), V, -1, True))
+    exp = 1.0 / n_dup
+    assert np.abs(got[5] - exp).max() < 1e-5 and got[5].max() > 0, got[5]
+    print("test_embedding_dense_backward PASS")
+
+
 def test_bn_legit_functional():
     rng = np.random.RandomState(3)
     x = rng.randn(4, 6, 3, 3).astype(np.float32)
@@ -246,7 +289,7 @@ def test_dispatch_registered():
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
                  "_native_batch_norm_legit_functional", "threshold_backward", "t",
-                 "gelu_backward"):
+                 "gelu_backward", "embedding_dense_backward"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 
@@ -257,6 +300,7 @@ if __name__ == "__main__":
     test_convolution_backward()
     test_threshold_backward()
     test_t()
+    test_embedding_dense_backward()
     test_bn_legit_functional()
     test_scalar_tensor_factory_lowering()
     test_arange()
