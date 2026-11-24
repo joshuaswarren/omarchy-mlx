@@ -618,20 +618,6 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
-def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
-    # torch: a NCL, w OIL ; mlx.conv1d: x NLC, w (L, I/groups, O)
-    if groups != 1:
-        return _raise("grouped conv1d")
-    x = _mx(a).transpose(0, 2, 1)
-    wt = _mx(w).transpose(0, 2, 1)  # OIL -> O,L,I (mlx conv1d weight layout)
-    p = padding[0] if isinstance(padding, (list, tuple)) else padding
-    st = stride[0] if isinstance(stride, (list, tuple)) else stride
-    dl = dilation[0] if isinstance(dilation, (list, tuple)) else dilation
-    y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl)
-    if b is not None:
-        y = y + _mx(b).reshape(1, -1)
-    return y.transpose(0, 2, 1)
-
 def _tup(v, n):
     return tuple(v) if isinstance(v, (list, tuple)) else (v,) * n
 
@@ -1224,7 +1210,6 @@ _FUNC_SPECS = {
     "_native_batch_norm_legit_functional": _bn_legit_functional,
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
-    "conv1d": _conv1d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
     "max_pool2d_with_indices": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices=True),
     "max_pool2d_with_indices_backward": _max_pool2d_bwd,
