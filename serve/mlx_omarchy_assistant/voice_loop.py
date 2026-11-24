@@ -174,12 +174,22 @@ def stream_reply(url: str, messages: list, *, model: str,
             data = line[5:].strip()
             if data == "[DONE]":
                 return
-            choices = json.loads(data).get("choices") or []
-            if not choices:
+            try:
+                event = json.loads(data)
+            except (ValueError, RecursionError) as exc:  # bad JSON, int digit cap, nesting too deep
+                raise RuntimeError(f"reply server sent an event that is not JSON: {data[:200]}") from exc
+            choices = event.get("choices") if isinstance(event, dict) else None
+            if choices is None or choices == []:
                 raise RuntimeError(f"reply server sent an event with no choices: {data[:200]}")
-            delta = choices[0].get("delta", {}).get("content")
-            if delta:
-                yield delta
+            # A role-only or finish chunk carries no text: delta or content is absent or null.
+            choice = choices[0] if isinstance(choices, list) else None
+            delta = choice.get("delta") if isinstance(choice, dict) else None
+            content = delta.get("content") if isinstance(delta, dict) else None
+            if not isinstance(choice, dict) or not isinstance(delta, (dict, type(None))) \
+                    or not isinstance(content, (str, type(None))):
+                raise RuntimeError(f"reply server sent a malformed event: {data[:200]}")
+            if content:
+                yield content
 
 
 def _abbreviation(token: str) -> bool:
