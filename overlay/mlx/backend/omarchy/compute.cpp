@@ -334,6 +334,7 @@
 #include "sdpa_decode_native_bf16_hd32.h"
 #include "sdpa_decode_native_bf16_hd96.h"
 #include "sdpa_decode_native_bf16_hd128.h"
+#include "sdpa_decode_native_bf16_hd128kt32.h"
 #include "sdpa_decode_masked_bf16_hd128.h"
 #include "sdpa_decode_rows_bf16_hd128.h"
 #include "sdpa_prefill_flash_bf16_hd128.h"
@@ -1943,7 +1944,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaDecodeNativeBF16Hd96:
       return {sdpa_decode_native_bf16_hd96, sdpa_decode_native_bf16_hd96_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd128:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd128S16:
       return {sdpa_decode_native_bf16_hd128, sdpa_decode_native_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd128Kt32:
+      return {sdpa_decode_native_bf16_hd128kt32, sdpa_decode_native_bf16_hd128kt32_size};
     case ComputeKernel::SdpaDecodeMaskedBF16Hd128:
       return {sdpa_decode_masked_bf16_hd128, sdpa_decode_masked_bf16_hd128_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd160:
@@ -2471,17 +2475,21 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
   if (size == 0 || size % sizeof(uint32_t) != 0) {
     throw std::runtime_error("[omarchy] embedded SPIR-V has an invalid size.");
   }
-  // Kernels built at a non-default slot width pin their own
-  // subgroup size (the QMM_LANES=16 build runs 16-lane subgroups).
-  // Fail closed: a 16-lane shader on unpinned 32-lane hardware subgroups
-  // corrupts output, and pinning without hardware admission violates
+  // Kernels built or pinned at a non-default subgroup width take their
+  // own requiredSubgroupSize (the QMM_LANES=16 multi build and the
+  // decode-SDPA s16 screen both run 16-lane subgroups). Fail closed:
+  // a 16-lane shader on unpinned 32-lane hardware subgroups corrupts
+  // output, and pinning without hardware admission violates
   // VUID-02761/02762/02757.
-  if (kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16) {
+  const bool wants_s16 =
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16 ||
+      kernel == ComputeKernel::SdpaDecodeNativeBF16Hd128S16;
+  if (wants_s16) {
     if (!subgroup_size_16_admitted_) {
       throw std::runtime_error(
-          "[omarchy] QmmVecQ4MultiSubgroupBF16R2S16KCONTS16 requires "
-          "requiredSubgroupSize = 16 on a 256-lane workgroup, which this"
-          " device cannot legally pin.");
+          "[omarchy] a 16-lane kernel requires requiredSubgroupSize = 16"
+          " on a 256-lane workgroup, which this device cannot legally"
+          " pin.");
     }
     return create_pipeline(
         std::span<const uint32_t>{

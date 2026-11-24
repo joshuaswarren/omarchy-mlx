@@ -1211,6 +1211,13 @@ enum class ComputeKernel : uint16_t {
   // (shaders/qmm_vec.comp, QMM_LANES=16; requiredSubgroupSize 16).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S16KCONTS16,
+  // Decode-SDPA screens on the bf16 hd128 fused kernel: S16 is the same
+  // SPIR-V as SdpaDecodeNativeBF16Hd128 with requiredSubgroupSize 16
+  // (the bf16 arm uses no subgroup ops, so the pin cannot reorder
+  // arithmetic); KT32 is sdpa_decode_native.comp -DSDPA_KT=32. Both
+  // bit-identical to the base kernel. Appended to keep ids stable.
+  SdpaDecodeNativeBF16Hd128S16,
+  SdpaDecodeNativeBF16Hd128Kt32,
   Count,
 };
 

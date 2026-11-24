@@ -475,6 +475,9 @@ omarchy_shader(sdpa_decode_native_bf16_hd256 shaders/sdpa_decode_native.comp -DB
 omarchy_shader(sdpa_decode_native_bf16_hd32 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=32)
 omarchy_shader(sdpa_decode_native_bf16_hd96 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=96)
 omarchy_shader(sdpa_decode_native_bf16_hd128 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=128)
+# PAR-40b screen: 32-wide score/output tiles on the hd128 fused decode
+# kernel (ascending order kept; tail pads exact zeros -> bit-identical).
+omarchy_shader(sdpa_decode_native_bf16_hd128kt32 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=128 -DSDPA_KT=32)
 omarchy_shader(sdpa_decode_masked_bf16_hd128 shaders/sdpa_decode_native.comp
                -DBF16_IO=1 -DSDPA_DIM=128 -DSDPA_MASK=1)
 # Multi-token verify rows (q_len 2..16, causal, bf16): one workgroup per

@@ -101,6 +101,19 @@ layout(push_constant) uniform Params {
 const uint SIMD = 32u;
 const float FINITE_MIN = -3.4028234663852886e38;
 
+// Inner tile width of the bf16 arm's score d-chunk and output key-chunk
+// loops. The default 16 keeps the shipped blobs; -DSDPA_KT=N compiles a
+// wider or narrower tile. Tiles keep the ascending order (ascending-d,
+// ascending-key) and the tail pads with exact zeros, so every width is
+// bit-identical to the same route at 16.
+#ifndef SDPA_KT
+#define SDPA_KT 16
+#endif
+#if SDPA_KT < 8 || SDPA_KT > 64
+#error "SDPA_KT must sit in [8, 64]"
+#endif
+const uint KT = uint(SDPA_KT);
+
 // Query-head width. The default 64 keeps the original blobs; -DSDPA_DIM=N
 // compiles the wider twins. In the bf16 arm N is any multiple of 32 up to
 // 256 - every width runs the identical f32 score-composition sequence
@@ -248,12 +261,12 @@ void main() {
     float accumulator = 0.0;
     // Loads are independent of the accumulator chain: issue 16 K elements
     // before the 16 in-order FMAs (same expression order, bit-identical).
-    for (uint d = 0u; d < SDPA_DIM; d += 16u) {
-      float kv[16];
-      for (uint i = 0u; i < 16u; ++i) {
+    for (uint d = 0u; d < SDPA_DIM; d += KT) {
+      float kv[KT];
+      for (uint i = 0u; i < KT; ++i) {
         kv[i] = bf16_load(key_data.values[k_base + (d + i) * params.in_strides[0]]);
       }
-      for (uint i = 0u; i < 16u; ++i) {
+      for (uint i = 0u; i < KT; ++i) {
         accumulator += s_qrow[d + i] * kv[i];
       }
     }
@@ -322,17 +335,17 @@ void main() {
         d * params.in_strides[3];
     // Whole 16-key tiles: 16 independent V loads first, then the 16 in-order
     // FMAs (a 64-key block spilled the load registers and was 9x slower).
-    for (; key + 16u <= key_end; key += 16u) {
-      float vv[16];
-      for (uint index = 0u; index < 16u; ++index) {
+    for (; key + KT <= key_end; key += KT) {
+      float vv[KT];
+      for (uint index = 0u; index < KT; ++index) {
         vv[index] = bf16_load(
             value_data.values[v_base + (key + index) * params.in_strides[2]]);
       }
-      for (uint index = 0u; index < 16u; ++index) {
+      for (uint index = 0u; index < KT; ++index) {
         accumulator += s_stream[key + index] * vv[index];
       }
     }
-    for (uint index = 0u; index < 16u; ++index) {
+    for (uint index = 0u; index < KT; ++index) {
       float prob = key < key_end ? s_stream[key] : 0.0;
       float value16 = key < key_end ? bf16_load(
           value_data.values[v_batch +

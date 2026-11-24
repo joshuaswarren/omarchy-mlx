@@ -17748,8 +17748,26 @@ void ScaledDotProductAttention::eval_gpu(
           masked_bindings, params, params.matrix_m, 1u, static_cast<uint32_t>(batch));
       return;
     }
+    // Kernel-variant screens on the hd128 fused decode kernel
+    // (MLX_OMARCHY_SDPA_NATIVE_VARIANT): "s16" pins requiredSubgroupSize
+    // 16 where the size-control range admits it (the bf16 arm has no
+    // subgroup ops, so the pin cannot reorder arithmetic), "kt32" runs
+    // the 32-wide tile build (ascending order, exact-zero tail pad:
+    // bit-identical). Anything else keeps the shipped kernel.
+    omarchy::ComputeKernel one_pass = one_pass_kernel();
+    if (decode_bf16 && head_dim == 128) {
+      const char* nv = std::getenv("MLX_OMARCHY_SDPA_NATIVE_VARIANT");
+      if (nv != nullptr && std::strcmp(nv, "s16") == 0 &&
+          encoder.device()
+              .hardware_capabilities()
+              .subgroup_size_16_admitted) {
+        one_pass = omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd128S16;
+      } else if (nv != nullptr && std::strcmp(nv, "kt32") == 0) {
+        one_pass = omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd128Kt32;
+      }
+    }
     encoder.dispatch_compute(
-        one_pass_kernel(),
+        one_pass,
         bindings,
         params,
         params.matrix_m,
