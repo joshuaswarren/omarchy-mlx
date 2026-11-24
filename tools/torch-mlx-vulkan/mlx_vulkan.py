@@ -1753,15 +1753,25 @@ def _fuse_rope(nodes):
     nm = {n: getattr(n.target, "__name__", None) or _opname(n) for n in nodes}
 
     def _slice_get(n):
+        # only a slice on the LAST axis (preceded by Ellipsis/full slices)
         if nm.get(n) != "getitem" or len(n.args) != 2:
             return None
         idx = n.args[1]
         if not isinstance(idx, tuple):
+            idx = (idx,)
+        # last-axis slice: x[h:] or x[..., h:]; x[:, :h] slices axis 1 and
+        # must not match. Ellipsis or a bare index is the only proof of
+        # last-axis slicing without the tensor's ndim.
+        if len(idx) != 1 and Ellipsis not in idx:
             return None
-        sl = [s for s in idx if isinstance(s, slice)]
-        if len(sl) != 1 or sl[0].step is not None:
+        if not idx or not isinstance(idx[-1], slice):
             return None
-        return n.args[0], sl[0].start, sl[0].stop
+        if any(s is not Ellipsis and s != slice(None) for s in idx[:-1]):
+            return None
+        sl = idx[-1]
+        if sl.step is not None:
+            return None
+        return n.args[0], sl.start, sl.stop
 
     def _rot_src(cat):
         if nm.get(cat) != "cat":
@@ -1776,13 +1786,16 @@ def _fuse_rope(nodes):
         g2, g1 = _slice_get(nneg.args[0]), _slice_get(x1)
         if not g1 or not g2 or g1[0] is not g2[0]:
             return None
-        if g1[1] in (0, None) and g2[1] == g1[2] and g2[2] is None:
+        if (g1[1] in (0, None) and isinstance(g2[1], int) and g2[1] > 0
+                and g2[1] == g1[2] and g2[2] is None):
             return g1[0], g2[1], {cat, nneg, x1, nneg.args[0]}
         return None
 
+    _THIN = ("unsqueeze", "to", "contiguous", "detach", "float")
+
     def _trig_root(a, want):
         # unsqueeze/cast*(trig | mul(trig, scalar)) -> (node, scale)
-        while (nm.get(a) in ("unsqueeze", "to", "contiguous", "detach", "float")
+        while (nm.get(a) in _THIN
                and a.args and isinstance(a.args[0], torch.fx.Node)):
             a = a.args[0]
         if nm.get(a) == want:
@@ -1792,6 +1805,12 @@ def _fuse_rope(nodes):
                 if nm.get(t) == want and isinstance(sc, (int, float)):
                     return t, float(sc)
         return None, None
+
+    def _thin_root(a):
+        while (nm.get(a) in _THIN
+               and a.args and isinstance(a.args[0], torch.fx.Node)):
+            a = a.args[0]
+        return a
 
     fused = {}
     for n in nodes:
@@ -1806,6 +1825,10 @@ def _fuse_rope(nodes):
             if not rot:
                 continue
             x_rot, half, chain = rot
+            # m_cos must multiply the SAME rotated tensor: mul(x, cos).
+            if (len(m_cos.args) != 2 or x_rot not in m_cos.args
+                    or len(m_sin.args) != 2):
+                break
             sin_op = next((a for a in m_sin.args if a is not cat
                            and isinstance(a, torch.fx.Node)), None)
             cos_op = next((a for a in m_cos.args if a is not x_rot
@@ -1814,7 +1837,13 @@ def _fuse_rope(nodes):
                 break
             cn, csc = _trig_root(cos_op, "cos")
             sn, ssc = _trig_root(sin_op, "sin")
-            if cn is None or sn is None or csc != ssc:
+            # cos and sin must share the same angle input (compared after
+            # stripping transparent wrappers: dynamo may not CSE them).
+            if (cn is None or sn is None or csc != ssc
+                    or not cn.args or not sn.args
+                    or not isinstance(cn.args[0], torch.fx.Node)
+                    or not isinstance(sn.args[0], torch.fx.Node)
+                    or _thin_root(cn.args[0]) is not _thin_root(sn.args[0])):
                 break
             fused[n] = (x_rot, half, csc, {m_cos, m_sin} | chain)
             break
@@ -1845,9 +1874,13 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     skip, fused = _fuse_rmsnorm(nodes)
     rskip, rfused = _fuse_rope(nodes)
     pos_ph = next((n for n in phs if "position_ids" in str(n.target)), None)
-    invf_ph = next((n for n in phs if "rotary" in str(n.target)
-                    or "inv_freq" in str(n.target)), None)
-    if pos_ph is None or invf_ph is None:
+    invf_ph = next((n for n in phs if "inv_freq" in str(n.target)), None)
+    _halves = {v[1] for v in rfused.values()}
+    _n_invf = sum(1 for n in phs if "inv_freq" in str(n.target))
+    # fuse only when every site shares one rotary width, exactly one inv_freq
+    # placeholder exists (multi-theta graphs need per-site bases), and we can
+    # find the position placeholder the emit needs.
+    if pos_ph is None or invf_ph is None or len(_halves) != 1 or _n_invf != 1:
         rfused = {}
     else:
         skip |= rskip
@@ -1856,6 +1889,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # the runtime tensor so no host sync lands inside the traced graph.
     _rope = {"base": None}
     _invf_i = phs.index(invf_ph) if invf_ph is not None else -1
+    _pos_i = phs.index(pos_ph) if pos_ph is not None else -1
     _rope_half = next(iter(rfused.values()))[1] if rfused else 0
     fp32_params = {str(w.target) for _, w, _ in fused.values()}
     # embedding gathers feed the whole residual spine; keep their source weights
@@ -1868,9 +1902,17 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 w = w.args[0]
             if getattr(w, "op", None) == "placeholder":
                 fp32_params.add(str(w.target))
+    # same-storage, same-shape aliases only: an in-place op on a derived
+    # tensor (neg/matmul/cat output, a dtype-cast result, a reshaped view)
+    # does not write back to the placeholder, so it must not mark state and
+    # its post-mutation value must not be written back to env[ph] either.
+    _alias = {"detach", "alias", "lift_fresh", "lift_fresh_copy"}
+
     def _ph_of(n):
         while n is not None and n.op != "placeholder":
-            if not getattr(n, "args", None) or not isinstance(n.args[0], torch.fx.Node):
+            if ((getattr(n.target, "__name__", None) or _opname(n)) not in _alias
+                    or not getattr(n, "args", None)
+                    or not isinstance(n.args[0], torch.fx.Node)):
                 return None
             n = n.args[0]
         return n
@@ -1898,8 +1940,9 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # dynamo names: G_* (older torch lifted globals) and L_self_*/l_self_*
     # (torch>=2.4 nn params/buffers) are the static weights; L_kwargs_* are
     # per-call inputs and stay dynamic.
-    static_names = {str(n.target) for n in phs
-                    if str(n.target).startswith(("G_", "L_self_", "l_self_"))}
+    static_names = ({str(n.target) for n in phs
+                     if str(n.target).startswith(("G_", "L_self_", "l_self_"))}
+                    - state_names)
     mutated = [n for n in phs if str(n.target) in state_names]
     quant_names = _quantizable_phs(phs) if _Q_BITS else set()
     conv_static = {}
@@ -1956,9 +1999,18 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if n in rfused:
                 xn, half, osc = rfused[n]
-                r = mx.fast.rope(env[xn], 2 * half, traditional=False,
+                _x, _p = env[xn], env[pos_ph]
+                # fused rope only models [B,H,L,D] with the sequence on axis 2
+                # and the rotary width covering the head dim; anything else
+                # must fail loudly at trace time, not miscompile.
+                if (_x.ndim != 4 or _x.shape[-1] != 2 * half
+                        or _x.shape[2] != _p.shape[-1]):
+                    raise RuntimeError(
+                        "fused rope: unsupported layout "
+                        f"x={_x.shape} pos={_p.shape} half={half}")
+                r = mx.fast.rope(_x, 2 * half, traditional=False,
                                  base=_rope["base"], scale=1.0,
-                                 offset=env[pos_ph].reshape(-1)[0])
+                                 offset=_p.reshape(-1)[0])
                 env[n] = r * osc if osc != 1.0 else r
                 continue
             args = tuple(res(a) for a in n.args)
@@ -2007,13 +2059,20 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 sh = [1] * src.ndim
                 sh[dim] = idx.shape[0] if idx.ndim else 1
                 ib = mx.broadcast_to(idx.reshape(sh), src.shape)
-                upd = mx.put_along_axis(t, ib, _cast(src).astype(t.dtype), axis=dim)
+                upd = mx.put_along_axis(t, ib, src.astype(t.dtype), axis=dim)
                 env[n.args[0]] = upd      # model in-place mutation
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
                 env[n] = upd
                 continue
             if name == "add_":
-                env[n.args[0]] = env[n.args[0]] + args[1]
-                env[n] = env[n.args[0]]
+                upd = env[n.args[0]] + args[1]
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
                 continue
             # The aot backward graph: these ops must stay on mx or the whole
             # training step crosses to torch per node (PT-T1 speed gate).
@@ -2177,7 +2236,24 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
             # cannot leave a partially populated slot cache behind.
             _slots["st"], _slots["dyn"], _slots["flat"] = st, dyn, flat
         if rfused and _rope["base"] is None:
-            _rope["base"] = float(runtime_inputs[_invf_i].reshape(-1)[1]) ** (-_rope_half)
+            # theta = inv_freq[1]^(-half) only when inv_freq is geometric;
+            # verify spacing + positions once, fail loudly on scaled/YaRN or
+            # ragged/batched layouts the scalar-offset emit cannot model.
+            f = runtime_inputs[_invf_i].reshape(-1)
+            if f.numel() != _rope_half or f.numel() < 2:
+                raise RuntimeError(
+                    f"fused rope: inv_freq numel {f.numel()} != half {_rope_half}")
+            r = f[:-1].double() / f[1:].double()
+            if not bool(((r - r[0]).abs() <= 1e-4 * r[0].abs()).all()):
+                raise RuntimeError("fused rope: non-geometric inv_freq")
+            _rope["base"] = float(f[1]) ** (-_rope_half)
+            pt = runtime_inputs[_pos_i]
+            pt = pt.reshape(-1, pt.shape[-1])
+            if not bool((pt == pt[:1]).all()):
+                raise RuntimeError("fused rope: per-row positions unsupported")
+            row = pt[0]
+            if row.numel() > 1 and not bool((row[1:] - row[:-1] == 1).all()):
+                raise RuntimeError("fused rope: non-contiguous positions")
         t1 = _t.perf_counter()
         outs = (build if _DBG_ENV is not None else cfn)(*flat)
         outs = outs if isinstance(outs, (tuple, list)) else (outs,)
