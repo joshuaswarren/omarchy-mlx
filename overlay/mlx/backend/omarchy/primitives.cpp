@@ -15419,7 +15419,7 @@ void GreedyQuantizedArgmax::eval_gpu(
   // prune+exact+select, flagged full). Cross-stage state is zeroed by a
   // fill so the same-dispatch atomics start deterministic; each merged
   // stage's last workgroup runs the single-workgroup epilogue inline.
-  static const bool fused_stages =
+  const bool fused_stages =
       omarchy::env_flag("MLX_OMARCHY_GREEDY_FUSE");
   if (fused_stages) {
     encoder.fill_buffer(binding(state).buffer, 0u, state.nbytes(), 0);
