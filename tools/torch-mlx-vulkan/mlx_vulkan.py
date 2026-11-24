@@ -233,6 +233,196 @@ def _bitwise_or_logical(a, b, bitop, logop):
         return logop(a.astype(_b), b.astype(_b))
     return bitop(a, b)
 
+
+# ---------------- pooling (PT-P) ----------------
+# Pure-mx lowerings: fwd via strided window-stack, bwd via zero-insert
+# (fractional stride) + per-offset shift/accumulate. Static shapes only.
+
+def _pool_hw(v, default=None):
+    if v is None or (isinstance(v, (list, tuple)) and len(v) == 0):
+        return default
+    t = tuple(v) if isinstance(v, (list, tuple)) else (v, v)
+    return (int(t[0]), int(t[1]))
+
+
+def _pool_out(in_sz, k, s, p, dil, ceil_mode):
+    o = (in_sz + 2 * p - dil * (k - 1) - 1 + (s - 1 if ceil_mode else 0)) // s + 1
+    if (o - 1) * s >= in_sz + p:
+        o -= 1
+    return max(int(o), 0)
+
+
+def _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw, pad_value=0.0):
+    # (N,C,Hp,Wp) -> (N,C,oh,ow,K), K = kh*kw row-major window offsets.
+    # ceil_mode lets the last window start inside the pad and overrun the
+    # padded extent; grow the array on the bottom/right so those positions
+    # read pad_value instead of slicing ragged.
+    need_h = (oh - 1) * sh + (kh - 1) * dh + 1
+    need_w = (ow - 1) * sw + (kw - 1) * dw + 1
+    if need_h > xp.shape[2] or need_w > xp.shape[3]:
+        xp = mx.pad(xp, ((0, 0), (0, 0),
+                         (0, max(need_h - xp.shape[2], 0)),
+                         (0, max(need_w - xp.shape[3], 0))),
+                    constant_values=pad_value)
+    cols = [xp[:, :, i * dh: i * dh + (oh - 1) * sh + 1: sh,
+               j * dw: j * dw + (ow - 1) * sw + 1: sw]
+            for i in range(kh) for j in range(kw)]
+    return mx.stack(cols, axis=-1)
+
+
+def _unstride(g, oh, ow, sh, sw):
+    # (N,C,oh,ow) -> (N,C,(oh-1)*sh+1,(ow-1)*sw+1): values at strided spots,
+    # zeros between (insert s-1 zeros after each element along each axis)
+    n, c = g.shape[0], g.shape[1]
+    g = mx.pad(mx.reshape(g, (n, c, oh, ow, 1)),
+               ((0, 0), (0, 0), (0, 0), (0, 0), (0, sw - 1)))
+    g = mx.reshape(g, (n, c, oh, ow * sw))
+    g = mx.pad(mx.reshape(g, (n, c, oh, 1, ow * sw)),
+               ((0, 0), (0, 0), (0, 0), (0, sh - 1), (0, 0)))
+    g = mx.reshape(g, (n, c, oh * sh, ow * sw))
+    return g[:, :, : (oh - 1) * sh + 1, : (ow - 1) * sw + 1]
+
+
+def _pool_scatter(contrib, hp, wp, kh, kw, sh, sw, dh, dw):
+    # contrib (N,C,oh,ow,K) -> (N,C,hp,wp): each offset's field shifted into
+    # its window position and summed (handles overlap stride < kernel)
+    n, c, oh, ow = contrib.shape[0], contrib.shape[1], contrib.shape[2], contrib.shape[3]
+    acc = mx.zeros((n, c, hp, wp), dtype=contrib.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            g = _unstride(contrib[..., i * kw + j], oh, ow, sh, sw)
+            g = mx.pad(g, ((0, 0), (0, 0), (i * dh, hp), (j * dw, wp)))
+            acc = acc + g[:, :, :hp, :wp]
+    return acc
+
+
+def _pool_shape(a, kernel_size, stride, padding, dilation, ceil_mode):
+    kh, kw = _pool_hw(kernel_size)
+    sh, sw = _pool_hw(stride, (kh, kw))
+    ph, pw = _pool_hw(padding, (0, 0))
+    dh, dw = _pool_hw(dilation, (1, 1))
+    n, c, h, w = a.shape
+    oh = _pool_out(h, kh, sh, ph, dh, ceil_mode)
+    ow = _pool_out(w, kw, sw, pw, dw, ceil_mode)
+    return (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, dh, dw)
+
+
+def _max_pool2d(a, kernel_size, stride=None, padding=0, dilation=1,
+                ceil_mode=False, return_indices=False):
+    x = _mx(a)
+    (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, dh, dw) = \
+        _pool_shape(x, kernel_size, stride, padding, dilation, ceil_mode)
+    xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)), constant_values=-mx.inf)
+    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw,
+                        pad_value=-mx.inf)
+    out = win.max(axis=-1)
+    if not return_indices:
+        return out
+    idx = win.argmax(axis=-1)
+    ii, jj = idx // kw, idx % kw
+    hi = mx.arange(oh).reshape(1, 1, oh, 1) * sh + ii * dh - ph
+    wi = mx.arange(ow).reshape(1, 1, 1, ow) * sw + jj * dw - pw
+    return out, (hi * w + wi).astype(mx.int64)
+
+
+def _max_pool2d_bwd(grad_output, a, kernel_size, stride=None, padding=0,
+                    dilation=1, ceil_mode=False, indices=None):
+    g, x = _mx(grad_output), _mx(a)
+    (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, dh, dw) = \
+        _pool_shape(x, kernel_size, stride, padding, dilation, ceil_mode)
+    xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)), constant_values=-mx.inf)
+    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw,
+                        pad_value=-mx.inf)
+    idx = win.argmax(axis=-1)
+    mask = mx.equal(idx[..., None], mx.arange(kh * kw)).astype(g.dtype)
+    contrib = g[..., None] * mask
+    acc = _pool_scatter(contrib, h + 2 * ph, w + 2 * pw, kh, kw, sh, sw, dh, dw)
+    return acc[:, :, ph:ph + h, pw:pw + w]
+
+
+def _avg_pool2d(a, kernel_size, stride=None, padding=0, ceil_mode=False,
+                count_include_pad=True, divisor_override=None):
+    x = _mx(a)
+    (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, dh, dw) = \
+        _pool_shape(x, kernel_size, stride, padding, (1, 1), ceil_mode)
+    xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
+    s = _pool_windows(xp, oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
+    if divisor_override is not None:
+        return s / float(divisor_override)
+    # Divisor = window positions inside the padded input; ceil overrun
+    # never counts. include_pad counts the p-pad region itself.
+    ones = mx.ones((n, c, h, w), dtype=x.dtype)
+    cnt = _pool_windows(
+        mx.pad(ones, ((0, 0), (0, 0), (ph, ph), (pw, pw)),
+               constant_values=1.0 if count_include_pad else 0.0),
+        oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
+    return s / cnt
+
+
+def _avg_pool2d_backward(grad_output, a, kernel_size, stride=None, padding=0,
+                         ceil_mode=False, count_include_pad=True,
+                         divisor_override=None):
+    g, x = _mx(grad_output), _mx(a)
+    (n, c, h, w, oh, ow), (kh, kw, sh, sw, ph, pw, _, _) = \
+        _pool_shape(x, kernel_size, stride, padding, (1, 1), ceil_mode)
+    if divisor_override is not None:
+        div = float(divisor_override)
+    else:
+        ones = mx.ones((n, c, h, w), dtype=x.dtype)
+        div = _pool_windows(
+            mx.pad(ones, ((0, 0), (0, 0), (ph, ph), (pw, pw)),
+                   constant_values=1.0 if count_include_pad else 0.0),
+            oh, ow, kh, kw, sh, sw, 1, 1).sum(axis=-1)
+    contrib = mx.broadcast_to((g / div)[..., None],
+                              (n, c, oh, ow, kh * kw))
+    acc = _pool_scatter(contrib, h + 2 * ph, w + 2 * pw, kh, kw, sh, sw, 1, 1)
+    return acc[:, :, ph:ph + h, pw:pw + w]
+
+
+def _adaptive_avg_pool2d(a, output_size):
+    x = _mx(a)
+    n, c, h, w = x.shape
+    if output_size is None:
+        output_size = (h, w)
+    elif isinstance(output_size, (list, tuple)):
+        output_size = tuple(h if s is None else s for s in output_size[:1]) + \
+            tuple(w if s is None else s for s in output_size[1:2])
+    oh, ow = _pool_hw(output_size)
+    if oh == h and ow == w:
+        return x
+    rows = []
+    for i in range(oh):
+        hs = i * h // oh
+        he = (i + 1) * h // oh + (1 if (i + 1) * h % oh else 0)  # ceil
+        cols = []
+        for j in range(ow):
+            ws = j * w // ow
+            we = (j + 1) * w // ow + (1 if (j + 1) * w % ow else 0)
+            cols.append(x[:, :, hs:he, ws:we].mean(axis=(-2, -1)))
+        rows.append(mx.stack(cols, axis=-1))
+    return mx.stack(rows, axis=-2)
+
+
+def _adaptive_avg_pool2d_backward(grad_output, a):
+    g, x = _mx(grad_output), _mx(a)
+    n, c, h, w = x.shape
+    oh, ow = g.shape[2], g.shape[3]
+    if oh == h and ow == w:
+        return g
+    acc = mx.zeros((n, c, h, w), dtype=g.dtype)
+    for i in range(oh):
+        hs = i * h // oh
+        he = (i + 1) * h // oh + (1 if (i + 1) * h % oh else 0)
+        for j in range(ow):
+            ws = j * w // ow
+            we = (j + 1) * w // ow + (1 if (j + 1) * w % ow else 0)
+            cnt = float((he - hs) * (we - ws))
+            mask = mx.pad(mx.ones((1, 1, he - hs, we - ws), dtype=g.dtype),
+                          ((0, 0), (0, 0), (hs, h - he), (ws, w - we)))
+            acc = acc + g[:, :, i, j][:, :, None, None] * (mask / cnt)
+    return acc
+
+
 # ---------------- lowering tables ----------------
 
 # torch-level function objects -> lowering. Built lazily below so missing
@@ -301,6 +491,15 @@ _FUNC_SPECS = {
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
+    "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
+    "max_pool2d_with_indices": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices=True),
+    "max_pool2d_with_indices_backward": _max_pool2d_bwd,
+    "avg_pool2d": _avg_pool2d,
+    "avg_pool2d_backward": _avg_pool2d_backward,
+    "adaptive_avg_pool2d": _adaptive_avg_pool2d,
+    "_adaptive_avg_pool2d": _adaptive_avg_pool2d,
+    "adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
+    "_adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
@@ -449,6 +648,14 @@ _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones"}
 
+# ops that must never CPU-fallback: lower even when upstream nodes produced
+# torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)
+_ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
+                 "max_pool2d_with_indices_backward", "avg_pool2d",
+                 "avg_pool2d_backward", "adaptive_avg_pool2d",
+                 "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
+                 "_adaptive_avg_pool2d_backward"}
+
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
 
@@ -578,7 +785,9 @@ def make_executor(gm):
                             or FUNC_TABLE_BY_NAME.get(getattr(node.target, "__name__", ""))
                             or ATEN_TABLE.get(name))
                 is_producer = (getattr(node.target, "__name__", "") in _PRODUCERS
-                               or name in _PRODUCERS)
+                               or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
+                               or name in _PRODUCERS
+                               or name in _ALWAYS_LOWER)
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
                         val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
@@ -633,6 +842,21 @@ def _eager_run(gm):
     run, stats = make_executor(gm)
     run._mlx_stats = stats
     return run
+
+
+# Training variant: AOTAutograd splits fwd/bwd and compiles both subgraphs
+# through the same executor, so *_backward aten nodes lower to mx (pools,
+# conv bwd, bn bwd). Use for train graphs: backend="mlx_vulkan_train".
+def _aot_exec(gm, inputs):
+    return _eager_run(gm)
+
+
+try:
+    from torch._dynamo.backends.common import aot_autograd
+    torch._dynamo.register_backend(name="mlx_vulkan_train")(
+        aot_autograd(fw_compiler=_aot_exec, bw_compiler=_aot_exec))
+except Exception as _e:
+    log.info("mlx_vulkan_train backend unavailable: %s", _e)
 
 
 @torch._dynamo.register_backend(name="mlx_vulkan")
