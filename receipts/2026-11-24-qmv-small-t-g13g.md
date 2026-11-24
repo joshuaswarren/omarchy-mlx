@@ -47,3 +47,23 @@ diverge. G17C: stays 0.
 Note: the 2026-09-29 negative receipt probed coopmat-family variants,
 not this comparison; the small-row chain shipped 2026-11-15 and was
 never re-raced against the batch GEMV on G13G.
+
+## G13C (16-inch M1 Max, jw16) — wAW replicate + wB1 route probe
+wAW ran qmv_sweep2.py verbatim on the prod wheel +bf5631d
+(issuecomment-7119188736). Read with the device name in mind — jw16
+reports "Apple M1 Max (G13C C0)", so its small_t default was already 8
+in that wheel: every m<=8 cell compares the SAME route to itself, and
+the observed -13..+22% spread is harness noise, not a route change.
+The flip this PR adds stays scoped to G13G and G14C.
+
+m=16 tall-K: wAW's table showed def 19-33% slower than the alt arms at
+K=6144->2048 and K=9728->2560 and suggested a tile rule. wB1 probe of
+the actual dispatches (MLX_OMARCHY_GPU_PROFILE, diag wheel 5ef3034,
+same shapes): every arm emits the identical QmmTileF32 dispatch — the
+m>8 path has a single route, so no threshold can change it. Rep-level
+ABBA on wAW's exact venv (/usr/lib/omarchy-mlx/venv, +bf5631d), same
+cell, 10 interleaved reps: def 2.058 / small 2.063 / tile 2.066 /
+sm8 2.059 ms — parity within 0.4%. The reported gap is an ABBA
+position/order artifact in the sweep harness, and the *_ident=False
+flags at m=16 mark that route's nondeterministic accumulation, not a
+reroute. No G13C m=16 rule added; not confirmed.
