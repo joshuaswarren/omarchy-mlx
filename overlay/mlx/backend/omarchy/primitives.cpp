@@ -10438,7 +10438,6 @@ bool dispatch_quantized_gemv_group(
       }
     }
   }
-<<<<<<< HEAD
   if (res_norm_active) {
     res_norm->out.set_data(allocator().malloc(res_norm->out.nbytes()));
     encoder.add_temporary(res_norm->weight);
