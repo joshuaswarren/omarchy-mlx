@@ -1184,6 +1184,18 @@ enum class ComputeKernel : uint16_t {
   ConvDw2dF16,
   ConvDw2dBF16,
   QmmVecQ4MultiSubgroupBF16R2S16KCONT,
+  QmmVecQ4WordSubgroupBF16R2S8,
+  QmmVecQ4MultiSubgroupBF16R2S4W2,
+  QmmVecQ4MultiSubgroupBF16R2S4KCONT,
+  QmmVecQ4MultiSubgroupBF16R2S8,
+  QmmVecQ4MultiSubgroupBF16R2S8W2,
+  QmmVecQ4MultiSubgroupBF16R2S8KCONT,
+  QmmVecQ4MultiSubgroupBF16R4S2,
+  QmmVecQ4MultiSubgroupBF16R4S2W2,
+  QmmVecQ4MultiSubgroupBF16R4S4,
+  QmmVecQ4MultiSubgroupBF16R4S4W2,
+  QmmVecQ4MultiSubgroupBF16R4S4KCONT,
+  SdpaCausalFlashCoopmatBF16Qchunk4,
   Count,
 };
 

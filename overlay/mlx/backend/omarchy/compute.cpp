@@ -315,6 +315,17 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kcont.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s8.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s4kcont.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8kcont.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s2w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s4.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s4w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s4kcont.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
@@ -718,6 +729,7 @@
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
+#include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk4.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -1872,6 +1884,50 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16kcont,
           qmm_vec_q4_multi_subgroup_bf16_r2s16kcont_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s8,
+          qmm_vec_q4_word_subgroup_bf16_r2s8_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s4w2,
+          qmm_vec_q4_multi_subgroup_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4KCONT:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s4kcont,
+          qmm_vec_q4_multi_subgroup_bf16_r2s4kcont_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8KCONT:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8kcont,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8kcont_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s2,
+          qmm_vec_q4_multi_subgroup_bf16_r4s2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S2W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s2w2,
+          qmm_vec_q4_multi_subgroup_bf16_r4s2w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S4:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s4,
+          qmm_vec_q4_multi_subgroup_bf16_r4s4_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S4W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s4w2,
+          qmm_vec_q4_multi_subgroup_bf16_r4s4w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S4KCONT:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s4kcont,
+          qmm_vec_q4_multi_subgroup_bf16_r4s4kcont_size};
     case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
       return {
           qmm_vec_q4_multi_subgroup_bf16,
@@ -2095,6 +2151,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2,
           sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2_size};
+    case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk4:
+      return {
+          sdpa_prefill_flash_causal_coopmat_bf16_qchunk4,
+          sdpa_prefill_flash_causal_coopmat_bf16_qchunk4_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -2105,6 +2165,7 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2:
+    case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk4:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:

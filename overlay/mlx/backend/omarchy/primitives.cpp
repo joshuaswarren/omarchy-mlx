@@ -228,8 +228,59 @@ const QmmGeometry& qmm_geometry() {
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
     }
+    if (v == "2x4w2") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16R2S4W2,
+          "2x4w2"};
+    }
+    if (v == "2x4kcont") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16,
+          K::QmmVecQ4MultiSubgroupBF16R2S4KCONT, "2x4kcont"};
+    }
+    if (v == "2x8") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R2S8, "2x8"};
+    }
+    if (v == "2x8w2") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R2S8W2, "2x8w2"};
+    }
+    if (v == "2x8kcont") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R2S8KCONT, "2x8kcont"};
+    }
+    if (v == "4x2") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16R4S2,
+          "4x2"};
+    }
+    if (v == "4x2w2") {
+      return QmmGeometry{
+          8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16R4S2W2,
+          "4x2w2"};
+    }
+    if (v == "4x4") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R4S4, "4x4"};
+    }
+    if (v == "4x4w2") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R4S4W2, "4x4w2"};
+    }
+    if (v == "4x4kcont") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R2S8,
+          K::QmmVecQ4MultiSubgroupBF16R4S4KCONT, "4x4kcont"};
+    }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x16 2x16w2 2x16kcont");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of "
+        "2x4 2x4w2 2x4kcont 2x8 2x8w2 2x8kcont 4x2 4x2w2 4x4 4x4w2 4x4kcont 2x16 2x16w2 2x16kcont");
   }();
   return geometry;
 }
@@ -17665,7 +17716,12 @@ void ScaledDotProductAttention::eval_gpu(
           omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16;
       const char* qchunk_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
       const bool qchunk_off = qchunk_env != nullptr && qchunk_env[0] == '0';
-      if (cf_is_g16s && !qchunk_off) {
+      if (qchunk_env != nullptr && qchunk_env[0] == '4') {
+        cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk4;
+      } else if (
+          (qchunk_env != nullptr &&
+           (qchunk_env[0] == '8' || qchunk_env[0] == '1')) ||
+          (cf_is_g16s && !qchunk_off)) {
         cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8;
       }
       // Env-gated K/V amortization. Not a default.
