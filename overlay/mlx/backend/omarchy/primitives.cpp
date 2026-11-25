@@ -11400,6 +11400,83 @@ bool dispatch_rope_pair(
   return true;
 }
 
+bool dispatch_add_norm_pair(
+    std::array<array, 2>& nodes,
+    const Stream& stream) {
+  // nodes[0] = the residual Add, nodes[1] = the RMSNorm that reads it.
+  // Contract mirrors the plan-time guards; any refusal leaves both
+  // arrays unallocated so their ordinary primitives run unchanged.
+  auto& encoder = get_command_encoder(stream);
+  const auto& caps = encoder.device().capabilities();
+  if (encoder.device().compute().binding_limit() < 5 ||
+      !caps.storage_buffer_16bit_access) {
+    return false;
+  }
+  array& add_node = nodes[0];
+  array& norm_node = nodes[1];
+  if (add_node.dtype() != bfloat16 || norm_node.dtype() != bfloat16 ||
+      add_node.shape() != norm_node.shape() ||
+      add_node.primitive().stream() != norm_node.primitive().stream()) {
+    return false;
+  }
+  const auto& add_in = add_node.inputs();
+  const auto& norm_in = norm_node.inputs();
+  if (add_in.size() != 2 || norm_in.size() != 2 ||
+      add_in[0].dtype() != bfloat16 || add_in[1].dtype() != bfloat16 ||
+      add_in[0].shape() != add_node.shape() ||
+      add_in[1].shape() != add_node.shape()) {
+    return false;
+  }
+  const auto& norm_prim =
+      static_cast<const mlx::core::fast::RMSNorm&>(norm_node.primitive());
+  const float eps = norm_prim.state().second;
+  size_t row_length = norm_node.shape(-1);
+  size_t rows = norm_node.size() / row_length;
+  if (rows == 0 || row_length == 0 ||
+      !omarchy::apple_norm_enabled(encoder.device(), row_length, rows)) {
+    return false;
+  }
+  const array& w = norm_in[1];
+  if (w.dtype() != bfloat16 ||
+      (w.size() != 1 && w.size() != row_length) ||
+      !whole_dense(w, w.size())) {
+    return false;
+  }
+  auto settled = [](const array& a) {
+    return a.data_shared_ptr() != nullptr;
+  };
+  if (!settled(add_in[0]) || !settled(add_in[1]) || !settled(w)) {
+    // A producer chain is still unscheduled inside this tape segment;
+    // the ordinary path evaluates it in order. Un-plan rather than
+    // settle here: the composed path is bit-exact either way, and the
+    // O(graph) settle walk is not worth it for a 1-dispatch saving.
+    return false;
+  }
+  const std::string tag = "add_rms_norm_pair";
+  add_node.set_data(allocate_omarchy(add_node.nbytes()));
+  norm_node.set_data(allocate_omarchy(norm_node.nbytes()));
+  auto params = norm_params(add_node, row_length, eps, tag, norm_node);
+  params.rhs_offset = checked_item_offset(w, w.size(), tag, norm_node);
+  params.output_offset =
+      checked_item_offset(norm_node, norm_node.size(), tag, norm_node);
+  params.lhs_size = checked_u32(w.size(), tag, norm_node);
+  params.aux_offset =
+      checked_item_offset(add_in[1], add_in[1].size(), tag, norm_node);
+  params.matrix_m = checked_item_offset(add_node, add_node.size(), tag, norm_node);
+  std::array<omarchy::ComputeBinding, 5> bindings{
+      binding(add_in[0]),
+      binding(w),
+      binding(add_in[1]),
+      binding(add_node),
+      binding(norm_node)};
+  encoder.dispatch_compute(
+      omarchy::ComputeKernel::FastAddRmsNormAppleBF16,
+      bindings,
+      params,
+      std::min(params.output_size, omarchy::kMaxComputeGroupCountX));
+  return true;
+}
+
 SliceUpdatePairDispatch dispatch_slice_update_pair(
     std::array<array, 2>& nodes,
     const Stream& stream) {

@@ -1238,6 +1238,12 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4SwigluBF16R2S8W2,
   QmmVecQ4ResNormBF16R2S8W2,
   QmmVecQ4OutgateResNormBF16R2S8W2,
+  // Fused residual Add + RMSNorm, Apple-tree reduction (M2D-2): one
+  // dispatch replaces BinaryVecBF16(Add) -> FastRmsNormAppleBF16 for
+  // same-shape bf16 residual edges. Bit-exact by construction (the add
+  // rounds h with the shared RNE helper and the reduction consumes the
+  // rounded values). Appended to keep profile kernel ids stable.
+  FastAddRmsNormAppleBF16,
   Count,
 };
 
