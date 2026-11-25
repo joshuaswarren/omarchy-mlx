@@ -975,9 +975,10 @@ def _atan2(y, x):
     # recovers it (no mx.signbit in the wheel). Only the (+/-0, -0) pairs
     # are wrong: nonzero and NaN y stay on mx.atan2.
     y, x = _mx(y), _mx(x)
+    r = mx.atan2(y, x)
     x_neg0 = (x == 0) & (1.0 / x < 0)
-    fix = mx.where(1.0 / y < 0, -math.pi, math.pi)   # sign of the y-zero
-    return mx.where(x_neg0 & (y == 0), fix, mx.atan2(y, x))
+    fix = mx.where(1.0 / y < 0, -math.pi, math.pi).astype(r.dtype)
+    return mx.where(x_neg0 & (y == 0), fix, r)
 
 
 def _arange(*a, **k):

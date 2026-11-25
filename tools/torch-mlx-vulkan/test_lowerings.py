@@ -933,6 +933,28 @@ def test_arc_trig():
         assert out.item() == ref.item(), (yv, xv, out.item(), ref.item())
         assert math.copysign(1.0, out.item()) == math.copysign(1.0, ref.item()), \
             (yv, xv, out.item(), ref.item())
+    # the correction must not widen the result: FP16 inputs keep FP16 and
+    # torch's rounded fp16 pi, BF16 inputs keep BF16 through the helper.
+    for dt, yv, xv in ((torch.float16, 0.0, -0.0), (torch.float16, -0.0, -0.0)):
+        yt = torch.tensor([yv], dtype=dt)
+        xt = torch.tensor([xv], dtype=dt)
+        g = torch.fx.Graph()
+        py, px = g.placeholder("y"), g.placeholder("x")
+        n = g.call_function(torch.ops.aten.atan2.default, (py, px), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(yt, xt)
+        ref = torch.atan2(yt, xt)
+        assert stats["cpu"] == [], stats
+        assert out.dtype == ref.dtype == dt, (out.dtype, ref.dtype)
+        assert out.item() == ref.item(), (dt, yv, xv, out.item(), ref.item())
+    b16 = mlx_vulkan._atan2(mx.array([-0.0], dtype=mx.bfloat16),
+                            mx.array([-0.0], dtype=mx.bfloat16))
+    assert b16.dtype == mx.bfloat16, b16.dtype
+    assert float(b16[0]) == torch.atan2(
+        torch.tensor(-0.0, dtype=torch.bfloat16),
+        torch.tensor(-0.0, dtype=torch.bfloat16)).item(), float(b16[0])
     print("test_arc_trig PASS")
 
 
