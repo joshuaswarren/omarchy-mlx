@@ -10987,6 +10987,24 @@ bool dispatch_quantized_gemv_group(
       mf << " off=" << window.offset << " strides=" << window.strides[0]
          << "," << window.strides[1] << "," << window.strides[2]
          << " ndim=" << window.ndim << "\n";
+      for (size_t ci = 0; ci < rope_epi->q.view_chain.size(); ++ci) {
+        const array& ch = rope_epi->q.view_chain[ci];
+        mf << "qchain" << ci << " id=" << reinterpret_cast<void*>(ch.id())
+           << " shape=";
+        for (auto s : ch.shape()) mf << s << ",";
+        mf << " strides=";
+        for (auto s : ch.strides()) mf << s << ",";
+        mf << "\n";
+      }
+      for (size_t ci = 0; ci < rope_epi->k.view_chain.size(); ++ci) {
+        const array& ch = rope_epi->k.view_chain[ci];
+        mf << "kchain" << ci << " id=" << reinterpret_cast<void*>(ch.id())
+           << " shape=";
+        for (auto s : ch.shape()) mf << s << ",";
+        mf << " strides=";
+        for (auto s : ch.strides()) mf << s << ",";
+        mf << "\n";
+      }
       mf << "epi_d=" << epi_d << " dims=" << rope_epi->dims
          << " heads=" << epi_heads[0] << "," << epi_heads[1]
          << " pat=" << epi_pattern[0] << "," << epi_pattern[1]
