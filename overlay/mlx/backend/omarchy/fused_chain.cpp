@@ -2429,7 +2429,10 @@ bool qmm_residual_norm_enabled(
     return std::strcmp(env, "0") != 0;
   }
   if (norm_cols == 2560 &&
-      caps.device_name.find("G14C") != std::string::npos) {
+      (caps.device_name.find("G14C") != std::string::npos ||
+       caps.device_name.find("G13G") != std::string::npos)) {
+    // G14C: #936 (Qwen3-4B decode 14.37 -> 13.94 ms/token, 3 paired ABBA
+    // blocks, ids identical). G13G: M1D-1 paired A/B on the 13-inch M1.
     return true;
   }
   return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;

@@ -159,14 +159,15 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // once): the bf16 subgroup Q4 word and multi kernels run <rows> columns per
 // slot and <slots> 32-lane slots per workgroup. Every column keeps the same
 // per-lane chain, so the bytes are identical in every geometry; only the
-// columns and threads per workgroup change. Unset: 2x16 on G13G and G13C
-// (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
-// context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
-// identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
-// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4w2 on
-// G14C (uvec2 weight loads in the 2x4 multi kernel: 2B ctx=512 +1.35% 5/5,
-// 2B short +1.69% 3/3, 9B ctx=512 +1.18% 3/3 atop OUTGATE_FOLD=0, tokens
-// identical), and 2x4 on every other chip until its paired A/B lands.
+// columns and threads per workgroup change. Unset: 2x8w2 on G13G, G13C, and
+// G14C (select_qmm_apple_2x8w2; on G13G the 2B went 47.55 -> 49.00 tok/s and
+// the 4B 23.29 -> 23.51 with identical tokens — M1D-1), 2x16 on parts that
+// pass the wide-2x16 probe (select_qmm_wide_2x16; on G13C the 4x8 and 4x4
+// routes measured 6.40 and 7.28 percent slower than 2x16 with identical
+// tokens, PAR-101 — #351), 2x4w2 on G14C (uvec2 weight loads in the 2x4
+// multi kernel: 2B ctx=512 +1.35% 5/5, 2B short +1.69% 3/3, 9B ctx=512
+// +1.18% 3/3 atop OUTGATE_FOLD=0, tokens identical), and 2x4 on every other
+// chip until its paired A/B lands.
 // The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
 struct QmmGeometry {
   uint32_t columns;
