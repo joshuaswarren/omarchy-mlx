@@ -17908,7 +17908,7 @@ void ScaledDotProductAttention::eval_gpu(
         // unset or empty follows omarchy::sdpa_split_bk64_default. Value-phase variant with four query heads per key-value head only.
         const int bk64_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK64");
         const bool bk64 = pv && split_group == 4u && (bk64_env > 0 || (bk64_env < 0 && omarchy::sdpa_split_bk64_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
-        const uint32_t split_block_keys = bk64 ? 64u : 128u;
+        uint32_t split_block_keys = bk64 ? 64u : 128u;
         // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
         // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
         const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, static_cast<uint32_t>(kv_heads), pv_env, static_cast<uint32_t>(k_len),
@@ -17942,8 +17942,48 @@ void ScaledDotProductAttention::eval_gpu(
             encoder.device().compute().binding_limit() >= 6 &&
             (merge_env > 0 || (merge_env < 0 && !bk64 && omarchy::sdpa_split_merge_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
-        const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
+        omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
             : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
+        // Opt-in coalesced-K+V split-K pass 1 (MLX_OMARCHY_SDPA_SPLIT_P1KV=32|64|128).
+        const int p1kv_bk = []() -> int {
+          const char* raw = std::getenv("MLX_OMARCHY_SDPA_SPLIT_P1KV");
+          if (raw == nullptr || raw[0] == '\0') {
+            return 0;
+          }
+          return std::atoi(raw);
+        }();
+        const bool p1kv_v_aligned = split_wide
+            ? (split_params.aux_offset % 8u == 0u && v.strides()[1] % 8 == 0 && v.strides()[2] % 8 == 0)
+            : pv_aligned;
+        const bool p1kv_shuffle_ok = split_wide ||
+            ((decode_caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u);
+        if ((p1kv_bk == 32 || p1kv_bk == 64 || p1kv_bk == 128) &&
+            split_group == 4u && p1kv_v_aligned && p1kv_shuffle_ok) {
+          split_block_keys = static_cast<uint32_t>(p1kv_bk);
+          if (split_wide) {
+            if (p1kv_bk == 32) {
+              split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1KVBk32R4BF16Hd256;
+              split_p2 = omarchy::ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd256;
+            } else if (p1kv_bk == 64) {
+              split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1KVBk64R4BF16Hd256;
+              split_p2 = omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd256;
+            } else {
+              split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1KVBk128R4BF16Hd256;
+              split_p2 = omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256;
+            }
+          } else {
+            if (p1kv_bk == 32) {
+              split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1KVBk32R4BF16Hd128;
+              split_p2 = omarchy::ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128;
+            } else if (p1kv_bk == 64) {
+              split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1KVBk64R4BF16Hd128;
+              split_p2 = omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128;
+            } else {
+              split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1KVBk128R4BF16Hd128;
+              split_p2 = omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
+            }
+          }
+        }
         const uint32_t split_q_offset = split_params.lhs_offset;
         const uint32_t split_out_offset = split_params.output_offset;
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
