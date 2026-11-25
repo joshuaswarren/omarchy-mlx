@@ -1021,6 +1021,26 @@ def test_addcmul_addcdiv():
             return
         raise AssertionError("no raise", str(target), kw)
 
+    def fx_defer(target, ins, kw):
+        # 0-dim mixed-dtype promotion is weak in torch; the lowering defers
+        # to the CPU fallback, whose output must still match torch
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        name = str(target).split("aten.")[1].split(".")[0]
+        assert any(name in s for s in stats["cpu"]), (stats, name)
+        assert torch.as_tensor(out).dtype == ref.dtype, \
+            (str(target), torch.as_tensor(out).dtype, ref.dtype)
+        assert np.allclose(torch.as_tensor(out).float().numpy(),
+                           ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, torch.as_tensor(out).float().numpy(),
+             ref.float().numpy())
+
     ia = torch.tensor([1, -2, 3], dtype=torch.int64)
     it1 = torch.tensor([4, 5, -6], dtype=torch.int64)
     it2 = torch.tensor([2, -1, 3], dtype=torch.int64)
@@ -1088,6 +1108,19 @@ def test_addcmul_addcdiv():
     fx_expect_raise(torch.ops.aten.addcdiv.default, (a[0], b3, it2), {})
     # all-bool addcmul has no kernel
     fx_expect_raise(torch.ops.aten.addcmul.default, (b3, b3, b3), {})
+
+    # 0-dim mixed-dtype operands: torch promotes weakly, so the lowering
+    # defers to the CPU fallback rather than emulate it
+    fx_defer(torch.ops.aten.addcmul.default,
+             (h0, torch.tensor(2.0, dtype=torch.float32),
+              hq.expand(1)), {"value": 1})
+    fx_defer(torch.ops.aten.addcdiv.default,
+             (h0, torch.tensor(2.0, dtype=torch.float32),
+              hq.expand(1)), {"value": 1})
+    fx_defer(torch.ops.aten.addcmul.default,
+             (torch.zeros(3, dtype=torch.int8),
+              torch.tensor(100, dtype=torch.int64),
+              torch.full((3,), 2, dtype=torch.int8)), {"value": 1})
     print("test_addcmul_addcdiv PASS")
 
 

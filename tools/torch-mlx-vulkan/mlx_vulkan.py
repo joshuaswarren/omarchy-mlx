@@ -1140,6 +1140,16 @@ def _astype(v, dt):
     return v.astype(dt) if isinstance(v, mx.array) else v
 
 
+def _has_0d_mixed(*vs):
+    # torch promotes 0-dim tensors weakly — they cannot raise the result
+    # above a non-0-dim operand's dtype. Mixed-dtype inputs with a 0-dim
+    # operand follow rules subtle enough to leave to the torch fallback.
+    ts = [v for v in vs if isinstance(v, (mx.array, torch.Tensor))]
+    if not any(v.ndim == 0 for v in ts):
+        return False
+    return len({_dtype_of(v) for v in ts}) > 1
+
+
 def _addcmul(a, t1, t2, value=1, **k):
     # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. Bool
     # has no kernel; on integral operands the wrapped value scalar takes
@@ -1147,6 +1157,8 @@ def _addcmul(a, t1, t2, value=1, **k):
     # the common dtype — fp32 opmath for the low-precision floats — so
     # neither narrow ints nor fp16 intermediates overflow before
     # promotion; value applies to t1 first like torch.
+    if _has_0d_mixed(a, t1, t2):
+        return _raise("addcmul 0-dim mixed-dtype operand")
     dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
                         _dtype_of(t2))
     if dt == mx.bool_:
@@ -1163,6 +1175,8 @@ def _addcdiv(a, t1, t2, value=1, **k):
     # aten.addcdiv(input, t1, t2, *, value=1): input + value*t1/t2. Torch
     # rejects integral division operands regardless of self's dtype
     # (integer division unsupported); same common-dtype eval as addcmul.
+    if _has_0d_mixed(a, t1, t2):
+        return _raise("addcdiv 0-dim mixed-dtype operand")
     if _is_integral_dtype(
             mx.result_type(_dtype_of(t1), _dtype_of(t2))):
         raise RuntimeError(
