@@ -18,6 +18,25 @@ def _np(a):
     return np.array(a)
 
 
+def _provenance():
+    # AGENTS.md: a parity result travels with the loaded binary's identity.
+    # Prefer the repo gate (libmlx hash vs the wheel's RECORD); a bare file
+    # copy outside the tree falls back to a direct libmlx hash.
+    scripts = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           os.pardir, os.pardir, "scripts")
+    if os.path.exists(os.path.join(scripts, "mlx_provenance.py")):
+        sys.path.insert(0, scripts)
+        import mlx_provenance
+        print("provenance:", mlx_provenance.provenance_line(
+            mlx_provenance.installed_provenance()))
+        return
+    import hashlib
+    lib = os.path.join(os.path.dirname(mx.__file__), "lib", "libmlx.so")
+    h = hashlib.sha256(open(lib, "rb").read()).hexdigest()[:16]
+    print(f"provenance: mx={mx.__version__} libmlx sha256:{h} "
+          "(source build, no RECORD)")
+
+
 def test_topk():
     rng = np.random.RandomState(0)
     x = rng.randn(4, 7).astype(np.float32)
@@ -1330,6 +1349,113 @@ def test_random_family():
     print("test_random_family PASS")
 
 
+def test_sub_div():
+    _provenance()
+    # PT-U8: aten.sub.default/div.default/true_divide.Scalar (+ mul.default,
+    # PAR-41 rank 11, 17,208 receipts) had specs yet missed the table on the
+    # census's sampled forms — three separate binding defects fixed here:
+    # scalar-only args never tripped the has_mx gate, an alpha kwarg (or
+    # positional alpha, which the old *k spec silently dropped) broke the
+    # lambdas, and the "true_divide" opname had no ATEN_TABLE entry.
+    x32 = torch.tensor([[3.0, -1.5], [0.5, 4.0]])
+    y32 = torch.tensor([[1.0, 2.5], [-2.0, 0.25]])
+    i64 = torch.tensor([[2, -3], [4, 1]], dtype=torch.int64)
+
+    def fx_fn(target, args, ins, kwargs=None):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        a = tuple(next(it) if torch.is_tensor(v) else v for v in args)
+        n = g.call_function(target, a, kwargs or {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        return run(*ins), stats
+
+    def check(name, target, args, ins, ref, kwargs=None):
+        out, stats = fx_fn(target, args, ins, kwargs)
+        assert stats["cpu"] == [], (name, stats)
+        assert name in stats["mlx"], (name, stats)
+        out = torch.as_tensor(out).float()
+        ref = torch.as_tensor(ref).float()
+        assert np.allclose(_np(out), ref.numpy(), atol=2e-2), \
+            (name, _np(out), ref)
+
+    # tensor forms incl. alpha both ways (positional alpha was silently
+    # dropped by the old (a, b, *k) spec; kwarg alpha TypeError'd it)
+    check("sub", torch.ops.aten.sub.Tensor, (x32, y32), [x32, y32],
+          torch.sub(x32, y32))
+    check("sub", torch.ops.aten.sub.Tensor, (x32, y32, 2), [x32, y32],
+          torch.sub(x32, y32, alpha=2))
+    check("sub", torch.ops.aten.sub.Tensor, (x32, y32), [x32, y32],
+          torch.sub(x32, y32, alpha=2), kwargs={"alpha": 2})
+    check("sub", torch.ops.aten.sub.Scalar, (x32, 1.5), [x32],
+          torch.sub(x32, 1.5))
+    # alpha*other computes in the PROMOTED dtype: f16 40000 * 2 must yield
+    # f32 80000, not an f16 intermediate that overflows to inf (codex P2).
+    z32 = torch.zeros(2, dtype=torch.float32)
+    big16 = torch.full((2,), 40000.0, dtype=torch.float16)
+    check("add", torch.ops.aten.add.Tensor, (z32, big16, 2), [z32, big16],
+          torch.add(z32, big16, alpha=2))
+    check("add", torch.ops.aten.add.Tensor, (x32, y32), [x32, y32],
+          torch.add(x32, y32, alpha=2), kwargs={"alpha": 2})
+    check("add", torch.ops.aten.add.Scalar, (x32, 0.5), [x32],
+          torch.add(x32, 0.5))
+    # int tensor + int alpha lowers (integral alpha is legal)
+    check("sub", torch.ops.aten.sub.Tensor, (i64, i64, 2), [i64, i64],
+          torch.sub(i64, i64, alpha=2))
+
+    # div family: div.Tensor, div.Scalar, true_divide.{Scalar,Tensor}
+    check("div", torch.ops.aten.div.Tensor, (x32, y32), [x32, y32],
+          torch.div(x32, y32))
+    check("div", torch.ops.aten.div.Scalar, (x32, 2.0), [x32],
+          torch.div(x32, 2.0))
+    check("true_divide", torch.ops.aten.true_divide.Scalar, (x32, 2.0),
+          [x32], torch.div(x32, 2.0))
+    check("true_divide", torch.ops.aten.true_divide.Tensor, (x32, y32),
+          [x32, y32], torch.div(x32, y32))
+
+    # scalar-only args: no mx input, previously gated to CPU
+    check("mul", torch.ops.aten.mul.default, (2, 3), [],
+          torch.ops.aten.mul.default(2, 3))
+    check("sub", torch.ops.aten.sub.default, (2, 3), [],
+          torch.ops.aten.sub.default(2, 3))
+    check("div", torch.ops.aten.div.default, (2, 3), [],
+          torch.ops.aten.div.default(2, 3))
+
+    # method path: t.sub(x, alpha=2) routes through _run_method -> spec
+    g = torch.fx.Graph()
+    p1, p2 = g.placeholder("p1"), g.placeholder("p2")
+    n = g.call_method("sub", (p1, p2), {"alpha": 2})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x32, y32)
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), torch.sub(x32, y32, alpha=2).numpy())
+
+    # parity on torch's rejections: float alpha on integral operands and
+    # bool subtraction must raise, matching torch's errors
+    for mk in (lambda: torch.sub(i64, i64, alpha=2.5),
+               lambda: fx_fn(torch.ops.aten.sub.Tensor, (i64, i64, 2.5),
+                             [i64, i64])):
+        try:
+            mk()
+            raise AssertionError("float alpha on integral inputs accepted")
+        except RuntimeError:
+            pass
+    bx = torch.tensor([True, False])
+    by = torch.tensor([True, True])
+    for mk in (lambda: torch.sub(bx, by),
+               lambda: fx_fn(torch.ops.aten.sub.Tensor, (bx, by), [bx, by])):
+        try:
+            mk()
+            raise AssertionError("bool subtraction accepted")
+        except RuntimeError:
+            pass
+    print("test_sub_div PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -1355,6 +1481,9 @@ if __name__ == "__main__":
     test_bitwise_and_()
     test_arc_trig()
     test_addcmul_addcdiv()
+    test_sub_div()
     test_hyperbolic()
     test_random_family()
     print("ALL PASS")
+
+
