@@ -513,6 +513,9 @@ if __name__ == "__main__":
     test_numel()
     test_slice()
     test_transpose_expand()
+    test_sum()
+    test_sum_aot_dim_input()
+    test_bmm_matmul()
     print("ALL PASS")
 
 def test_sum():
