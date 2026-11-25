@@ -2089,13 +2089,13 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g13g));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g13g));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
 
   for (size_t i = 0; i < saved.size(); ++i) {

@@ -847,13 +847,14 @@ inline bool sdpa_decode_f16_without_coopmat_part(
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
   // No-gating default (2026-11-25): the fused kernel is on at every
-  // length except on G15S, where two-pass pass 1 packs unnormalized
-  // weighted value sums in f16 and can overflow to inf on finite
-  // inputs past 1024 keys; G15S keeps the one-pass range.
-  if (device_name.find("G15S") != std::string::npos) {
-    return sdpa_decode_f16_two_pass_blocks(keys) == 0u;
+  // length only on G16S, which measured clean at 4096 keys; every
+  // other part keeps the one-pass range because two-pass pass 1
+  // packs unnormalized weighted value sums in f16 and can overflow
+  // to inf on finite inputs past 1024 keys (first measured on G15S).
+  if (device_name.find("G16S") != std::string::npos) {
+    return true;
   }
-  return true;
+  return sdpa_decode_f16_two_pass_blocks(keys) == 0u;
 }
 
 // Two-pass bf16 4-bit/group-64 prefill (MLX_OMARCHY_QMM_BF16W unset): the parts where a transposed quantized_matmul with enough
@@ -1060,6 +1061,10 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (device_name.find("G17C") != std::string::npos) return 2048;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 16384;
   if (device_name.find("G15S") != std::string::npos) return 1280;
+  // G13G keeps the fused pass 1: receipts/2026-10-24-sdpa-split-pv
+  // measured the value-phase pass 1 losing above 512 keys and
+  // slowing Qwen3-4B decode by 2.4% at the longer prompt.
+  if (device_name.find("G13G") != std::string::npos) return 0;
   // No-gating default (2026-11-25): an unlisted part takes the
   // newest-class measured ceiling (the Max-class 2048) instead of
   // keeping the old pass 1 at every length.

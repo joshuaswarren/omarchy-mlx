@@ -1911,6 +1911,13 @@ TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on everywhere
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 64u));
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 64u));
 
+  // An unlisted part gets the fused kernel only in the one-pass
+  // range: two-pass pass 1 can overflow f16 past 1024 keys.
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 1023u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 1024u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 2048u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 4096u));
+
   setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "1", 1);
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 8192u));
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
