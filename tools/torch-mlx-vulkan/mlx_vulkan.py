@@ -1135,6 +1135,30 @@ def _atan2(y, x):
     return mx.where(x_neg0 & (y == 0), fix, r)
 
 
+def _addcmul(a, t1, t2, value=1, **k):
+    # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. On
+    # integral operands the wrapped value scalar takes the tensor dtype
+    # (fractional value truncates), so the result stays integral.
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    if isinstance(value, float) and _is_integral_dtype(dt):
+        value = int(value)
+    return _mx(a) + value * _mx(t1) * _mx(t2)
+
+
+def _addcdiv(a, t1, t2, value=1, **k):
+    # aten.addcdiv(input, t1, t2, *, value=1): input + value*t1/t2. Torch
+    # rejects integral operands outright (integer division unsupported).
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    if _is_integral_dtype(dt):
+        raise RuntimeError(
+            "Integer division with addcdiv is no longer supported, and in "
+            "a future release addcdiv will perform a true division like "
+            "tensor1.true_divide(tensor2)")
+    return _mx(a) + value * _mx(t1) / _mx(t2)
+
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -1540,8 +1564,8 @@ _FUNC_SPECS = {
     "div": lambda a, b, *k: _mx(a) / _mx(b),
     "truediv": lambda a, b, *k: _mx(a) / _mx(b),
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
-    "addcmul": lambda a, t1, t2, value=1, *k: _mx(a) + value * _mx(t1) * _mx(t2),
-    "addcdiv": lambda a, t1, t2, value=1, *k: _mx(a) + value * _mx(t1) / _mx(t2),
+    "addcmul": _addcmul,
+    "addcdiv": _addcdiv,
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,

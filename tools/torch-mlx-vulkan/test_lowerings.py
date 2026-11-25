@@ -997,10 +997,33 @@ def test_addcmul_addcdiv():
         assert any(name in s for s in stats["mlx"]), (stats, name)
         assert torch.as_tensor(out).shape == ref.shape, \
             (str(target), torch.as_tensor(out).shape, ref.shape)
+        # the executor's bf16 output path widens to fp32 (no bf16 numpy
+        # dtype); pin dtype parity everywhere it can be expressed
+        if ref.dtype != torch.bfloat16:
+            assert str(out.dtype).split(".")[-1] == \
+                str(ref.dtype).split(".")[-1], \
+                (str(target), kw, str(out.dtype), str(ref.dtype))
         assert np.allclose(torch.as_tensor(out).float().numpy(),
                            ref.float().numpy(), atol=2e-2), \
             (str(target), kw, torch.as_tensor(out).float().numpy(),
              ref.float().numpy())
+
+    def fx_expect_raise(target, ins, kw):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        try:
+            run(*ins)
+        except RuntimeError:
+            return
+        raise AssertionError("no raise", str(target), kw)
+
+    ia = torch.tensor([1, -2, 3], dtype=torch.int64)
+    it1 = torch.tensor([4, 5, -6], dtype=torch.int64)
+    it2 = torch.tensor([2, -1, 3], dtype=torch.int64)
 
     cases = [
         (torch.ops.aten.addcmul.default, (a, t1, t2), {}),
@@ -1015,9 +1038,22 @@ def test_addcmul_addcdiv():
          (a.bfloat16(), t1.bfloat16(), t2.bfloat16()), {}),
         # int value is legal (promotes like a wrapped scalar)
         (torch.ops.aten.addcmul.default, (a, t1, t2), {"value": 1}),
+        # integral tensors: result stays integral; a fractional value
+        # truncates to the compute dtype (wrapped-scalar rule)
+        (torch.ops.aten.addcmul.default, (ia, it1, it2), {"value": 2}),
+        (torch.ops.aten.addcmul.default, (ia, it1, it2), {"value": 2.5}),
+        (torch.ops.aten.addcmul.default, (ia, it1, it2), {"value": -2.5}),
+        # mixed integral/floating promotes to float — legal
+        (torch.ops.aten.addcmul.default, (ia, t1[0], it2), {"value": 0.5}),
+        (torch.ops.aten.addcdiv.default, (ia, t1[0], it2), {}),
     ]
     for target, ins, kw in cases:
         fx_run(target, ins, kw)
+
+    # Torch raises on integral addcdiv (integer division unsupported)
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (ia, it1, it2), {})
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (ia, it1, it2),
+                    {"value": 1})
     print("test_addcmul_addcdiv PASS")
 
 
