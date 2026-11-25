@@ -1135,28 +1135,44 @@ def _atan2(y, x):
     return mx.where(x_neg0 & (y == 0), fix, r)
 
 
+def _as_f32(v):
+    v = _mx(v)
+    return v.astype(mx.float32) if isinstance(v, mx.array) else v
+
+
 def _addcmul(a, t1, t2, value=1, **k):
-    # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. On
-    # integral operands the wrapped value scalar takes the tensor dtype
-    # (fractional value truncates), so the result stays integral.
+    # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. Bool
+    # has no kernel; on integral operands the wrapped value scalar takes
+    # the tensor dtype (fractional value truncates). Low-precision floats
+    # evaluate at fp32 opmath like torch, then cast back.
     dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
                         _dtype_of(t2))
+    if dt == mx.bool_:
+        raise NotImplementedError(
+            '"addcmul" not implemented for \'Bool\'')
     if isinstance(value, float) and _is_integral_dtype(dt):
         value = int(value)
-    return _mx(a) + value * _mx(t1) * _mx(t2)
+    if dt == mx.float16 or dt == mx.bfloat16 or dt == mx.float32:
+        return (_as_f32(a) + value * (_as_f32(t1) * _as_f32(t2))).astype(dt)
+    return _mx(a) + value * (_mx(t1) * _mx(t2))
 
 
 def _addcdiv(a, t1, t2, value=1, **k):
     # aten.addcdiv(input, t1, t2, *, value=1): input + value*t1/t2. Torch
-    # rejects integral operands outright (integer division unsupported).
-    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
-                        _dtype_of(t2))
-    if _is_integral_dtype(dt):
+    # rejects integral division operands regardless of self's dtype
+    # (integer division unsupported). Low-precision floats evaluate at
+    # fp32 opmath like torch, then cast back.
+    if _is_integral_dtype(
+            mx.result_type(_dtype_of(t1), _dtype_of(t2))):
         raise RuntimeError(
             "Integer division with addcdiv is no longer supported, and in "
             "a future release addcdiv will perform a true division like "
             "tensor1.true_divide(tensor2)")
-    return _mx(a) + value * _mx(t1) / _mx(t2)
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    if dt == mx.float16 or dt == mx.bfloat16 or dt == mx.float32:
+        return (_as_f32(a) + value * (_as_f32(t1) / _as_f32(t2))).astype(dt)
+    return _mx(a) + value * (_mx(t1) / _mx(t2))
 
 
 def _arange(*a, **k):

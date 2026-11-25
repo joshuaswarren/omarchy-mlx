@@ -1024,6 +1024,10 @@ def test_addcmul_addcdiv():
     ia = torch.tensor([1, -2, 3], dtype=torch.int64)
     it1 = torch.tensor([4, 5, -6], dtype=torch.int64)
     it2 = torch.tensor([2, -1, 3], dtype=torch.int64)
+    b3 = torch.tensor([True, True, True])
+    h0 = torch.zeros(1, dtype=torch.float16)
+    h6 = torch.full((1,), 60000.0, dtype=torch.float16)
+    hq = torch.full((1,), 0.25, dtype=torch.float16)
 
     cases = [
         (torch.ops.aten.addcmul.default, (a, t1, t2), {}),
@@ -1046,14 +1050,26 @@ def test_addcmul_addcdiv():
         # mixed integral/floating promotes to float — legal
         (torch.ops.aten.addcmul.default, (ia, t1[0], it2), {"value": 0.5}),
         (torch.ops.aten.addcdiv.default, (ia, t1[0], it2), {}),
+        # fp32 opmath: value*t1 overflows fp16 but the torch result is
+        # finite (2*(60000*0.25)=30000, 2*(60000/60000)=2)
+        (torch.ops.aten.addcmul.default, (h0, h6, hq), {"value": 2}),
+        (torch.ops.aten.addcdiv.default, (h0, h6, h6), {"value": 2}),
+        # bool+int mix promotes to int — legal
+        (torch.ops.aten.addcmul.default,
+         (b3, torch.tensor([2, 2, 2]), torch.tensor([3, 3, 3])), {}),
     ]
     for target, ins, kw in cases:
         fx_run(target, ins, kw)
 
-    # Torch raises on integral addcdiv (integer division unsupported)
+    # Torch raises on integral addcdiv (integer division unsupported) —
+    # the guard keys on the division operands, not self
     fx_expect_raise(torch.ops.aten.addcdiv.default, (ia, it1, it2), {})
     fx_expect_raise(torch.ops.aten.addcdiv.default, (ia, it1, it2),
                     {"value": 1})
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (a[0], it1, it2), {})
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (a[0], b3, it2), {})
+    # all-bool addcmul has no kernel
+    fx_expect_raise(torch.ops.aten.addcmul.default, (b3, b3, b3), {})
     print("test_addcmul_addcdiv PASS")
 
 
