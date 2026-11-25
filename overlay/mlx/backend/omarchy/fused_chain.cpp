@@ -726,7 +726,15 @@ struct RopePair {
   // Indices into rope_norms for norm-carrying members (the fold the
   // pair dispatch absorbs); -1 means the plain 2-input form.
   std::array<int, 2> norm_folds{-1, -1};
-  enum class State : uint8_t { pending, done, failed } state{State::pending};
+  // dispatching marks a pair whose dispatch is on the stack: a nested
+  // eval reaching either member must not re-fire dispatch_rope_pair
+  // (its chain settle walks ancestors that include pair members, so a
+  // re-entrant pair dispatch would recurse forever). The re-entrant
+  // eval falls through to the fold arm or the ordinary path instead,
+  // which materializes the node; the in-flight pair kernel then writes
+  // bit-identical data over it.
+  enum class State : uint8_t { pending, dispatching, done, failed } state{
+      State::pending};
 };
 
 // A planned RMSNorm -> RoPE fold: the norm's only consumer is a plain
@@ -3596,6 +3604,7 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
           norm_ptrs[s] = &*pair_norms[s];
         }
       }
+      pair.state = RopePair::State::dispatching;
       bool fired = dispatch_rope_pair(pair.nodes, norm_ptrs, stream);
       pair.state = fired ? RopePair::State::done : RopePair::State::failed;
       if (fired) {
@@ -3616,8 +3625,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
             "[trio-run] pair un-planned: runtime contract refused\n");
       }
     }
-    // The pair is failed (refused now or on the other member's eval).
-    // A fold-claimed rope still has its fold below: it replays the
+    // The pair is failed (refused now or on the other member's eval) or
+    // dispatching (a nested eval reached a member mid-dispatch). A
+    // fold-claimed rope still has its fold below: it replays the
     // claimed norm and view so the ordinary rope eval reads settled
     // inputs. A plain rope has no second coverage, so refuse it.
     if (eager_state->rope_norm_roles.find(node.id()) == nullptr) {
