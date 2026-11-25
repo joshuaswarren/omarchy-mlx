@@ -2235,14 +2235,51 @@ Device::RecoveryResult Device::recover_stalled_submissions(
 
   size_t count = stranded.size();
   size_t published = 0;
+  // Publication gap: once a batch leaves the round without a retirement
+  // fence on the queue, no higher batch may submit or publish. A higher
+  // publish would cover the lower value on the timeline (timeline waits
+  // are >=) even though that batch's commands never ran - silent
+  // corruption. A batch whose fence IS on the queue does not open a
+  // gap: queue order already proves its commands retire before anything
+  // resubmitted behind it.
+  bool publish_gap = false;
   for (auto& batch : stranded) {
+    if (publish_gap) {
+      completions.retain_for_resubmit(batch.value, std::move(batch));
+      continue;
+    }
+    // Already covered: a signal at or above this batch's value landed
+    // (its own submission recovered and signaled, or a higher publish
+    // whose queue position proved this batch's commands retired). Its
+    // retained fence may still belong to a live resubmit: poll before
+    // destroying, keep the batch when it has not retired.
+    uint64_t covered = 0;
+    if (dt.GetSemaphoreCounterValue(
+            device_, completions.semaphore(), &covered) != VK_SUCCESS) {
+      covered = 0;
+    }
+    if (covered >= batch.value) {
+      if (batch.pending_fence == VK_NULL_HANDLE) {
+        continue;
+      }
+      if (dt.WaitForFences(
+              device_, 1, &batch.pending_fence, VK_TRUE, 0) ==
+          VK_SUCCESS) {
+        dt.DestroyFence(device_, batch.pending_fence, nullptr);
+        continue;
+      }
+      completions.retain_for_resubmit(batch.value, std::move(batch));
+      continue;
+    }
     // Resolve the batch's waits first (they are the original list and
     // either already landed or were just published by this round's
     // earlier replays/resubmits).
     if (!batch.wait_sems.empty() &&
         !worker_wait_timeline(batch.wait_sems, batch.wait_values)) {
       // Shutdown or a wait pinned on a rejected value: keep the batch
-      // for a later round.
+      // for a later round. A batch that never reached the queue opens
+      // the publication gap for every higher batch.
+      publish_gap = publish_gap || batch.pending_fence == VK_NULL_HANDLE;
       completions.retain_for_resubmit(batch.value, std::move(batch));
       continue;
     }
@@ -2307,6 +2344,9 @@ Device::RecoveryResult Device::recover_stalled_submissions(
       if (dt.CreateFence(device_, &fci, nullptr, &resubmit_fence) !=
               VK_SUCCESS ||
           resubmit_fence == VK_NULL_HANDLE) {
+        // Nothing of this batch reached the queue: open the publication
+        // gap so no higher batch publishes past it.
+        publish_gap = true;
         completions.retain_for_resubmit(batch.value, std::move(batch));
         continue;
       }
@@ -2319,6 +2359,7 @@ Device::RecoveryResult Device::recover_stalled_submissions(
           // Resubmit rejected: nothing references the fence yet, so it
           // can be destroyed here; keep the batch for a later round and
           // let the waiter's remaining budget decide.
+          publish_gap = true;
           dt.DestroyFence(device_, resubmit_fence, nullptr);
           completions.retain_for_resubmit(batch.value, std::move(batch));
           continue;
@@ -2362,10 +2403,21 @@ Device::RecoveryResult Device::recover_stalled_submissions(
     // freshly reserved value would. The batch's user (event)
     // semaphores get the same host treatment at bumped values, as in
     // the replay path.
-    VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-    cc.semaphore = completions.semaphore();
-    cc.value = batch.value;
-    VKX_CHECK(signal_fn(handle(), &cc));
+    // A higher batch's publish may already cover this value on the
+    // timeline; signaling at or below the counter is invalid, so skip
+    // the completion signal when covered. The ride-along user signals
+    // below are bumped above the live counter either way.
+    uint64_t counter_now = 0;
+    if (dt.GetSemaphoreCounterValue(
+            device_, completions.semaphore(), &counter_now) != VK_SUCCESS) {
+      counter_now = 0;
+    }
+    if (counter_now < batch.value) {
+      VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+      cc.semaphore = completions.semaphore();
+      cc.value = batch.value;
+      VKX_CHECK(signal_fn(handle(), &cc));
+    }
     for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
       uint64_t current = 0;
       if (vk::device_table().GetSemaphoreCounterValue(
