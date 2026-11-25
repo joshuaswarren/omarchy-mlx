@@ -464,6 +464,10 @@
 #include "qmm_coopmat_sg4_x32_fn_g4_pad_cheap.h"
 #include "qmm_coopmat_sg4_x32_fn_g4_pad_k32.h"
 #include "qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_k64.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm.h"
+#include "qmm_coopmat_sg8_x32_fn_g4_pad_k64.h"
+#include "qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
@@ -2305,6 +2309,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_sg4_x32_fn_g4_pad_k32, qmm_coopmat_sg4_x32_fn_g4_pad_k32_size};
     case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap:
       return {qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap, qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_k64, qmm_coopmat_sg4_x32_fn_g4_pad_k64_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm, qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm_size};
+    case ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64:
+      return {qmm_coopmat_sg8_x32_fn_g4_pad_k64, qmm_coopmat_sg8_x32_fn_g4_pad_k64_size};
+    case ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM:
+      return {qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm, qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm_size};
     case ComputeKernel::QmmVecQ4ResNormBF16:
       return {qmm_vec_q4_resnorm_bf16, qmm_vec_q4_resnorm_bf16_size};
     case ComputeKernel::QmmVecQ4OutgateResNormBF16:
