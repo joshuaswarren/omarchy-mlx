@@ -1173,6 +1173,33 @@ void CommandEncoder::emit_pending() {
         static_cast<unsigned long long>(hist[1]),
         static_cast<unsigned long long>(hist[2]),
         static_cast<unsigned long long>(hist[3]));
+    // Buffer-sharing census (DEC-02): per-VkBuffer count of DISTINCT
+    // tracked range ends across the batch. A buffer bound once per node
+    // with one end is tracked exactly; >1 distinct end means it hosts
+    // slices/views whose [0,end] ranges over-cover and can mint false
+    // hazard edges (the descriptor carries no element offset).
+    std::unordered_map<VkBuffer, std::set<VkDeviceSize>> ends;
+    for (const auto& p : pending_) {
+      for (uint32_t k = 0; k < p.nr; ++k) {
+        ends[p.rd[k].buffer].insert(p.rd[k].end);
+      }
+      for (uint32_t k = 0; k < p.nw; ++k) {
+        ends[p.wr[k].buffer].insert(p.wr[k].end);
+      }
+    }
+    uint64_t shared_bufs = 0;
+    uint64_t distinct_ends = 0;
+    for (const auto& [buf, set] : ends) {
+      if (set.size() > 1) {
+        ++distinct_ends;
+      }
+      ++shared_bufs;
+    }
+    std::fprintf(
+        stderr,
+        "[wave-diag-bufs] bufs=%llu distinct_end_bufs=%llu\n",
+        static_cast<unsigned long long>(shared_bufs),
+        static_cast<unsigned long long>(distinct_ends));
     std::fflush(stderr);
   }
 
