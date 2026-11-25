@@ -1038,6 +1038,50 @@ void dispatch_matmul(
         "cooperative_matrix_fp32_8x8x8",
         encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
   }
+#ifdef MLX_OMARCHY_BF16_DIRECT
+  // Intel/ANV-shaped dense coopmat (shaders/matmul_coopmat_xe16.comp):
+  // bf16 operands on the 8x16x16 bf16 x bf16 -> f32 subgroup shape ANV
+  // advertises on Xe2 (BMG), the same shape the qmm_intel_bf16 route
+  // uses. Selected only when the fp32 8x8x8 staged route is absent, so
+  // Apple/NVIDIA paths are unchanged. The kernel stages all four
+  // orientations through shared memory with element-granularity loads,
+  // so no alignment or k-multiple constraint applies; m, n and k tails
+  // are masked. Its 32-row tile stays under the 64-row bound the Xe2
+  // tile-wedge receipt requires. The 64-lane two-subgroup workgroup
+  // needs 32-lane subgroups; on size-control devices the global
+  // requiredSubgroupSize pin supplies it. Stored bits differ from the
+  // FMA route only in accumulation order (bf16 operands, f32
+  // accumulator) - the ABBA's identical-ids contract covers parity.
+  // MLX_OMARCHY_NO_MATMUL_XE16=1 keeps the shipped pick for A/B.
+  static const bool matmul_xe16_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_XE16");
+  const bool xe16_shape_advertised = omarchy::cooperative_matrix_advertises(
+      caps.cooperative_matrix_shapes, omarchy::matmul_xe16_bf16_shape());
+  const bool xe16 = !matmul_xe16_disabled && !sdpa && !coopmat && !use_c &&
+      kernel == omarchy::ComputeKernel::MatmulBF16 &&
+      xe16_shape_advertised && caps.subgroup_size == 32u &&
+      !coopmat_disabled && params.matrix_m > 1u && params.matrix_k > 0u &&
+      (32u * 16u + 16u * 32u) * 2u <=
+          caps.max_compute_shared_memory_size;
+  if (xe16) {
+    kernel = omarchy::ComputeKernel::MatmulBF16CoopmatXe16;
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps,
+        xe16,
+        "MatmulBF16CoopmatXe16",
+        "cooperative_matrix_bf16_8x16x16+subgroup_size==32",
+        omarchy::cooperative_matrix_advertises(
+            encoder.device()
+                .hardware_capabilities()
+                .cooperative_matrix_shapes,
+            omarchy::matmul_xe16_bf16_shape()) &&
+            encoder.device().hardware_capabilities().subgroup_size == 32u);
+  }
+  bf16_fma = bf16_fma && !xe16;
+#else
+  const bool xe16 = false;
+#endif
   // Register-blocked f16 tile for prefill-sized matrices (the
   // attention scores and probs matmuls): same per-output arithmetic as
   // matmul.comp, 64x64 tile. Decode (matrix_m == 1) keeps the 16x16
@@ -1214,7 +1258,9 @@ void dispatch_matmul(
     params.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
   }
   const uint32_t tile =
-      (direct || direct16) ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
+      (direct || direct16) ? 64u
+                           : ((coopmat || sdpa || xe16) ? 32u
+                                                        : (rb ? 64u : 16u));
   bool bf16_vec_aligned = ((params.lhs_offset | params.rhs_offset |
       params.rhs_gap) & 3u) == 0u;
   for (uint32_t axis = 0; bf16_vec_aligned && axis < params.dims; ++axis) {
@@ -9223,6 +9269,37 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       coopmat_caps.cooperative_matrix_bf16 && coopmat16_shape_advertised &&
       coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
       kQmmCoopmat16SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
+  // Intel/ANV-shaped coopmat16 twin (shaders/qmm_coopmat16_xe.comp):
+  // same fp16-operand contract on the 8x16x16 fp16 x fp16 -> f32 shape
+  // ANV advertises on Xe2 (BMG). x stages through shared, so unlike
+  // QmmPrefillIntelBF16 the tile height needs no m alignment - this
+  // variant covers the matrix_m shapes the Intel gate rejects, on top
+  // of being the literal "QmmPrefillCoopmat16" route for a driver whose
+  // shape list has no M16 entry. Ordered after both the Intel direct
+  // route (returns above) and the NVIDIA CMAT16 route so parts
+  // advertising more than one 16-family shape keep the measured pick.
+  bool qmm_xe16_reachable = false;
+#ifdef MLX_OMARCHY_BF16_DIRECT
+  // MLX_OMARCHY_NO_QMM_XE16=1 restores the shipped pick for A/B.
+  static const bool qmm_xe16_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16");
+  constexpr uint32_t kQmmCoopmat16XeSharedBytes =
+      (16u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u;
+  const bool qmm_xe16_shape_advertised =
+      omarchy::cooperative_matrix_advertises(
+          coopmat_caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_xe_shape());
+  qmm_xe16_reachable =
+      !qmm_xe16_disabled &&
+      !coopmat_reachable && !coopmat16_reachable && tile_path &&
+      rb_enabled && q4_g64_transpose && out.dtype() == bfloat16 &&
+      x.ndim() >= 2 && x.shape(-2) > 1 &&
+      x.shape(-1) % 64 == 0 &&
+      coopmat_caps.cooperative_matrix_bf16 && qmm_xe16_shape_advertised &&
+      coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
+      kQmmCoopmat16XeSharedBytes <=
+          coopmat_caps.max_compute_shared_memory_size;
+#endif
   bool qmm_fma_reachable = false;
   // Driver split, measured (receipts/2026-09-12-prefill-fma-qualify): the
   // scalar-FMA kernel loses to the 8x8x8 cooperative-matrix route wherever
@@ -9233,6 +9310,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // a coopmat-capable driver the dispatch falls through to the shipped
   // cooperative-matrix pick by name and the FMA kernels stay reserved.
   if (!qmm_fma_disabled && !coopmat_reachable && !coopmat16_reachable &&
+      !qmm_xe16_reachable &&
       tile_path && rb_enabled && q4_g64_transpose &&
       (out.dtype() == float16 ||
        (out.dtype() == bfloat16 && !qmm_fma_bf16_disabled)) &&
@@ -9844,6 +9922,38 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           });
       return;
     }
+#ifdef MLX_OMARCHY_BF16_DIRECT
+    if (rb_enabled && out.dtype() == bfloat16 && qmm_xe16_reachable) {
+      const auto& xe16_hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          coopmat_caps,
+          qmm_xe16_reachable,
+          "QmmPrefillCoopmat16XeBF16",
+          "cooperative_matrix_fp16_8x16x16",
+          omarchy::cooperative_matrix_advertises(
+              xe16_hw.cooperative_matrix_shapes,
+              omarchy::qmm_prefill_coopmat16_xe_shape()));
+      dispatch_qmm_out_rows(
+          encoder,
+          out,
+          bindings,
+          params,
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::QmmPrefillCoopmat16XeBF16,
+                cb,
+                cp,
+                std::min((cp.matrix_n + 31u) / 32u,
+                         omarchy::kMaxComputeGroupCountX),
+                std::min((cp.matrix_m + 15u) / 16u,
+                         omarchy::kMaxComputeGroupCountX),
+                1u);
+          });
+      return;
+    }
+#endif
     if (rb_enabled && out.dtype() == bfloat16 && qmm_fma_reachable) {
       if ((params.lhs_offset & 7u) != 0u ||
           (params.output_offset & 1u) != 0u) {

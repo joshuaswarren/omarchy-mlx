@@ -97,4 +97,18 @@ CoopmatShape qmm_prefill_coopmat_shape_f16x16();
 // only when the fp32 8x8x8 direct route is unavailable.
 CoopmatShape matmul_direct_coopmat_shape_c16(CoopmatType operand);
 
+// The exact 8x16x16 subgroup shape the Intel/ANV dense bf16 matmul
+// kernel (shaders/matmul_coopmat_xe16.comp) emits: bf16 operands, fp32
+// accumulator and result, non-saturating. ANV on Xe2 (BMG G21) lists
+// this entry; it has no fp32 8x8x8 shape, so dense bf16 matmuls keep
+// the scalar-FMA route there unless this shape is advertised.
+CoopmatShape matmul_xe16_bf16_shape();
+
+// The exact 8x16x16 subgroup shape the Intel/ANV qmm prefill coopmat16
+// variant (shaders/qmm_coopmat16_xe.comp) emits: fp16 operands (bf16 x
+// is staged as fp16, the dequantized weights store fp16), fp32
+// accumulator and result, non-saturating. Same operand contract as
+// qmm_prefill_coopmat_shape_f16x16 on ANV's 8-row matrix dimension.
+CoopmatShape qmm_prefill_coopmat16_xe_shape();
+
 } // namespace mlx::core::omarchy

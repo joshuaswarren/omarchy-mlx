@@ -207,3 +207,56 @@ TEST_CASE("the match is exact in every field") {
   // The identical shape matches.
   CHECK(omarchy::cooperative_matrix_advertises({want}, want));
 }
+
+TEST_CASE("matmul_xe16_bf16_shape names the Intel/ANV 8x16x16 bf16 shape") {
+  // ANV on Xe2 advertises only M8xN16 shapes: K16 bf16 operands with an
+  // fp32 accumulator, subgroup scope, non-saturating.
+  const CoopmatShape s = omarchy::matmul_xe16_bf16_shape();
+  CHECK(s.m == 8u);
+  CHECK(s.n == 16u);
+  CHECK(s.k == 16u);
+  CHECK(s.a == CoopmatType::BFloat16);
+  CHECK(s.b == CoopmatType::BFloat16);
+  CHECK(s.c == CoopmatType::Float32);
+  CHECK(s.result == CoopmatType::Float32);
+  CHECK(s.scope == CoopmatScope::Subgroup);
+  CHECK(s.saturating == false);
+
+  const std::vector<CoopmatShape> adv = {s};
+  CHECK(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::matmul_xe16_bf16_shape()));
+  // The fp16-operand QMM prefill variant is a different shape and must
+  // not alias onto the bf16 route.
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat16_xe_shape()));
+  // An fp32 8x8x8 shape alone does not authorize the Xe16 kernel.
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      {same_operand(CoopmatType::Float32)},
+      omarchy::matmul_xe16_bf16_shape()));
+}
+
+TEST_CASE("qmm_prefill_coopmat16_xe_shape names the fp16-operand Xe shape") {
+  const CoopmatShape s = omarchy::qmm_prefill_coopmat16_xe_shape();
+  CHECK(s.m == 8u);
+  CHECK(s.n == 16u);
+  CHECK(s.k == 16u);
+  CHECK(s.a == CoopmatType::Float16);
+  CHECK(s.b == CoopmatType::Float16);
+  CHECK(s.c == CoopmatType::Float32);
+  CHECK(s.result == CoopmatType::Float32);
+  CHECK(s.scope == CoopmatScope::Subgroup);
+  CHECK(s.saturating == false);
+
+  const std::vector<CoopmatShape> adv = {s};
+  CHECK(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat16_xe_shape()));
+  // NVIDIA-style M16 fp16 shapes do not authorize the M8 kernel.
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      {CoopmatShape{16u, 16u, 16u, CoopmatType::Float16,
+          CoopmatType::Float16, CoopmatType::Float32,
+          CoopmatType::Float32, CoopmatScope::Subgroup, false}},
+      omarchy::qmm_prefill_coopmat16_xe_shape()));
+  // And the M8 fp16 shape does not alias onto the M16 CMAT16 route.
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape_f16x16()));
+}
