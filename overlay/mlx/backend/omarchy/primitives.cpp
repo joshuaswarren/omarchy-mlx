@@ -10404,6 +10404,24 @@ bool dispatch_quantized_gemv_group(
         rope_epi_active = false;
         break;
       }
+      if (epi_ctrace) {
+        static int trv = 0;
+        if (trv++ < 8) {
+          std::fprintf(
+              stderr,
+              "[epi-ctr] view: side%zu id=%p ndim=%d s-3=%lld s-2=%lld "
+              "shape=%d,%d,%d,%d\n",
+              s,
+              reinterpret_cast<void*>(view.id()),
+              view.ndim(),
+              static_cast<long long>(view.strides()[view.ndim() - 3]),
+              static_cast<long long>(view.strides()[view.ndim() - 2]),
+              view.shape(0),
+              view.shape(1),
+              view.shape(2),
+              view.shape(3));
+        }
+      }
       if (s == 0) {
         epi_d = view.shape(-1);
       } else if (view.shape(-1) != epi_d) {
@@ -10942,7 +10960,8 @@ bool dispatch_quantized_gemv_group(
       write_all(base + "qnormw.bin", rope_epi->q.rope.inputs()[2]);
       write_all(base + "knormw.bin", rope_epi->k.rope.inputs()[2]);
       std::ofstream mf(base + "meta.txt", std::ios::trunc);
-      mf << "qview ndim=" << q_view.ndim() << " shape=";
+      mf << "qview id=" << reinterpret_cast<void*>(q_view.id())
+         << " ndim=" << q_view.ndim() << " shape=";
       for (auto s : q_view.shape()) mf << s << ",";
       mf << " strides=";
       for (auto s : q_view.strides()) mf << s << ",";
@@ -17530,7 +17549,8 @@ void RoPE::eval_gpu(
     mf << "kernel=" << (kernel == omarchy::ComputeKernel::FastRopeNormBF16
                             ? "std"
                             : "apple")
-       << " kv_direct=" << kv_direct << "\n";
+       << " kv_direct=" << kv_direct
+       << " in_id=" << reinterpret_cast<void*>(in.id()) << "\n";
     mf << "in shape=";
     for (auto sv : in.shape()) mf << sv << ",";
     mf << " strides=";
