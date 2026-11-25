@@ -285,8 +285,8 @@ layout(set = 0, binding = 25, std430) coherent buffer Ticket {
   uint values[];
 } ticket;
 shared uint s_rope_is_last;
-shared float epi_block[128u];
-shared float epi_rounded[256u];
+shared float epi_block[512u];
+shared float epi_rounded[512u];
 float epi_member_load(uint member, uint index) {
   if (member == 0u) {
     return LOAD_VALUE(output0.values[index]);
@@ -1497,51 +1497,58 @@ void main() {
     }
     memoryBarrierBuffer();
     barrier();
-    for (uint t = 0u; t < rope_t; ++t) {
-      const uint mat = head;
-      const uint in_base = in_off + t * is1 + mat * is0;
-        // Norm phase: the same pairing the 256-thread stride tree
-        // produces — virtual lanes l and l+128 merge first, then the
-        // 64..1 tree runs on the 128 partials.
-        float sq = 0.0;
-        if (lane < row_length) {
-          float v = epi_member_load(member, in_base + lane);
-          sq = v * v;
-        }
-        if (lane + 128u < row_length) {
-          float v = epi_member_load(member, in_base + lane + 128u);
-          sq += v * v;
-        }
-        epi_block[lane] = sq;
-        barrier();
-        for (uint stride = 64u; stride > 0u; stride >>= 1u) {
-          if (lane < stride) {
-            epi_block[lane] += epi_block[lane + stride];
-          }
-          barrier();
-        }
-        const float mean_square = epi_block[0] / float(row_length);
-        barrier();
-        precise float norm = inversesqrt(mean_square + eps);
-        for (uint vl = lane; vl < row_length; vl += 128u) {
-          float v = epi_member_load(member, in_base + vl);
-          float w = epi_weight_load(side, vl);
-          precise float weight_norm = w * norm;
-          epi_rounded[vl] = epi_rope_round(v * weight_norm);
-        }
-        barrier();
-        if (lane < row_length / 2u) {
-          const uint k = lane;
-          const float position =
-              params.alpha * (float(t) + epi_off);
+    // Row-per-subgroup: the workgroup's four 32-lane subgroups each
+    // take one token row. The norm keeps the 256-thread tree's exact
+    // pairing — partials v[i]^2 (+v[i+128]^2) then the 64..1 shared
+    // tree — so every reduction order matches the serial path
+    // bit-for-bit; only the row-to-subgroup assignment changed.
+    const uint sub_id = lane / LANES;
+    const uint sub_lane = lane % LANES;
+    const uint t = sub_id;
+    const uint mat = head;
+    const uint blk = sub_id * 128u;
+    const uint in_base = in_off + t * is1 + mat * is0;
+    const bool row_ok = t < rope_t;
+    for (uint i = sub_lane; i < 128u; i += LANES) {
+      float sq = 0.0;
+      if (row_ok && i < row_length) {
+        float v = epi_member_load(member, in_base + i);
+        sq = v * v;
+      }
+      if (row_ok && i + 128u < row_length) {
+        float v = epi_member_load(member, in_base + i + 128u);
+        sq += v * v;
+      }
+      epi_block[blk + i] = sq;
+    }
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+      for (uint i = sub_lane; i < stride; i += LANES) {
+        epi_block[blk + i] += epi_block[blk + i + stride];
+      }
+      barrier();
+    }
+    const float mean_square = epi_block[blk] / float(row_length);
+    barrier();
+    precise float norm = inversesqrt(mean_square + eps);
+    for (uint vl = sub_lane; vl < row_length; vl += LANES) {
+      float v = row_ok ? epi_member_load(member, in_base + vl) : 0.0;
+      float w = epi_weight_load(side, vl);
+      precise float weight_norm = w * norm;
+      epi_rounded[blk + vl] = epi_rope_round(v * weight_norm);
+    }
+    barrier();
+    for (uint k = sub_lane; k < row_length / 2u; k += LANES) {
+      const float position =
+          params.alpha * (float(t) + epi_off);
           float v0;
           float v1;
           if (passthrough) {
             const uint d0 = 2u * k;
             const uint d1 = d0 + 1u;
             if (d0 >= 2u * half_dims) {
-              v0 = epi_rounded[d0];
-              v1 = epi_rounded[d1];
+              v0 = epi_rounded[blk + d0];
+              v1 = epi_rounded[blk + d1];
             } else {
               float vals[2];
               for (uint s = 0u; s < 2u; ++s) {
@@ -1551,8 +1558,8 @@ void main() {
                 float theta = position * inv_freq;
                 float cos_t = epi_rope_round(omarchy_trig_cos(theta));
                 float sin_t = epi_rope_round(omarchy_trig_sin(theta));
-                float x1 = epi_rounded[i];
-                float x2 = epi_rounded[i + half_dims];
+                float x1 = epi_rounded[blk + i];
+                float x2 = epi_rounded[blk + i + half_dims];
                 float xa = epi_rope_round(x1 * cos_t);
                 float xb = epi_rope_round(x2 * sin_t);
                 float xc = epi_rope_round(x1 * sin_t);
@@ -1580,10 +1587,10 @@ void main() {
                 epi_rope_round(omarchy_trig_cos(position * inv1));
             float sin1 =
                 epi_rope_round(omarchy_trig_sin(position * inv1));
-            float xa = epi_rounded[i0];
-            float xb = epi_rounded[i0 + half_dims];
-            float xc = epi_rounded[i1];
-            float xd = epi_rounded[i1 + half_dims];
+            float xa = epi_rounded[blk + i0];
+            float xb = epi_rounded[blk + i0 + half_dims];
+            float xc = epi_rounded[blk + i1];
+            float xd = epi_rounded[blk + i1 + half_dims];
             if (r1_side) {
               v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
               v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
@@ -1591,6 +1598,9 @@ void main() {
               v0 = epi_rope_round(xa * sin0) + epi_rope_round(xb * cos0);
               v1 = epi_rope_round(xc * sin1) + epi_rope_round(xd * cos1);
             }
+          }
+          if (!row_ok) {
+            continue;
           }
           if (side == 0u) {
             uint ob = params.output_size +
@@ -1604,9 +1614,7 @@ void main() {
             sum3.values[ob] = STORE_VALUE(v0);
             sum3.values[ob + 1u] = STORE_VALUE(v1);
           }
-        }
-        barrier();
-      }
+    }
   }
 #endif
 }
