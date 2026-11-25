@@ -602,18 +602,29 @@ def _embedding(a, b, *a_, **k_):
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
 
-def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
+def _softmax_fwd(a, dim=-1, half_to_float=False, dtype=None, *, log=False):
     a = _mx(a)
-    # aten casts the INPUT to dtype before the op: fp16/bf16 + dtype=fp32
-    # must compute in fp32, not compute-then-cast.
     if dtype is not None:
         if dtype not in _MX_DT:
-            return _raise(f"log_softmax dtype {dtype}")
+            return _raise(f"softmax dtype {dtype}")
         a = a.astype(_MX_DT[dtype])
-    # aten: half_to_float computes in fp32 and returns fp32 for half inputs
-    if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
+    if not mx.issubdtype(a.dtype, mx.floating):
+        return _raise(f"softmax dtype {a.dtype}")
+
+    use_fp32 = a.dtype in (mx.float16, mx.bfloat16)
+    out_dtype = mx.float32 if half_to_float and use_fp32 else a.dtype
+    if a.size == 0 and -a.ndim <= dim < a.ndim:
+        return a.astype(out_dtype)
+    if use_fp32:
         a = a.astype(mx.float32)
-    return a - mx.logsumexp(a, axis=dim, keepdims=True)
+    shifted = a - mx.max(a, axis=dim, keepdims=True)
+    numer = mx.exp(shifted)
+    denom = mx.sum(numer, axis=dim, keepdims=True)
+    result = shifted - mx.log(denom) if log else numer / denom
+    return result.astype(out_dtype)
+
+def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
+    return _softmax_fwd(a, dim, half_to_float, dtype=dtype, log=True)
 
 def _log_softmax_bwd(g, out, dim, input_dtype=None):
     # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)
@@ -1358,8 +1369,8 @@ _FUNC_SPECS = {
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
-    "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
-    "_softmax": lambda a, dim, half=False: mx.softmax(a, axis=dim),
+    "softmax": lambda a, dim=-1, dtype=None, **k: _softmax_fwd(a, dim, dtype=dtype),
+    "_softmax": _softmax_fwd,
     "gelu": lambda a, approximate="none": (0.5 * a * (1.0 + mx.tanh(math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a))) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0)))),
     "cross_entropy": lambda logits, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", label_smoothing=0.0, *a_, **k_: (
         _ce(logits, target, weight, ignore_index, label_smoothing, _red(reduction, size_average, reduce))),
@@ -1431,7 +1442,7 @@ _FUNC_SPECS = {
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
-    "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim, half_to_float),
+    "_log_softmax": _log_softmax_fwd,
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
