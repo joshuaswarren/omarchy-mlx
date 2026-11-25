@@ -1216,6 +1216,13 @@ enum class ComputeKernel : uint16_t {
   BinarySimpleF32,
   BinarySimpleF16,
   BinarySimpleBF16,
+  // ROWS_PER_SLOT=4 decode column geometries of the bf16 subgroup Q4 word
+  // and multi kernels (MLX_OMARCHY_QMM_GEOM=4x8/4x4): Metal qmv_fast's
+  // four rows per subgroup. Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R4S8,
+  QmmVecQ4MultiSubgroupBF16R4S8,
+  QmmVecQ4WordSubgroupBF16R4S4,
+  QmmVecQ4MultiSubgroupBF16R4S4,
   Count,
 };
 

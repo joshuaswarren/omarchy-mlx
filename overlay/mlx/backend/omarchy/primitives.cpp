@@ -253,6 +253,18 @@ const QmmGeometry& qmm_geometry() {
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
     }
+    if (v == "4x8") {
+      // Experimental: four rows per 32-lane slot (Metal qmv_fast's
+      // results_per_simdgroup=4); halves x-load traffic per weight word.
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R4S8,
+          K::QmmVecQ4MultiSubgroupBF16R4S8, "4x8"};
+    }
+    if (v == "4x4") {
+      return QmmGeometry{
+          16u, K::QmmVecQ4WordSubgroupBF16R4S4,
+          K::QmmVecQ4MultiSubgroupBF16R4S4, "4x4"};
+    }
     if (v == "2x4") {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
