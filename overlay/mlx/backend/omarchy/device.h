@@ -889,12 +889,15 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_QMM_BF16W")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // Measured exception table (PAR-92): on G13C (Apple M1 Max) and G14C
-  // (Apple M2 Max), the single-kernel 128-row SG8 K=64 coalesced-W coopmat
-  // route beats the two-pass dequant+matmul path by ~30-70% on 4B/9B
-  // prefill512 while keeping fp32 weight dequantization and zero temporary
-  // dequant buffers.
-  if (device_name.find("G13C") != std::string::npos ||
+  // Measured exception table (PAR-92): on G13C (Apple M1 Max), G14C
+  // (Apple M2 Max) and G13G (13-inch Apple M1), the single-kernel 128-row
+  // SG8 K=64 coalesced-W coopmat route beats the two-pass dequant+matmul
+  // path on 4B/9B prefill512 while keeping fp32 weight dequantization and
+  // zero temporary dequant buffers. G13G measured: 4B 210.27 vs 98.00
+  // tok/s (2.15x), 9B 101.64 vs 49.52 (2.05x), token ids identical
+  // (5-pair ABBA on main 1f854b9b85, PR #935).
+  if (device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
       device_name.find("G14C") != std::string::npos) {
     return false;
   }

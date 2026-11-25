@@ -6,8 +6,9 @@
 // Moved here from primitives.cpp so tests can pin the 64-row gate: the
 // 64-row default is a 4-bit group-64 transposed FullN route only
 // (review of #508); every other format and non-FullN shape keeps the
-// 32-row tile. G16S defaults to 64-row G4+LdsPad and G13G defaults to
-// 64-row SG4+LdsPad+STEPK=32; parts outside G16S and G13G keep 32 rows.
+// 32-row tile. G16S defaults to 64-row G4+LdsPad; G13C, G14C and G13G
+// default to 128-row SG8 K=64 where the grid fills the part, stepping
+// down to 64-row SG4 (G13G at STEP_K=32); other parts keep 32 rows.
 
 #pragma once
 
@@ -134,10 +135,13 @@ inline bool qmm_coopmat_rows128_requested(const std::string& device_name) {
       return false;
     }
   }
-  // G13C (M1 Max) and G14C (M2 Max) default to 128-row SG8 coalesced-W K=64
-  // where the grid fills the part, stepping down to 64-row SG4 K=64 for
-  // smaller M/N.
-  return device_name.find("G13C") != std::string::npos ||
+  // G13C (M1 Max), G14C (M2 Max) and G13G (13-inch M1) default to 128-row
+  // SG8 coalesced-W K=64 where the grid fills the part, stepping down to
+  // 64-row SG4 K=64 for smaller M/N. G13G measured: prefill512 2.05-2.15x
+  // vs the 64-row SG4 default (9B 101.6 vs 49.5 tok/s, 4B 210.3 vs 98.0,
+  // ids identical, 5-pair ABBA on main 1f854b9b85).
+  return device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
       device_name.find("G14C") != std::string::npos;
 }
 
