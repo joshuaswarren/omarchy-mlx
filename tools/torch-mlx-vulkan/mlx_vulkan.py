@@ -1799,7 +1799,7 @@ _FUNC_SPECS = {
     # are typed length-0 tensors, so the lowering returns typed empties too
     # and keeps _bn3's eval math for the output only.
     "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, momentum, eps, *k: (
-        lambda r: (r[0], _mx(rm).reshape(-1)[:0], _mx(rv).reshape(-1)[:0]))(_bn3(
+        lambda r: (r[0].astype(_mx(x).dtype), _mx(rm).reshape(-1)[:0], _mx(rv).reshape(-1)[:0]))(_bn3(
             x, w, b, rm, rv, False, momentum, eps)),
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,

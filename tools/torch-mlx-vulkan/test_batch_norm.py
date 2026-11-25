@@ -217,6 +217,14 @@ def check_no_training(c, dt_name, tol):
     name = "_native_batch_norm_legit_no_training"
     # FX graph through the executor: the real ATen entry, all 3 outputs,
     # compared against torch (not a manual oracle)
+    # FP16 input with FP32 affine/stats: torch returns (fp16 out,
+    # fp32 empty, fp32 empty); the lowering must keep that split.
+    if dt_name == "fp32":
+        x16 = mx.array(c["x"]).astype(mx.float16)
+        r16 = mlx_vulkan.ATEN_TABLE[name](x16, w_m, b_m, rm_m, rv_m, mom, eps)
+        assert r16[0].dtype == mx.float16, r16[0].dtype
+        assert r16[1].dtype == mx.float32 and r16[2].dtype == mx.float32, \
+            (r16[1].dtype, r16[2].dtype)
     g = torch.fx.Graph()
     phs = [g.placeholder(f"p{i}") for i in range(7)]
     g.call_function(torch.ops.aten._native_batch_norm_legit_no_training,
@@ -240,6 +248,10 @@ def check_no_training(c, dt_name, tol):
     # (shape/dtype only - a max-reduction over a zero-size array is undefined)
     assert tuple(r[1].shape) == tuple(wr[1].shape) == (0,), (r[1].shape, wr[1].shape)
     assert tuple(r[2].shape) == tuple(wr[2].shape) == (0,), (r[2].shape, wr[2].shape)
+    # the executor widens bf16 outputs to fp32 (numpy has no bf16 buffer);
+    # dtype fidelity at the entry itself is asserted in the fp16 case above
+    assert r[0].dtype == wr[0].dtype or (
+        dt_name == "bf16" and r[0].dtype == torch.float32), (r[0].dtype, wr[0].dtype)
     # the eval math itself must use the passed eps, not the momentum
     C, chw = c["C"], (1, c["C"], *([1] * (len(c["x"].shape) - 2)))
     want = (x_t - rm_t.reshape(chw)) / torch.sqrt(rv_t.reshape(chw) + eps) * w_t.reshape(chw) + b_t.reshape(chw)
