@@ -1275,6 +1275,71 @@ def test_random_family():
                   [0.0, 1.0, (4,)], {"dtype": torch.float16})
     assert o.dtype == torch.float16
 
+    # uniform's from==to edge is valid: constant output, still lowered
+    o = fx_sample(torch.ops.aten.uniform.default, [big, 2.0, 2.0])
+    assert (o == 2.0).all()
+
+    # the registered backend wraps the graph in mx.compile, which would
+    # freeze mx.random draws — sampling nodes refuse it and run on the
+    # per-node path. Consecutive calls must draw fresh values, and a
+    # torch.manual_seed reset must replay the same sample.
+    def reg_uniform():
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch.ops.aten.uniform.default, (ph,))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        return mlx_vulkan.mlx_vulkan_backend(gm, [])
+    runner = reg_uniform()
+    x = torch.zeros(4096)
+
+    def r1():
+        o = runner(x)
+        return torch.as_tensor(
+            o[0] if isinstance(o, (tuple, list)) else o)
+
+    o1, o2 = r1(), r1()
+    assert not torch.equal(o1, o2)
+    torch.manual_seed(1729)
+    s1 = r1()
+    torch.manual_seed(1729)
+    s2 = r1()
+    assert torch.equal(s1, s2)
+
+    # invalid parameters must refuse before drawing — the CPU fallback
+    # then surfaces torch's own RuntimeError through the FX executor
+    def fx_raise(target, arglist, kw=None):
+        ins = [a for a in arglist if isinstance(a, torch.Tensor)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        n = g.call_function(
+            target, tuple(
+                next(it) if isinstance(a, torch.Tensor) else a
+                for a in arglist), kw or {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, _stats = mlx_vulkan.make_executor(gm)
+        try:
+            run(*ins)
+        except RuntimeError:
+            return
+        raise AssertionError(f"{target} accepted invalid params")
+
+    fx_raise(torch.ops.aten.uniform.default, [big, 5.0, 2.0])
+    fx_raise(torch.ops.aten.exponential.default, [big], {"lambd": 0.0})
+    fx_raise(torch.ops.aten.exponential.default, [big], {"lambd": -0.5})
+    fx_raise(torch.ops.aten.geometric.default, [big], {"p": 0.0})
+    fx_raise(torch.ops.aten.geometric.default, [big], {"p": 1.0})
+    fx_raise(torch.ops.aten.geometric.default, [big], {"p": 1.5})
+    fx_raise(torch.ops.aten.cauchy.default, [big], {"sigma": 0.0})
+    fx_raise(torch.ops.aten.log_normal.default, [big], {"std": 0.0})
+    fx_raise(torch.ops.aten.log_normal.default, [big], {"std": -1.0})
+    fx_raise(torch.ops.aten.normal.Tensor_float, [big, -0.5])
+    st_bad = torch.full((20000,), 0.5)
+    st_bad[0] = -1.0
+    fx_raise(torch.ops.aten.normal.Tensor_Tensor, [big, st_bad])
+
     # a torch Generator can't be honored by mx.random -> the lowering
     # raises (LOWER-FAIL -> CPU fallback). FX can't codegen a live
     # Generator, so call the spec functions directly here.

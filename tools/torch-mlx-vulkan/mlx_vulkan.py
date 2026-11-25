@@ -1607,6 +1607,23 @@ def _acosh(a):
     return mx.where(a == float("inf"), a, mx.acosh(a))
 
 
+def _rng_key():
+    # seed each mx.random draw from a value pulled off torch's default
+    # generator: torch.manual_seed resets replay deterministically, and
+    # consuming one draw advances torch's state so consecutive calls
+    # differ — the same contract torch's sampling kernels honor
+    return mx.random.key(int(torch.randint(0, 1 << 62, ()).item()))
+
+
+def _rng_u(shape):
+    return mx.random.uniform(shape=shape, dtype=mx.float32,
+                             key=_rng_key())
+
+
+def _rng_n(shape):
+    return mx.random.normal(shape, dtype=mx.float32, key=_rng_key())
+
+
 def _sample_self(self, generator, name):
     # the aten.*.default samplers draw fresh values in self's shape; torch
     # only samples floating tensors, and an explicit Generator cannot be
@@ -1623,10 +1640,13 @@ def _uniform(self, *args, generator=None, **k):
     # aten.uniform.default(self, from=0, to=1): uniform samples in self's
     # shape/dtype; self is only a template (out-of-place)
     a = _sample_self(self, generator, "uniform")
-    lo = args[0] if len(args) > 0 else k.get("from", 0.0)
-    hi = args[1] if len(args) > 1 else k.get("to", 1.0)
-    return mx.random.uniform(low=float(lo), high=float(hi), shape=a.shape,
-                             dtype=mx.float32).astype(a.dtype)
+    lo = float(args[0] if len(args) > 0 else k.get("from", 0.0))
+    hi = float(args[1] if len(args) > 1 else k.get("to", 1.0))
+    if not (lo <= hi):
+        return _raise(f"uniform range {lo} > {hi}")
+    if lo == hi:
+        return mx.full(a.shape, lo).astype(a.dtype)
+    return (_rng_u(a.shape) * (hi - lo) + lo).astype(a.dtype)
 
 
 def _cauchy(self, *args, generator=None, **k):
@@ -1634,7 +1654,9 @@ def _cauchy(self, *args, generator=None, **k):
     a = _sample_self(self, generator, "cauchy")
     median = args[0] if len(args) > 0 else k.get("median", 0.0)
     sigma = args[1] if len(args) > 1 else k.get("sigma", 1.0)
-    u = mx.random.uniform(shape=a.shape, dtype=mx.float32)
+    if not (float(sigma) > 0.0):
+        return _raise(f"cauchy sigma {sigma}")
+    u = _rng_u(a.shape)
     return (median + sigma * mx.tan(math.pi * (u - 0.5))).astype(a.dtype)
 
 
@@ -1642,16 +1664,19 @@ def _exponential(self, *args, generator=None, **k):
     # aten.exponential.default(self, lambd=1): -ln(1-u)/lambd, u ~ U[0,1)
     a = _sample_self(self, generator, "exponential")
     lambd = args[0] if len(args) > 0 else k.get("lambd", 1.0)
-    u = mx.random.uniform(shape=a.shape, dtype=mx.float32)
-    return (-mx.log1p(-u) / lambd).astype(a.dtype)
+    if not (float(lambd) > 0.0):
+        return _raise(f"exponential lambd {lambd}")
+    return (-mx.log1p(-_rng_u(a.shape)) / lambd).astype(a.dtype)
 
 
 def _geometric(self, *args, generator=None, **k):
     # aten.geometric.default(self, p): trials to first success on {1,2,..}
     a = _sample_self(self, generator, "geometric")
     p = args[0] if len(args) > 0 else k.get("p")
-    u = mx.random.uniform(shape=a.shape, dtype=mx.float32)
-    return (mx.floor(mx.log1p(-u) / math.log(1.0 - p)) + 1).astype(a.dtype)
+    if not (0.0 < float(p) < 1.0):
+        return _raise(f"geometric p {p}")
+    return (mx.floor(mx.log1p(-_rng_u(a.shape)) / math.log(1.0 - p)) + 1) \
+        .astype(a.dtype)
 
 
 def _log_normal(self, *args, generator=None, **k):
@@ -1659,8 +1684,9 @@ def _log_normal(self, *args, generator=None, **k):
     a = _sample_self(self, generator, "log_normal")
     mean = args[0] if len(args) > 0 else k.get("mean", 1.0)
     std = args[1] if len(args) > 1 else k.get("std", 2.0)
-    n = mx.random.normal(a.shape, dtype=mx.float32)
-    return mx.exp(mean + std * n).astype(a.dtype)
+    if not (float(std) > 0.0):
+        return _raise(f"log_normal std {std}")
+    return mx.exp(mean + std * _rng_n(a.shape)).astype(a.dtype)
 
 
 def _normal(*args, generator=None, dtype=None, **k):
@@ -1676,22 +1702,29 @@ def _normal(*args, generator=None, dtype=None, **k):
         dt = _MX_DT.get(dtype) if dtype is not None else mx.float32
         if dt is None:
             return _raise(f"normal dtype {dtype}")
+        if float(std) < 0:
+            return _raise(f"normal std {std}")
         size = tuple(int(x) for x in args[2])
-        return (float(mean) + float(std)
-                * mx.random.normal(size, dtype=mx.float32)).astype(dt)
+        return (float(mean) + float(std) * _rng_n(size)).astype(dt)
     m = _mx(mean) if m_t else float(mean)
     s = _mx(std) if s_t else float(std)
     for t in (m, s):
         if isinstance(t, mx.array) and not mx.issubdtype(t.dtype,
                                                        mx.floating):
             return _raise(f"normal operand dtype {t.dtype}")
+    # torch requires std >= 0, elementwise for a tensor std
+    if isinstance(s, mx.array):
+        if bool(mx.any(s < 0)):
+            return _raise("normal std < 0")
+    elif s < 0:
+        return _raise(f"normal std {std}")
     if m_t and s_t:
         shape, dt = mx.broadcast_shapes(m.shape, s.shape), \
             mx.result_type(m.dtype, s.dtype)
     else:
         ref = m if m_t else s
         shape, dt = ref.shape, ref.dtype
-    return (m + s * mx.random.normal(shape, dtype=mx.float32)).astype(dt)
+    return (m + s * _rng_n(shape)).astype(dt)
 
 
 _FUNC_SPECS = {
@@ -1957,6 +1990,12 @@ _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "new_empty", "new_full", "scalar_tensor",
               "uniform", "normal", "cauchy", "exponential", "geometric",
               "log_normal"}
+
+# sampling ops: mx.compile would trace the draw once and replay it, so the
+# whole-graph compiled executor refuses them — the per-node eager path
+# keeps torch's RNG contract (fresh draws, seed-reset replay)
+_SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
+             "log_normal"}
 
 # ops that must never CPU-fallback: lower even when upstream nodes produced
 # torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)
@@ -2907,6 +2946,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = args[0][_coerce_index(args[1])]
                 continue
             if n.op == "call_function":
+                if name in _SAMPLERS:
+                    raise RuntimeError(
+                        f"unlowerable node {name}: mx.compile freezes "
+                        "mx.random draws; sampling stays on the "
+                        "per-node path")
                 low = (FUNC_TABLE.get(n.target)
                        or FUNC_TABLE_BY_NAME.get(getattr(n.target, "__name__", ""))
                        or ATEN_TABLE.get(name))
