@@ -1238,6 +1238,17 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4SwigluBF16R2S8W2,
   QmmVecQ4ResNormBF16R2S8W2,
   QmmVecQ4OutgateResNormBF16R2S8W2,
+
+  // M2D-3: 128-thread fused rope+norm variants for D <= 128 rows (the 256
+  // -thread build wastes half its threads there). Appended to keep profile
+  // kernel ids stable. Bit-exact to the 256-thread builds at these shapes:
+  // the dropped threads 128..255 load 0.0 and contribute exact +0.0 to the
+  // reduction, and the 256-thread tree's stride-128 step is therefore
+  // (+0.0)-neutral on every element the 128-thread build computes.
+  FastRopeNormBF16W128,
+  FastRopeNormAppleBF16W128,
+  FastRopeNormPairBF16W128,
+  FastRopeNormPairAppleBF16W128,
   // Fused GDN decode conv + gated-delta step for unequal key/value head
   // counts (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED
   // -DGDN_NATIVE_GQA_INDEX): the conv prologue reads q and k channels by
