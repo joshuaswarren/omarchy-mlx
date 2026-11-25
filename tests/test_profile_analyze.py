@@ -268,5 +268,127 @@ class CalibrationRecordTests(unittest.TestCase):
         self.assertIn("malformed cal record", r.stderr)
 
 
+class HoneykrispDt1Tests(unittest.TestCase):
+    def test_apple_device_auto_uses_dt1_within_submit(self):
+        rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1.0, "valid_bits": 64, "pool": 65536,
+             "label": "hk", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 1000000, "t1": 1010000, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 4, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 3010000, "t1": 3030000, "b": []},
+            {"k": "d", "s": 2, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 9000000, "t1": 9020000, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "s", "s": 2, "dur": 100, "t": 2000},
+            {"k": "end", "t": 3000, "dispatches": 3, "dropped": 0,
+             "submissions": 2, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("timing=dt1", r.stdout)
+        # Heavy kernel_1 gets dt1 = 3030000 - 1010000 = 2.020ms, not 20us.
+        self.assertIn("kernel_1                   n=1      total=2.020ms", r.stdout)
+        # First kernel_0 gets 10us (submit 1) + 20us (submit 2 reset) = 30.0us.
+        self.assertIn("kernel_0                   n=2      total=30.0us", r.stdout)
+        # Intra-submit raw interval is labeled as included in dt1 busy, not double-counted as gap.
+        self.assertIn("raw intra-submission timestamp intervals (included in dt1 busy):", r.stdout)
+        self.assertNotIn("gaps intra-submission:", r.stdout)
+
+    def test_dt1_counter_wrap_and_untimed_dispatch_break(self):
+        # 8-bit wrap: (240,245) -> (4,8) at 1 us/tick => 5 us + 19 us = 24 us.
+        wrap_rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
+             "label": "wrap", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 4, "t1": 8, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "end", "t": 2000, "dispatches": 2, "dropped": 0,
+             "submissions": 1, "joins": 0},
+        ]
+        # Untimed dispatch between (100,105) and (125,130) breaks dt1 chain:
+        # kernel_2 gets t1-t0 = 5 us, not 25 us.
+        gap_rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 64, "pool": 65536,
+             "label": "gap", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 100, "t1": 105, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "b": []},
+            {"k": "d", "s": 1, "e": 2, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 125, "t1": 130, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "end", "t": 2000, "dispatches": 3, "dropped": 0,
+             "submissions": 1, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            p1, _ = write_fixture(td, wrap_rec)
+            r1 = run_analyzer(p1)
+            p2, _ = write_fixture(td, gap_rec)
+            r2 = run_analyzer(p2)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertIn("busy 24.0us / span 24.0us", r1.stdout)
+        self.assertIn("kernel_1                   n=1      total=19.0us", r1.stdout)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("kernel_2                   n=1      total=5.0us", r2.stdout)
+        self.assertIn("gaps intra-submission: n=1 total=20.0us", r2.stdout)
+
+    def test_split_submit_counter_wrap_preserves_inter_submit_gap(self):
+        # 8-bit wrap split across s=1 (240,245) then s=2 (4,8) at 1 us/tick:
+        # s1=5us, s2=4us, inter-submit gap = (260 - 245) = +15.0us (not -24us).
+        rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
+             "label": "split-wrap", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
+            {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 4, "t1": 8, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "s", "s": 2, "dur": 100, "t": 2000},
+            {"k": "end", "t": 3000, "dispatches": 2, "dropped": 0,
+             "submissions": 2, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("busy 9.0us / span 24.0us", r.stdout)
+        self.assertIn("gaps inter-submission: n=1 total=15.0us", r.stdout)
+
+    def test_missing_middle_submit_record_keeps_submission_id_order(self):
+        # Missing s-record for s=2 between s=1 and s=3 must keep [1, 2, 3]
+        # timeline order on both Apple and non-Apple devices (180ns total gap,
+        # 2/2 disjoint pairs).
+        for device in ("Apple M1 Max (G13C C0)", "NVIDIA GeForce RTX 5060 Ti"):
+            rec = [
+                {"k": "meta", "device": device, "period_ns": 1.0,
+                 "valid_bits": 64, "pool": 65536, "label": "mid", "host_t0": 0},
+                {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 100, "t1": 110, "b": [[1, 0, 64]]},
+                {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 200, "t1": 210, "b": [[2, 0, 64]]},
+                {"k": "d", "s": 3, "e": 2, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 300, "t1": 310, "b": [[1, 0, 64]]},
+                {"k": "s", "s": 1, "dur": 10, "t": 1000},
+                {"k": "s", "s": 3, "dur": 10, "t": 3000},
+                {"k": "end", "t": 4000, "dispatches": 3, "dropped": 0,
+                 "submissions": 2, "joins": 0},
+            ]
+            with tempfile.TemporaryDirectory() as td:
+                profile, _ = write_fixture(td, rec)
+                r = run_analyzer(profile)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("gaps inter-submission: n=2 total=180ns", r.stdout)
+            self.assertIn("dependency proxy [all]: 2/2 consecutive pairs fully disjoint", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
