@@ -30,6 +30,7 @@
 #include "mlx/backend/cpu/device_info.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/coopmat_select.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
@@ -1451,9 +1452,22 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
   const auto& caps = omarchy::device(0).capabilities();
   const bool coopmat_device =
       caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  // The Intel/ANV 8x16x16 bf16 shape (MatmulBF16CoopmatXe16) serves
+  // the same calls where the fp32 8x8x8 route is absent; the two
+  // routes are mutually exclusive per device, so one flag covers the
+  // dispatch pin below.
+  const bool xe16_device =
+      !coopmat_device && caps.cooperative_matrix_bf16 &&
+      caps.subgroup_size == 32u &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::matmul_xe16_bf16_shape()) &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_XE16") &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
   std::cout << "[provenance] cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
-            << " subgroup_size=" << caps.subgroup_size << "\n";
+            << " subgroup_size=" << caps.subgroup_size
+            << " xe16_device=" << (xe16_device ? 1 : 0) << "\n";
 
   std::mt19937 rng(20260908);
   std::uniform_int_distribution<int> small(-4, 4);
@@ -1560,7 +1574,8 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
         if (a_t || b_t) {
           continue;
         }
-        if (coopmat_device && m >= 32 && k >= 896 && n >= 896) {
+        if ((coopmat_device || xe16_device) && m >= 32 && k >= 896 &&
+            n >= 896) {
           // The route expectation is load-bearing: a gate regression to
           // the 16x16 tile must fail here, so pin the dispatch the way
           // the q4g32 case does. Pinned on the Qwen shapes only: the
@@ -1589,10 +1604,13 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
               std::istreambuf_iterator<char>());
           // The direct route shadows MatmulBF16Coopmat wherever a row
           // (or the bf16_8 shape) engages; those kernels are the same
-          // 8x8x8 coopmat class, so accept the family. A regression to
-          // the tile or scalar-FMA kernels matches none of them.
+          // 8x8x8 coopmat class, so accept the family. The Xe16 kernel
+          // is the same cooperative-matrix class on ANV's 8x16x16
+          // shape. A regression to the tile or scalar-FMA kernels
+          // matches none of them.
           const std::vector<omarchy::ComputeKernel> dense_coopmat{
               omarchy::ComputeKernel::MatmulBF16Coopmat,
+              omarchy::ComputeKernel::MatmulBF16CoopmatXe16,
               omarchy::ComputeKernel::MatmulDirectBF16Nn,
               omarchy::ComputeKernel::MatmulDirectBF16Nt,
               omarchy::ComputeKernel::MatmulDirectBF16Tn,
@@ -7969,15 +7987,33 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
       caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
       (32u * 16u + 16u * 32u) * sizeof(float) <=
           caps.max_compute_shared_memory_size;
+  // The Intel/ANV fp16-operand 8x16x16 route
+  // (QmmPrefillCoopmat16XeBF16) claims the same calls where its shape
+  // is advertised - the FMA kernels stay reachable only behind
+  // MLX_OMARCHY_NO_QMM_XE16 there, so this arm-vs-arm comparison is
+  // not the device's real pick. Mirrors the production gate's
+  // device-level terms; the m {5,77,1030}, k=192 shapes below all
+  // satisfy the call-level terms.
+  const bool qmm_xe16_reachable = caps.cooperative_matrix_bf16 &&
+      caps.subgroup_size == 32u &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16") &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_xe_shape()) &&
+      (16u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u <=
+          caps.max_compute_shared_memory_size;
   std::cout << "[provenance] device=" << caps.device_name
             << " cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
             << " subgroup_size=" << caps.subgroup_size
             << " no_coopmat_flag="
             << (omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") ? 1 : 0)
-            << " coopmat_reachable=" << (coopmat_reachable ? 1 : 0) << "\n";
-  if (coopmat_reachable) {
-    skip("the cooperative-matrix qmm route serves bf16 prefill on this device");
+            << " coopmat_reachable=" << (coopmat_reachable ? 1 : 0)
+            << " qmm_xe16_reachable=" << (qmm_xe16_reachable ? 1 : 0)
+            << "\n";
+  if (coopmat_reachable || qmm_xe16_reachable) {
+    skip("a cooperative-matrix qmm route serves bf16 prefill on this device");
     return;
   }
   if (omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA") ||
@@ -8071,6 +8107,100 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
               << " of " << results[0].size() << " outputs differ\n";
   }
   unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+}
+
+// QmmPrefillCoopmat16XeBF16 (shaders/qmm_coopmat16_xe.comp): the fp16-
+// operand 8x16x16 subgroup shape ANV advertises on Xe2 (BMG). x stages
+// through shared, so a ragged matrix_m tile zero-fills - the route
+// claims the q4-g64 bf16 prefill calls the Intel direct kernel's m%16
+// gate declines on a driver whose shape list has no M16 entry. Pin the
+// dispatch on m not a multiple of 16, then check the value class: fp16
+// operand staging bounds the call at roughly one 2^-11 rounding per
+// operand on top of the f32 accumulation chain and the bf16 store.
+TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool xe16_reachable = caps.cooperative_matrix_bf16 &&
+      caps.subgroup_size == 32u &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16") &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_xe_shape()) &&
+      (16u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u <=
+          caps.max_compute_shared_memory_size;
+  std::cout << "[provenance] device=" << caps.device_name
+            << " xe16_reachable=" << (xe16_reachable ? 1 : 0) << "\n";
+  if (!xe16_reachable) {
+    skip("no 8x16x16 fp16 subgroup coopmat shape on this device");
+    return;
+  }
+  unsetenv("MLX_OMARCHY_QMM_TILE");
+  unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4, k = 192, n = 130;
+  std::mt19937 gen(20261125);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  HostQuantizedWeights rounded = host;
+  rounded.scales = round_trip(stream, host.scales, bfloat16);
+  rounded.biases = round_trip(stream, host.biases, bfloat16);
+  array w_words(host.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+  for (int m : {5, 77}) {
+    std::vector<float> x_values(static_cast<size_t>(m) * k);
+    for (auto& v : x_values) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_values, bfloat16);
+    std::vector<float> expected =
+        host_quantized_matmul(rounded, x_rt, m, n, k, group_size, bits);
+    array x(x_rt.begin(), Shape{m, k}, bfloat16);
+    eval({x, w_words, scales, biases});
+    omarchy::get_command_encoder(stream).synchronize();
+    array out = quantized_matmul(
+        x, w_words, scales, biases, true, group_size, bits, "affine",
+        stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t dispatched =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    INFO("m=" << m << " n=" << n << " k=" << k);
+    CHECK_EQ(dispatched,
+             static_cast<int64_t>(
+                 omarchy::ComputeKernel::QmmPrefillCoopmat16XeBF16));
+    std::vector<float> got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), expected.size());
+    double m_max = 0.0;
+    for (float v : got) {
+      REQUIRE(std::isfinite(v));
+      m_max = std::max(m_max, std::fabs(static_cast<double>(v)));
+    }
+    const double m_bound = std::max(m_max * 2.0, 1.0);
+    // fp16 operands: one 2^-11 relative rounding per factor against
+    // the f32 chain term the FMA route's bound uses, then the same
+    // bf16 storage rounding.
+    const double bound =
+        (3.0 * k + 1.0) * m_bound * std::ldexp(1.0, -23) +
+        2.0 * k * m_bound * std::ldexp(1.0, -11) +
+        m_bound * std::ldexp(1.0, -8);
+    double max_diff = 0.0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      max_diff = std::max(
+          max_diff, std::fabs(static_cast<double>(got[i]) - expected[i]));
+    }
+    std::cout << "[qmm-xe16-bf16] m=" << m << " max_diff=" << max_diff
+              << " bound=" << bound << "\n";
+    CHECK(max_diff <= bound);
+  }
 }
 
 TEST_CASE("bf16 linear-layer FMA over the cooperative matrix: the part rule") {
