@@ -265,6 +265,53 @@ def test_mul():
     print("test_mul PASS")
 
 
+def test_remainder():
+    # PT-AN: aten.remainder.default is a receipt-zero PAR-41 census row
+    # (elementwise modulo for quantization / zigzag index math). Prove the
+    # eager executor lowers remainder/remainder.Scalar (stats["mlx"]) and
+    # matches torch CPU at fp32, bf16, and int64 on negative operands:
+    # torch.remainder takes the divisor's sign, the same numpy-style
+    # contract mx.remainder implements.
+    x32 = torch.tensor([[7.0, -7.0], [7.5, -7.5]])
+    y32 = torch.tensor([[3.0, 3.0], [-2.0, -2.0]])
+    xb, yb = x32.bfloat16(), y32.bfloat16()
+    i64 = torch.tensor([[7, -7], [7, -7]], dtype=torch.int64)
+    j64 = torch.tensor([[3, 3], [-4, -4]], dtype=torch.int64)
+    cases = [
+        (torch.ops.aten.remainder.default, (x32, y32), None, torch.remainder(x32, y32)),
+        (torch.ops.aten.remainder.default, (xb, yb), None, torch.remainder(xb, yb)),
+        (torch.ops.aten.remainder.Scalar, (x32,), -2.0, torch.remainder(x32, -2.0)),
+        (torch.ops.aten.remainder.Scalar, (i64,), 3, torch.remainder(i64, 3)),
+        (torch.ops.aten.remainder.default, (i64, j64), None, torch.remainder(i64, j64)),
+        (torch.remainder, (x32, y32), None, torch.remainder(x32, y32)),
+        # scalar-only call (aten.remainder.default(7, 3)): torch returns the
+        # int64 scalar 1; boxing must not leave an int32 mx array behind.
+        (torch.ops.aten.remainder.default, (7, 3), None,
+         torch.ops.aten.remainder.default(7, 3)),
+    ]
+    for target, ins, scalar, ref in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        args = tuple(phs) if scalar is None else (phs[0], scalar)
+        n = g.call_function(target, args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        ref = torch.as_tensor(ref)
+        assert stats["cpu"] == [], (stats, [str(t.target) for t in gm.graph.nodes])
+        assert any("remainder" in s for s in stats["mlx"]), stats
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=1e-5), (str(target), got)
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), out.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            low = mlx_vulkan._FUNC_SPECS["remainder"](mlx_vulkan._mx(xb), mlx_vulkan._mx(yb))
+            assert low.dtype == mx.bfloat16, low.dtype
+    print("test_remainder PASS")
+
+
 def test_scalar_tensor_factory_lowering():
     # BERT emits scalar_tensor factory nodes (scalar arg, no tensor inputs):
     # the eager executor only lowers call_function nodes with an mx input or
@@ -1528,6 +1575,7 @@ if __name__ == "__main__":
     test_scalar_tensor_factory_lowering()
     test_arange()
     test_mul()
+    test_remainder()
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
