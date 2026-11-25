@@ -2639,10 +2639,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // the same stream folds into ONE FastAddRmsNormAppleBF16 dispatch at
   // the add's tape position. The add's rounded residual stays
   // multi-reader safe: the fused kernel writes the residual buffer the
-  // composed add would have written. The device gate is the same
-  // apple_norm_enabled the standalone norm uses, so a refused device
-  // plans nothing and every node keeps today's route.
-  {
+  // composed add would have written. The apple device gate lives at
+  // fire time (TU-local to primitives.cpp); a refused device un-plans
+  // on the first fire and every node keeps today's route.
+  // MLX_OMARCHY_ADD_NORM_FUSE=0 plans nothing (the off arm for the
+  // bit-exactness test and bisection).
+  if (omarchy::env_str("MLX_OMARCHY_ADD_NORM_FUSE") == nullptr ||
+      omarchy::env_flag("MLX_OMARCHY_ADD_NORM_FUSE")) {
     std::unordered_map<std::uintptr_t, const array*> norm_by_in;
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RMSNorm)) || node.dtype() != bfloat16 ||
