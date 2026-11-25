@@ -268,5 +268,33 @@ class CalibrationRecordTests(unittest.TestCase):
         self.assertIn("malformed cal record", r.stderr)
 
 
+class HoneykrispDt1Tests(unittest.TestCase):
+    def test_apple_device_auto_uses_dt1_within_submit(self):
+        rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1.0, "valid_bits": 64, "pool": 65536,
+             "label": "hk", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 1000000, "t1": 1010000, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 4, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 3010000, "t1": 3030000, "b": []},
+            {"k": "d", "s": 2, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 9000000, "t1": 9020000, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "s", "s": 2, "dur": 100, "t": 2000},
+            {"k": "end", "t": 3000, "dispatches": 3, "dropped": 0,
+             "submissions": 2, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("timing=dt1", r.stdout)
+        # Heavy kernel_1 gets dt1 = 3030000 - 1010000 = 2.020ms, not 20us.
+        self.assertIn("kernel_1                   n=1      total=2.020ms", r.stdout)
+        # First kernel_0 gets 10us (submit 1) + 20us (submit 2 reset) = 30.0us.
+        self.assertIn("kernel_0                   n=2      total=30.0us", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

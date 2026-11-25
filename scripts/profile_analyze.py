@@ -91,11 +91,20 @@ def fmt_ns(v):
     return f"{v:.0f}ns"
 
 
+def is_honeykrisp_device(device_name):
+    name = (device_name or "").lower()
+    return "apple" in name or "honeykrisp" in name
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("profile")
     ap.add_argument("--markers")
     ap.add_argument("--compute-h", default=None)
+    ap.add_argument("--timing-mode", choices=("auto", "dt1", "t1-t0"),
+                    default="auto",
+                    help="auto uses dt1=t1[i]-t1[i-1] (same submit) on "
+                         "Apple/Honeykrisp and t1-t0 elsewhere")
     args = ap.parse_args()
 
     meta = None
@@ -220,9 +229,14 @@ def main():
     def say(s):
         out.append(s)
 
+    use_dt1 = (
+        args.timing_mode == "dt1"
+        or (args.timing_mode == "auto" and is_honeykrisp_device(meta.get("device")))
+    )
     say(f"== profile {args.profile}")
     say(f"   device={meta['device']} period={period}ns "
-        f"valid_bits={valid_bits}")
+        f"valid_bits={valid_bits}"
+        + (" timing=dt1" if use_dt1 else ""))
     if cal is not None:
         floor = cal.get("floor_ns")
         samples = cal.get("samples")
@@ -258,8 +272,15 @@ def main():
         span = max(t1s) - min(t0s)
         busy = 0.0
         kernels_ns = []
+        prev_s = None
+        prev_u1 = None
         for d, u0, u1 in zip(ordered, t0s, t1s):
-            dur = max(0.0, (u1 - u0)) * period
+            if use_dt1 and prev_s == d["s"] and prev_u1 is not None and u1 >= prev_u1:
+                dur = max(0.0, (u1 - prev_u1)) * period
+            else:
+                dur = max(0.0, (u1 - u0)) * period
+            prev_s = d["s"]
+            prev_u1 = u1
             busy += dur
             kernels_ns.append((dur, d))
         busy_frac = busy / (span * period) if span else 0.0
