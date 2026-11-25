@@ -16335,7 +16335,7 @@ void GdnConvUpdate::eval_gpu(
     std::vector<array> dense;
     dense.reserve(inputs.size());
     for (const auto& x : inputs) {
-      if (x.flags().row_contiguous) {
+      if (x.flags().row_contiguous && x.offset() == 0) {
         dense.push_back(x);
       } else {
         dense.push_back(contiguous_copy_gpu(x, s));
