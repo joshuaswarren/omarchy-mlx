@@ -1321,6 +1321,14 @@ enum class ComputeKernel : uint16_t {
   // rounds h with the shared RNE helper and the reduction consumes the
   // rounded values). Appended to keep profile kernel ids stable.
   FastAddRmsNormAppleBF16,
+  // M2D-3: 128-thread fused rope+norm variants for D <= 128 rows (the 256
+  // -thread build wastes half its threads there). Appended to keep profile
+  // kernel ids stable. Bit-exact to the 256-thread builds at these shapes:
+  // the dropped threads 128..255 load 0.0 and contribute exact +0.0 to the
+  // reduction, and the 256-thread tree's stride-128 step is therefore
+  // (+0.0)-neutral on every element the 128-thread build computes.
+  FastRopeNormBF16W128,
+  FastRopeNormAppleBF16W128,
   Count,
 };
 
