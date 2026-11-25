@@ -363,6 +363,32 @@ class HoneykrispDt1Tests(unittest.TestCase):
         self.assertIn("busy 9.0us / span 24.0us", r.stdout)
         self.assertIn("gaps inter-submission: n=1 total=15.0us", r.stdout)
 
+    def test_missing_middle_submit_record_keeps_submission_id_order(self):
+        # Missing s-record for s=2 between s=1 and s=3 must keep [1, 2, 3]
+        # timeline order on both Apple and non-Apple devices (180ns total gap,
+        # 2/2 disjoint pairs).
+        for device in ("Apple M1 Max (G13C C0)", "NVIDIA GeForce RTX 5060 Ti"):
+            rec = [
+                {"k": "meta", "device": device, "period_ns": 1.0,
+                 "valid_bits": 64, "pool": 65536, "label": "mid", "host_t0": 0},
+                {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 100, "t1": 110, "b": [[1, 0, 64]]},
+                {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 200, "t1": 210, "b": [[2, 0, 64]]},
+                {"k": "d", "s": 3, "e": 2, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 300, "t1": 310, "b": [[1, 0, 64]]},
+                {"k": "s", "s": 1, "dur": 10, "t": 1000},
+                {"k": "s", "s": 3, "dur": 10, "t": 3000},
+                {"k": "end", "t": 4000, "dispatches": 3, "dropped": 0,
+                 "submissions": 2, "joins": 0},
+            ]
+            with tempfile.TemporaryDirectory() as td:
+                profile, _ = write_fixture(td, rec)
+                r = run_analyzer(profile)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("gaps inter-submission: n=2 total=180ns", r.stdout)
+            self.assertIn("dependency proxy [all]: 2/2 consecutive pairs fully disjoint", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

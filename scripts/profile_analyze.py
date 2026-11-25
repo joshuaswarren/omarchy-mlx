@@ -261,26 +261,17 @@ def main():
     if has_gpu:
         # Preserve producer emission order within each submission so counter
         # wraps stay ordered and untimed dispatches break dt1 chains. Order
-        # distinct submissions by capture submission time (s-record host t,
-        # tie-broken by submit id) when available so cross-submit wraps stay
-        # chronological; submissions without an s-record fall back to raw t0.
+        # distinct submissions by their monotonic submission id d["s"]
+        # (reserved under the queue mutex) so cross-submit wraps and missing
+        # s-records never reorder the GPU timeline; s["t"] stays for phase
+        # attribution only.
         sub_groups = {}
         for d in dispatches:
             sub_groups.setdefault(d["s"], []).append(d)
-        timed_sids = [
+        sub_order = sorted(
             sid for sid, ds in sub_groups.items()
             if any("t0" in d and "t1" in d for d in ds)
-        ]
-
-        def sub_sort_key(sid):
-            s_rec = submit_by_s.get(sid)
-            if s_rec is not None and "t" in s_rec:
-                return (1, s_rec["t"], sid)
-            first_t0 = next(
-                d["t0"] for d in sub_groups[sid] if "t0" in d and "t1" in d)
-            return (0, first_t0, sid)
-
-        sub_order = sorted(timed_sids, key=sub_sort_key)
+        )
         ordered = []
         chained_prev = set()
         raw_series = []
