@@ -223,25 +223,50 @@ def _aint(v, default=None):
 
 
 def _dim0_index(idx):
-    """True when a getitem index only touches dim 0 in a
-    contiguity-preserving way (int, unit-step slice, None/Ellipsis
-    decorations). Anything else may yield a non-contiguous result."""
+    """True when a getitem index provably keeps contiguity: a prefix of
+    integer indices (each removing its dim), then at most one unit-step
+    partial slice on the next dim, then only non-restricting decorations
+    (None, full slices, one Ellipsis). An int or partial slice after a dim
+    survives, a step!=1 slice, or any restriction after an Ellipsis (it may
+    touch a trailing dim while earlier dims survive) can all produce a
+    non-contiguous result."""
     if isinstance(idx, torch.fx.Node):
         return False
-    if isinstance(idx, (int, torch.SymInt)):
-        return True
-    if idx is None or idx is Ellipsis:
-        return True
-    if isinstance(idx, slice):
-        return _aint(idx.step) in (None, 1)
-    if isinstance(idx, (tuple, list)):
-        real = [x for x in idx if x is not None and x is not Ellipsis]
-        if not real:
-            return True
-        if len(real) > 1:
+    if not isinstance(idx, (tuple, list)):
+        idx = (idx,)
+    pre, post, ell = [], [], False
+    for i in idx:
+        if i is Ellipsis:
+            ell = True
+            continue
+        (post if ell else pre).append(i)
+    for i in post:
+        if i is None:
+            continue
+        if (isinstance(i, slice) and i.start is None and i.stop is None
+                and _aint(i.step) in (None, 1)):
+            continue
+        return False
+    restricted = False
+    for i in pre:
+        if i is None:
+            continue
+        if isinstance(i, torch.fx.Node):
             return False
-        return _dim0_index(real[0])
-    return False
+        if isinstance(i, (int, torch.SymInt)):
+            if restricted:
+                return False
+            continue
+        if isinstance(i, slice):
+            if _aint(i.step) not in (None, 1):
+                return False
+            if i.start is not None or i.stop is not None:
+                if restricted:
+                    return False
+            restricted = True
+            continue
+        return False
+    return True
 
 
 def _strided_nodes(nodes):
@@ -274,6 +299,43 @@ def _view_refused(name, n, strided):
     return (name in _VIEW_OPS and n.args
             and isinstance(n.args[0], torch.fx.Node)
             and n.args[0] in strided)
+
+
+def _node_args(a):
+    if isinstance(a, torch.fx.Node):
+        yield a
+    elif isinstance(a, (tuple, list)):
+        for x in a:
+            yield from _node_args(x)
+    elif isinstance(a, dict):
+        for x in a.values():
+            yield from _node_args(x)
+
+
+def _refused_nodes(nodes, strided):
+    """Nodes refused to the CPU path for view/stride semantics: every view
+    on a flagged input, plus the flagged producers behind it. Refusing the
+    view alone is not enough -- an mx-lowered producer hands the torch
+    fallback a materialized contiguous tensor, so the view then returns
+    strides (or succeeds) where eager would raise. Refusing the strided
+    cone keeps every producer under torch, where real strides are kept."""
+    refused = set()
+    stack = []
+    for n in nodes:
+        if _view_refused(_opname(n), n, strided):
+            refused.add(n)
+            stack.append(n)
+    while stack:
+        n = stack.pop()
+        for a in _node_args(n.args):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+        for a in _node_args(n.kwargs):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+    return refused
 
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
@@ -1584,6 +1646,7 @@ def _run_method(obj, name, args, kwargs):
 def make_executor(gm):
     stats = {"mlx": [], "cpu": [], "glue": [], "crossings": 0}
     strided = _strided_nodes(gm.graph.nodes)
+    refused = _refused_nodes(gm.graph.nodes, strided)
     _nprof = os.environ.get("MV_NODE_PROF")
     if _nprof:
         stats["node_ms"] = {}
@@ -1636,7 +1699,7 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 _tick("get_attr")
                 continue
-            if node.target is operator.getitem or name == "getitem":
+            if (node.target is operator.getitem or name == "getitem") and node not in refused:
                 try:
                     env[node] = args[0][_coerce_index(args[1])]
                     stats["glue"].append("getitem")
@@ -1665,7 +1728,7 @@ def make_executor(gm):
                                or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
                                or name in _PRODUCERS
                                or name in _ALWAYS_LOWER)
-                if _view_refused(name, node, strided):
+                if node in refused:
                     lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
@@ -1686,7 +1749,7 @@ def make_executor(gm):
                     _tick(name)
                     continue
             elif node.op == "call_method":
-                if _view_refused(name, node, strided):
+                if node in refused:
                     val, on_mlx = None, False
                 else:
                     try:

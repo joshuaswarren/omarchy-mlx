@@ -68,46 +68,60 @@ def test_view_contiguous_lowers():
 
 def test_view_strided_refuses():
     # Each producer may yield a non-contiguous torch tensor, so the
-    # trailing aten.view is refused to the CPU path (mx.reshape would
-    # silently copy, breaking view's alias/error semantics). Three
-    # outcomes on the refused path, pinned per case below:
-    # "raise": eager's view errors and the mx->torch boundary preserves the
-    #   layout, so the same RuntimeError surfaces
-    # "legal": eager's view runs; the refused path must too, matching
-    #   shape + digest on the torch fallback
-    # "copy": eager's view errors but the boundary materializes a
-    #   contiguous tensor, so the fallback returns the reshape-equivalent
-    #   values; in every case "view" must never reach stats["mlx"]
+    # trailing aten.view is refused to the CPU path -- and so is the whole
+    # strided producer cone feeding it. Refusing the view alone is not
+    # enough: an mx-lowered producer hands the torch fallback a
+    # materialized contiguous tensor, and the view then returns strides
+    # (or succeeds) where eager would raise. With the cone refused, every
+    # case must match eager exactly: same RuntimeError, or same shape +
+    # stride + digest when eager's view is legal.
     cases = [
-        ("raise", ("call_function", torch.ops.aten.transpose.int, (0, 1)),
-         torch.randn(4, 8), lambda x: x.t().reshape(-1)),
-        ("raise", ("call_function", torch.ops.aten.t.default, ()),
-         torch.randn(4, 8), lambda x: x.t().reshape(-1)),
-        ("raise", ("call_function", torch.ops.aten.permute.default, ([1, 0],)),
-         torch.randn(4, 8), lambda x: x.permute(1, 0).reshape(-1)),
-        ("legal", ("call_function", torch.ops.aten.select.int, (1, 0)),
+        (("call_function", torch.ops.aten.transpose.int, (0, 1)), [-1],
+         torch.randn(4, 8), lambda x: x.t().view(-1)),
+        (("call_function", torch.ops.aten.t.default, ()), [-1],
+         torch.randn(4, 8), lambda x: x.t().view(-1)),
+        (("call_function", torch.ops.aten.permute.default, ([1, 0],)), [-1],
+         torch.randn(4, 8), lambda x: x.permute(1, 0).view(-1)),
+        (("call_function", torch.ops.aten.select.int, (1, 0)), [-1],
          torch.randn(4, 8), lambda x: x.select(1, 0).view(-1)),
-        ("legal", ("call_function", operator.getitem, ((slice(None), 0),)),
+        (("call_function", operator.getitem, ((slice(None), 0),)), [-1],
          torch.randn(4, 8), lambda x: x[:, 0].view(-1)),
-        ("copy", ("call_function", torch.ops.aten.slice.Tensor, (1, None, None, 2)),
-         torch.randn(4, 8), lambda x: x[:, ::2].reshape(-1)),
-        ("copy", ("call_function", torch.ops.aten.expand.default, ([4, 8],)),
-         torch.randn(4, 1), lambda x: x.expand(4, 8).reshape(-1)),
+        (("call_function", torch.ops.aten.slice.Tensor, (1, None, None, 2)), [-1],
+         torch.randn(4, 8), lambda x: x[:, ::2].view(-1)),
+        (("call_function", torch.ops.aten.expand.default, ([4, 8],)), [-1],
+         torch.randn(4, 1), lambda x: x.expand(4, 8).view(-1)),
+        # getitem misclassification: a restriction after an ellipsis touches
+        # a trailing dim while earlier dims survive -> strided, refused
+        (("call_function", operator.getitem, ((Ellipsis, slice(1, None)),)), [-1],
+         torch.randn(4, 8), lambda x: x[..., 1:].view(-1)),
+        (("call_function", operator.getitem, ((Ellipsis, 0),)), [-1],
+         torch.randn(4, 8), lambda x: x[..., 0].view(-1)),
+        (("call_function", operator.getitem,
+          ((slice(None), slice(None, None, 2)),)), [-1],
+         torch.randn(4, 8), lambda x: x[:, ::2].view(-1)),
+        # strided input whose view stays legal in eager: the refused path
+        # must return eager's real strides, not a materialized (1,) copy
+        (("call_function", torch.ops.aten.select.int, (1, 0)), [4, 1],
+         torch.randn(4, 8), lambda x: x.select(1, 0).view(4, 1)),
+        (("call_function", torch.ops.aten.slice.Tensor, (1, None, None, 2)), [4, 4],
+         torch.randn(4, 8), lambda x: x[:, ::2].view(4, 4)),
     ]
-    for cls, prod, x, expf in cases:
-        gm = _gm(prod, ("call_function", torch.ops.aten.view.default, ([-1],)))
+    for prod, vargs, x, expf in cases:
+        gm = _gm(prod, ("call_function", torch.ops.aten.view.default, (vargs,)))
         run, stats = mlx_vulkan.make_executor(gm)
-        if cls == "raise":
+        try:
+            exp = expf(x)
+        except RuntimeError:
             try:
                 run(mx.array(x.numpy()))
             except RuntimeError:
                 pass
             else:
-                raise AssertionError((prod[1], "view did not refuse"))
+                raise AssertionError((prod[1], "view returned where eager raised"))
         else:
             out = run(mx.array(x.numpy()))
-            exp = expf(x)
             assert tuple(out.shape) == tuple(exp.shape), (prod[1], out.shape, exp.shape)
+            assert out.stride() == exp.stride(), (prod[1], out.stride(), exp.stride())
             assert _dg(out) == _dg(exp), prod[1]
             assert "view" in stats["cpu"], (prod[1], stats)
         assert "view" not in stats["mlx"], (prod[1], stats)
@@ -145,6 +159,13 @@ def test_view_dim0_carveouts_lower():
         (("call_function", torch.ops.aten.select.int, (0, 1)), (1, 8), x.select(0, 1).view(1, 8)),
         (("call_function", torch.ops.aten.narrow.default, (0, 1, 2)), (-1,), x.narrow(0, 1, 2).view(-1)),
         (("call_function", torch.ops.aten.slice.Tensor, (0, 1, 3, 1)), (2, 8), x[1:3].view(2, 8)),
+        # getitem carve-outs: leading ints (each removing its dim), a lone
+        # dim-0 range slice, and full-slice/ellipsis decorations all keep
+        # contiguity, so the trailing view still lowers
+        (("call_function", operator.getitem, (2,)), (-1,), x[2].view(-1)),
+        (("call_function", operator.getitem, ((1, slice(None)),)), (-1,), x[1, :].view(-1)),
+        (("call_function", operator.getitem, ((2, Ellipsis),)), (-1,), x[2, ...].view(-1)),
+        (("call_function", operator.getitem, ((slice(None),),)), (-1,), x[:].view(-1)),
     ]
     for prod, shp, exp in cases:
         gm = _gm(prod, ("call_function", torch.ops.aten.view.default, (list(shp),)))
