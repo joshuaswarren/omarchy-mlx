@@ -1065,6 +1065,16 @@ def test_addcmul_addcdiv():
         (torch.ops.aten.addcdiv.default,
          (a, torch.full((2, 3), 1e20), torch.full((2, 3), 1e-20)),
          {"value": 0}),
+        # operands cast to the common dtype before multiply: 2*int8(100)
+        # wraps to -112 in int8 but is 400 at int64
+        (torch.ops.aten.addcmul.default,
+         (torch.zeros(1, dtype=torch.int64),
+          torch.full((1,), 100, dtype=torch.int8),
+          torch.full((1,), 2, dtype=torch.int64)), {"value": 2}),
+        (torch.ops.aten.addcmul.default,
+         (torch.zeros(1, dtype=torch.int64),
+          torch.full((1,), 100, dtype=torch.int8),
+          torch.full((1,), 2, dtype=torch.int8)), {"value": 1}),
     ]
     for target, ins, kw in cases:
         fx_run(target, ins, kw)
