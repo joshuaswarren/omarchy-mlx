@@ -53,12 +53,18 @@ from mlx_lm.generate import stream_generate
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
 ap.add_argument("--prompt-file", required=True)
+ap.add_argument("--prefill-tokens", type=int, default=512)
 ap.add_argument("--decode-tokens", type=int, default=64)
 ap.add_argument("--logits-out", default="")
 args = ap.parse_args()
 
 model, tok = load(args.model)
-prompt = open(args.prompt_file).read()
+# Exact-length prefill: the file is tokenized once, then truncated to
+# the requested count and handed to the generator as ids. The response's
+# prompt_tokens (recorded below) is the processed count - if it does not
+# match the request the run is invalid, not merely mislabeled.
+prompt_ids = tok.encode(open(args.prompt_file).read())[:args.prefill_tokens]
+prompt = mx.array(prompt_ids)
 
 def digest(ids):
     return hashlib.sha256(",".join(str(int(i)) for i in ids).encode()).hexdigest()[:16]
@@ -85,7 +91,7 @@ decode_tps = (len(ids) - 1) / (times_done / 1e9) if len(ids) > 1 else None
 # last-token logits over prompt + generated ids
 row = {}
 if args.logits_out:
-    full = tok.encode(prompt) + ids
+    full = prompt_ids + ids
     logits = model(mx.array([full]))
     last_logits = logits[0, -1]
     mx.eval(last_logits)
@@ -121,6 +127,7 @@ def run_leg(driver, env_extra, args, logits_path, trace):
         sys.executable, driver,
         "--model", args.model,
         "--prompt-file", args.prompt_file,
+        "--prefill-tokens", str(args.prefill_tokens),
         "--decode-tokens", str(args.decode_tokens),
     ]
     if logits_path:
@@ -186,6 +193,11 @@ def main():
 
     stamps = {r["wheel"] for r in results}
     assert len(stamps) == 1, f"same-wheel violated: {stamps}"
+    for r in results:
+        if r["prompt_tokens"] != args.prefill_tokens:
+            raise SystemExit(
+                f"leg {r['seq']} processed {r['prompt_tokens']} prompt "
+                f"tokens, expected {args.prefill_tokens} — capture invalid")
     ids = {r["ids_sha256_16"] for r in results}
     a = [r for r in results if r["arm"] == "A"]
     b = [r for r in results if r["arm"] == "B"]
