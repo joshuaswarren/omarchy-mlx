@@ -972,6 +972,55 @@ def test_arc_trig():
     print("test_arc_trig PASS")
 
 
+def test_addcmul_addcdiv():
+    # PT-U10: aten.addcmul/addcdiv (input + value*t1*t2, input + value*t1/t2)
+    # — the last unclaimed receipt-zero composite row. Prove the eager
+    # executor lowers both (stats["mlx"]) and matches torch CPU at fp32
+    # and bf16, with broadcasting and a non-default value.
+    rng = np.random.RandomState(7)
+    a = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    t1 = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    t2 = torch.tensor(rng.randn(2, 3).astype(np.float32) + 1.5)
+    rb = torch.tensor(rng.randn(1, 3).astype(np.float32))
+
+    def fx_run(target, ins, kw):
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        name = str(target).split("aten.")[1].split(".")[0]
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        assert torch.as_tensor(out).shape == ref.shape, \
+            (str(target), torch.as_tensor(out).shape, ref.shape)
+        assert np.allclose(torch.as_tensor(out).float().numpy(),
+                           ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, torch.as_tensor(out).float().numpy(),
+             ref.float().numpy())
+
+    cases = [
+        (torch.ops.aten.addcmul.default, (a, t1, t2), {}),
+        (torch.ops.aten.addcmul.default, (a, t1, t2), {"value": 2.5}),
+        (torch.ops.aten.addcmul.default, (a, t1, rb), {}),
+        (torch.ops.aten.addcmul.default,
+         (a.bfloat16(), t1.bfloat16(), t2.bfloat16()), {}),
+        (torch.ops.aten.addcdiv.default, (a, t1, t2), {}),
+        (torch.ops.aten.addcdiv.default, (a, t1, t2), {"value": -0.5}),
+        (torch.ops.aten.addcdiv.default, (a, t1, rb), {}),
+        (torch.ops.aten.addcdiv.default,
+         (a.bfloat16(), t1.bfloat16(), t2.bfloat16()), {}),
+        # int value is legal (promotes like a wrapped scalar)
+        (torch.ops.aten.addcmul.default, (a, t1, t2), {"value": 1}),
+    ]
+    for target, ins, kw in cases:
+        fx_run(target, ins, kw)
+    print("test_addcmul_addcdiv PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -996,4 +1045,5 @@ if __name__ == "__main__":
     test_reductions()
     test_bitwise_and_()
     test_arc_trig()
+    test_addcmul_addcdiv()
     print("ALL PASS")

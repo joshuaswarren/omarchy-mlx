@@ -1539,6 +1539,9 @@ _FUNC_SPECS = {
     "mul_": lambda a, b, *k: _mx(a) * _mx(b),
     "div": lambda a, b, *k: _mx(a) / _mx(b),
     "truediv": lambda a, b, *k: _mx(a) / _mx(b),
+    # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
+    "addcmul": lambda a, t1, t2, value=1, *k: _mx(a) + value * _mx(t1) * _mx(t2),
+    "addcdiv": lambda a, t1, t2, value=1, *k: _mx(a) + value * _mx(t1) / _mx(t2),
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
