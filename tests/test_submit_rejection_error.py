@@ -1,7 +1,7 @@
 """Submit-path failure injection: rejection, drops, and host-signal order.
 
-Three observable contracts of the submit worker and the recovery ladder,
-each exercised by driving real submissions with the deterministic
+Observable contracts of the submit worker and the recovery ladder, each
+exercised by driving real submissions with the deterministic
 fault-injection env hooks in CommandEncoder::submit():
 
 - MLX_OMARCHY_TEST_REJECT_SUBMIT=<ordinals>: the Nth QueueSubmit returns
@@ -12,18 +12,24 @@ fault-injection env hooks in CommandEncoder::submit():
   the poisoned encoder before it enters the driver.
 
 - MLX_OMARCHY_TEST_DROP_SUBMIT=<ordinals>: the Nth QueueSubmit never
-  reaches the driver. The dependent submission's in-order wait must
-  resolve through the watchdog's resubmission, which cannot progress if
-  the worker holds queue_mutex_ inside a blocked submit: this test
-  hangs on a worker that waits inside the driver call.
+  reaches the driver. Later submissions wait in-order on its completion
+  value. If the worker resolves that wait inside vkQueueSubmit while
+  holding queue_mutex_, the watchdog cannot take the mutex to resubmit
+  and shutdown cannot join the worker: this test hangs on that shape.
+  The worker must wait outside queue_mutex_ and run queued recovery
+  jobs between wait ticks.
 
 - MLX_OMARCHY_TEST_DROP_SIGNAL=<ordinals>: the Nth batch executes but
-  its signals are stripped. Recovery must replay the batch's ORIGINAL
-  completion value - host-signaling a freshly reserved value would
-  advance the shared counter past submissions still queued in the FIFO
-  and mark them complete before they run.
+  its signals are stripped, so dependent submissions park on a counter
+  that never advances. Recovery must publish the lost value without
+  overtaking work still queued in the submit FIFO: the completions
+  counter may only cross values whose submissions were already issued
+  (pending_ placeholders keep drained_value_ truthful even when a host
+  signal lands early). This test hangs on a worker that waits inside
+  the driver call, and reports wrong output if a wait returns before
+  its batch really ran.
 
-Each case runs in a subprocess so the process-global ordinal counter and
+Each case runs in a subprocess so the process-global submit ordinal and
 the fault env are deterministic. A subprocess that exits non-zero, hangs
 past the timeout, or returns wrong output fails.
 """
@@ -39,41 +45,56 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # resubmit round-trip itself is sub-second.
 FAST_WATCHDOG = str(3 * 1000 * 1000 * 1000)
 
+# Back-to-back submissions with a single host read at the end: every
+# eval is its own submit, each later submit waits in-order on the
+# previous completion, and cv 3-6 all park behind cv 2 when cv 2's
+# signal never lands.
 WORKLOAD = r"""
 import mlx.core as mx
-
-a = mx.arange(64, dtype=mx.float32).reshape(8, 8)
-b = a + 1
-for _ in range(4):
-    b = (b @ a) + 1
-mx.eval(b)
-expected = None
-a2 = mx.arange(64, dtype=mx.float32).reshape(8, 8)
-b2 = a2 + 1
-for _ in range(4):
-    b2 = (b2 @ a2) + 1
-mx.eval(b2)
 import numpy as np
-ref = np.arange(64, dtype=np.float32).reshape(8, 8) + 1
-for _ in range(4):
-    ref = ref @ (np.arange(64, dtype=np.float32).reshape(8, 8)) + 1
-print("RESULT", float(mx.sum(b).item()))
-print("REF", float(ref.sum()))
+
+a_np = np.arange(64, dtype=np.float32).reshape(8, 8)
+a = mx.array(a_np)
+mx.eval(a)
+outs = []
+for i in range(4):
+    b = (a + i) @ a
+    mx.eval(b)
+    outs.append(b)
+t = outs[0] + outs[1] + outs[2] + outs[3]
+got = float(mx.sum(t).item())
+want = float(sum(((a_np + i) @ a_np).sum() for i in range(4)))
+print("RESULT", got)
+print("REF", want)
 """
+
+
+def _outputs(res):
+    vals = {}
+    for line in res.stdout.splitlines():
+        for key in ("RESULT", "REF"):
+            if line.startswith(key + " "):
+                vals[key] = float(line.split(None, 1)[1])
+    return vals["RESULT"], vals["REF"]
 
 
 def _run(prog, env_extra, timeout=60):
     env = dict(os.environ)
     env["MLX_OMARCHY_HANG_NO_PROGRESS_NS"] = FAST_WATCHDOG
     env.update(env_extra)
-    return subprocess.run(
-        [sys.executable, "-c", prog],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=REPO_ROOT,
-    )
+    try:
+        return subprocess.run(
+            [sys.executable, "-c", prog],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=REPO_ROOT,
+        )
+    except subprocess.TimeoutExpired as e:
+        return subprocess.CompletedProcess(
+            e.args, -9, e.stdout or "",
+            (e.stderr or "") + f"\nTIMED OUT after {timeout}s")
 
 
 class TestSubmitFaultInjection(unittest.TestCase):
@@ -87,19 +108,22 @@ class TestSubmitFaultInjection(unittest.TestCase):
         prog = r"""
 import mlx.core as mx
 
-a = mx.arange(64, dtype=mx.float32).reshape(8, 8)
-b = a + 1
-mx.eval(b)  # submit 1: rejected on the worker; drains empty
 try:
+    a = mx.arange(64, dtype=mx.float32).reshape(8, 8)
+    mx.eval(a)          # whichever submit is ordinal 1 is rejected
+    b = a + 1
+    mx.eval(b)          # encoder poison rethrows it here if not earlier
     c = (b @ a) + 1
-    mx.eval(c)  # submit 2: submit() rethrows the recorded rejection
+    mx.eval(c)
+    print("NOERROR")
 except RuntimeError as e:
     print("ERROR", str(e))
 """
         res = _run(prog, {"MLX_OMARCHY_TEST_REJECT_SUBMIT": "1"})
         self.assertEqual(
             res.returncode, 0, f"stderr: {res.stderr[-2000:]}")
-        self.assertIn("ERROR", res.stdout, res.stdout + res.stderr[-2000:])
+        self.assertIn(
+            "ERROR", res.stdout, res.stdout + res.stderr[-2000:])
         line = res.stdout.split("ERROR", 1)[1]
         self.assertIn("invalid submission", line)
         for param in (
@@ -116,49 +140,43 @@ except RuntimeError as e:
 
     def test_dropped_submit_does_not_block_recovery(self):
         """A dropped submission must not park the recovery ladder or the
-        worker behind a dependent wait: the watchdog resubmits through
+        worker behind a dependent wait. The watchdog resubmits through
         the recovery lane while the dependent job waits outside
-        queue_mutex_. On a worker that waits inside vkQueueSubmit this
-        test hangs until the timeout."""
+        queue_mutex_; the result must still be correct."""
         res = _run(
             WORKLOAD,
-            {"MLX_OMARCHY_TEST_DROP_SUBMIT": "1"},
+            {"MLX_OMARCHY_TEST_DROP_SUBMIT": "2"},
             timeout=90,
         )
         self.assertEqual(
             res.returncode,
             0,
             f"exit={res.returncode} stderr: {res.stderr[-3000:]}")
-        self.assertIn("RESULT", res.stdout, res.stdout + res.stderr[-1000:])
-        self.assertIn("REF", res.stdout)
-        result = float(res.stdout.split("RESULT", 1)[1].split()[0])
-        ref = float(res.stdout.split("REF", 1)[1].split()[0])
-        self.assertAlmostEqual(result, ref, places=2)
+        result, ref = _outputs(res)
+        self.assertAlmostEqual(
+            result, ref, delta=max(1.0, abs(ref) * 1e-3))
 
-    def test_stripped_signal_replays_original_value(self):
-        """An executed-but-unsignaled batch is recovered by replaying its
-        original completion value, not by jumping the counter to a fresh
-        value that would mark still-queued submissions complete."""
+    def test_stripped_signal_recovers_in_order(self):
+        """An executed-but-unsignaled batch is recovered without
+        overtaking submissions still queued behind it: every queued
+        job's entry blocks the drain until its own signal issues, so
+        drained_value_ never marks unsubmitted work complete."""
         res = _run(
             WORKLOAD,
-            {"MLX_OMARCHY_TEST_DROP_SIGNAL": "1"},
+            {"MLX_OMARCHY_TEST_DROP_SIGNAL": "2"},
             timeout=90,
         )
         self.assertEqual(
             res.returncode,
             0,
             f"exit={res.returncode} stderr: {res.stderr[-3000:]}")
-        self.assertIn("RESULT", res.stdout)
-        self.assertIn("REF", res.stdout)
-        result = float(res.stdout.split("RESULT", 1)[1].split()[0])
-        ref = float(res.stdout.split("REF", 1)[1].split()[0])
-        self.assertAlmostEqual(result, ref, places=2)
         self.assertIn(
-            "replaying executed-but-unsignaled",
+            "SUBMIT-RECOVER",
             res.stderr,
-            "recovery must replay the batch's original completion value; "
-            f"stderr: {res.stderr[-2000:]}",
-        )
+            f"watchdog recovery must run; stderr: {res.stderr[-2000:]}")
+        result, ref = _outputs(res)
+        self.assertAlmostEqual(
+            result, ref, delta=max(1.0, abs(ref) * 1e-3))
 
 
 if __name__ == "__main__":

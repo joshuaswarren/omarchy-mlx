@@ -1737,7 +1737,11 @@ void CommandEncoder::submit() {
             // ended command buffer and the pending semaphore lists die
             // with this frame; the batch's buffer stamps are harmless
             // (those buffers stay alive via their arrays or the
-            // quarantine).
+            // quarantine). Record the failure on the dispatcher so a
+            // host wait parked on this value surfaces the rejection
+            // instead of the generic hang error, and so a queued job
+            // whose in-order wait pins this value can bail out.
+            device->completions().record_failure(completion_value, message);
             device->completions().enqueue(completion_value, {}, {});
             std::lock_guard<std::mutex> elk(error_state->mutex);
             if (error_state->message.empty()) {

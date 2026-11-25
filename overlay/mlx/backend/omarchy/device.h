@@ -397,6 +397,14 @@ class CompletionDispatcher {
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
 
+  // A QueueSubmit failure on the submit worker: the reserved value's
+  // completion entry publishes empty (no signal can land), so a waiter
+  // whose target can never complete surfaces this error instead of the
+  // generic no-progress watchdog message. {value, message}; value==0
+  // means no failure recorded.
+  void record_failure(uint64_t value, std::string message);
+  std::pair<uint64_t, std::string> failure();
+
   // Blocks until generation |value| can release under the one-generation
   // contract: the drain covers |value| and either a later generation
   // has also drained (submits drain in value order, so observing
@@ -434,6 +442,8 @@ class CompletionDispatcher {
   // still recycles well inside the release contract.
   std::chrono::steady_clock::time_point last_drain_at_{
       std::chrono::steady_clock::time_point{}};
+  uint64_t failure_value_{0};
+  std::string failure_message_;
   std::mutex mutex_;
   std::mutex drain_mutex_;
   std::condition_variable cv_;

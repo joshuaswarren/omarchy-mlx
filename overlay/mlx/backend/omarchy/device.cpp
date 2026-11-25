@@ -2088,6 +2088,20 @@ bool Device::worker_wait_timeline(
     // A resubmit queued by the watchdog may be what publishes the signal
     // this job waits on - run it rather than blocking it behind us.
     run_queued_recovery_jobs();
+    // The rejected value itself can never signal: the producing job
+    // published an empty entry and retained no resubmitable batch. A
+    // wait pinned on exactly that value would park the worker forever
+    // (fresh resubmit signals land at higher values and still satisfy
+    // waits above it, so those stay in the loop).
+    const auto failed = completions_->failure();
+    if (failed.first != 0) {
+      for (size_t i = 0; i < sems.size(); ++i) {
+        if (sems[i] == completions_->semaphore() &&
+            values[i] == failed.first) {
+          return false;
+        }
+      }
+    }
   }
 }
 
@@ -2575,6 +2589,17 @@ void wait_for_timeline_progress(
         last_advance = clock::now();
         continue;
       }
+      // A recorded submission failure on this semaphore's dispatcher
+      // explains a frozen counter better than the generic hang message:
+      // the rejected value's entry published empty, so no signal can
+      // ever land at or above it. Throw the rejection itself (the
+      // pre-worker contract surfaced it synchronously at submit()).
+      if (progress && semaphore == progress->semaphore()) {
+        const auto failed = progress->failure();
+        if (failed.first != 0 && failed.first <= target_value) {
+          throw std::runtime_error(failed.second);
+        }
+      }
       // No progress for a full no-progress interval. Before declaring the
       // device hung, give the recovery ladder a chance: Honeykrisp
       // provably swallows submissions (the empty signal-only shape was
@@ -2857,6 +2882,21 @@ CompletionDispatcher::take_resubmit_batches(uint64_t through_value) {
   }
   resubmitable_.erase(resubmitable_.begin(), resubmitable_.upper_bound(through_value));
   return out;
+}
+
+void CompletionDispatcher::record_failure(
+    uint64_t value,
+    std::string message) {
+  std::lock_guard<std::mutex> lk(mutex_);
+  if (failure_value_ == 0) {
+    failure_value_ = value;
+    failure_message_ = std::move(message);
+  }
+}
+
+std::pair<uint64_t, std::string> CompletionDispatcher::failure() {
+  std::lock_guard<std::mutex> lk(mutex_);
+  return {failure_value_, failure_message_};
 }
 
 void CompletionDispatcher::drain_through(uint64_t max_value) {
