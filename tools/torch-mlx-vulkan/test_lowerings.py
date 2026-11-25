@@ -1564,6 +1564,86 @@ def test_sub_div():
     print("test_sub_div PASS")
 
 
+def test_meshgrid():
+    rng = np.random.RandomState(3)
+    x = torch.tensor(rng.randn(4).astype(np.float32))
+    y = torch.tensor(rng.randn(3).astype(np.float32))
+    z = torch.tensor(rng.randn(2).astype(np.float32))
+    i = torch.tensor([5, 1, 7, 2], dtype=torch.int64)
+    h = torch.tensor(rng.randn(3).astype(np.float16))
+
+    def fx_mesh(target, ins, kw):
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{j}") for j in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        assert any("meshgrid" in s for s in stats["mlx"]), (stats, str(target))
+        outs = list(out) if isinstance(out, (list, tuple)) else [out]
+        assert len(outs) == len(ref), (len(outs), len(ref), str(target))
+        for o, r in zip(outs, ref):
+            o = torch.as_tensor(o)
+            assert tuple(o.shape) == tuple(r.shape), \
+                (str(target), kw, o.shape, r.shape)
+            assert str(o.dtype).split(".")[-1] == str(r.dtype).split(".")[-1], \
+                (str(target), kw, str(o.dtype), str(r.dtype))
+            assert np.allclose(o.float().numpy(), r.float().numpy(), atol=2e-2), \
+                (str(target), kw)
+
+    i2 = torch.tensor([3, 9], dtype=torch.int64)
+    h2 = torch.tensor(rng.randn(2).astype(np.float16))
+    for ins, kw in (
+        ((x,), {}),
+        ((x, y), {}),
+        ((x, y), {"indexing": "ij"}),
+        ((x, y), {"indexing": "xy"}),
+        ((x, y, z), {}),
+        ((x, y, z), {"indexing": "xy"}),
+        ((i, i2), {}),  # same-dtype int pair
+        ((h, h2), {}),  # same-dtype fp16 pair
+    ):
+        fx_mesh(torch.meshgrid, ins, kw)
+
+    # same lowering via the aten overloads (single Tensor[] arg)
+    def fx_aten(target, ins, kw):
+        ref = target(list(ins), **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{j}") for j in range(len(ins))]
+        n = g.call_function(target, (list(phs),), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        for o, r in zip(out, ref):
+            o = torch.as_tensor(o)
+            assert tuple(o.shape) == tuple(r.shape), (o.shape, r.shape)
+            assert np.allclose(o.float().numpy(), r.float().numpy(), atol=2e-2)
+
+    fx_aten(torch.ops.aten.meshgrid.default, (x, y), {})
+    fx_aten(torch.ops.aten.meshgrid.indexing, (x, y), {"indexing": "xy"})
+    fx_aten(torch.ops.aten.meshgrid.indexing, (x, y, z), {"indexing": "ij"})
+
+    # aten requires same dtype; mx accepts mixed — the lowering defers
+    # and the CPU fallback raises torch's own error
+    g = torch.fx.Graph()
+    p0, p1 = g.placeholder("p0"), g.placeholder("p1")
+    n = g.call_function(torch.ops.aten.meshgrid.default, ([p0, p1],), {})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    try:
+        run(i, y)
+        raise AssertionError("no raise on mixed dtypes")
+    except RuntimeError:
+        pass
+    print("test_meshgrid PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -1594,6 +1674,7 @@ if __name__ == "__main__":
     test_hyperbolic()
     test_random_family()
     test_blas_accum()
+    test_meshgrid()
     print("ALL PASS")
 
 
