@@ -1831,10 +1831,16 @@ void CommandEncoder::submit() {
             if (simulate_drop) {
               fprintf(stderr, "[rtmod] TEST-DROP tid=%lu cv=%lu\n",
                       (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
-            } else if (simulate_strip) {
-              fprintf(stderr, "[rtmod] TEST-STRIP tid=%lu cv=%lu\n",
-                      (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
             } else {
+              if (simulate_strip) {
+                // Executed-but-unsignaled: the batch still reaches the
+                // driver with every signal stripped, so the commands run
+                // (started event sets) while the completion value never
+                // publishes - the drop-signal class the recovery ladder
+                // exists to fix, not a dropped submit.
+                fprintf(stderr, "[rtmod] TEST-STRIP tid=%lu cv=%lu\n",
+                        (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
+              }
               timeline::ScopedEvent tl_qsub(
                   timeline::Kind::QueueSubmit,
                   timeline::SubKind::VkQueueSubmit,

@@ -158,9 +158,13 @@ except RuntimeError as e:
 
     def test_stripped_signal_recovers_in_order(self):
         """An executed-but-unsignaled batch is recovered without
-        overtaking submissions still queued behind it: every queued
-        job's entry blocks the drain until its own signal issues, so
-        drained_value_ never marks unsubmitted work complete."""
+        overtaking submissions still queued behind it: the stripped
+        submit still reaches the driver, so its commands run and its
+        started event sets - recovery must take the host-replay rung
+        (publish the original value), not the resubmit rung. Every
+        queued job's entry blocks the drain until its own signal
+        issues, so drained_value_ never marks unsubmitted work
+        complete."""
         res = _run(
             WORKLOAD,
             {"MLX_OMARCHY_TEST_DROP_SIGNAL": "2"},
@@ -171,9 +175,9 @@ except RuntimeError as e:
             0,
             f"exit={res.returncode} stderr: {res.stderr[-3000:]}")
         self.assertIn(
-            "SUBMIT-RECOVER",
+            "executed-but-unsignaled",
             res.stderr,
-            f"watchdog recovery must run; stderr: {res.stderr[-2000:]}")
+            f"watchdog host-replay rung must run; stderr: {res.stderr[-2000:]}")
         result, ref = _outputs(res)
         self.assertAlmostEqual(
             result, ref, delta=max(1.0, abs(ref) * 1e-3))

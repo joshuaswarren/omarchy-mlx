@@ -2021,11 +2021,11 @@ void Device::push_submit_job(std::function<void()> job) {
     return submit_queue_.size() < kSubmitQueueBound || submit_worker_stop_;
   });
   if (submit_worker_stop_) {
-    // The worker is retired (device teardown): run the submission
-    // inline. Holding submit_order_mutex_ across this is safe - after
-    // teardown no other thread competes for it.
-    lk.unlock();
-    job();
+    // Submission admission is closed once teardown starts: running the
+    // job inline would issue a driver call after shutdown began. Drop
+    // it - accepted work still queued is drained by the worker before
+    // it exits, and this job's reserved placeholder is resolved by the
+    // dispatcher's shutdown drain.
     return;
   }
   submit_queue_.push_back(std::move(job));
@@ -2059,16 +2059,19 @@ bool Device::worker_wait_timeline(
     if (submit_worker_stop_) {
       return false;
     }
-    // The rejected value itself can never signal: the producing job
-    // published an empty entry and retained no resubmitable batch. A
-    // wait pinned on exactly that value would park the worker forever
-    // (fresh resubmit signals land at higher values and still satisfy
-    // waits above it, so those stay in the loop).
+    // A rejected submission poisons every value reserved after it: the
+    // queue's in-order wait chain means no job whose signal sits at or
+    // above the dead value can ever run (its own submit waits on work
+    // that will never land), so a wait pinned anywhere at or above the
+    // failure watermark is unresolvable. Bail so the job publishes its
+    // own failure and the next generation's wait bails in turn -
+    // otherwise the worker parks on a discarded dependent until
+    // shutdown.
     const auto failed = completions_->failure();
     if (failed.first != 0) {
       for (size_t i = 0; i < sems.size(); ++i) {
         if (sems[i] == completions_->semaphore() &&
-            values[i] == failed.first) {
+            values[i] >= failed.first) {
           return false;
         }
       }
@@ -2119,7 +2122,6 @@ uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
   VkSemaphoreSignalInfo ev{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
   ev.semaphore = semaphore;
   ev.value = value;
-  VKX_CHECK(signal_fn(handle(), &ev));
   // The completions publish must stay ordered with the queue work it can
   // overtake: the counter may only advance to completion_value once
   // every earlier reservation has retired - otherwise waiters and the
@@ -2127,6 +2129,7 @@ uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
   // This is the same wait join paths use, so a lost signal upstream is
   // recovered (or reported) by the watchdog rather than hanging here.
   try {
+    VKX_CHECK(signal_fn(handle(), &ev));
     if (completion_value > 1) {
       const uint64_t prior = completion_value - 1;
       wait_for_timeline_progress(
@@ -2145,9 +2148,10 @@ uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
       VKX_CHECK(signal_fn(handle(), &cc));
     }
   } catch (...) {
-    // A reserved value must always publish its entry: leave the
-    // placeholder drainable so waiters surface the error instead of
-    // blocking on an un-issued slot.
+    // A reserved value must always publish its entry on every error
+    // exit (the user-event signal above included): leave the
+    // placeholder drainable so the drain is not stranded behind an
+    // un-issued slot, and let the throw surface the failure.
     completions().enqueue(completion_value, {}, {});
     throw;
   }
@@ -2215,7 +2219,14 @@ Device::RecoveryResult Device::recover_stalled_submissions(
   }
   bool replayed = false;
   for (auto& batch : stranded) {
-    const bool ran = batch.started != VK_NULL_HANDLE &&
+    // A batch whose resubmit is already on the queue waits on its own
+    // fence below: it may NOT take the replay branch (host-publishing
+    // would mark the value complete while the resubmitted commands are
+    // still executing, and the fence would leak) and it may NOT be
+    // resubmitted again (re-submitting a command buffer that is still
+    // pending execution is illegal).
+    const bool ran = batch.pending_fence == VK_NULL_HANDLE &&
+        batch.started != VK_NULL_HANDLE &&
         vk::device_table().GetEventStatus(device_, batch.started) ==
             VK_EVENT_SET;
     if (!ran) {
@@ -2274,6 +2285,7 @@ Device::RecoveryResult Device::recover_stalled_submissions(
   lk.unlock();
 
   size_t count = batches.size();
+  size_t published = 0;
   for (auto& batch : batches) {
     // Resolve the batch's waits first (they are the original list and
     // either already landed or were just published by this round's
@@ -2313,57 +2325,68 @@ Device::RecoveryResult Device::recover_stalled_submissions(
         batch.cmd != VK_NULL_HANDLE ? &batch.cmd : nullptr;
     si.signalSemaphoreCount = 0;
     si.pSignalSemaphores = nullptr;
-    // The resubmit reports completion through a FENCE, not a timeline
-    // signal: fences carry no ordering rule, and the fence proves the
-    // batch's commands retired before the host publishes its value -
-    // publishing earlier would drain the completion entry (and recycle
-    // its slot/command buffer and temporaries) underneath the still
-    // running resubmit.
-    VkFence resubmit_fence = VK_NULL_HANDLE;
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    if (dt.CreateFence(device_, &fci, nullptr, &resubmit_fence) !=
-        VK_SUCCESS) {
-      resubmit_fence = VK_NULL_HANDLE;
-    }
-    {
-      std::lock_guard<std::mutex> job_lk(queue_mutex_);
-      try {
-        VKX_CHECK(vk::device_table().QueueSubmit(
-            queue_, 1, &si,
-            resubmit_fence != VK_NULL_HANDLE ? resubmit_fence
-                                             : VK_NULL_HANDLE));
-      } catch (...) {
-        // Resubmit rejected: keep the batch for a later round and let
-        // the waiter's remaining budget decide.
-        if (resubmit_fence != VK_NULL_HANDLE) {
-          dt.DestroyFence(device_, resubmit_fence, nullptr);
-        }
+    if (batch.pending_fence == VK_NULL_HANDLE) {
+      // The resubmit reports completion through a FENCE, not a
+      // timeline signal: fences carry no ordering rule, and the fence
+      // proves the batch's commands retired before the host publishes
+      // its value - publishing earlier would drain the completion
+      // entry (and recycle its slot/command buffer and temporaries)
+      // underneath the still running resubmit. Create the retirement
+      // handle BEFORE submitting: without it the commands would be
+      // untracked on the queue while the batch is retained for a later
+      // round, which would then submit the same (possibly still
+      // pending) command buffer a second time.
+      VkFence resubmit_fence = VK_NULL_HANDLE;
+      VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+      if (dt.CreateFence(device_, &fci, nullptr, &resubmit_fence) !=
+              VK_SUCCESS ||
+          resubmit_fence == VK_NULL_HANDLE) {
         completions.retain_for_resubmit(batch.value, std::move(batch));
         continue;
       }
-    }
-    bool resubmit_retired = false;
-    if (resubmit_fence != VK_NULL_HANDLE) {
-      for (;;) {
-        const VkResult fence_res = dt.WaitForFences(
-            device_, 1, &resubmit_fence, VK_TRUE, kHangWatchPollNs);
-        if (fence_res == VK_SUCCESS) {
-          resubmit_retired = true;
-          break;
-        }
-        if (fence_res != VK_TIMEOUT || submit_worker_stop_) {
-          break;
+      {
+        std::lock_guard<std::mutex> job_lk(queue_mutex_);
+        try {
+          VKX_CHECK(
+              vk::device_table().QueueSubmit(queue_, 1, &si, resubmit_fence));
+        } catch (...) {
+          // Resubmit rejected: nothing references the fence yet, so it
+          // can be destroyed here; keep the batch for a later round and
+          // let the waiter's remaining budget decide.
+          dt.DestroyFence(device_, resubmit_fence, nullptr);
+          completions.retain_for_resubmit(batch.value, std::move(batch));
+          continue;
         }
       }
-      dt.DestroyFence(device_, resubmit_fence, nullptr);
+      batch.pending_fence = resubmit_fence;
     }
-    if (resubmit_fence == VK_NULL_HANDLE || !resubmit_retired) {
-      // No fence, or the resubmit never retired (wedged GPU or
-      // teardown): keep the batch and let the waiter's remaining
-      // rounds decide.
+    // Wait on the retirement fence with a bounded number of poll ticks:
+    // the fence and batch stay owned together until retirement (or
+    // device loss), so a wedged GPU leaves the batch retained for the
+    // waiter's next round instead of parking the recovery thread here
+    // or destroying a fence a live submission still references.
+    bool resubmit_retired = false;
+    constexpr uint32_t kResubmitFenceWaitTicks = 4;
+    for (uint32_t tick = 0; tick < kResubmitFenceWaitTicks; ++tick) {
+      const VkResult fence_res = dt.WaitForFences(
+          device_, 1, &batch.pending_fence, VK_TRUE, kHangWatchPollNs);
+      if (fence_res == VK_SUCCESS) {
+        resubmit_retired = true;
+        break;
+      }
+      if (fence_res != VK_TIMEOUT || submit_worker_stop_) {
+        break;
+      }
+    }
+    if (!resubmit_retired) {
       completions.retain_for_resubmit(batch.value, std::move(batch));
       continue;
     }
+    // Retired: every queue operation referencing the fence completed,
+    // so destroying it is legal and the batch's value can publish.
+    dt.DestroyFence(device_, batch.pending_fence, nullptr);
+    batch.pending_fence = VK_NULL_HANDLE;
+    ++published;
     // Publish the completion value by HOST signal at the batch's
     // ORIGINAL value. vkSignalSemaphore is not a queue submission, so
     // it carries no ordering constraint against queued jobs' signals;
@@ -2399,7 +2422,15 @@ Device::RecoveryResult Device::recover_stalled_submissions(
       count,
       (unsigned long long)target_value,
       round + 1);
-  return RecoveryResult::kRecovered;
+  // Recovered means a completion value actually published this round:
+  // batches retained for a later round (fence wait timed out, fence
+  // allocation failed, resubmit rejected) are still outstanding work,
+  // and claiming recovery would reset the waiter's no-progress clock
+  // on nothing.
+  if (replayed || published > 0) {
+    return RecoveryResult::kRecovered;
+  }
+  return RecoveryResult::kNotRecoverable;
 }
 
 void Device::join_completed_handlers() {
@@ -2514,6 +2545,18 @@ void wait_for_timeline_progress(
   for (;;) {
     VkResult res = vk::device_table().WaitSemaphores(
         device, &info, kHangWatchPollNs);
+    // A timeline counter cannot express per-generation errors: once a
+    // submission is rejected at value F, no wait at or above F can be
+    // honestly satisfied - an unrelated higher signal pushes the
+    // counter past target and the >= wait would report success for a
+    // generation that never ran. Surface the recorded failure before
+    // honoring any success, on every poll.
+    if (progress && semaphore == progress->semaphore()) {
+      const auto failed = progress->failure();
+      if (failed.first != 0 && failed.first <= target_value) {
+        throw std::runtime_error(failed.second);
+      }
+    }
     if (res == VK_SUCCESS) {
       return;
     }
@@ -2604,17 +2647,6 @@ void wait_for_timeline_progress(
         }
         last_advance = clock::now();
         continue;
-      }
-      // A recorded submission failure on this semaphore's dispatcher
-      // explains a frozen counter better than the generic hang message:
-      // the rejected value's entry published empty, so no signal can
-      // ever land at or above it. Throw the rejection itself (the
-      // pre-worker contract surfaced it synchronously at submit()).
-      if (progress && semaphore == progress->semaphore()) {
-        const auto failed = progress->failure();
-        if (failed.first != 0 && failed.first <= target_value) {
-          throw std::runtime_error(failed.second);
-        }
       }
       // No progress for a full no-progress interval. Before declaring the
       // device hung, give the recovery ladder a chance: Honeykrisp
@@ -2794,6 +2826,24 @@ void CompletionDispatcher::shutdown(bool destroy_vulkan_handles) {
       vk::device_table().DestroySemaphore(device_, semaphore_, nullptr);
     }
     semaphore_ = VK_NULL_HANDLE;
+  }
+  // Resubmit fences still owned by retained batches. Teardown waits the
+  // device idle before shutdown, so their submissions have retired;
+  // the zero-timeout poll still gates destruction on actual retirement
+  // in any shutdown path that runs without the idle wait - a fence a
+  // live submission still references is left for vkDestroyDevice
+  // rather than destroyed out from under it
+  // (VUID-vkDestroyFence-fence-01120).
+  for (auto& [value, batch] : resubmitable_) {
+    VkFence fence = batch.pending_fence;
+    batch.pending_fence = VK_NULL_HANDLE;
+    if (fence == VK_NULL_HANDLE || !destroy_vulkan_handles) {
+      continue;
+    }
+    if (vk::device_table().WaitForFences(device_, 1, &fence, VK_TRUE, 0) ==
+        VK_SUCCESS) {
+      vk::device_table().DestroyFence(device_, fence, nullptr);
+    }
   }
 }
 

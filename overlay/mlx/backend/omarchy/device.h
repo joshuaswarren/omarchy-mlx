@@ -394,6 +394,14 @@ class CompletionDispatcher {
     // executed-but-unsignaled class (host-replay the original value)
     // from the never-submitted class (resubmit at a fresh value).
     VkEvent started{VK_NULL_HANDLE};
+    // A resubmit already on the queue reports retirement through this
+    // fence. Once set, the fence and the batch stay owned together
+    // until the fence retires (or the device is lost): a later round
+    // waits on it instead of resubmitting the command buffer, and
+    // shutdown destroys it after the device is idle - destroying a
+    // fence a live submission still references is spec-illegal
+    // (VUID-vkDestroyFence-fence-01120).
+    VkFence pending_fence{VK_NULL_HANDLE};
   };
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
