@@ -9929,7 +9929,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         x.ndim() >= 2 && x.shape(-2) > 1 &&
         (params.matrix_k % 64u) == 0u &&
         (params.matrix_m % 16u) == 0u &&
-        std::getenv("MLX_OMARCHY_NO_COOPMAT16") == nullptr) {
+        omarchy::env_str("MLX_OMARCHY_NO_COOPMAT16") == nullptr) {
       const auto& rcaps = encoder.device().capabilities();
       const uint64_t out_align = std::max<uint64_t>(
           16ull, rcaps.min_storage_buffer_offset_alignment);
