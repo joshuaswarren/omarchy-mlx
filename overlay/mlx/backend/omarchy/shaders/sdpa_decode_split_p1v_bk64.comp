@@ -28,6 +28,15 @@
 #define SPLIT_R 4
 #endif
 
+// Key-block width: 64 (the measured default this shader ships as) or 32 for the
+// occupancy screen (twice the workgroups per cache, a quarter-K chain per thread,
+// and a 32-key walk per subgroup in the value phase instead of 16). The f64 parity
+// test gates both; the block sums keep a fixed group order, so each width has its
+// own summation order and its own result.
+#ifndef BK
+#define BK 64
+#endif
+
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Query {
@@ -68,12 +77,12 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint D = 128u;
-const uint BK = 64u;
 const uint SUBGROUPS = 4u;
+const uint GROUPS = 128u / BK;
 
 shared float s_q[SPLIT_R * D];
 shared float s_p[SPLIT_R * BK];
-shared float s_part[2u * SPLIT_R * BK];
+shared float s_part[GROUPS * SPLIT_R * BK];
 shared float s_max[SPLIT_R * SUBGROUPS];
 shared float s_sum[SPLIT_R * SUBGROUPS];
 shared float s_o[4u * SPLIT_R * D];
@@ -89,6 +98,9 @@ void main() {
   uint k_len = params.matrix_k;
   uint nblocks = (k_len + BK - 1u) / BK;
   uint sg = gl_SubgroupID;
+  const uint chunks = 16u / GROUPS;
+  const uint kt = t % BK;
+  const uint group = t / BK;
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
@@ -97,8 +109,6 @@ void main() {
   }
   barrier();
 
-  uint kt = t & 63u;
-  uint half_id = t >> 6u;
   uint key = block * BK + kt;
   bool valid = key < k_len;
   float score[SPLIT_R];
@@ -107,7 +117,7 @@ void main() {
   }
   if (valid) {
     uint k_base = (params.rhs_offset + kv_head * params.shape[1] + key * params.shape[2]) >> 3u;
-    for (uint c = half_id * 8u; c < half_id * 8u + 8u; ++c) {
+    for (uint c = group * chunks; c < group * chunks + chunks; ++c) {
       uvec4 w = key_data.values[k_base + c];
       float kf[8];
       kf[0] = uintBitsToFloat(w.x << 16u);
@@ -126,11 +136,15 @@ void main() {
     }
   }
   for (uint r = 0u; r < SPLIT_R; ++r) {
-    s_part[(half_id * SPLIT_R + r) * BK + kt] = score[r];
+    s_part[(group * SPLIT_R + r) * BK + kt] = score[r];
   }
   barrier();
   for (uint r = 0u; r < SPLIT_R; ++r) {
-    score[r] = valid ? s_part[r * BK + kt] + s_part[(SPLIT_R + r) * BK + kt] : uintBitsToFloat(0xff800000u);
+    float acc = 0.0;
+    for (uint g = 0u; g < GROUPS; ++g) {
+      acc += s_part[(g * SPLIT_R + r) * BK + kt];
+    }
+    score[r] = valid ? acc : uintBitsToFloat(0xff800000u);
   }
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
@@ -157,8 +171,9 @@ void main() {
   uint v_stride = params.in_strides[2];
   uint dg = t & 31u;
   uint part = t >> 5u;
-  uint kstart = part * 16u;
-  uint kend = min(nk, kstart + 16u);
+  uint kchunk = BK / SUBGROUPS;
+  uint kstart = part * kchunk;
+  uint kend = min(nk, kstart + kchunk);
   uint v_row0 = params.aux_offset + kv_head * params.in_strides[1] + block * BK * v_stride + dg * 4u;
   float o[SPLIT_R * 4];
   for (uint i = 0u; i < SPLIT_R * 4u; ++i) {
@@ -210,7 +225,13 @@ void main() {
     uint base = (head * nblocks + block) * (D + 2u);
     if (t == 0u) {
       scratch_data.values[base] = block_max[r];
+#if BK == 64
+      // Two subgroups cover the block's keys disjointly; their sums add in a fixed order.
       scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u];
+#else
+      // Every subgroup walks the whole block, so each holds the full sum.
+      scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS];
+#endif
     }
     float total = s_o[r * D + t] + s_o[(SPLIT_R + r) * D + t] + s_o[(2u * SPLIT_R + r) * D + t] + s_o[(3u * SPLIT_R + r) * D + t];
     scratch_data.values[base + 2u + t] = total;

@@ -17656,7 +17656,12 @@ void ScaledDotProductAttention::eval_gpu(
         // unset or empty follows omarchy::sdpa_split_bk64_default. Value-phase variant with four query heads per key-value head only.
         const int bk64_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK64");
         const bool bk64 = pv && split_group == 4u && (bk64_env > 0 || (bk64_env < 0 && omarchy::sdpa_split_bk64_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
-        const uint32_t split_block_keys = bk64 ? 64u : 128u;
+        // The block-width screen (M2D-5): MLX_OMARCHY_SDPA_SPLIT_BK=32 selects 32-key blocks (twice the workgroups per
+        // cache) inside the bk64 route; anything else keeps 64. The 32-key build re-proves the f64 parity, and its shared
+        // memory is about 12.6 KB per workgroup, so the occupancy question is workgroup count, not shared memory.
+        const int bk_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK");
+        const bool bk32 = bk64 && bk_env == 32;
+        const uint32_t split_block_keys = bk32 ? 32u : bk64 ? 64u : 128u;
         // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
         // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
         const bool pv_wide = omarchy::sdpa_split_pv_wide(head_dim, split_group, static_cast<uint32_t>(kv_heads), pv_env, static_cast<uint32_t>(k_len),
@@ -17676,10 +17681,12 @@ void ScaledDotProductAttention::eval_gpu(
           split_p1 = pv ? omarchy::ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128;
         }
         if (bk64) {
-          split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
+          split_p1 = bk32 ? omarchy::ComputeKernel::SdpaDecodeSplitP1VBk32R4BF16Hd128
+                          : omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
         }
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
         const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
+            : bk32 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128
             : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
         const uint32_t split_q_offset = split_params.lhs_offset;
         const uint32_t split_out_offset = split_params.output_offset;
