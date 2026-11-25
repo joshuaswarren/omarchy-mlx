@@ -199,6 +199,35 @@ def check_backward(c, dt_name, tol):
           dy_t / torch.sqrt(rv_t.reshape(chw) + eps) * w_t.reshape(chw), tol)
 
 
+def check_no_training(c, dt_name, tol):
+    """_native_batch_norm_legit_no_training: aten order (x, w, b, rm, rv,
+    momentum, eps) with DISTINCT momentum and eps; torch returns
+    (out, empty, empty), MLX returns the running stats in slots 2/3."""
+    bf16 = dt_name == "bf16"
+    dt = mx.bfloat16 if bf16 else mx.float32
+    tdt = torch.bfloat16 if bf16 else torch.float32
+    x_t = torch.tensor(c["x"]).to(tdt)
+    w_t = torch.tensor(c["w"]).to(tdt)
+    b_t = torch.tensor(c["b"]).to(tdt)
+    rm_t = torch.tensor(c["rm"]).to(tdt)
+    rv_t = torch.tensor(c["rv"]).to(tdt)
+    x_m, w_m, b_m = (mx.array(c[k]).astype(dt) for k in ("x", "w", "b"))
+    rm_m, rv_m = mx.array(c["rm"]).astype(dt), mx.array(c["rv"]).astype(dt)
+    mom, eps = 0.25, 1e-3  # distinct, to catch argument-order binding
+    name = "_native_batch_norm_legit_no_training"
+    r = mlx_vulkan.ATEN_TABLE[name](x_m, w_m, b_m, rm_m, rv_m, mom, eps)
+    assert isinstance(r, tuple) and len(r) == 3, f"{name} contract"
+    wr = torch.ops.aten._native_batch_norm_legit_no_training(
+        x_t, w_t, b_t, rm_t.clone(), rv_t.clone(), mom, eps)
+    close(f"{name} out", r[0], wr[0], tol)
+    close(f"{name} save_mean (running)", r[1], rm_t, tol)
+    close(f"{name} save_invstd (running)", r[2], 1.0 / torch.sqrt(rv_t + eps), tol)
+    # the eval math itself must use the passed eps, not the momentum
+    C, chw = c["C"], (1, c["C"], *([1] * (len(c["x"].shape) - 2)))
+    want = (x_t - rm_t.reshape(chw)) / torch.sqrt(rv_t.reshape(chw) + eps) * w_t.reshape(chw) + b_t.reshape(chw)
+    close(f"{name} out vs manual running-stat formula", r[0], want, tol)
+
+
 def main():
     # one process, entries in sequence: native, batch_norm, legit per case
     for dt_name, tol in (("fp32", 2e-5), ("bf16", 4e-2)):
@@ -207,6 +236,7 @@ def main():
             check_native(c, dt_name, tol)
             check_batch_norm(c, dt_name, tol)
             check_legit(c, dt_name, tol)
+            check_no_training(c, dt_name, tol)
             check_backward(c, dt_name, tol)
     print("ALL BN parity checks PASS (one process, in sequence)")
 

@@ -1791,8 +1791,11 @@ _FUNC_SPECS = {
     "_native_batch_norm_legit_functional": _bn_legit_functional,
     # the aot/functional EVAL graph lowers to this op; without an entry
     # every eval batch-norm through torch.compile is unlowerable (PAR-41)
-    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, eps, *k: _bn3(
-        x, w, b, rm, rv, False, 0.0, eps)[0],
+    # aten order: (x, weight, bias, running_mean, running_var, momentum, eps)
+    # - no training flag. Torch returns (out, empty, empty); MLX returns the
+    # running stats in slots 2/3 like native_batch_norm.
+    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, momentum, eps, *k: _bn3(
+        x, w, b, rm, rv, False, momentum, eps),
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
