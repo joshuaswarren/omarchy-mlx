@@ -2568,14 +2568,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
 ComputeRuntime::ComputeRuntime(
     VkDevice device,
     uint32_t binding_limit,
+    uint32_t subgroup_size,
     uint32_t required_subgroup_size,
     bool subgroup_size_16_admitted,
-    bool subgroup_size_32_admitted)
+    bool subgroup_size_32_admitted,
+    bool subgroup_size_64_admitted)
     : device_(device),
       binding_limit_(binding_limit),
+      subgroup_size_(subgroup_size),
       required_subgroup_size_(required_subgroup_size),
       subgroup_size_16_admitted_(subgroup_size_16_admitted),
-      subgroup_size_32_admitted_(subgroup_size_32_admitted) {
+      subgroup_size_32_admitted_(subgroup_size_32_admitted),
+      subgroup_size_64_admitted_(subgroup_size_64_admitted) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2780,6 +2784,28 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         "main",
         nullptr,
         pin);
+  }
+  if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16) {
+    // Same fail-closed rule as the 16-lane build, one wave up: the kernel
+    // launches one 64-lane subgroup per workgroup. Pin 64 when the device
+    // legally accepts it; unpinned is correct only when wave64 is both
+    // native and what the global pin would ask for anyway.
+    if (subgroup_size_64_admitted_) {
+      return create_pipeline(
+          std::span<const uint32_t>{
+              reinterpret_cast<const uint32_t*>(bytes),
+              size / sizeof(uint32_t)},
+          "main",
+          nullptr,
+          64u);
+    }
+    if (subgroup_size_ != 64u ||
+        (required_subgroup_size_ != 0u && required_subgroup_size_ != 64u)) {
+      throw std::runtime_error(
+          "[omarchy] QmmPrefillCoopmatBF16x16 runs one 64-lane subgroup per"
+          " workgroup, and this device can neither run that unpinned nor"
+          " legally pin requiredSubgroupSize = 64.");
+    }
   }
   return create_pipeline(
       std::span<const uint32_t>{

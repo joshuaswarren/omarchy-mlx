@@ -1026,6 +1026,24 @@ TEST_CASE("a 16-lane compute pin needs the full Vulkan admission") {
           true, VK_SHADER_STAGE_FRAGMENT_BIT, 8, 32, 16, 16, 256));
 }
 
+TEST_CASE("a 64-lane compute pin needs the full Vulkan admission") {
+  constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
+  // RDNA4-class range [32, 64] admits the one-subgroup 64-lane workgroup:
+  // the wave32-native device can pin wave64 (VUID-02757: 1 * 1 <= max).
+  CHECK(omarchy::subgroup_size_admitted(true, compute, 32, 64, 32, 64, 64));
+  // A fixed-64 device admits trivially (64 sits in [64, 64]).
+  CHECK(omarchy::subgroup_size_admitted(true, compute, 64, 64, 32, 64, 64));
+  // A wave32-only device cannot produce a 64-lane subgroup.
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 32, 32, 32, 64, 64));
+  // min above 64 refuses (VUID-02761/02762).
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 128, 128, 64, 64, 64));
+  // No size-control feature or no compute stage coverage: no pin.
+  CHECK(!omarchy::subgroup_size_admitted(false, compute, 32, 64, 32, 64, 64));
+  CHECK(
+      !omarchy::subgroup_size_admitted(
+          true, VK_SHADER_STAGE_FRAGMENT_BIT, 32, 64, 32, 64, 64));
+}
+
 TEST_CASE("discrete GPUs come first, otherwise discovery order") {
   using V = std::vector<VkPhysicalDeviceType>;
   using I = std::vector<size_t>;

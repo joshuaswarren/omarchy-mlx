@@ -9917,15 +9917,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       }
     }
     // 16x16x16 bf16 coopmat qmm prefill (RADV/RDNA WMMA shape): serves
-    // the same q4-g64-transposed bf16 call when the device has
-    // cooperative matrix but not the fp32 8x8x8 shape, which is exactly
-    // the gap that sent prefill to the scalar-FMA path. The workgroup is
-    // one 64-lane subgroup owning a 16-row tile, so matrix_m must be a
-    // multiple of 16 (a partial tail tile would read past the activation
-    // buffer); matrix_k must fill whole 64-wide chunks. Anything else
-    // keeps the FMA path below.
+    // the same q4-g64-transposed bf16 call whenever the device advertises
+    // the shape and can run a 64-lane subgroup — natively (wave64) or by
+    // legally pinning requiredSubgroupSize = 64 (wave32 + size control).
+    // The workgroup is one 64-lane subgroup owning a 16-row tile, so
+    // matrix_m must be a multiple of 16 (a partial tail tile would read
+    // past the activation buffer); matrix_k must fill whole 64-wide
+    // chunks. Anything else keeps the FMA path below.
     if (rb_enabled && out.dtype() == bfloat16 &&
-        !coopmat_reachable && !coopmat_disabled && q4_g64_transpose &&
+        !coopmat_disabled && q4_g64_transpose &&
         x.ndim() >= 2 && x.shape(-2) > 1 &&
         (params.matrix_k % 64u) == 0u &&
         (params.matrix_m % 16u) == 0u &&
@@ -9944,11 +9944,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           out_byte_start,
           rcaps.max_storage_buffer_range,
           out_align);
+      const bool wave64_capable =
+          rcaps.subgroup_size == 64u || rcaps.subgroup_size_64_admitted;
+      const bool coopmat16_shape = omarchy::cooperative_matrix_advertises(
+          rcaps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_bf16_shape());
       const bool coopmat16_reachable =
-          rcaps.subgroup_size == 64u &&
-          omarchy::cooperative_matrix_advertises(
-              rcaps.cooperative_matrix_shapes,
-              omarchy::qmm_prefill_coopmat16_bf16_shape()) &&
+          wave64_capable && coopmat16_shape &&
           (params.shape[0] > 1u || rows_per == 0u ||
            (rows_per % 16u) == 0u) &&
           // w_s 16x32 bf16 dequant tile + one 16x16 f32 drain block.
@@ -9957,6 +9959,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.lhs_offset & 7u) == 0u &&
           (params.output_offset & 1u) == 0u;
       if (coopmat16_reachable) {
+        const auto& hw = encoder.device().hardware_capabilities();
+        omarchy::capsim::require_backed(
+            encoder.device(),
+            rcaps,
+            coopmat16_reachable,
+            "QmmPrefillCoopmatBF16x16",
+            "cooperative_matrix_bf16_16x16x16_wave64",
+            omarchy::cooperative_matrix_advertises(
+                hw.cooperative_matrix_shapes,
+                omarchy::qmm_prefill_coopmat16_bf16_shape()) &&
+                (hw.subgroup_size == 64u || hw.subgroup_size_64_admitted));
         dispatch_qmm_out_rows(
             encoder,
             out,
