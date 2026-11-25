@@ -1134,11 +1134,17 @@ def _alpha_arith(a, b, alpha, sign):
             "Subtraction, the `-` operator, with a bool tensor is not "
             "supported. If you are trying to invert a mask, use the `~` or "
             "`logical_not()` operator instead.")
-    if isinstance(alpha, float) and _is_integral_dtype(mx.result_type(da, db)):
+    rt = mx.result_type(da, db)
+    if isinstance(alpha, float) and _is_integral_dtype(rt):
         raise RuntimeError(
             "For integral input tensors, the argument alpha must not be a "
             "floating point number")
-    return _ar(_mx(a) + sign * alpha * _mx(b))
+    # Compute in the promoted dtype: alpha*other in other's own dtype can
+    # overflow before promotion (f16 40000 * 2 = inf vs f32 80000).
+    ma, mb = _mx(a), _mx(b)
+    ma = ma.astype(rt) if isinstance(ma, mx.array) else mx.array(ma, dtype=rt)
+    mb = mb.astype(rt) if isinstance(mb, mx.array) else mx.array(mb, dtype=rt)
+    return _ar(ma + sign * (alpha * mb))
 
 
 def _ar(v):

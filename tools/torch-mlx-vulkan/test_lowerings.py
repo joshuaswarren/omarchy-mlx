@@ -18,6 +18,25 @@ def _np(a):
     return np.array(a)
 
 
+def _provenance():
+    # AGENTS.md: a parity result travels with the loaded binary's identity.
+    # Prefer the repo gate (libmlx hash vs the wheel's RECORD); a bare file
+    # copy outside the tree falls back to a direct libmlx hash.
+    scripts = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           os.pardir, os.pardir, "scripts")
+    if os.path.exists(os.path.join(scripts, "mlx_provenance.py")):
+        sys.path.insert(0, scripts)
+        import mlx_provenance
+        print("provenance:", mlx_provenance.provenance_line(
+            mlx_provenance.installed_provenance()))
+        return
+    import hashlib
+    lib = os.path.join(os.path.dirname(mx.__file__), "lib", "libmlx.so")
+    h = hashlib.sha256(open(lib, "rb").read()).hexdigest()[:16]
+    print(f"provenance: mx={mx.__version__} libmlx sha256:{h} "
+          "(source build, no RECORD)")
+
+
 def test_topk():
     rng = np.random.RandomState(0)
     x = rng.randn(4, 7).astype(np.float32)
@@ -1206,6 +1225,7 @@ def test_addcmul_addcdiv():
 
 
 def test_sub_div():
+    _provenance()
     # PT-U8: aten.sub.default/div.default/true_divide.Scalar (+ mul.default,
     # PAR-41 rank 11, 17,208 receipts) had specs yet missed the table on the
     # census's sampled forms — three separate binding defects fixed here:
@@ -1246,6 +1266,12 @@ def test_sub_div():
           torch.sub(x32, y32, alpha=2), kwargs={"alpha": 2})
     check("sub", torch.ops.aten.sub.Scalar, (x32, 1.5), [x32],
           torch.sub(x32, 1.5))
+    # alpha*other computes in the PROMOTED dtype: f16 40000 * 2 must yield
+    # f32 80000, not an f16 intermediate that overflows to inf (codex P2).
+    z32 = torch.zeros(2, dtype=torch.float32)
+    big16 = torch.full((2,), 40000.0, dtype=torch.float16)
+    check("add", torch.ops.aten.add.Tensor, (z32, big16, 2), [z32, big16],
+          torch.add(z32, big16, alpha=2))
     check("add", torch.ops.aten.add.Tensor, (x32, y32), [x32, y32],
           torch.add(x32, y32, alpha=2), kwargs={"alpha": 2})
     check("add", torch.ops.aten.add.Scalar, (x32, 0.5), [x32],
