@@ -15,7 +15,6 @@
 #include <typeinfo>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -829,26 +828,66 @@ struct SliceUpdatePair {
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
-  std::unordered_map<std::uintptr_t, size_t> gemv_roles;
+  TapeIndex<size_t> gemv_roles;
   std::vector<GemvGroup> gemv_groups;
-  std::unordered_map<std::uintptr_t, size_t> res_norm_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> dense_gemv_roles;
+  TapeIndex<size_t> res_norm_skip_roles;
+  TapeIndex<size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
-  std::unordered_map<std::uintptr_t, size_t> slice_update_roles;
+  TapeIndex<size_t> slice_update_roles;
   std::vector<SliceUpdatePair> slice_update_pairs;
-  std::unordered_map<std::uintptr_t, size_t> rope_redirect_roles;
-  std::unordered_map<std::uintptr_t, size_t> reshape_redirect_roles;
-  std::unordered_map<std::uintptr_t, size_t> rope_pair_roles;
+  TapeIndex<size_t> rope_redirect_roles;
+  TapeIndex<size_t> reshape_redirect_roles;
+  TapeIndex<size_t> rope_pair_roles;
   std::vector<RopePair> rope_pairs;
-  std::unordered_map<std::uintptr_t, size_t> rope_norm_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> rope_norm_roles;
+  TapeIndex<size_t> rope_norm_skip_roles;
+  TapeIndex<size_t> rope_norm_roles;
   std::vector<RopeNormFold> rope_norms;
-  std::unordered_map<std::uintptr_t, size_t> prologue_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> prologue_fold_roles;
+  TapeIndex<size_t> prologue_skip_roles;
+  TapeIndex<size_t> prologue_fold_roles;
   std::vector<PrologueFold> prologue_folds;
+
+  void prepare(std::size_t tape_size) {
+    gemv_roles.prepare(tape_size);
+    res_norm_skip_roles.prepare(tape_size);
+    dense_gemv_roles.prepare(tape_size);
+    slice_update_roles.prepare(tape_size);
+    rope_redirect_roles.prepare(tape_size);
+    reshape_redirect_roles.prepare(tape_size);
+    rope_pair_roles.prepare(tape_size);
+    rope_norm_skip_roles.prepare(tape_size);
+    rope_norm_roles.prepare(tape_size);
+    prologue_skip_roles.prepare(tape_size);
+    prologue_fold_roles.prepare(tape_size);
+  }
+
+  // Called when the scope ends and the state returns to the pool: drops
+  // every array reference the plans held so buffers can be reused
+  // between evals. Container capacity is kept for the next scope.
+  void reset() {
+    roles.clear();
+    chains.clear();
+    gemv_groups.clear();
+    dense_gemv_groups.clear();
+    slice_update_pairs.clear();
+    rope_pairs.clear();
+    rope_norms.clear();
+    prologue_folds.clear();
+  }
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
+
+// One spare state per live scope, depth-capped: a decode eval builds the
+// same ~10 role tables every step, and unordered_map pays a node
+// allocation per insert plus bucket growth each time. Reused states keep
+// their bucket/vector capacity so a steady-state eval allocates no map
+// nodes at all for the TapeIndex tables and none for growth elsewhere.
+// Nested scopes (a settle eval inside a dispatch) take distinct pool
+// entries, so live tables are never shared.
+std::vector<std::unique_ptr<EagerFusionState>>& fusion_state_pool() {
+  static thread_local std::vector<std::unique_ptr<EagerFusionState>> pool;
+  return pool;
+}
 
 bool is_op(const array* node, const std::type_info& op) {
   return node && node->has_primitive() && typeid(node->primitive()) == op;
@@ -1048,7 +1087,7 @@ DirectPlan plan_values_window(
     const array* update,
     const TapeIndex<size_t>& uses,
     const std::vector<GemvGroup>& groups,
-    const std::unordered_map<std::uintptr_t, size_t>& dense_roles,
+    const TapeIndex<size_t>& dense_roles,
     std::vector<DenseGemvGroup>& dense_groups) {
   DirectPlan plan;
   auto use_count = [&](const array& value) {
@@ -1079,14 +1118,14 @@ DirectPlan plan_values_window(
   // member's output row (no Add epilogue). The group stores it through
   // the same producer-direct window contract.
   auto dense_it = dense_roles.find(sum->id());
-  if (dense_it != dense_roles.end()) {
+  if (dense_it != nullptr) {
     if (use_count(*sum) != 1) {
       return plan;
     }
-    const auto& group_nodes = dense_groups[dense_it->second].nodes;
+    const auto& group_nodes = dense_groups[*dense_it].nodes;
     for (size_t mi = 0; mi < group_nodes.size(); ++mi) {
       if (group_nodes[mi].id() == sum->id()) {
-        plan.group_index = dense_it->second;
+        plan.group_index = *dense_it;
         plan.member_index = mi;
         plan.kind = DirectKind::dense_values;
         found = true;
@@ -1287,20 +1326,35 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
   }
 
-  auto* state = new EagerFusionState;
+  EagerFusionState* state;
+  auto& pool = fusion_state_pool();
+  if (pool.empty()) {
+    state = new EagerFusionState;
+  } else {
+    state = pool.back().release();
+    pool.pop_back();
+  }
   eager_state = state;
+  state->prepare(tape.size());
   // Tape-index scratch is thread-local and reused across passes. The maps
   // are only live for this planning section, so reuse is safe under nested
   // scopes: a nested scope's eval runs after this constructor returns,
   // never while it still holds the tables.
   static thread_local TapeIndex<const array*> nodes;
   static thread_local TapeIndex<size_t> uses;
+  // consumer_of[input] = last tape node reading input; paired with the
+  // uses count it is the single-consumer map without a second tape pass.
+  static thread_local TapeIndex<const array*> consumer_of;
+  static thread_local TapeIndex<char> claimed;
   nodes.prepare(tape.size());
   uses.prepare(tape.size() * 2);
+  consumer_of.prepare(tape.size() * 2);
+  claimed.prepare(tape.size());
   for (const auto& node : tape) {
     nodes.put_if_absent(node.id(), &node);
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
+      consumer_of[input.id()] = &node;
     }
   }
   auto lookup = [&](const array& ref) -> const array* {
@@ -1317,7 +1371,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     array out;
   };
   std::vector<SwigluPlan> swiglu_plans;
-  std::unordered_set<std::uintptr_t> claimed;
   for (const auto& tail : tape) {
     if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
         claimed.count(tail.id())) {
@@ -1361,9 +1414,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         inner->id(), EagerRole{group, EagerStep::gate_mul});
     state->roles.emplace(
         tail.id(), EagerRole{group, EagerStep::output_mul});
-    claimed.insert(sigmoid->id());
-    claimed.insert(inner->id());
-    claimed.insert(tail.id());
+    claimed.put_if_absent(sigmoid->id(), 1);
+    claimed.put_if_absent(inner->id(), 1);
+    claimed.put_if_absent(tail.id(), 1);
   }
   // Out-gate prologue plans: tail = Multiply(Sigmoid(gate), out) whose
   // sigmoid the tail alone reads and whose own single consumer is a
@@ -1399,8 +1452,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     outgate_plans.emplace(
         tail.id(),
         OutgatePlan{sigmoid->inputs()[0], out, tail, sigmoid->id()});
-    claimed.insert(sigmoid->id());
-    claimed.insert(tail.id());
+    claimed.put_if_absent(sigmoid->id(), 1);
+    claimed.put_if_absent(tail.id(), 1);
   }
   for (size_t i = 1; i < tape.size(); ++i) {
     const array& first = tape[i - 1];
@@ -1422,11 +1475,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       continue;
     }
     size_t index = state->slice_update_pairs.size();
-    state->slice_update_roles.emplace(first.id(), index);
-    state->slice_update_roles.emplace(second.id(), index);
+    state->slice_update_roles.put_if_absent(first.id(), index);
+    state->slice_update_roles.put_if_absent(second.id(), index);
     state->slice_update_pairs.emplace_back(first, second);
-    claimed.insert(first.id());
-    claimed.insert(second.id());
+    claimed.put_if_absent(first.id(), 1);
+    claimed.put_if_absent(second.id(), 1);
     ++i;
   }
 
@@ -1441,15 +1494,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // and size; its other operand may be any array that is ready when the
   // group dispatches (checked then, refused otherwise). A group of one
   // member without an epilogue gains nothing and is not planned.
-  std::unordered_map<std::uintptr_t, const array*> single_consumer;
-  for (const auto& node : tape) {
-    for (const auto& input : node.inputs()) {
-      if (uses[input.id()] == 1) {
-        single_consumer[input.id()] = &node;
-      }
-    }
-  }
-  std::unordered_map<std::uintptr_t, std::vector<const array*>> by_x;
+  static thread_local TapeIndex<std::vector<const array*>> by_x;
+  by_x.prepare(tape.size());
   std::vector<std::uintptr_t> x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(QuantizedMatmul)) ||
@@ -1480,14 +1526,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // until root-caused the token route plans WITHOUT epilogues and the
     // residual/bias adds ride their separate eager dispatches. The fold
     // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
-    auto [it, inserted] = by_x.try_emplace(x.id());
-    if (inserted) {
+    auto& group_list = by_x[x.id()];
+    if (group_list.empty()) {
       x_order.push_back(x.id());
     }
-    it->second.push_back(&node);
+    group_list.push_back(&node);
   }
   for (auto x_id : x_order) {
-    const auto& nodes = by_x[x_id];
+    const auto& nodes = *by_x.find(x_id);
     auto plan_it = outgate_plans.find(x_id);
     bool x_has_plan = plan_it != outgate_plans.end();
     // Token rows share the single-token group planner; the out-gate
@@ -1516,9 +1562,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
            ++i) {
         const array& node = *nodes[i];
         GemvFusionMember member{node, std::nullopt, std::nullopt};
-        if (auto consumer = single_consumer.find(node.id());
-            consumer != single_consumer.end()) {
-          const array* add = consumer->second;
+        if (auto* uses_p = uses.find(node.id());
+            uses_p != nullptr && *uses_p == 1) {
+          if (auto* consumer = consumer_of.find(node.id())) {
+          const array* add = *consumer;
           if (fold_ok && is_op(add, typeid(Add)) &&
               add->inputs().size() == 2 &&
               add->dtype() == node.dtype() &&
@@ -1552,6 +1599,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
               member.addend = *other;
             }
           }
+          }
         }
         worth = worth || member.epilogue.has_value();
         group.members.push_back(std::move(member));
@@ -1571,11 +1619,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
-        state->gemv_roles.emplace(member.node.id(), index);
-        claimed.insert(member.node.id());
+        state->gemv_roles.put_if_absent(member.node.id(), index);
+        claimed.put_if_absent(member.node.id(), 1);
         if (member.epilogue) {
-          state->gemv_roles.emplace(member.epilogue->id(), index);
-          claimed.insert(member.epilogue->id());
+          state->gemv_roles.put_if_absent(member.epilogue->id(), index);
+          claimed.put_if_absent(member.epilogue->id(), 1);
         }
       }
       state->gemv_groups.push_back(std::move(group));
@@ -1589,12 +1637,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // failed contract drops them back onto the ordinary path and the
   // multiply materializes x as before. (EagerRole.group carries the
   // gemv-group index for skip roles.)
-  std::unordered_map<std::uintptr_t, size_t> outgate_reader_count;
-  for (const auto& node : tape) {
-    for (const auto& input : node.inputs()) {
-      ++outgate_reader_count[input.id()];
-    }
-  }
   for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
     auto& group = state->gemv_groups[gi];
     if (!group.outgate) {
@@ -1608,8 +1650,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         (!gate_node ||
          gate_node->primitive().stream() == member_stream) &&
         (!out_node || out_node->primitive().stream() == member_stream);
-    if (!streams_ok || outgate_reader_count[plan.gate.id()] != 1 ||
-        outgate_reader_count[plan.out.id()] != 1) {
+    if (!streams_ok || uses[plan.gate.id()] != 1 ||
+        uses[plan.out.id()] != 1) {
       group.outgate.reset();
       continue;
     }
@@ -1653,22 +1695,26 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // dispatch never exists. Any runtime contract failure un-plans the
   // whole group onto the per-node path.
   if (!swiglu_plans.empty()) {
-    std::unordered_map<std::uintptr_t, std::vector<std::uintptr_t>>
-        consumers;
-    for (const auto& node : tape) {
-      for (const auto& input : node.inputs()) {
-        consumers[input.id()].push_back(node.id());
-      }
-    }
+    // Readers of a leaf, collected on demand only for the ~2 ids per
+    // plan: a whole-tape consumer map costs a node+vector allocation per
+    // distinct input every eval to answer a handful of checks.
     auto only_readers = [&](std::uintptr_t leaf,
                             std::vector<std::uintptr_t> want) {
-      auto it = consumers.find(leaf);
-      if (it == consumers.end()) {
+      auto* count = uses.find(leaf);
+      if (count == nullptr || *count != want.size()) {
         return false;
       }
-      std::sort(it->second.begin(), it->second.end());
+      std::vector<std::uintptr_t> got;
+      for (const auto& node : tape) {
+        for (const auto& input : node.inputs()) {
+          if (input.id() == leaf) {
+            got.push_back(node.id());
+          }
+        }
+      }
+      std::sort(got.begin(), got.end());
       std::sort(want.begin(), want.end());
-      return it->second == want;
+      return got == want;
     };
     for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
       auto& group = state->gemv_groups[gi];
@@ -1703,13 +1749,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         for (std::uintptr_t id :
              {plan.sigmoid_id, plan.inner_id, plan.out.id()}) {
           state->roles.erase(id);
-          state->gemv_roles.emplace(id, gi);
+          state->gemv_roles.put_if_absent(id, gi);
         }
         break;
       }
     }
   }
-  std::unordered_map<std::uintptr_t, std::vector<const array*>> dense_by_x;
+  static thread_local TapeIndex<std::vector<const array*>> dense_by_x;
+  dense_by_x.prepare(tape.size());
   std::vector<std::uintptr_t> dense_x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(Matmul)) || node.inputs().size() != 2 ||
@@ -1723,14 +1770,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       continue;
     }
     const array& source = dense_gemv_source(x);
-    auto [it, inserted] = dense_by_x.try_emplace(source.id());
-    if (inserted) {
+    auto& dense_list = dense_by_x[source.id()];
+    if (dense_list.empty()) {
       dense_x_order.push_back(source.id());
     }
-    it->second.push_back(&node);
+    dense_list.push_back(&node);
   }
   for (auto x_id : dense_x_order) {
-    const auto& nodes = dense_by_x[x_id];
+    const auto& nodes = *dense_by_x.find(x_id);
     for (size_t start = 0; start + 1 < nodes.size();
          start += kDenseVecMultiWeights) {
       DenseGemvGroup group;
@@ -1745,8 +1792,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       const size_t index = state->dense_gemv_groups.size();
       for (const auto& node : group.nodes) {
-        state->dense_gemv_roles.emplace(node.id(), index);
-        claimed.insert(node.id());
+        state->dense_gemv_roles.put_if_absent(node.id(), index);
+        claimed.put_if_absent(node.id(), 1);
       }
       state->dense_gemv_groups.push_back(std::move(group));
     }
@@ -1858,10 +1905,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       pair.windows[0] = std::move(plans[rope_side].window);
       pair.windows[1] = std::move(sum_plan.window);
-      state->rope_redirect_roles.emplace(
+      state->rope_redirect_roles.put_if_absent(
           pair.nodes[rope_side].inputs()[1].id(), index);
       for (const auto& view : sum_plan.view_chain) {
-        state->reshape_redirect_roles.emplace(view.id(), index);
+        state->reshape_redirect_roles.put_if_absent(view.id(), index);
       }
       pair.direct = true;
     }
@@ -1913,8 +1960,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         const float eps =
             static_cast<const fast::RMSNorm&>(norm.primitive()).state().second;
         group.res_norm = ResNormPlan{norm, nw, eps};
-        state->res_norm_skip_roles.emplace(norm.id(), gi);
-        claimed.insert(norm.id());
+        state->res_norm_skip_roles.put_if_absent(norm.id(), gi);
+        claimed.put_if_absent(norm.id(), 1);
       }
     }
   }
@@ -2015,11 +2062,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       const size_t index = state->rope_pairs.size();
-      state->rope_pair_roles.emplace(first.id(), index);
-      state->rope_pair_roles.emplace(second.id(), index);
+      state->rope_pair_roles.put_if_absent(first.id(), index);
+      state->rope_pair_roles.put_if_absent(second.id(), index);
       state->rope_pairs.push_back(RopePair{{first, second}});
-      claimed.insert(first.id());
-      claimed.insert(second.id());
+      claimed.put_if_absent(first.id(), 1);
+      claimed.put_if_absent(second.id(), 1);
       trace.pairs += 1;
       i += 2;
     }
@@ -2148,9 +2195,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       const size_t index = state->rope_norms.size();
-      state->rope_norm_skip_roles.emplace(n.id(), index);
-      state->rope_norm_skip_roles.emplace(in.id(), index);
-      state->rope_norm_roles.emplace(node.id(), index);
+      state->rope_norm_skip_roles.put_if_absent(n.id(), index);
+      state->rope_norm_skip_roles.put_if_absent(in.id(), index);
+      state->rope_norm_roles.put_if_absent(node.id(), index);
       state->rope_norms.push_back(RopeNormFold{
           n,
           node,
@@ -2160,9 +2207,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           n.primitive_ptr(),
           view_p != nullptr ? view_p->primitive_ptr() : nullptr,
           static_cast<const fast::RMSNorm&>(n.primitive()).state().second});
-      claimed.insert(n.id());
-      claimed.insert(in.id());
-      claimed.insert(node.id());
+      claimed.put_if_absent(n.id(), 1);
+      claimed.put_if_absent(in.id(), 1);
+      claimed.put_if_absent(node.id(), 1);
     }
     if (trace && fold_trace < 8) {
       ++fold_trace;
@@ -2283,12 +2330,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
     const size_t index = state->prologue_folds.size();
-    state->prologue_fold_roles.emplace(node.id(), index);
+    state->prologue_fold_roles.put_if_absent(node.id(), index);
     for (const auto& step : replay) {
-      state->prologue_skip_roles.emplace(step.node.id(), index);
-      claimed.insert(step.node.id());
+      state->prologue_skip_roles.put_if_absent(step.node.id(), index);
+      claimed.put_if_absent(step.node.id(), 1);
     }
-    claimed.insert(node.id());
+    claimed.put_if_absent(node.id(), 1);
     state->prologue_folds.push_back(PrologueFold{
         node,
         *ids,
@@ -2306,7 +2353,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 }
 
 EagerFusionScope::~EagerFusionScope() {
-  delete eager_state;
+  if (eager_state != nullptr) {
+    eager_state->reset();
+    auto& pool = fusion_state_pool();
+    if (pool.size() < 4) {
+      pool.emplace_back(eager_state);
+    } else {
+      delete eager_state;
+    }
+  }
   eager_state = static_cast<EagerFusionState*>(previous_);
 }
 
@@ -2403,10 +2458,10 @@ KvDirectWindow* find_rope_kv_redirect(const array& out) {
     return nullptr;
   }
   auto it = eager_state->rope_redirect_roles.find(out.id());
-  if (it == eager_state->rope_redirect_roles.end()) {
+  if (it == nullptr) {
     return nullptr;
   }
-  auto& pair = eager_state->slice_update_pairs[it->second];
+  auto& pair = eager_state->slice_update_pairs[*it];
   if (!pair.direct || pair.state != SliceUpdatePair::State::pending ||
       !pair.values_committed) {
     return nullptr;
@@ -2419,10 +2474,10 @@ void commit_rope_kv_redirect(const array& out) {
     return;
   }
   auto it = eager_state->rope_redirect_roles.find(out.id());
-  if (it == eager_state->rope_redirect_roles.end()) {
+  if (it == nullptr) {
     return;
   }
-  auto& pair = eager_state->slice_update_pairs[it->second];
+  auto& pair = eager_state->slice_update_pairs[*it];
   if (pair.direct && pair.state == SliceUpdatePair::State::pending) {
     pair.state = SliceUpdatePair::State::done;
   }
@@ -2688,20 +2743,20 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return false;
   }
   if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
-      skip != eager_state->res_norm_skip_roles.end()) {
-    return eager_state->gemv_groups[skip->second].res_norm_done;
+      skip != nullptr) {
+    return eager_state->gemv_groups[*skip].res_norm_done;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
-      skip != eager_state->prologue_skip_roles.end()) {
+      skip != nullptr) {
     // The fold's dispatch owns this node while pending or done; on a
     // failed fold the fire arm replays every skipped node before the
     // dequantize runs, so nothing ever falls through unwritten.
-    return eager_state->prologue_folds[skip->second].state !=
+    return eager_state->prologue_folds[*skip].state !=
         PrologueFold::State::failed;
   }
   if (auto fit = eager_state->prologue_fold_roles.find(node.id());
-      fit != eager_state->prologue_fold_roles.end()) {
-    auto& fold = eager_state->prologue_folds[fit->second];
+      fit != nullptr) {
+    auto& fold = eager_state->prologue_folds[*fit];
     if (fold.state == PrologueFold::State::done) {
       return true;
     }
@@ -2734,16 +2789,16 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return true;
   }
   if (auto skip = eager_state->rope_norm_skip_roles.find(node.id());
-      skip != eager_state->rope_norm_skip_roles.end()) {
+      skip != nullptr) {
     // The rope-side fold owns this norm's dispatch; a failed fold runs
     // it in place from the rope arm below, so skip only while the fold
     // can still fire.
-    return eager_state->rope_norms[skip->second].state !=
+    return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
   }
   if (auto fold_it = eager_state->rope_norm_roles.find(node.id());
-      fold_it != eager_state->rope_norm_roles.end()) {
-    auto& fold = eager_state->rope_norms[fold_it->second];
+      fold_it != nullptr) {
+    auto& fold = eager_state->rope_norms[*fold_it];
     if (fold.state == RopeNormFold::State::done) {
       return true;
     }
@@ -2775,8 +2830,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return true;
   }
   if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
-      rope_pair != eager_state->rope_pair_roles.end()) {
-    auto& pair = eager_state->rope_pairs[rope_pair->second];
+      rope_pair != nullptr) {
+    auto& pair = eager_state->rope_pairs[*rope_pair];
     if (pair.state == RopePair::State::done) {
       return true;
     }
@@ -2804,8 +2859,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return pair.state == RopePair::State::done;
   }
   if (auto update = eager_state->slice_update_roles.find(node.id());
-      update != eager_state->slice_update_roles.end()) {
-    auto& pair = eager_state->slice_update_pairs[update->second];
+      update != nullptr) {
+    auto& pair = eager_state->slice_update_pairs[*update];
     if (pair.direct) {
       if (pair.state == SliceUpdatePair::State::done) {
         return true;
@@ -2839,8 +2894,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return false;
   }
   if (auto reshape = eager_state->reshape_redirect_roles.find(node.id());
-      reshape != eager_state->reshape_redirect_roles.end()) {
-    auto& pair = eager_state->slice_update_pairs[reshape->second];
+      reshape != nullptr) {
+    auto& pair = eager_state->slice_update_pairs[*reshape];
     if (!pair.values_committed) {
       return false;
     }
@@ -2855,8 +2910,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return true;
   }
   if (auto dense = eager_state->dense_gemv_roles.find(node.id());
-      dense != eager_state->dense_gemv_roles.end()) {
-    auto& group = eager_state->dense_gemv_groups[dense->second];
+      dense != nullptr) {
+    auto& group = eager_state->dense_gemv_groups[*dense];
     if (group.state == DenseGemvGroup::State::pending) {
       // Producer-direct values windows: same contract as the quantized
       // path. In place, the member's rows land straight in the live
@@ -2895,8 +2950,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return group.state == DenseGemvGroup::State::done;
   }
   if (auto gemv = eager_state->gemv_roles.find(node.id());
-      gemv != eager_state->gemv_roles.end()) {
-    auto& group = eager_state->gemv_groups[gemv->second];
+      gemv != nullptr) {
+    auto& group = eager_state->gemv_groups[*gemv];
     if (group.state == GemvGroup::State::pending) {
       group.state = dispatch_quantized_gemv_group(
                         group.members,

@@ -630,6 +630,11 @@ bool env_set(const char* name);
 // next env_note_eval(), so callers must not hold it across an eval.
 const char* env_str(const char* name);
 
+// Current env-cache epoch on this thread: 0 before the first eval
+// boundary (all env reads fresh). Callers memoizing on env values key
+// their memo on this and recompute while it is 0.
+uint64_t env_epoch();
+
 // Marks one graph-eval boundary: cached env reads refresh lazily on the
 // next call. Runs once per eval_impl from EagerFusionScope's ctor. Calls
 // on threads that have never passed a boundary always read fresh.

@@ -1206,6 +1206,10 @@ void env_note_eval() {
   ++env_cache_.epoch;
 }
 
+uint64_t env_epoch() {
+  return env_cache_.epoch;
+}
+
 const char* env_str(const char* name) {
   return env_lookup(name);
 }
