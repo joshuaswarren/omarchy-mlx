@@ -315,6 +315,57 @@ class GpuProfiler {
     dispatches_++;
   }
 
+  // Bracket a non-dispatch node (inline update / copy / fill) the same way
+  // a dispatch is bracketed, so its GPU span joins the d-record stream as
+  // k=t. kind: 1=update, 2=copy, 3=fill; bytes rides the count field.
+  void before_transfer(
+      const void* owner,
+      int slot,
+      VkCommandBuffer cmd,
+      uint32_t kind,
+      uint64_t bytes) {
+    if (out_ == nullptr || !dispatch_enabled_) {
+      return;
+    }
+    Ctx* ctx = find(owner);
+    if (ctx == nullptr) {
+      return;
+    }
+    SlotCtx& s = ctx->slots[slot];
+    PendingDispatch p{};
+    p.cmd_kind = kind;
+    p.count = static_cast<uint32_t>(bytes);
+    p.skipped = s.cursor + 2 > kPoolQueries;
+    if (p.skipped) {
+      dropped_++;
+    } else {
+      p.tick_index = s.cursor;
+      vk::device_table().CmdWriteTimestamp(
+          cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s.pool, s.cursor);
+      vk::device_table().CmdPipelineBarrier(
+          cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
+    }
+    s.pending.push_back(p);
+  }
+
+  void after_transfer(const void* owner, int slot, VkCommandBuffer cmd) {
+    if (out_ == nullptr || !dispatch_enabled_) {
+      return;
+    }
+    Ctx* ctx = find(owner);
+    if (ctx == nullptr) {
+      return;
+    }
+    SlotCtx& s = ctx->slots[slot];
+    PendingDispatch& p = s.pending.back();
+    if (!p.skipped) {
+      vk::device_table().CmdWriteTimestamp(
+          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, p.tick_index + 1);
+      s.cursor = p.tick_index + 2;
+    }
+  }
+
   // Buffer mode only: writes the buffer's closing timestamp; called by the
   // encoder right before EndCommandBuffer.
   void on_buffer_end(const void* owner, int slot, VkCommandBuffer cmd) {
@@ -431,6 +482,9 @@ class GpuProfiler {
     // 1 when this dispatch recorded a dependency barrier, 0 when the
     // gated tracker skipped it.
     uint32_t bar{0};
+    // 0 = compute dispatch (k=d); nonzero rides a k=t record:
+    // 1=inline update, 2=copy, 3=fill.
+    uint32_t cmd_kind{0};
     // Consuming primitive name (trace::current_prim at record time).
     std::array<char, 48> prim{};
   };
@@ -542,6 +596,20 @@ class GpuProfiler {
     for (size_t i = 0; i < s.pending.size(); ++i) {
       const PendingDispatch& p = s.pending[i];
       if (p.skipped) {
+        continue;
+      }
+      if (p.cmd_kind != 0) {
+        emitf("{\"k\":\"t\",\"s\":%" PRIu64 ",\"e\":%u,\"n\":%u",
+              sub,
+              p.cmd_kind,
+              p.count);
+        if (p.tick_index + 1 < queries &&
+            ticks[p.tick_index + 1] >= ticks[p.tick_index]) {
+          emitf(",\"t0\":%" PRIu64 ",\"t1\":%" PRIu64,
+                ticks[p.tick_index],
+                ticks[p.tick_index + 1]);
+        }
+        emitf("}\n");
         continue;
       }
       emitf("{\"k\":\"d\",\"s\":%" PRIu64 ",\"e\":%u,\"op\":%u,\"n\":%u"
@@ -793,6 +861,8 @@ class GpuProfiler {
       uint32_t,
       uint64_t,
       uint32_t) {}
+  void before_transfer(const void*, int, VkCommandBuffer, uint32_t, uint64_t) {}
+  void after_transfer(const void*, int, VkCommandBuffer) {}
   void on_submit_end(const void*, uint64_t, uint64_t, int) {}
   void on_submit_boundary(uint64_t, uint64_t, uint64_t, uint64_t) {}
   void on_join(

@@ -454,7 +454,9 @@ void CommandEncoder::upload_device_local_if_needed(
           }
           tracker_.add_write(wr);
         }
+        prof::get().before_transfer(this, current_slot_, cmd_, 1, vb->size);
         dt.CmdUpdateBuffer(cmd_, vb->buffer, 0, vb->size, vb->host_shadow);
+        prof::get().after_transfer(this, current_slot_, cmd_);
         transfer_since_barrier_ = true;
         if (!gated_barriers()) {
           record_dependency_barrier();
@@ -542,7 +544,9 @@ void CommandEncoder::copy_buffer(
   region.srcOffset = src_offset;
   region.dstOffset = dst_offset;
   region.size = size;
+  prof::get().before_transfer(this, current_slot_, cmd_, 2, size);
   vk::device_table().CmdCopyBuffer(cmd_, src, dst, 1, &region);
+  prof::get().after_transfer(this, current_slot_, cmd_);
   transfer_since_barrier_ = true;
   node_count_++;
   trace::counters().vk_buffer_copies++;
@@ -588,7 +592,9 @@ void CommandEncoder::fill_buffer(
     }
     tracker_.add_write(write);
   }
+  prof::get().before_transfer(this, current_slot_, cmd_, 3, size);
   vk::device_table().CmdFillBuffer(cmd_, dst, offset, size, value);
+  prof::get().after_transfer(this, current_slot_, cmd_);
   transfer_since_barrier_ = true;
   node_count_++;
   trace::counters().vk_buffer_fills++;
@@ -1431,17 +1437,24 @@ void CommandEncoder::emit_pending() {
         region.srcOffset = node.src_offset;
         region.dstOffset = node.dst_offset;
         region.size = node.size;
+        prof::get().before_transfer(this, current_slot_, cmd_, 2, node.size);
         dt.CmdCopyBuffer(cmd_, node.src, node.dst, 1, &region);
+        prof::get().after_transfer(this, current_slot_, cmd_);
       } else if (node.kind == PendingNode::Kind::Fill) {
+        prof::get().before_transfer(this, current_slot_, cmd_, 3, node.size);
         dt.CmdFillBuffer(
             cmd_, node.dst, node.write_offset, node.size, node.value);
+        prof::get().after_transfer(this, current_slot_, cmd_);
       } else {
+        prof::get().before_transfer(
+            this, current_slot_, cmd_, 1, node.update_data.size());
         dt.CmdUpdateBuffer(
             cmd_,
             node.dst,
             node.write_offset,
             node.update_data.size(),
             node.update_data.data());
+        prof::get().after_transfer(this, current_slot_, cmd_);
       }
       for (uint32_t r = 0; r < node.nr; ++r) {
         tracker_.add_read(node.rd[r]);
