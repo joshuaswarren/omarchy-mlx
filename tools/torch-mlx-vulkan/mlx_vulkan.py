@@ -183,6 +183,160 @@ def _reshape(a, *s):
         s = tuple(s[0])
     return mx.reshape(a, tuple(s))
 
+# view/reshape: mx arrays carry no strides, so layout is tracked
+# structurally. aten.view must alias its input storage; mx.reshape silently
+# copies a strided input instead, so a view whose input may be
+# non-contiguous is refused to the CPU path where torch computes the real
+# strides (or the real error). reshape never refuses: torch's own
+# copy-if-needed semantics already match mx.reshape.
+_VIEW_OPS = {"view", "_unsafe_view", "unsafe_view"}
+
+# ops whose output may be non-contiguous regardless of input layout
+_STRIDED_OPS = {
+    "t", "mT", "transpose", "permute", "movedim", "moveaxis", "swapaxes",
+    "swapdims", "expand", "expand_as", "broadcast_to", "unbind", "split",
+    "split_with_sizes", "unsafe_split", "chunk", "tensor_split", "hsplit",
+    "vsplit", "dsplit", "diagonal", "unfold", "as_strided",
+}
+
+# layout-transparent ops: the result shares storage with the input, so the
+# stridedness flag passes through
+_LAYOUT_PASS = {
+    "detach", "detach_", "clone", "alias", "lift_fresh", "lift_fresh_copy",
+    "to", "_to_copy", "type", "cpu", "cuda", "requires_grad",
+    "requires_grad_", "float", "half", "bfloat16", "double", "int", "long",
+    "bool", "short", "byte", "char", "type_as",
+}
+
+
+def _narg(n, i, key, default=None):
+    if key in n.kwargs:
+        return n.kwargs[key]
+    return n.args[i] if len(n.args) > i else default
+
+
+def _aint(v, default=None):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dim0_index(idx):
+    """True when a getitem index provably keeps contiguity: a prefix of
+    integer indices (each removing its dim), then at most one unit-step
+    partial slice on the next dim, then only non-restricting decorations
+    (None, full slices, one Ellipsis). An int or partial slice after a dim
+    survives, a step!=1 slice, or any restriction after an Ellipsis (it may
+    touch a trailing dim while earlier dims survive) can all produce a
+    non-contiguous result."""
+    if isinstance(idx, torch.fx.Node):
+        return False
+    if not isinstance(idx, (tuple, list)):
+        idx = (idx,)
+    pre, post, ell = [], [], False
+    for i in idx:
+        if i is Ellipsis:
+            ell = True
+            continue
+        (post if ell else pre).append(i)
+    for i in post:
+        if i is None:
+            continue
+        if (isinstance(i, slice) and i.start is None and i.stop is None
+                and _aint(i.step) in (None, 1)):
+            continue
+        return False
+    restricted = False
+    for i in pre:
+        if i is None:
+            continue
+        if isinstance(i, torch.fx.Node):
+            return False
+        if isinstance(i, (int, torch.SymInt)):
+            if restricted:
+                return False
+            continue
+        if isinstance(i, slice):
+            if _aint(i.step) not in (None, 1):
+                return False
+            if i.start is not None or i.stop is not None:
+                if restricted:
+                    return False
+            restricted = True
+            continue
+        return False
+    return True
+
+
+def _strided_nodes(nodes):
+    """Graph pass: nodes whose output may be non-contiguous under torch
+    stride semantics. A view on a member is refused rather than silently
+    copied by mx.reshape."""
+    strided = set()
+    for n in nodes:
+        name = _opname(n)
+        a0 = n.args[0] if (n.args and isinstance(n.args[0], torch.fx.Node)) else None
+        if name in _STRIDED_OPS:
+            strided.add(n)
+        elif name in ("select", "narrow"):
+            if a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0:
+                strided.add(n)
+        elif name == "slice":
+            if (a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0
+                    or _aint(_narg(n, 4, "step"), 1) != 1):
+                strided.add(n)
+        elif n.target is operator.getitem or name == "getitem":
+            if a0 in strided or not _dim0_index(n.args[1] if len(n.args) > 1 else None):
+                strided.add(n)
+        elif name in _LAYOUT_PASS:
+            if a0 in strided:
+                strided.add(n)
+    return strided
+
+
+def _view_refused(name, n, strided):
+    return (name in _VIEW_OPS and n.args
+            and isinstance(n.args[0], torch.fx.Node)
+            and n.args[0] in strided)
+
+
+def _node_args(a):
+    if isinstance(a, torch.fx.Node):
+        yield a
+    elif isinstance(a, (tuple, list)):
+        for x in a:
+            yield from _node_args(x)
+    elif isinstance(a, dict):
+        for x in a.values():
+            yield from _node_args(x)
+
+
+def _refused_nodes(nodes, strided):
+    """Nodes refused to the CPU path for view/stride semantics: every view
+    on a flagged input, plus the flagged producers behind it. Refusing the
+    view alone is not enough -- an mx-lowered producer hands the torch
+    fallback a materialized contiguous tensor, so the view then returns
+    strides (or succeeds) where eager would raise. Refusing the strided
+    cone keeps every producer under torch, where real strides are kept."""
+    refused = set()
+    stack = []
+    for n in nodes:
+        if _view_refused(_opname(n), n, strided):
+            refused.add(n)
+            stack.append(n)
+    while stack:
+        n = stack.pop()
+        for a in _node_args(n.args):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+        for a in _node_args(n.kwargs):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+    return refused
+
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
@@ -1716,6 +1870,8 @@ def _run_method(obj, name, args, kwargs):
 
 def make_executor(gm):
     stats = {"mlx": [], "cpu": [], "glue": [], "crossings": 0}
+    strided = _strided_nodes(gm.graph.nodes)
+    refused = _refused_nodes(gm.graph.nodes, strided)
     _nprof = os.environ.get("MV_NODE_PROF")
     if _nprof:
         stats["node_ms"] = {}
@@ -1768,7 +1924,7 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 _tick("get_attr")
                 continue
-            if node.target is operator.getitem or name == "getitem":
+            if (node.target is operator.getitem or name == "getitem") and node not in refused:
                 try:
                     env[node] = args[0][_coerce_index(args[1])]
                     stats["glue"].append("getitem")
@@ -1797,6 +1953,8 @@ def make_executor(gm):
                                or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
                                or name in _PRODUCERS
                                or name in _ALWAYS_LOWER)
+                if node in refused:
+                    lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
                         val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
@@ -1816,13 +1974,16 @@ def make_executor(gm):
                     _tick(name)
                     continue
             elif node.op == "call_method":
-                try:
-                    val, on_mlx = _run_method(args[0], str(node.target), args[1:], kwargs)
-                except NotImplementedError:
+                if node in refused:
                     val, on_mlx = None, False
-                except Exception as e:
-                    log.info("LOWER-FAIL\t%s\t%s", node.target, e)
-                    val, on_mlx = None, False
+                else:
+                    try:
+                        val, on_mlx = _run_method(args[0], str(node.target), args[1:], kwargs)
+                    except NotImplementedError:
+                        val, on_mlx = None, False
+                    except Exception as e:
+                        log.info("LOWER-FAIL\t%s\t%s", node.target, e)
+                        val, on_mlx = None, False
 
             if not on_mlx:
                 if has_mx(args) or has_mx(kwargs.values()):
@@ -2237,6 +2398,7 @@ def _inplace_writeback(dst, upd):
 def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
+    strided = _strided_nodes(nodes)
     skip, fused = _fuse_rmsnorm(nodes)
     rskip, rfused = _fuse_rope(nodes)
     pos_ph = next((n for n in phs if "position_ids" in str(n.target)), None)
@@ -2493,7 +2655,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 d0, d1 = int(args[1]), int(args[2])
                 env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
                 continue
-            if name in ("view", "_unsafe_view") and n.op == "call_function":
+            if name in _VIEW_OPS and n.op == "call_function":
+                if _view_refused(name, n, strided):
+                    raise RuntimeError(
+                        f"{name} on a possibly non-contiguous input: "
+                        "refused to the per-node path for torch stride "
+                        "semantics")
                 shape = args[1]
                 if isinstance(shape, torch.fx.Node):
                     shape = env[shape]
@@ -2544,6 +2711,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = y.astype(mx.float32)
                 continue
             if n.op == "call_method":
+                if _view_refused(name, n, strided):
+                    raise RuntimeError(
+                        f"{name} on a possibly non-contiguous input: "
+                        "refused to the per-node path for torch stride "
+                        "semantics")
                 val, on_mx = _run_method(args[0], name, args[1:], kwargs)
                 if on_mx:
                     env[n] = val
