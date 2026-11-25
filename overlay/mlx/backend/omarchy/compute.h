@@ -1245,6 +1245,20 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  // 16x16x16 dense direct builds (matmul_coopmat_direct.comp -DCMAT16):
+  // same tile geometry as the 8x8x8 family, for drivers whose coopmat
+  // list has no fp32 8x8x8 shape (NVIDIA, ANV, RADV). fp16 operands;
+  // bf16 operands gated on OMARCHY_BF16_DIRECT. Dispatched with a
+  // requiredSubgroupSize 32 pin on drivers whose native subgroup size
+  // differs. Appended to keep profile kernel ids stable.
+  MatmulDirectF16C16Nn,
+  MatmulDirectF16C16Nt,
+  MatmulDirectF16C16Tn,
+  MatmulDirectF16C16Tt,
+  MatmulDirectBF16C16Nn,
+  MatmulDirectBF16C16Nt,
+  MatmulDirectBF16C16Tn,
+  MatmulDirectBF16C16Tt,
   Count,
 };
 
@@ -1321,7 +1335,8 @@ class ComputeRuntime {
       VkDevice device,
       uint32_t binding_limit,
       uint32_t required_subgroup_size,
-      bool subgroup_size_16_admitted);
+      bool subgroup_size_16_admitted,
+      bool subgroup_size_32_admitted);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1392,6 +1407,7 @@ class ComputeRuntime {
   uint32_t binding_limit_{0};
   uint32_t required_subgroup_size_{0};
   bool subgroup_size_16_admitted_{false};
+  bool subgroup_size_32_admitted_{false};
   bool push_descriptors_{false};
 
   VkDevice device_;

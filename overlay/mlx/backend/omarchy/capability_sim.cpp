@@ -310,6 +310,32 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
           CoopmatType::Float32, CoopmatType::Float32,
           CoopmatScope::Subgroup, false});
     }
+    // The bf16-operand twin for the CMAT16 dense matmul route rides the
+    // same axis but only where the hardware truth enabled the bf16
+    // extension: a driver whose list carries 16-wide operand entries
+    // lists the bf16 one only when it also shipped the
+    // VK_KHR_shader_bfloat16 cooperative-matrix gate the device chained
+    // the feature on.
+    shapes.erase(
+        std::remove_if(
+            shapes.begin(),
+            shapes.end(),
+            [](const CoopmatShape& s) {
+              return s.m == 16u && s.n == 16u && s.k == 16u &&
+                  s.a == CoopmatType::BFloat16 &&
+                  s.b == CoopmatType::BFloat16 &&
+                  s.c == CoopmatType::Float32 &&
+                  s.result == CoopmatType::Float32 &&
+                  s.scope == CoopmatScope::Subgroup && !s.saturating;
+            }),
+        shapes.end());
+    if (profile.cooperative_matrix_f16_16 != 0 &&
+        caps.cooperative_matrix_bf16) {
+      shapes.push_back(CoopmatShape{
+          16u, 16u, 16u, CoopmatType::BFloat16, CoopmatType::BFloat16,
+          CoopmatType::Float32, CoopmatType::Float32,
+          CoopmatScope::Subgroup, false});
+    }
   }
   if (profile.shared_memory_limit_bytes != 0) {
     caps.max_compute_shared_memory_size = profile.shared_memory_limit_bytes;

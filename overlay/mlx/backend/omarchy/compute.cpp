@@ -732,6 +732,10 @@
 #include "matmul_direct_f16_nt_k2s8.h"
 #include "matmul_direct_f32_nt_k4s8.h"
 #include "matmul_direct_f32_tn_ws8.h"
+#include "matmul_direct_f16_c16_nn.h"
+#include "matmul_direct_f16_c16_nt.h"
+#include "matmul_direct_f16_c16_tn.h"
+#include "matmul_direct_f16_c16_tt.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -739,6 +743,10 @@
 #include "matmul_direct_bf16_tt.h"
 #include "matmul_direct_bf16_tn_ws8.h"
 #include "matmul_direct_bf16_nt_k4s8.h"
+#include "matmul_direct_bf16_c16_nn.h"
+#include "matmul_direct_bf16_c16_nt.h"
+#include "matmul_direct_bf16_c16_tn.h"
+#include "matmul_direct_bf16_c16_tt.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
@@ -2133,6 +2141,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_f32_nt_k4s8, matmul_direct_f32_nt_k4s8_size};
     case ComputeKernel::MatmulDirectF32TnWS8:
       return {matmul_direct_f32_tn_ws8, matmul_direct_f32_tn_ws8_size};
+    case ComputeKernel::MatmulDirectF16C16Nn:
+      return {matmul_direct_f16_c16_nn, matmul_direct_f16_c16_nn_size};
+    case ComputeKernel::MatmulDirectF16C16Nt:
+      return {matmul_direct_f16_c16_nt, matmul_direct_f16_c16_nt_size};
+    case ComputeKernel::MatmulDirectF16C16Tn:
+      return {matmul_direct_f16_c16_tn, matmul_direct_f16_c16_tn_size};
+    case ComputeKernel::MatmulDirectF16C16Tt:
+      return {matmul_direct_f16_c16_tt, matmul_direct_f16_c16_tt_size};
 #ifdef MLX_OMARCHY_BF16_DIRECT
     case ComputeKernel::MatmulDirectBF16Nn:
       return {matmul_direct_bf16_nn, matmul_direct_bf16_nn_size};
@@ -2146,6 +2162,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_bf16_tn_ws8, matmul_direct_bf16_tn_ws8_size};
     case ComputeKernel::MatmulDirectBF16NtK4S8:
       return {matmul_direct_bf16_nt_k4s8, matmul_direct_bf16_nt_k4s8_size};
+    case ComputeKernel::MatmulDirectBF16C16Nn:
+      return {
+          matmul_direct_bf16_c16_nn, matmul_direct_bf16_c16_nn_size};
+    case ComputeKernel::MatmulDirectBF16C16Nt:
+      return {
+          matmul_direct_bf16_c16_nt, matmul_direct_bf16_c16_nt_size};
+    case ComputeKernel::MatmulDirectBF16C16Tn:
+      return {
+          matmul_direct_bf16_c16_tn, matmul_direct_bf16_c16_tn_size};
+    case ComputeKernel::MatmulDirectBF16C16Tt:
+      return {
+          matmul_direct_bf16_c16_tt, matmul_direct_bf16_c16_tt_size};
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
       return {
           sdpa_prefill_flash_causal_coopmat_bf16,
@@ -2167,6 +2195,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::MatmulDirectBF16Tt:
     case ComputeKernel::MatmulDirectBF16TnWS8:
     case ComputeKernel::MatmulDirectBF16NtK4S8:
+    case ComputeKernel::MatmulDirectBF16C16Nn:
+    case ComputeKernel::MatmulDirectBF16C16Nt:
+    case ComputeKernel::MatmulDirectBF16C16Tn:
+    case ComputeKernel::MatmulDirectBF16C16Tt:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2:
@@ -2371,11 +2403,13 @@ ComputeRuntime::ComputeRuntime(
     VkDevice device,
     uint32_t binding_limit,
     uint32_t required_subgroup_size,
-    bool subgroup_size_16_admitted)
+    bool subgroup_size_16_admitted,
+    bool subgroup_size_32_admitted)
     : device_(device),
       binding_limit_(binding_limit),
       required_subgroup_size_(required_subgroup_size),
-      subgroup_size_16_admitted_(subgroup_size_16_admitted) {
+      subgroup_size_16_admitted_(subgroup_size_16_admitted),
+      subgroup_size_32_admitted_(subgroup_size_32_admitted) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2547,6 +2581,39 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         "main",
         nullptr,
         16u);
+  }
+  // The CMAT16 dense direct builds assume 32-lane subgroups: a device
+  // reporting a different native size (16 on ANV, 64 on RADV) reaches
+  // them only through a requiredSubgroupSize pin, and only when the
+  // hardware report admitted the pin. A native-32 device takes the
+  // default (required_subgroup_size_ is 0 or already 32). Same
+  // fail-closed rule as the KCONTS16 pin.
+  if (kernel == ComputeKernel::MatmulDirectF16C16Nn ||
+      kernel == ComputeKernel::MatmulDirectF16C16Nt ||
+      kernel == ComputeKernel::MatmulDirectF16C16Tn ||
+      kernel == ComputeKernel::MatmulDirectF16C16Tt ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Nn ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Nt ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Tn ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Tt) {
+    if (required_subgroup_size_ != 0u &&
+        required_subgroup_size_ != 32u &&
+        !subgroup_size_32_admitted_) {
+      throw std::runtime_error(
+          "[omarchy] CMAT16 dense matmul requires 32-lane subgroups, "
+          "which this device cannot legally pin.");
+    }
+    const uint32_t pin =
+        required_subgroup_size_ != 0u && required_subgroup_size_ != 32u
+        ? 32u
+        : required_subgroup_size_;
+    return create_pipeline(
+        std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(bytes),
+            size / sizeof(uint32_t)},
+        "main",
+        nullptr,
+        pin);
   }
   return create_pipeline(
       std::span<const uint32_t>{

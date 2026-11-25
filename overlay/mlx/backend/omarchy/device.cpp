@@ -1062,6 +1062,20 @@ bool Runtime::init_impl() {
             p13.maxComputeWorkgroupSubgroups,
             16u,
             256u);
+    // 32-lane admission follows the same enable rule, for the CMAT16
+    // dense matmul builds on drivers whose native subgroup is 16 (ANV)
+    // or 64 (RADV) lanes. A native-32 device reports
+    // required_subgroup_size == 0 and needs no pin.
+    info.caps.subgroup_size_32_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            32u,
+            128u);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1864,7 +1878,8 @@ Device::Device(uint32_t physical_device_index) {
       device_,
       binding_limit,
       hardware_caps_.required_subgroup_size,
-      hardware_caps_.subgroup_size_16_admitted);
+      hardware_caps_.subgroup_size_16_admitted,
+      hardware_caps_.subgroup_size_32_admitted);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

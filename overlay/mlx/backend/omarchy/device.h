@@ -249,6 +249,12 @@ struct CapabilityReport {
   // hardware report only; gate on hardware_capabilities(), never the
   // simulated profile.
   bool subgroup_size_16_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 32 for a 128-lane
+  // compute workgroup (the CMAT16 dense matmul builds, whose geometry
+  // assumes 32-lane subgroups). Lets drivers with a native 16- or
+  // 64-lane subgroup (ANV, RADV) run the same route NVIDIA runs
+  // natively. Derived from the hardware report only.
+  bool subgroup_size_32_admitted{false};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride

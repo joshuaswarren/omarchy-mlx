@@ -1100,8 +1100,69 @@ void dispatch_matmul(
       (params.matrix_n & 1u) == 0u &&
       (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
       direct_shape;
-  bf16_fma = bf16_fma && !direct;
+  // 16x16x16 dense direct route (matmul_coopmat_direct.comp -DCMAT16):
+  // the same tile geometry on the 16x16x16 shape for drivers whose
+  // coopmat list has no fp32 8x8x8 shape (NVIDIA, ANV, RADV) and so can
+  // never take the direct route above. The workgroup assumes 32-lane
+  // subgroups: a driver reporting a different native size (ANV 16, RADV
+  // 64) reaches the route only when the hardware report admitted a
+  // requiredSubgroupSize 32 pin for a 128-lane workgroup, and
+  // create_pipeline pins it. Each dtype needs its exact operand shape
+  // advertised; the bf16 arm additionally requires the bf16 extension
+  // gate (cooperative_matrix_bf16) that device creation chained the
+  // cooperative-matrix feature on for an f32_8-less driver.
+  const bool c16_subgroup = caps.subgroup_size == 32u ||
+      caps.subgroup_size_32_admitted;
+  bool direct16_shape = direct_dtype == float16 &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::matmul_direct_coopmat_shape_c16(
+              omarchy::CoopmatType::Float16));
+#ifdef MLX_OMARCHY_BF16_DIRECT
+  if (direct_dtype == bfloat16 && caps.cooperative_matrix_bf16) {
+    direct16_shape = omarchy::cooperative_matrix_advertises(
+        caps.cooperative_matrix_shapes,
+        omarchy::matmul_direct_coopmat_shape_c16(
+            omarchy::CoopmatType::BFloat16));
+  }
+#endif
+  const bool direct16 = !sdpa && !use_c &&
+      causal.second == CausalSkip::None && !direct && !coopmat &&
+      !coopmat_disabled &&
+      c16_subgroup && params.matrix_m >= 32u && params.matrix_n >= 32u &&
+      params.matrix_k > 0u && (params.matrix_k % 16u) == 0u &&
+      (params.matrix_n & 1u) == 0u &&
+      (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
+      direct16_shape;
+  bf16_fma = bf16_fma && !direct && !direct16;
   uint32_t direct_tile_n = 64u;
+  if (direct16) {
+    static constexpr omarchy::ComputeKernel kDirectC16[2][4] = {
+        {omarchy::ComputeKernel::MatmulDirectF16C16Nn,
+         omarchy::ComputeKernel::MatmulDirectF16C16Nt,
+         omarchy::ComputeKernel::MatmulDirectF16C16Tn,
+         omarchy::ComputeKernel::MatmulDirectF16C16Tt},
+        {omarchy::ComputeKernel::MatmulDirectBF16C16Nn,
+         omarchy::ComputeKernel::MatmulDirectBF16C16Nt,
+         omarchy::ComputeKernel::MatmulDirectBF16C16Tn,
+         omarchy::ComputeKernel::MatmulDirectBF16C16Tt}};
+    kernel = kDirectC16[direct_dtype == bfloat16]
+                       [(a_transposed ? 2 : 0) + (b_transposed ? 1 : 0)];
+    const auto& c16_hw = encoder.device().hardware_capabilities();
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps,
+        direct16,
+        "MatmulDirectC16",
+        direct_dtype == bfloat16
+            ? "cooperative_matrix_bf16_16x16x16"
+            : "cooperative_matrix_fp16_16x16x16",
+        omarchy::cooperative_matrix_advertises(
+            c16_hw.cooperative_matrix_shapes,
+            omarchy::matmul_direct_coopmat_shape_c16(
+                direct_dtype == bfloat16 ? omarchy::CoopmatType::BFloat16
+                                         : omarchy::CoopmatType::Float16)));
+  }
   if (direct) {
     static constexpr omarchy::ComputeKernel kDirect[3][4] = {
         {omarchy::ComputeKernel::MatmulDirectF16Nn,
@@ -1139,7 +1200,7 @@ void dispatch_matmul(
         hw.cooperative_matrix_f32_8 &&
             (direct_dtype != float16 || hw.cooperative_matrix_f16_8) &&
             (direct_dtype != bfloat16 || hw.cooperative_matrix_bf16_8));
-  } else if (rb) {
+  } else if (rb && !direct16) {
     kernel = rb_f32 ? omarchy::ComputeKernel::MatmulRbF32
                     : omarchy::ComputeKernel::MatmulRbF16;
   }
@@ -1152,7 +1213,7 @@ void dispatch_matmul(
     params.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
   }
   const uint32_t tile =
-      direct ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
+      (direct || direct16) ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
   bool bf16_vec_aligned = ((params.lhs_offset | params.rhs_offset |
       params.rhs_gap) & 3u) == 0u;
   for (uint32_t axis = 0; bf16_vec_aligned && axis < params.dims; ++axis) {
