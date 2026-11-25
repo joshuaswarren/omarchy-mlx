@@ -8091,7 +8091,8 @@ TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
     CHECK(omarchy::qmm_bf16w_default_part("Apple M5 Max (G17C B1)"));
     CHECK(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
     CHECK(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
-    CHECK(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 Max (G13C C0)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
     CHECK(omarchy::qmm_bf16w_default_part("Apple M6 (G18G B1)"));
     CHECK(omarchy::qmm_bf16w_default_part(""));
   }
