@@ -1190,6 +1190,41 @@ def _rsub(a, b, alpha=1, **k):
     return _mx(b) - _mx(a) * alpha
 
 
+def _alpha_arith(a, b, alpha, sign):
+    # aten.add/sub (self, other, *, alpha=1): self +/- alpha*other. Torch
+    # rejects sub on bool operands and a floating alpha when the promoted
+    # operand type is integral (int64 self + float other is legal and
+    # returns float).
+    da, db = _dtype_of(a), _dtype_of(b)
+    if sign < 0 and (da == mx.bool_ or db == mx.bool_):
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is not "
+            "supported. If you are trying to invert a mask, use the `~` or "
+            "`logical_not()` operator instead.")
+    rt = mx.result_type(da, db)
+    if isinstance(alpha, float) and _is_integral_dtype(rt):
+        raise RuntimeError(
+            "For integral input tensors, the argument alpha must not be a "
+            "floating point number")
+    # Compute in the promoted dtype: alpha*other in other's own dtype can
+    # overflow before promotion (f16 40000 * 2 = inf vs f32 80000).
+    ma, mb = _mx(a), _mx(b)
+    ma = ma.astype(rt) if isinstance(ma, mx.array) else mx.array(ma, dtype=rt)
+    mb = mb.astype(rt) if isinstance(mb, mx.array) else mx.array(mb, dtype=rt)
+    return _ar(ma + sign * (alpha * mb))
+
+
+def _ar(v):
+    # Scalar-only calls (aten.mul.default(2, 3)) reach the specs with no mx
+    # operand; a bare Python number would leave the graph output unboxed.
+    # Box with torch's scalar dtypes (int64 for ints) — assert_close checks.
+    if isinstance(v, mx.array):
+        return v
+    if isinstance(v, int) and not isinstance(v, bool):
+        return mx.array(v, dtype=mx.int64)
+    return mx.array(v)
+
+
 def _atan2(y, x):
     # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
     # The Vulkan atan2 kernel drops the sign of a zero x; 1/+-0 = +-inf
@@ -1514,37 +1549,44 @@ def _adaptive_avg_pool2d_backward(grad_output, a):
 def _bn3(x, w, b, rm, rv, training, momentum, eps):
     """batch-norm forward, channel dim 1 (N,C,... layout). Training
     normalizes with the biased batch variance (torch semantics); eval
-    reads the running stats. Returns (out, save_mean, save_invstd)."""
+    reads the running stats. Returns (out, save_mean, save_invstd).
+
+    The normalize runs in an (N*H*W, C) layout: multi-axis mean/var over
+    a 4-D tensor produced wrong values on the Vulkan backend (PAR-41),
+    while the 2-D column reductions are exact."""
     x = _mx(x)
-    bc = [1, -1] + [1] * (x.ndim - 2)
+    C = x.shape[1]
+    N = x.shape[0]
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
     if training:
-        axes = tuple(d for d in range(x.ndim) if d != 1)
-        mean = mx.mean(x, axis=axes, keepdims=True)
-        var = mx.var(x, axis=axes, keepdims=True)
+        mean = mx.mean(x2, axis=0)
+        var = mx.var(x2, axis=0)
     else:
-        mean = mx.reshape(_mx(rm), bc)
-        var = mx.reshape(_mx(rv), bc)
+        mean = mx.reshape(_mx(rm), (-1,))
+        var = mx.reshape(_mx(rv), (-1,))
     invstd = mx.rsqrt(var + eps)
-    y = (x - mean) * invstd
+    y = (x2 - mean) * invstd
     if w is not None:
-        y = y * mx.reshape(_mx(w), bc)
+        y = y * mx.reshape(_mx(w), (1, C))
     if b is not None:
-        y = y + mx.reshape(_mx(b), bc)
-    squeeze = lambda t: mx.reshape(t, (-1,)) if t.ndim > 1 else t
-    return y, squeeze(mean), squeeze(invstd)
+        y = y + mx.reshape(_mx(b), (1, C))
+    y = mx.moveaxis(y.reshape(N, *x.shape[2:], C), -1, 1)
+    return y, mean, invstd
 
 def _bn_legit_functional(x, w, b, rm, rv, training, momentum, eps):
     """aten._native_batch_norm_legit_functional (aot train path): same core as
     _bn3 but returns updated running stats: (out, save_mean, save_invstd,
     new_running_mean, new_running_var). Torch updates running_var with the
-    UNBIASED batch var while normalizing with the biased one."""
+    UNBIASED batch var while normalizing with the biased one. Uses the same
+    (N*H*W, C) layout as _bn3 (PAR-41)."""
     x = _mx(x)
     out, sm, si = _bn3(x, w, b, rm, rv, training, momentum, eps)
     rmx, rvx = _mx(rm), _mx(rv)
     if training:
-        axes = tuple(d for d in range(x.ndim) if d != 1)
-        n = x.size / x.shape[1]
-        var_b = mx.var(x, axis=axes)
+        C = x.shape[1]
+        x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
+        n = x2.shape[0]
+        var_b = mx.var(x2, axis=0)
         unbias = var_b * (n / (n - 1)) if n > 1 else var_b
         new_rm = (1.0 - momentum) * rmx + momentum * sm
         new_rv = (1.0 - momentum) * rvx + momentum * unbias
@@ -1566,26 +1608,31 @@ def _select_backward(g, sizes, dim, index):
 
 
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
-    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask."""
+    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask.
+    Same (N*H*W, C) layout as _bn3 (PAR-41)."""
     dy, x = _mx(dy), _mx(x)
-    axes = tuple(d for d in range(x.ndim) if d != 1)
-    bc = [1, -1] + [1] * (x.ndim - 2)
+    C = x.shape[1]
+    N = x.shape[0]
+    dy2 = mx.moveaxis(dy, 1, -1).reshape(-1, C)
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
     if training:
-        mean = mx.reshape(_mx(save_mean), bc)
-        invstd = mx.reshape(_mx(save_invstd), bc)
+        mean = _mx(save_mean)
+        invstd = _mx(save_invstd)
     else:
-        mean = mx.reshape(_mx(rm), bc)
-        invstd = mx.rsqrt(mx.reshape(_mx(rv), bc) + eps)
-    wb = mx.reshape(_mx(w), bc) if w is not None else 1.0
-    xh = (x - mean) * invstd
+        mean = mx.reshape(_mx(rm), (-1,))
+        invstd = mx.rsqrt(mx.reshape(_mx(rv), (-1,)) + eps)
+    wb = mx.reshape(_mx(w), (1, C)) if w is not None else 1.0
+    xh = (x2 - mean) * invstd
     if training:
-        dx = (dy - mx.mean(dy, axis=axes, keepdims=True)
-              - xh * mx.mean(dy * xh, axis=axes, keepdims=True)) * invstd * wb
+        dx2 = (dy2 - mx.mean(dy2, axis=0)
+               - xh * mx.mean(dy2 * xh, axis=0)) * invstd * wb
     else:
-        dx = dy * invstd * wb
-    dw = mx.sum(dy * xh, axis=axes) if (w is not None and out_mask[1]) else None
-    db = mx.sum(dy, axis=axes) if out_mask[2] else None
-    return (dx if out_mask[0] else None), dw, db
+        dx2 = dy2 * invstd * wb
+    dw = mx.sum(dy2 * xh, axis=0) if (w is not None and out_mask[1]) else None
+    db = mx.sum(dy2, axis=0) if out_mask[2] else None
+    dx = (mx.moveaxis(dx2.reshape(N, *x.shape[2:], C), -1, 1)
+          if out_mask[0] else None)
+    return dx, dw, db
 
 # ---------------- lowering tables ----------------
 
@@ -1681,25 +1728,37 @@ def _acosh(a):
 # contract exact. test_random_family pins the deferral.
 
 
+def _blas_beta(b, beta):
+    # aten beta=0 ignores `input` entirely, NaN/inf included; a bare
+    # `beta * input` would propagate that payload into the result.
+    b = _mx(b)
+    if beta == 0:
+        return mx.zeros(b.shape, b.dtype)
+    return beta * b
+
+
 _FUNC_SPECS = {
     "linear": _linear,
-    # PT-AE: MLX matmul answers bf16 inputs in fp32; torch keeps bf16. Cast back
-    # to the left operand dtype (fp32 accumulate, same rounding as torch).
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
     "bmm": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
     "mm": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
-    "addmm": lambda b, m1, m2, beta=1, alpha=1: (beta * _mx(b) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
-    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: (beta * _mx(b) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
+    "addmm": lambda b, m1, m2, beta=1, alpha=1: (_blas_beta(b, beta) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
+    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: (_blas_beta(b, beta) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
     "mv": lambda a, v: mx.matmul(a, v),
     "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
+    "addmv": lambda b, m, v, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m, v),
+    "addbmm": lambda b, b1, b2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.sum(mx.matmul(b1, b2), axis=0),
+    "addr": lambda b, v1, v2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.outer(_mx(v1), _mx(v2)),
+    "vdot": lambda a, b: mx.sum(mx.conjugate(_mx(a)) * _mx(b)),
     "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
     "unsafe_view": _reshape,
-    "add": lambda a, b, *k: _mx(a) + _mx(b),
-    "sub": lambda a, b, *k: _mx(a) - _mx(b),
-    "mul": lambda a, b, *k: _mx(a) * _mx(b),
-    "mul_": lambda a, b, *k: _mx(a) * _mx(b),
-    "div": lambda a, b, *k: _mx(a) / _mx(b),
-    "truediv": lambda a, b, *k: _mx(a) / _mx(b),
+    "add": lambda a, b, alpha=1, *k: _alpha_arith(a, b, alpha, +1),
+    "sub": lambda a, b, alpha=1, *k: _alpha_arith(a, b, alpha, -1),
+    "mul": lambda a, b, *k: _ar(_mx(a) * _mx(b)),
+    "mul_": lambda a, b, *k: _ar(_mx(a) * _mx(b)),
+    "div": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    "truediv": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    "true_divide": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
     "addcdiv": _addcdiv,
@@ -1745,6 +1804,18 @@ _FUNC_SPECS = {
     "batch_norm": lambda x, w, b, rm, rv, training, momentum, eps, *k: _bn3(x, w, b, rm, rv, training, momentum, eps)[0],
     "native_batch_norm": lambda x, w, b, rm, rv, training, momentum, eps: _bn3(x, w, b, rm, rv, training, momentum, eps),
     "_native_batch_norm_legit_functional": _bn_legit_functional,
+    # the aot/functional EVAL graph lowers to this op; without an entry
+    # every eval batch-norm through torch.compile is unlowerable (PAR-41)
+    # aten order: (x, weight, bias, running_mean, running_var, momentum, eps)
+    # - no training flag. Torch returns (out, empty, empty); MLX returns the
+    # running stats in slots 2/3 like native_batch_norm.
+    # aten order: (x, weight, bias, running_mean, running_var, momentum, eps)
+    # - no training flag. Torch returns (out, empty, empty): the save stats
+    # are typed length-0 tensors, so the lowering returns typed empties too
+    # and keeps _bn3's eval math for the output only.
+    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, momentum, eps, *k: (
+        lambda r: (r[0].astype(_mx(x).dtype), _mx(rm).reshape(-1)[:0], _mx(rv).reshape(-1)[:0]))(_bn3(
+            x, w, b, rm, rv, False, momentum, eps)),
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
@@ -1955,14 +2026,17 @@ _SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
              "log_normal"}
 
 # ops that must never CPU-fallback: lower even when upstream nodes produced
-# torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)
+# torch tensors (e.g. pool bwd behind an unlowered conv/bn backward), and
+# cheap elementwise binops whose sampled forms can arrive with scalar-only
+# args (aten.mul.default(2, 3) style — no mx input to trip has_mx)
 _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "max_pool2d_with_indices_backward", "avg_pool2d",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
                  "_adaptive_avg_pool2d_backward", "convolution_backward",
                  "threshold_backward", "native_batch_norm_backward",
-                 "Float"}
+                 "Float",
+                 "add", "sub", "mul", "div", "truediv", "true_divide"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
