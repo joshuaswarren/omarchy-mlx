@@ -89,6 +89,7 @@ SERIES_PATCHES=(
   mlx-lm-spec-split-rows.patch
   mlx-lm-kv-host-offset.patch
   mlx-lm-readback-chunk.patch
+  mlx-lm-deferred-token-yield.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -363,6 +364,18 @@ if [[ "$SERIES" == "patches" ]]; then
   apply mlx-lm-readback-chunk.patch
 else
   echo "readback-chunk: 0.31.3 series only; skipped on $SERIES"
+fi
+
+# Deferred token yield (MLX_OMARCHY_DEFER_TOKENS=K, default 8): the per-step
+# y.item() join moves to a daemon reader thread so the eval thread keeps
+# recording; the loop stays K steps ahead and yields tokens as the reader
+# materializes them. RTX 5060 Ti decode-only A/B: ~139 vs ~103 tps stock
+# (+34%); the same-thread readback-chunk it supersedes measured flat there.
+# =0 restores the eager loop. 0.31.3 series only.
+if [[ "$SERIES" == "patches" ]]; then
+  apply mlx-lm-deferred-token-yield.patch
+else
+  echo "deferred-token-yield: 0.31.3 series only; skipped on $SERIES"
 fi
 
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
