@@ -569,6 +569,11 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
     raw = worker.call(payload, deadline_seconds)
     latency_ms = (time.monotonic() - start) * 1000.0
 
+    if not isinstance(raw, dict):
+        return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
+    if any(not isinstance(raw.get(flag, False), bool) for flag in ("busy", "timed_out")):
+        return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
+
     if raw.get("busy"):
         return RoutingOutcome(reason="previous_call_pending", latency_ms=latency_ms)
     if raw.get("timed_out"):
@@ -585,15 +590,17 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
         return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
     values = [probs[k] for k in ROUTES]
     if any(isinstance(v, bool) or not isinstance(v, (int, float))
-           or not math.isfinite(v) or not 0 <= v <= 1 for v in values):
+           or not 0 <= v <= 1 for v in values):
         return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
     if not math.isclose(sum(values), 1, abs_tol=0.001):
         return RoutingOutcome(reason="invalid_distribution", latency_ms=latency_ms)
 
-    rl = answer.get("rl_agent") or {}
+    rl = answer.get("rl_agent")
+    if not isinstance(rl, dict):
+        return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
     act = rl.get("act_probability")
     if (isinstance(act, bool) or not isinstance(act, (int, float))
-            or not math.isfinite(act) or not 0 <= act <= 1):
+            or not 0 <= act <= 1):
         return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
 
     choice = answer.get("choice")

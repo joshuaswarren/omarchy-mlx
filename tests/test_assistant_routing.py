@@ -296,6 +296,33 @@ class EvaluateRouteTests(unittest.TestCase):
             self.assertIsNone(out.route, msg=reason)
             self.assertEqual(out.reason, "invalid_output", msg=reason)
 
+    def test_malformed_worker_reply_is_invalid_output(self):
+        def answer(**fields):
+            reply = _good_response("structured_decision", prob=0.7, margin=0.4, act=0.9)
+            reply["answers"]["route"].update(fields)
+            return reply
+
+        cases = [("raw_none", None), ("raw_list", []), ("raw_str", "err"),
+                 ("raw_int", 123), ("raw_bool", True)]
+        cases += [(name, answer(rl_agent=bad)) for name, bad in
+                  (("rl_list", [1]), ("rl_str", "bad"), ("rl_int", 1), ("rl_bool", True))]
+        cases += [("huge_act_probability", answer(rl_agent={"act_probability": 10**400})),
+                  ("huge_probability", answer(probabilities={
+                      "conversation": 10**400, "structured_decision": 0, "clarify": 0}))]
+        cases += [("busy_str", dict(answer(), busy="false")),
+                  ("busy_int", dict(answer(), busy=1)),
+                  ("timed_out_str", dict(answer(), timed_out="false")),
+                  ("timed_out_null", dict(answer(), timed_out=None))]
+        for name, reply in cases:
+            with self.subTest(case=name):
+                worker = FakeWorker()
+                worker.response = reply  # FakeWorker swaps a falsy response for its default
+                out = evaluate_route(self.DECISION_TEXT, worker=worker)
+                self.assertIsNone(out.route)
+                self.assertEqual(out.reason, "invalid_output")
+                self.assertIs(out.timed_out, False)
+                self.assertIsInstance(out.latency_ms, float)
+
     def test_sum_off_is_invalid_distribution(self):
         worker = FakeWorker(_bad_response("sum_off"))
         out = evaluate_route(self.DECISION_TEXT, worker=worker)
