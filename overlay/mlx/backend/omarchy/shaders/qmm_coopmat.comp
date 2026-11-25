@@ -126,6 +126,9 @@
 #endif
 #define SUBGROUP_ROW_BLOCKS 1u
 #elif TILE_ROWS == 64
+#ifdef CMAT16
+#error "CMAT16 ships the 32-row tile only"
+#endif
 // Two subgroups each own 32 rows (4 blocks), or SG4: four subgroups
 // (128 threads) each own 16 rows (2 blocks) so the 64-row tile keeps
 // the shipped 32-row per-thread accumulator footprint. W is dequantized
