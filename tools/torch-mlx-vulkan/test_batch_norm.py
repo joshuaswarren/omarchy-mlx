@@ -215,13 +215,31 @@ def check_no_training(c, dt_name, tol):
     rm_m, rv_m = mx.array(c["rm"]).astype(dt), mx.array(c["rv"]).astype(dt)
     mom, eps = 0.25, 1e-3  # distinct, to catch argument-order binding
     name = "_native_batch_norm_legit_no_training"
-    r = mlx_vulkan.ATEN_TABLE[name](x_m, w_m, b_m, rm_m, rv_m, mom, eps)
-    assert isinstance(r, tuple) and len(r) == 3, f"{name} contract"
+    # FX graph through the executor: the real ATen entry, all 3 outputs,
+    # compared against torch (not a manual oracle)
+    g = torch.fx.Graph()
+    phs = [g.placeholder(f"p{i}") for i in range(7)]
+    g.call_function(torch.ops.aten._native_batch_norm_legit_no_training,
+                    tuple(phs), {})
+    g.output((phs[6],))  # placeholder; replaced below with the real node
+    # rebuild properly: capture the node
+    g = torch.fx.Graph()
+    phs = [g.placeholder(f"p{i}") for i in range(7)]
+    n = g.call_function(torch.ops.aten._native_batch_norm_legit_no_training,
+                        tuple(phs), {})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    r = run(x_t, w_t, b_t, rm_t.clone(), rv_t.clone(), mom, eps)
+    assert stats["cpu"] == [], stats
     wr = torch.ops.aten._native_batch_norm_legit_no_training(
         x_t, w_t, b_t, rm_t.clone(), rv_t.clone(), mom, eps)
+    assert isinstance(r, tuple) and len(r) == 3, f"{name} contract"
     close(f"{name} out", r[0], wr[0], tol)
-    close(f"{name} save_mean (running)", r[1], rm_t, tol)
-    close(f"{name} save_invstd (running)", r[2], 1.0 / torch.sqrt(rv_t + eps), tol)
+    # torch's slots 2/3 are EMPTY typed tensors; the lowering must match
+    # (shape/dtype only - a max-reduction over a zero-size array is undefined)
+    assert tuple(r[1].shape) == tuple(wr[1].shape) == (0,), (r[1].shape, wr[1].shape)
+    assert tuple(r[2].shape) == tuple(wr[2].shape) == (0,), (r[2].shape, wr[2].shape)
     # the eval math itself must use the passed eps, not the momentum
     C, chw = c["C"], (1, c["C"], *([1] * (len(c["x"].shape) - 2)))
     want = (x_t - rm_t.reshape(chw)) / torch.sqrt(rv_t.reshape(chw) + eps) * w_t.reshape(chw) + b_t.reshape(chw)

@@ -1794,8 +1794,13 @@ _FUNC_SPECS = {
     # aten order: (x, weight, bias, running_mean, running_var, momentum, eps)
     # - no training flag. Torch returns (out, empty, empty); MLX returns the
     # running stats in slots 2/3 like native_batch_norm.
-    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, momentum, eps, *k: _bn3(
-        x, w, b, rm, rv, False, momentum, eps),
+    # aten order: (x, weight, bias, running_mean, running_var, momentum, eps)
+    # - no training flag. Torch returns (out, empty, empty): the save stats
+    # are typed length-0 tensors, so the lowering returns typed empties too
+    # and keeps _bn3's eval math for the output only.
+    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, momentum, eps, *k: (
+        lambda r: (r[0], _mx(rm).reshape(-1)[:0], _mx(rv).reshape(-1)[:0]))(_bn3(
+            x, w, b, rm, rv, False, momentum, eps)),
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
