@@ -3449,12 +3449,16 @@ TEST_CASE("add+norm fold refuses non-contiguous addends, composed matches") {
   set_compile_mode(CompileMode::disabled);
   // A transposed addend (row_contiguous=false) must refuse the fold and
   // produce the composed chain's bits, not corrupt output (#944 review).
+  // {2048,1} transposed would be trivially contiguous, so use a
+  // 2-row tensor transposed to {2,2048} plus a broadcast to the
+  // operating shape.
   array xt = astype(
-      random::normal(Shape{2048, 1}, float32, std::nullopt, stream),
+      random::normal(Shape{2048, 2}, float32, std::nullopt, stream),
       bfloat16, stream);
-  array x = transpose(xt, {1, 0}, stream);
+  array x = broadcast_to(transpose(xt, {1, 0}, stream), Shape{2, 2048},
+                         stream);
   array r = astype(
-      random::normal(Shape{1, 2048}, float32, std::nullopt, stream),
+      random::normal(Shape{2, 2048}, float32, std::nullopt, stream),
       bfloat16, stream);
   array w = astype(
       random::normal(Shape{2048}, float32, std::nullopt, stream), bfloat16,

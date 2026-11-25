@@ -12601,8 +12601,8 @@ bool dispatch_add_norm_pair(
   if (w.dtype() != bfloat16 ||
       (w.size() != 1 && w.size() != row_length) ||
       !whole_dense(w, w.size()) ||
-      !add_in[0].flags().row_contiguous ||
-      !add_in[1].flags().row_contiguous ||
+      !whole_dense(add_in[0], add_in[0].size()) ||
+      !whole_dense(add_in[1], add_in[1].size()) ||
       !input_ready(add_in[0], stream) || !input_ready(add_in[1], stream) ||
       !input_ready(w, stream)) {
     return false;

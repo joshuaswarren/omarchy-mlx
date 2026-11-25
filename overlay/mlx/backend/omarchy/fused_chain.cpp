@@ -2670,6 +2670,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       const array* norm = it->second;
+      if (norm->ndim() == 0) {
+        continue;
+      }
       size_t row_length = norm->shape(-1);
       if (row_length == 0) {
         continue;
@@ -2682,12 +2685,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           norm->inputs()[0].primitive().stream() != node.primitive().stream()) {
         continue;
       }
-      // Dense row-contiguous INPUTS only (#944 review): output arrays
-      // are unscheduled at plan time and their flags are meaningless.
-      if (!norm->inputs()[0].flags().row_contiguous ||
-          !norm->inputs()[1].flags().row_contiguous) {
-        continue;
-      }
+      // Layout and readiness gate entirely at fire time (#944 review):
+      // plan-time nodes are unscheduled, so their flags are meaningless.
       // The apple_norm_enabled device gate lives at fire time (it is
       // TU-local to primitives.cpp); a refused device un-plans on the
       // first fire and both nodes take today's route.
