@@ -1216,7 +1216,11 @@ enum class ComputeKernel : uint16_t {
   BinarySimpleF32,
   BinarySimpleF16,
   BinarySimpleBF16,
-  Count,
+  Count,  // PT-T decode norm: one subgroup per row, single pass (w7H)
+  FastRmsNormSubgroupBF16,
+  // gated decode norm: same zero-barrier single-subgroup design (w7H draft)
+  FastNormGatedSubgroupBF16,
+
 };
 
 struct ComputeBinding {
@@ -1372,10 +1376,6 @@ class ComputeRuntime {
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;
   std::unordered_map<VkPipeline, BindingAccess> access_;
   std::mutex mutex_;
-  // PT-T decode norm: one subgroup per row, single pass (w7H)
-  FastRmsNormSubgroupBF16,
-  // gated decode norm: same zero-barrier single-subgroup design (w7H draft)
-  FastNormGatedSubgroupBF16,
 };
 
 } // namespace mlx::core::omarchy
