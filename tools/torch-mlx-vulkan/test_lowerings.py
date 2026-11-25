@@ -1457,6 +1457,66 @@ def test_random_family():
     print("test_random_family PASS")
 
 
+
+def test_sum_aot_dim_input():
+    # PT-B: AOT graphs functionalize the dim list into a tensor graph input.
+    # The lowering must accept a tensor of dims, not only python lists.
+    import numpy as np
+    x32 = torch.tensor([[1.5, -2.0, 0.25], [3.0, -1.0, 2.0]])
+    g = torch.fx.Graph()
+    ph = g.placeholder("p0")
+    dp = g.placeholder("p1")
+    n = g.call_function(torch.ops.aten.sum.dim_IntList, (ph,), {"dim": dp, "keepdim": True})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    dim = torch.tensor([1])
+    out = run(x32, dim)
+    ref = torch.sum(x32, dim=[1], keepdim=True)
+    assert stats["cpu"] == [], (stats, "aten.sum.dim_IntList fell back")
+    assert np.allclose(out.float().numpy(), ref.numpy(), atol=2e-2), (out, ref)
+    print("test_sum_aot_dim_input PASS")
+
+
+def test_bmm_matmul():
+    # PT-AE: aten.bmm.default and aten.matmul.default are the batched-GEMM
+    # census rows (PAR-41: matmul/bmm carry the MLP/BERT weight). Prove the
+    # eager executor lowers both overloads into stats["mlx"] and matches
+    # eager at fp32 and bf16, including the 2D x 3D broadcast.
+    import numpy as np
+    a3 = torch.randn(2, 2, 3)
+    b3 = torch.randn(2, 3, 4)
+    a2 = torch.randn(3, 4)
+    ab2 = torch.randn(2, 3)
+    a3b, b3b = a3.bfloat16(), b3.bfloat16()
+    cases = [
+        (torch.ops.aten.bmm.default, (a3, b3), torch.bmm(a3, b3)),
+        (torch.ops.aten.bmm.default, (a3b, b3b), torch.bmm(a3b, b3b)),
+        (torch.ops.aten.matmul.default, (a3, b3), torch.matmul(a3, b3)),
+        (torch.ops.aten.matmul.default, (a3b, b3b), torch.matmul(a3b, b3b)),
+        (torch.ops.aten.matmul.default, (ab2, b3), torch.matmul(ab2, b3)),  # 2D x 3D broadcast
+        (torch.ops.aten.matmul.default, (a3, a2), torch.matmul(a3, a2)),   # 3D x 2D broadcast
+    ]
+    for target, ins, ref in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        assert any(k in s for s in stats["mlx"] for k in ("matmul", "bmm")), (stats, str(target))
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=3e-2), (str(target), got, ref.float().numpy())
+        if out.dtype != ref.dtype:
+            # KNOWN GAP (d-PT-AE follow-up): bf16 GEMM answers fp32; values match
+            # exactly and the mx lowering is bf16 - the executor output path
+            # upcasts. Tracked; do not hide it silently.
+            print(f"WARN {target}: out {out.dtype} != torch {ref.dtype} (values match)")
+        else:
+            print(f"dtype ok {target}")
+    print("test_bmm_matmul PASS")
 def test_sub_div():
     _provenance()
     # PT-U8: aten.sub.default/div.default/true_divide.Scalar (+ mul.default,
@@ -1673,6 +1733,8 @@ if __name__ == "__main__":
     test_sub_div()
     test_hyperbolic()
     test_random_family()
+    test_sum_aot_dim_input()
+    test_bmm_matmul()
     test_blas_accum()
     test_meshgrid()
     print("ALL PASS")

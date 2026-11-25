@@ -1750,9 +1750,11 @@ def _blas_beta(b, beta):
 
 _FUNC_SPECS = {
     "linear": _linear,
-    "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
-    "addmm": lambda b, m1, m2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m1, m2),
-    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m1, m2),
+    "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
+    "bmm": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
+    "mm": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
+    "addmm": lambda b, m1, m2, beta=1, alpha=1: (_blas_beta(b, beta) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
+    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: (_blas_beta(b, beta) + alpha * mx.matmul(m1, m2)).astype(_mx(b).dtype),
     "mv": lambda a, v: mx.matmul(a, v),
     "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
     "addmv": lambda b, m, v, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m, v),
