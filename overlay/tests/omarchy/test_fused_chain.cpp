@@ -2059,6 +2059,22 @@ TEST_CASE("gemv epilogue-only route: the part rule") {
   CHECK_FALSE(omarchy::gemv_epilogue_only_part(""));
 }
 
+TEST_CASE("gemv balanced QKV route: part and width guards") {
+  CHECK(omarchy::gemv_balanced_qkv_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_part(""));
+
+  CHECK(omarchy::gemv_balanced_qkv_widths_ok({4096, 1024, 1024}));
+  CHECK(omarchy::gemv_balanced_qkv_widths_ok({4096, 512, 512}));
+  CHECK(omarchy::gemv_balanced_qkv_widths_ok({8192, 1024, 1024}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({6144, 2048, 16, 16}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 4096, 32, 32}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({9728, 9728}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({4096, 256, 256}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 512, 512}));
+}
+
 TEST_CASE("qmm residual norm default: shape, device capabilities and overrides") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};

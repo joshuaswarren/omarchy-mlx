@@ -1604,10 +1604,35 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         worth = worth || member.epilogue.has_value();
         group.members.push_back(std::move(member));
       }
-      // Epilogue-only route (device.h gemv_epilogue_only_part): the
-      // multi-member fold and epilogue-free singles keep their per-node
-      // path; only single-member Add-epilogue groups plan.
-      if (!node_gemv_enabled(*nodes[start]) &&
+      // Epilogue-only route (device.h gemv_epilogue_only_part): general
+      // multi-member folds (such as asymmetric 4-way GDN in_proj) and
+      // epilogue-free singles keep their per-node path; single-member
+      // Add-epilogue groups plan, plus balanced 3-member bf16 QKV groups
+      // on G14C unless MLX_OMARCHY_FUSED_GEMV is explicitly set to 0.
+      bool balanced_qkv = false;
+      if (!node_gemv_enabled(*nodes[start]) && x_rows == 1 &&
+          group.members.size() == 3 && !group.members[0].epilogue &&
+          !group.members[1].epilogue && !group.members[2].epilogue) {
+        const Device* d = stream_device(*nodes[start]);
+        const char* fg_env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV");
+        const bool explicit_gemv_off =
+            fg_env != nullptr && fg_env[0] != '\0' &&
+            !env_flag("MLX_OMARCHY_FUSED_GEMV");
+        if (d != nullptr && !explicit_gemv_off &&
+            gemv_epilogue_only_route_enabled(*d) &&
+            gemv_balanced_qkv_part(d->capabilities().device_name) &&
+            group.members[0].node.dtype() == bfloat16 &&
+            group.members[1].node.dtype() == bfloat16 &&
+            group.members[2].node.dtype() == bfloat16) {
+          std::vector<int64_t> widths;
+          widths.reserve(3);
+          for (const auto& m : group.members) {
+            widths.push_back(m.node.inputs()[1].shape(0));
+          }
+          balanced_qkv = gemv_balanced_qkv_widths_ok(widths);
+        }
+      }
+      if (!node_gemv_enabled(*nodes[start]) && !balanced_qkv &&
           (group.members.size() != 1 || !group.members[0].epilogue)) {
         continue;
       }
