@@ -57,6 +57,7 @@ import mlx_omarchy_paths
 import os
 import shutil
 import signal
+import stat
 import tempfile
 import threading
 import uuid
@@ -339,8 +340,9 @@ def set_reservation(name: str, byte_count: int, note: str = "",
                     resident_floor_bytes: int | None = None,
                     owner: str | None = None,
                     identity: dict | None = None) -> None:
-    if not name or byte_count <= 0:
-        raise BudgetError("reservation needs a name and positive bytes")
+    if not name or isinstance(byte_count, bool) or not isinstance(byte_count, int) \
+            or byte_count <= 0:
+        raise BudgetError("reservation needs a name and positive integer bytes")
     if state not in RESERVATION_STATES:
         raise BudgetError(f"reservation state must be one of {RESERVATION_STATES}")
     _validate_floor(byte_count, resident_floor_bytes)
@@ -352,7 +354,7 @@ def set_reservation(name: str, byte_count: int, note: str = "",
                 f"reservation {name!r} is owned by another holder "
                 f"({existing['owner']}); refusing to overwrite"
             )
-        data[name] = {"bytes": int(byte_count), "note": note, "state": state,
+        data[name] = {"bytes": byte_count, "note": note, "state": state,
                       "resident_floor_bytes": resident_floor_bytes, "owner": owner,
                       "identity": identity}
 
@@ -503,8 +505,9 @@ def admit_and_reserve(
     available_bytes exists for deterministic tests; production omits it
     and the transaction reads live MemAvailable inside the lock.
     """
-    if not name or byte_count <= 0:
-        raise BudgetError("admit_and_reserve needs a name and positive bytes")
+    if not name or isinstance(byte_count, bool) or not isinstance(byte_count, int) \
+            or byte_count <= 0:
+        raise BudgetError("admit_and_reserve needs a name and positive integer bytes")
     if not owner:
         raise BudgetError("admit_and_reserve needs an owner token (generate_owner())")
     _validate_floor(byte_count, resident_floor_bytes)
@@ -542,7 +545,7 @@ def admit_and_reserve(
                 "never allocate its buffers on this machine; lower --context "
                 "or use a smaller model"
             )
-        data[name] = {"bytes": int(byte_count), "note": note, "state": state,
+        data[name] = {"bytes": byte_count, "note": note, "state": state,
                       "resident_floor_bytes": resident_floor_bytes, "owner": owner,
                       "identity": identity}
         return Admission(True, byte_count, others, available,
@@ -687,6 +690,11 @@ def claim_reservation(name: str, claim_token: str, *, expected_bytes: int,
     a live or uncertain child is refused."""
     if not claim_token:
         raise BudgetError("claim refused: missing token")
+    if isinstance(expected_bytes, bool) or not isinstance(expected_bytes, int) \
+            or expected_bytes <= 0:
+        raise BudgetError(
+            f"claim refused for {name!r}: expected_bytes must be a positive integer, "
+            f"got {type(expected_bytes).__name__}")
     child_ident = proc_identity(os.getpid())
     if child_ident is None:
         raise BudgetError("claim refused: cannot read the claiming process's identity")
@@ -703,7 +711,7 @@ def claim_reservation(name: str, claim_token: str, *, expected_bytes: int,
                 f"not {expected_pair!r}")
         if entry.get("owner") != claim_token:
             raise BudgetError(f"claim refused for {name!r}: token mismatch")
-        if int(expected_bytes) != entry["bytes"]:
+        if expected_bytes != entry["bytes"]:
             raise BudgetError(
                 f"claim refused for {name!r}: allocation {expected_bytes} != "
                 f"reserved {entry['bytes']}; a claim never changes an allocation")
@@ -811,17 +819,40 @@ def claim_from_env(home: Path | None = None) -> dict | None:
         expected_pair=payload.get("pair_id"))
 
 
+# os.fdopen and os.fstat take a C int; a larger fd raises a raw
+# OverflowError or TypeError instead of OSError.
+_MAX_FD = 2**31 - 1
+
+
+def _lifetime_pipe(fd) -> bool:
+    """True only for the read end of a pipe above stdio. Stdio (0-2, and
+    True, which is fd 1) is refused because the watchdog closes the fd it
+    watches; a non-pipe (socket, tty, regular file), a pipe's write end, or
+    a FIFO opened read/write is refused because it may never reach EOF (a
+    read/write FIFO holds its own writer)."""
+    if isinstance(fd, bool) or not isinstance(fd, int) or not (2 < fd <= _MAX_FD):
+        return False
+    try:
+        return (stat.S_ISFIFO(os.fstat(fd).st_mode)
+                and (fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE) == os.O_RDONLY)
+    except OSError:
+        return False
+
+
 def watch_parent_fd(fd: int, on_eof) -> None:
     """Child-side parent-lifetime watchdog: blocks until the inherited pipe
     closes (the manager exited or died), then invokes on_eof exactly once.
     Run this in a daemon thread; on_eof typically SIGTERMs the child's own
-    pid so existing shutdown paths release the reservation."""
-    try:
-        with os.fdopen(int(fd), "rb", closefd=True) as fh:
-            while fh.read(65536):
-                pass
-    except OSError:
-        pass
+    pid so existing shutdown paths release the reservation. An fd that is not
+    an open pipe above stdio counts as a closed pipe: on_eof runs and nothing
+    is opened or closed."""
+    if _lifetime_pipe(fd):
+        try:
+            with os.fdopen(fd, "rb", closefd=True) as fh:
+                while fh.read(65536):
+                    pass
+        except OSError:
+            pass
     on_eof()
 
 
@@ -829,13 +860,22 @@ def watch_parent_from_env() -> bool:
     """Start the lifetime watchdog when the manager passed a lifetime fd.
     When the pipe closes the worker SIGTERMs itself, so the manager's death
     never leaves an orphan that still holds weights. Returns False for a
-    standalone launch (no fd), where nothing is watched."""
+    standalone launch (no fd), where nothing is watched. A set value that is
+    not an open pipe fd above stdio raises BudgetError before any thread
+    starts: the manager meant to supervise this child."""
     raw = os.environ.get(LIFETIME_FD_ENV, "")
-    if not raw.isdigit():
+    if not raw:
         return False
+    # ASCII digits only (str.isdigit and int() accept other Unicode digits),
+    # and at most 10 of them, so int() never meets the str-digits limit.
+    fd = int(raw) if len(raw) <= 10 and raw.isascii() and raw.isdigit() else None
+    if not _lifetime_pipe(fd):
+        raise BudgetError(
+            f"{LIFETIME_FD_ENV} must name the read end of an open pipe above fd 2, "
+            f"got {raw[:40]!r}")
     threading.Thread(
         target=watch_parent_fd,
-        args=(int(raw), lambda: os.kill(os.getpid(), signal.SIGTERM)),
+        args=(fd, lambda: os.kill(os.getpid(), signal.SIGTERM)),
         daemon=True,
     ).start()
     return True

@@ -876,8 +876,8 @@ def start_managed() -> None:
         from . import budget
     except ImportError:
         import budget
-    budget.watch_parent_from_env()
     try:
+        budget.watch_parent_from_env()
         budget.claim_from_env()
     except budget.BudgetError as exc:
         print(f"error: {exc}", file=sys.stderr)
