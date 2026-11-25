@@ -30,7 +30,7 @@
 extern "C" int mlx_omarchy_gdn_conv_delta_default(void);
 
 using namespace mlx::core;
-using mlx::core::omarchy::trace::counters;
+using mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot;
 
 namespace {
 constexpr int H = 16, D = 128, KEY_DIM = H * D, C = 3 * KEY_DIM, TAPS = 4;
@@ -88,11 +88,19 @@ struct Run {
   uint64_t dispatches;
 };
 
+uint64_t compute_dispatches() {
+  // When linked to a wheel, the inline counter in this executable is not libmlx's counter.
+  MlxOmarchyTraceSnapshot snapshot{};
+  REQUIRE(mlx_omarchy_trace_snapshot_abi_size() == sizeof(snapshot));
+  mlx_omarchy_trace_snapshot(&snapshot);
+  return snapshot.vk_compute_dispatches;
+}
+
 // The production dispatches the fused op replaces, exactly as the model calls them: conv, delta and, with
 // `norm`, the gated norm (mx.fast.rms_norm_gated(out, z, weight, eps)).
 Run production_pair(const Inputs& in, Stream s, bool norm = false, int hk = H, int hv = H) {
   const int kd = hk * D;
-  uint64_t before = counters().vk_compute_dispatches.load();
+  const uint64_t before = compute_dispatches();
   auto conv = fast::gdn_conv_update(
       in.conv_state, in.qkv, in.weight, true, kd, INV * INV, INV, EPS, s);
   auto parts = split(conv[0], {kd, 2 * kd}, -1, s);
@@ -104,19 +112,19 @@ Run production_pair(const Inputs& in, Stream s, bool norm = false, int hk = H, i
   array y = norm ? fast::rms_norm_gated(delta[0], in.gate, in.norm_w, EPS, s) : delta[0];
   Run r{{y, delta[1], conv[1]}, 0};
   eval(r.out);
-  r.dispatches = counters().vk_compute_dispatches.load() - before;
+  r.dispatches = compute_dispatches() - before;
   return r;
 }
 
 Run fused(const Inputs& in, Stream s, bool norm = false, int hk = H) {
-  uint64_t before = counters().vk_compute_dispatches.load();
+  const uint64_t before = compute_dispatches();
   Run r{fast::gdn_conv_delta_update(
             in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias, in.delta_state,
             hk * D, INV * INV, INV, EPS, norm ? std::optional<array>(in.gate) : std::nullopt,
             norm ? std::optional<array>(in.norm_w) : std::nullopt, norm ? EPS : 0.0f, s),
         0};
   eval(r.out);
-  r.dispatches = counters().vk_compute_dispatches.load() - before;
+  r.dispatches = compute_dispatches() - before;
   return r;
 }
 
