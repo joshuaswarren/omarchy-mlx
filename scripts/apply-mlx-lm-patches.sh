@@ -89,6 +89,7 @@ SERIES_PATCHES=(
   mlx-lm-spec-split-rows.patch
   mlx-lm-kv-host-offset.patch
   mlx-lm-readback-chunk.patch
+  mlx-lm-deferred-token-yield.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
