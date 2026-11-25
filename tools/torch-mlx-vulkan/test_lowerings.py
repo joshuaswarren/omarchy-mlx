@@ -784,6 +784,61 @@ def test_reductions():
     print("test_reductions PASS")
 
 
+def test_hyperbolic():
+    # PT-U11: the hyperbolic family — the top unclaimed aten family in
+    # w7R's PAR-41 fallback census once the circular arc-trig ops went to
+    # #889. Prove the eager executor lowers each op (stats["mlx"]) and
+    # matches torch CPU at fp32 and bf16.
+    u = torch.tensor([[0.5, -0.75], [0.125, 0.999]])
+    v = torch.tensor([[1.5, 2.0], [1.001, 4.25]])   # acosh domain: x >= 1
+    a = torch.tensor([[0.5, -0.75], [0.125, 0.9]])  # atanh domain: |x| < 1
+    ub, vb, ab = u.bfloat16(), v.bfloat16(), a.bfloat16()
+    cases = [
+        (torch.ops.aten.sinh.default, (u,), torch.sinh(u), "sinh"),
+        (torch.ops.aten.sinh.default, (ub,), torch.sinh(ub), "sinh"),
+        (torch.ops.aten.cosh.default, (u,), torch.cosh(u), "cosh"),
+        (torch.ops.aten.cosh.default, (ub,), torch.cosh(ub), "cosh"),
+        (torch.ops.aten.asinh.default, (u,), torch.asinh(u), "asinh"),
+        (torch.ops.aten.asinh.default, (ub,), torch.asinh(ub), "asinh"),
+        (torch.ops.aten.acosh.default, (v,), torch.acosh(v), "acosh"),
+        (torch.ops.aten.acosh.default, (vb,), torch.acosh(vb), "acosh"),
+        (torch.ops.aten.atanh.default, (a,), torch.atanh(a), "atanh"),
+        (torch.ops.aten.atanh.default, (ab,), torch.atanh(ab), "atanh"),
+    ]
+    for target, ins, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, name)
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                           atol=2e-2), (name, out.float().numpy())
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (name, out.dtype, ref.dtype)
+    # domain guards: acosh(x < 1) and atanh(|x| >= 1) are NaN in torch;
+    # the lowering must produce NaN, not a wrong number or an exception.
+    for target, oob in ((torch.ops.aten.acosh.default,
+                         torch.tensor([0.5, -1.0])),
+                        (torch.ops.aten.atanh.default,
+                         torch.tensor([1.0, -1.5]))):
+        g = torch.fx.Graph()
+        p = g.placeholder("p0")
+        n = g.call_function(target, (p,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(oob)
+        assert stats["cpu"] == [], stats
+        assert bool(torch.isnan(out).all()) == bool(
+            torch.isnan(target(oob)).all()), target
+    print("test_hyperbolic PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -806,4 +861,5 @@ if __name__ == "__main__":
     test_cat_clone()
     test_sum()
     test_reductions()
+    test_hyperbolic()
     print("ALL PASS")
