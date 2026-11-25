@@ -173,15 +173,42 @@ struct QmmGeometry {
   omarchy::ComputeKernel word;
   omarchy::ComputeKernel multi;
   const char* name;
+  bool word_w2{false};
+  bool dedicated_swiglu{false};
+  uint32_t swiglu_columns{0u};
+  omarchy::ComputeKernel swiglu{omarchy::ComputeKernel::Count};
+  uint32_t resnorm_columns{32u};
+  omarchy::ComputeKernel resnorm{omarchy::ComputeKernel::QmmVecQ4ResNormBF16};
+  uint32_t outgate_resnorm_columns{16u};
+  omarchy::ComputeKernel outgate_resnorm{
+      omarchy::ComputeKernel::QmmVecQ4OutgateResNormBF16};
 };
 const QmmGeometry& qmm_geometry() {
   static const QmmGeometry geometry = [] {
     using K = omarchy::ComputeKernel;
+    auto make_2x8w2 = [] {
+      return QmmGeometry{
+          16u,
+          K::QmmVecQ4WordSubgroupBF16R2S8W2,
+          K::QmmVecQ4MultiSubgroupBF16R2S8W2,
+          "2x8w2",
+          true,
+          true,
+          16u,
+          K::QmmVecQ4SwigluBF16R2S8W2,
+          16u,
+          K::QmmVecQ4ResNormBF16R2S8W2,
+          16u,
+          K::QmmVecQ4OutgateResNormBF16R2S8W2};
+    };
     const char* env = omarchy::env_str("MLX_OMARCHY_QMM_GEOM");
     const std::string v = env == nullptr ? std::string() : std::string(env);
     if (v.empty()) {
       const auto& dev = omarchy::device();
       const auto& caps = dev.capabilities();
+      if (omarchy::select_qmm_g13_2x8w2(caps.device_name)) {
+        return make_2x8w2();
+      }
       const omarchy::QmmWideCaps wide_caps{
           caps.subgroup_size,
           caps.subgroup_operations,
@@ -220,6 +247,9 @@ const QmmGeometry& qmm_geometry() {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
+    }
+    if (v == "2x8w2") {
+      return make_2x8w2();
     }
     if (v == "2x16") {
       return QmmGeometry{
@@ -264,7 +294,7 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont 2x16kcs16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
   }();
   return geometry;
 }
@@ -9497,8 +9527,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     uint32_t qmm_groups = n_groups_qmm_vec;
     if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16) {
       const auto& geometry = qmm_geometry();
-      vec_kernel = geometry.word;
-      qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u &&
+          (params.shape[1] % 2u == 0u))) {
+        vec_kernel = geometry.word;
+        qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      }
     }
     encoder.dispatch_compute(
         vec_kernel,
@@ -10472,14 +10505,21 @@ bool dispatch_quantized_gemv_group(
   }
   ComputeParams params;
   uint32_t total_groups = 0;
+  const auto& geom = qmm_geometry();
+  const bool dedicated_swiglu_active = swiglu_out && !token_route &&
+      outgate == nullptr && dtype == bfloat16 && subgroup_ready &&
+      geom.dedicated_swiglu && members.size() == 2;
   // Columns per workgroup of the kernel selected below: the geometry applies
-  // to the bf16 subgroup single-token multi kernel only (or 2x16 / 2x8 for
-  // the fused resnorm epilogue kernels).
+  // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
+  // resnorm epilogue kernels.
   const uint32_t group_columns = res_norm_active
-      ? (outgate != nullptr ? 16u : 32u)
+      ? (outgate != nullptr ? geom.outgate_resnorm_columns
+                            : geom.resnorm_columns)
+      : dedicated_swiglu_active
+      ? geom.swiglu_columns
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? qmm_geometry().columns
+             ? geom.columns
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -10738,7 +10778,7 @@ bool dispatch_quantized_gemv_group(
           binding(outgate->gate),
           binding(outgate->x)};
       encoder.dispatch_compute(
-          ComputeKernel::QmmVecQ4OutgateResNormBF16,
+          geom.outgate_resnorm,
           rn_bindings,
           params,
           total_groups,
@@ -10757,7 +10797,7 @@ bool dispatch_quantized_gemv_group(
           binding(res_norm->out),
           encoder.resnorm_ticket_binding()};
       encoder.dispatch_compute(
-          ComputeKernel::QmmVecQ4ResNormBF16,
+          geom.resnorm,
           rn_bindings,
           params,
           total_groups,
@@ -10767,6 +10807,25 @@ bool dispatch_quantized_gemv_group(
     if (res_norm_done) {
       *res_norm_done = true;
     }
+    return true;
+  }
+  if (dedicated_swiglu_active) {
+    std::array<ComputeBinding, 8> sw_bindings{
+        binding(x),
+        binding(members[0].node.inputs()[1]),
+        binding(members[0].node.inputs()[2]),
+        binding(members[0].node.inputs()[3]),
+        binding(members[1].node.inputs()[1]),
+        binding(members[1].node.inputs()[2]),
+        binding(members[1].node.inputs()[3]),
+        binding(*swiglu_out)};
+    encoder.dispatch_compute(
+        geom.swiglu,
+        sw_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
     return true;
   }
   for (size_t i = 0; i < members.size(); ++i) {
