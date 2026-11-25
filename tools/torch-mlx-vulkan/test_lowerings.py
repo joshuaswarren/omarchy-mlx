@@ -5,7 +5,7 @@ Runs under plain python3 (no pytest needed) or pytest.
 Requires torch + mlx on the path; run from this directory or set
 PYTHONPATH to it.
 """
-import os, sys
+import math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
@@ -678,9 +678,10 @@ def test_reductions():
     # #867; var/var_mean/std_mean had no spec at all; and the std lambda
     # ignored `correction` so it silently computed ddof=0 (biased) where torch
     # defaults to ddof=1 (unbiased). Covers dim lists, keepdim, empty-dims,
-    # correction values, 0-d tensors, dtype cast, fp32 + bf16.
+    # correction values, 0-d tensors, dtype cast, fp32 + bf16 + fp16.
     x32 = torch.tensor([[1.5, -2.0, 0.25], [3.0, -1.0, 2.0]])
     xb = x32.bfloat16()
+    xh = x32.half()
     x0 = torch.tensor(5.0)
 
     def run_one(target, ins, kw):
@@ -696,6 +697,10 @@ def test_reductions():
         # #864: _torch widens bf16 outputs to f32 (numpy has no bf16 buffer)
         assert out.dtype == ref.dtype or (ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
             (str(target), out.dtype, ref.dtype)
+        # allclose broadcasts — pin the shape too so a scalar-vs-(1,1)
+        # keepdim slip can't pass silently
+        assert torch.as_tensor(out).shape == ref.shape, \
+            (str(target), kw, torch.as_tensor(out).shape, ref.shape)
         assert np.allclose(torch.as_tensor(out).float().numpy(), ref.float().numpy(), atol=2e-2), \
             (str(target), kw, torch.as_tensor(out).float().numpy(), ref.float().numpy())
 
@@ -707,13 +712,22 @@ def test_reductions():
         (torch.ops.aten.mean.dim, (x0,), {"dim": [0]}),
         (torch.ops.aten.mean.dim, (x0,), {"dim": [-1], "keepdim": True}),
         (torch.ops.aten.mean.dim, (xb,), {"dim": [1]}),
+        (torch.ops.aten.mean.dim, (xh,), {"dim": [1]}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [1], "unbiased": False}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [0], "keepdim": True}),
         (torch.ops.aten.var.dim, (x32,), {"dim": []}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
+        (torch.ops.aten.var.dim, (xh,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [0], "keepdim": True}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
         (torch.ops.aten.std.dim, (xb,), {"dim": [1]}),
+        (torch.ops.aten.std.dim, (xh,), {"dim": [1]}),
     ]:
         run_one(target, ins, kw)
 
@@ -860,6 +874,256 @@ def test_bitwise_and_():
     print("test_bitwise_and_ PASS")
 
 
+def test_arc_trig():
+    # PT-AH: the circular arc-trig set, the highest-ranked unclaimed aten
+    # family in w7R's PAR-41 fallback census: acos rank 53, asin 77,
+    # atan 79, atan2 78 (hyperbolic sibling trio owned by wB1). Prove the
+    # eager executor lowers each aten op (stats["mlx"]) and matches torch
+    # CPU at fp32 and bf16; atan2 additionally covers broadcasting.
+    u = torch.tensor([[0.5, -0.75], [0.125, 0.999]])
+    w = torch.tensor([[0.2, -0.3], [-0.6, 0.45]])
+    ub, wb = u.bfloat16(), w.bfloat16()
+    cases = [
+        (torch.ops.aten.acos.default, (u,), torch.acos(u), "acos"),
+        (torch.ops.aten.acos.default, (ub,), torch.acos(ub), "acos"),
+        (torch.ops.aten.asin.default, (u,), torch.asin(u), "asin"),
+        (torch.ops.aten.asin.default, (ub,), torch.asin(ub), "asin"),
+        (torch.ops.aten.atan.default, (u,), torch.atan(u), "atan"),
+        (torch.ops.aten.atan.default, (ub,), torch.atan(ub), "atan"),
+        (torch.ops.aten.atan2.default, (u, w), torch.atan2(u, w), "atan2"),
+        (torch.ops.aten.atan2.default, (ub, wb), torch.atan2(ub, wb), "atan2"),
+        (torch.ops.aten.atan2.default, (u, w[0]), torch.atan2(u, w[0]), "atan2"),
+    ]
+    for target, ins, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, name)
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                           atol=2e-2), (name, out.float().numpy())
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (name, out.dtype, ref.dtype)
+    # domain guard: acos/asin inputs outside [-1, 1] must produce NaN like
+    # torch, not a wrong number or an exception
+    oob = torch.tensor([1.5, -1.5])
+    for target in (torch.ops.aten.acos.default, torch.ops.aten.asin.default):
+        g = torch.fx.Graph()
+        p = g.placeholder("p0")
+        n = g.call_function(target, (p,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(oob)
+        assert stats["cpu"] == [], stats
+        assert bool(torch.isnan(out).all()) == bool(
+            torch.isnan(target(oob)).all()), target
+    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
+    # Pin values and sign bits for all four (+/-0, +/-0) pairs, plus the
+    # non-zero-y rows of the x = -0 column the fix must not regress.
+    for yv, xv in ((0.0, 0.0), (0.0, -0.0), (-0.0, 0.0), (-0.0, -0.0),
+                   (1.0, -0.0), (-1.0, -0.0),
+                   (float("inf"), -0.0), (float("-inf"), -0.0),
+                   (float("nan"), -0.0)):
+        yt = torch.tensor([yv])
+        xt = torch.tensor([xv])
+        g = torch.fx.Graph()
+        py, px = g.placeholder("y"), g.placeholder("x")
+        n = g.call_function(torch.ops.aten.atan2.default, (py, px), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(yt, xt)
+        ref = torch.atan2(yt, xt)
+        assert stats["cpu"] == [], stats
+        if math.isnan(ref.item()):
+            assert math.isnan(out.item()), (yv, xv, out.item())
+            continue
+        assert out.item() == ref.item(), (yv, xv, out.item(), ref.item())
+        assert math.copysign(1.0, out.item()) == math.copysign(1.0, ref.item()), \
+            (yv, xv, out.item(), ref.item())
+    # the correction must not widen the result: FP16 inputs keep FP16 and
+    # torch's rounded fp16 pi, BF16 inputs keep BF16 through the helper.
+    for dt, yv, xv in ((torch.float16, 0.0, -0.0), (torch.float16, -0.0, -0.0)):
+        yt = torch.tensor([yv], dtype=dt)
+        xt = torch.tensor([xv], dtype=dt)
+        g = torch.fx.Graph()
+        py, px = g.placeholder("y"), g.placeholder("x")
+        n = g.call_function(torch.ops.aten.atan2.default, (py, px), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(yt, xt)
+        ref = torch.atan2(yt, xt)
+        assert stats["cpu"] == [], stats
+        assert out.dtype == ref.dtype == dt, (out.dtype, ref.dtype)
+        assert out.item() == ref.item(), (dt, yv, xv, out.item(), ref.item())
+    b16 = mlx_vulkan._atan2(mx.array([-0.0], dtype=mx.bfloat16),
+                            mx.array([-0.0], dtype=mx.bfloat16))
+    assert b16.dtype == mx.bfloat16, b16.dtype
+    assert float(b16[0]) == torch.atan2(
+        torch.tensor(-0.0, dtype=torch.bfloat16),
+        torch.tensor(-0.0, dtype=torch.bfloat16)).item(), float(b16[0])
+    print("test_arc_trig PASS")
+
+
+def test_addcmul_addcdiv():
+    # PT-U10: aten.addcmul/addcdiv (input + value*t1*t2, input + value*t1/t2)
+    # — the last unclaimed receipt-zero composite row. Prove the eager
+    # executor lowers both (stats["mlx"]) and matches torch CPU at fp32
+    # and bf16, with broadcasting and a non-default value.
+    rng = np.random.RandomState(7)
+    a = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    t1 = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    t2 = torch.tensor(rng.randn(2, 3).astype(np.float32) + 1.5)
+    rb = torch.tensor(rng.randn(1, 3).astype(np.float32))
+
+    def fx_run(target, ins, kw):
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        name = str(target).split("aten.")[1].split(".")[0]
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        assert torch.as_tensor(out).shape == ref.shape, \
+            (str(target), torch.as_tensor(out).shape, ref.shape)
+        # the executor's bf16 output path widens to fp32 (no bf16 numpy
+        # dtype); pin dtype parity everywhere it can be expressed
+        if ref.dtype != torch.bfloat16:
+            assert str(out.dtype).split(".")[-1] == \
+                str(ref.dtype).split(".")[-1], \
+                (str(target), kw, str(out.dtype), str(ref.dtype))
+        assert np.allclose(torch.as_tensor(out).float().numpy(),
+                           ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, torch.as_tensor(out).float().numpy(),
+             ref.float().numpy())
+
+    def fx_expect_raise(target, ins, kw):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        try:
+            run(*ins)
+        except RuntimeError:
+            return
+        raise AssertionError("no raise", str(target), kw)
+
+    def fx_defer(target, ins, kw):
+        # 0-dim mixed-dtype promotion is weak in torch; the lowering defers
+        # to the CPU fallback, whose output must still match torch
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        name = str(target).split("aten.")[1].split(".")[0]
+        assert any(name in s for s in stats["cpu"]), (stats, name)
+        assert torch.as_tensor(out).dtype == ref.dtype, \
+            (str(target), torch.as_tensor(out).dtype, ref.dtype)
+        assert np.allclose(torch.as_tensor(out).float().numpy(),
+                           ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, torch.as_tensor(out).float().numpy(),
+             ref.float().numpy())
+
+    ia = torch.tensor([1, -2, 3], dtype=torch.int64)
+    it1 = torch.tensor([4, 5, -6], dtype=torch.int64)
+    it2 = torch.tensor([2, -1, 3], dtype=torch.int64)
+    b3 = torch.tensor([True, True, True])
+    h0 = torch.zeros(1, dtype=torch.float16)
+    h6 = torch.full((1,), 60000.0, dtype=torch.float16)
+    hq = torch.full((1,), 0.25, dtype=torch.float16)
+
+    cases = [
+        (torch.ops.aten.addcmul.default, (a, t1, t2), {}),
+        (torch.ops.aten.addcmul.default, (a, t1, t2), {"value": 2.5}),
+        (torch.ops.aten.addcmul.default, (a, t1, rb), {}),
+        (torch.ops.aten.addcmul.default,
+         (a.bfloat16(), t1.bfloat16(), t2.bfloat16()), {}),
+        (torch.ops.aten.addcdiv.default, (a, t1, t2), {}),
+        (torch.ops.aten.addcdiv.default, (a, t1, t2), {"value": -0.5}),
+        (torch.ops.aten.addcdiv.default, (a, t1, rb), {}),
+        (torch.ops.aten.addcdiv.default,
+         (a.bfloat16(), t1.bfloat16(), t2.bfloat16()), {}),
+        # int value is legal (promotes like a wrapped scalar)
+        (torch.ops.aten.addcmul.default, (a, t1, t2), {"value": 1}),
+        # integral tensors: result stays integral; a fractional value
+        # truncates to the compute dtype (wrapped-scalar rule)
+        (torch.ops.aten.addcmul.default, (ia, it1, it2), {"value": 2}),
+        (torch.ops.aten.addcmul.default, (ia, it1, it2), {"value": 2.5}),
+        (torch.ops.aten.addcmul.default, (ia, it1, it2), {"value": -2.5}),
+        # mixed integral/floating promotes to float — legal
+        (torch.ops.aten.addcmul.default, (ia, t1[0], it2), {"value": 0.5}),
+        (torch.ops.aten.addcdiv.default, (ia, t1[0], it2), {}),
+        # fp32 opmath: value*t1 overflows fp16 but the torch result is
+        # finite (2*(60000*0.25)=30000, 2*(60000/60000)=2)
+        (torch.ops.aten.addcmul.default, (h0, h6, hq), {"value": 2}),
+        (torch.ops.aten.addcdiv.default, (h0, h6, h6), {"value": 2}),
+        # bool+int mix promotes to int — legal
+        (torch.ops.aten.addcmul.default,
+         (b3, torch.tensor([2, 2, 2]), torch.tensor([3, 3, 3])), {}),
+        # value applies to t1 first: 0*(t1*t2) with an inf fp32 product
+        # would be NaN; (0*t1)*t2 is 0 like torch
+        (torch.ops.aten.addcmul.default,
+         (a, torch.full((2, 3), 1e20), torch.full((2, 3), 1e20)),
+         {"value": 0}),
+        (torch.ops.aten.addcdiv.default,
+         (a, torch.full((2, 3), 1e20), torch.full((2, 3), 1e-20)),
+         {"value": 0}),
+        # operands cast to the common dtype before multiply: 2*int8(100)
+        # wraps to -112 in int8 but is 400 at int64
+        (torch.ops.aten.addcmul.default,
+         (torch.zeros(1, dtype=torch.int64),
+          torch.full((1,), 100, dtype=torch.int8),
+          torch.full((1,), 2, dtype=torch.int64)), {"value": 2}),
+        (torch.ops.aten.addcmul.default,
+         (torch.zeros(1, dtype=torch.int64),
+          torch.full((1,), 100, dtype=torch.int8),
+          torch.full((1,), 2, dtype=torch.int8)), {"value": 1}),
+    ]
+    for target, ins, kw in cases:
+        fx_run(target, ins, kw)
+
+    # Torch raises on integral addcdiv (integer division unsupported) —
+    # the guard keys on the division operands, not self
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (ia, it1, it2), {})
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (ia, it1, it2),
+                    {"value": 1})
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (a[0], it1, it2), {})
+    fx_expect_raise(torch.ops.aten.addcdiv.default, (a[0], b3, it2), {})
+    # all-bool addcmul has no kernel
+    fx_expect_raise(torch.ops.aten.addcmul.default, (b3, b3, b3), {})
+
+    # 0-dim mixed-dtype operands: torch promotes weakly, so the lowering
+    # defers to the CPU fallback rather than emulate it
+    fx_defer(torch.ops.aten.addcmul.default,
+             (h0, torch.tensor(2.0, dtype=torch.float32),
+              hq.expand(1)), {"value": 1})
+    fx_defer(torch.ops.aten.addcdiv.default,
+             (h0, torch.tensor(2.0, dtype=torch.float32),
+              hq.expand(1)), {"value": 1})
+    fx_defer(torch.ops.aten.addcmul.default,
+             (torch.zeros(3, dtype=torch.int8),
+              torch.tensor(100, dtype=torch.int64),
+              torch.full((3,), 2, dtype=torch.int8)), {"value": 1})
+    print("test_addcmul_addcdiv PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -883,4 +1147,6 @@ if __name__ == "__main__":
     test_sum()
     test_reductions()
     test_bitwise_and_()
+    test_arc_trig()
+    test_addcmul_addcdiv()
     print("ALL PASS")
