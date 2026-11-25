@@ -1328,7 +1328,7 @@ _FUNC_SPECS = {
     "invert": lambda a: mx.logical_not(a),
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "rsub": lambda a, b: _mx(b) - _mx(a),
+    "rsub": lambda a, b, alpha=1, **k: _mx(b) - _mx(a) * alpha,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
@@ -1418,6 +1418,7 @@ def _build_func_table():
 _build_func_table()
 # dotted-name resolve only covers torch attrs; operator.* objects register directly
 FUNC_TABLE[operator.iadd] = _FUNC_SPECS["add"]
+FUNC_TABLE[operator.isub] = _FUNC_SPECS["sub"]
 
 # name-keyed fallback: dynamo may reference e.g. torch._C._VariableFunctions.matmul
 # which is a different object than torch.matmul
@@ -2229,6 +2230,18 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 if _ph is not None and _ph is not n.args[0]:
                     env[_ph] = upd        # same-storage alias of a state ph
                 env[n] = upd
+                continue
+            if name in ("sub_", "sub_.Tensor"):
+                upd = env[n.args[0]] - args[1]
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in ("rsub", "rsub.Scalar") and n.op == "call_function":
+                alpha = args[2] if len(args) > 2 else 1
+                env[n] = args[1] - args[0] * alpha
                 continue
             if name == "mul_":
                 upd = env[n.args[0]] * args[1]
