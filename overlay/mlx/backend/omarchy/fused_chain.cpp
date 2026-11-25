@@ -34,7 +34,7 @@
 namespace mlx::core::omarchy {
 
 bool fused_chain_enabled() {
-  return std::getenv("MLX_OMARCHY_FUSED_CHAIN") == nullptr ||
+  return omarchy::env_str("MLX_OMARCHY_FUSED_CHAIN") == nullptr ||
       env_flag("MLX_OMARCHY_FUSED_CHAIN");
 }
 namespace {
@@ -666,7 +666,7 @@ void dispatch_chain(
   // MLX_OMARCHY_FUSED_CHAIN_LANES=128 selects the four-subgroup
   // variants. The 256-lane and 128-lane kernels must produce
   // byte-identical output; the fused-chain test asserts it.
-  const char* lanes_env = std::getenv("MLX_OMARCHY_FUSED_CHAIN_LANES");
+  const char* lanes_env = omarchy::env_str("MLX_OMARCHY_FUSED_CHAIN_LANES");
   const bool lanes128 = lanes_env && std::strcmp(lanes_env, "128") == 0;
   auto kernel = lanes128 ? ComputeKernel::FusedChainF32L128
                          : ComputeKernel::FusedChainF32;
@@ -984,7 +984,7 @@ std::optional<DirectGeometry> direct_window_geometry(const array& member) {
 // base handle, which would count as a second holder.
 // MLX_OMARCHY_KV_INPLACE=0 forces the copy.
 bool kv_window_in_place(const array& member) {
-  return (std::getenv("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+  return (omarchy::env_str("MLX_OMARCHY_KV_INPLACE") == nullptr ||
           env_flag("MLX_OMARCHY_KV_INPLACE")) &&
       member.inputs()[0].is_donatable();
 }
@@ -1237,7 +1237,7 @@ bool gemv_epilogue_only_route_enabled(const Device& device) {
   if (!fused_chain_enabled()) {
     return false;
   }
-  const char* env = std::getenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
@@ -1259,6 +1259,7 @@ bool node_trio_enabled(const array& node) {
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     : previous_(eager_state) {
   eager_state = nullptr;
+  env_note_eval();
   if (!fused_chain_enabled()) {
     return;
   }
@@ -1269,7 +1270,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // plans). Tapes with none of these can fire no plan, so skip the
   // node/use maps and all pattern passes. Set
   // MLX_OMARCHY_NO_FUSION_GATE to restore the unconditional scan.
-  if (std::getenv("MLX_OMARCHY_NO_FUSION_GATE") == nullptr) {
+  if (omarchy::env_str("MLX_OMARCHY_NO_FUSION_GATE") == nullptr) {
     bool anchor = false;
     for (const auto& node : tape) {
       if (is_op(&node, typeid(QuantizedMatmul)) ||
@@ -1503,7 +1504,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // residual/bias adds ride their separate eager dispatches. The fold
     // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
     const char* token_fold_env =
-        x_rows > 1 ? std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") : nullptr;
+        x_rows > 1 ? omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") : nullptr;
     const bool fold_ok =
         x_rows == 1 ||
         (token_fold_env != nullptr && std::strcmp(token_fold_env, "0") != 0);
@@ -1787,7 +1788,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           plans[1].kind == DirectKind::none ||
           plans[0].kind == plans[1].kind) {
         static int kv_trace = 0;
-        if (std::getenv("MLX_OMARCHY_KV_TRACE") != nullptr && kv_trace < 6) {
+        if (omarchy::env_str("MLX_OMARCHY_KV_TRACE") != nullptr && kv_trace < 6) {
           ++kv_trace;
           std::fprintf(
               stderr,
@@ -2023,7 +2024,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       i += 2;
     }
     static int trio_trace_plans = 0;
-    if (std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
         trace.rope_nodes > 0 && trio_trace_plans < 3) {
       ++trio_trace_plans;
       std::fprintf(
@@ -2058,7 +2059,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // primitive on the tape rope node itself.
   if (rope_norm_fold_enabled()) {
     static int fold_trace = 0;
-    const bool trace = std::getenv("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr;
+    const bool trace = omarchy::env_str("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr;
     size_t cand = 0;
     for (const array& node : tape) {
       if (!is_op(&node, typeid(fast::RoPE)) || node.inputs().size() != 2 ||
@@ -2181,7 +2182,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // own. Word-pack affine dequantize only (bits 2/4/8); anything else
   // keeps the ordinary path. MLX_OMARCHY_PROLOGUE_FOLD=0 disables.
   const bool prologue_fold =
-      std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") == nullptr ||
+      omarchy::env_str("MLX_OMARCHY_PROLOGUE_FOLD") == nullptr ||
       env_flag("MLX_OMARCHY_PROLOGUE_FOLD");
   for (const auto& node : tape) {
     if (!prologue_fold) {
@@ -2323,7 +2324,7 @@ bool outgate_fold_default_for_device(const std::string& device_name) {
 }
 
 bool outgate_fold_enabled() {
-  const char* v = std::getenv("MLX_OMARCHY_OUTGATE_FOLD");
+  const char* v = omarchy::env_str("MLX_OMARCHY_OUTGATE_FOLD");
   if (v != nullptr && *v != '\0') {
     return !(v[0] == '0' && v[1] == '\0');
   }
@@ -2334,7 +2335,7 @@ bool qmm_residual_norm_enabled(const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
   }
-  const char* env = std::getenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_RESIDUAL_NORM");
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
@@ -2349,7 +2350,7 @@ bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
   }
-  if (std::getenv(variable) != nullptr) {
+  if (omarchy::env_str(variable) != nullptr) {
     return env_flag(variable);
   }
   if (std::strcmp(variable, "MLX_OMARCHY_FUSED_GEMV") == 0) {
@@ -2367,7 +2368,7 @@ bool fused_gemv_enabled(const Device& device) {
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
 bool fused_gemv_swiglu_enabled(const Device& device) {
   return fused_gemv_enabled(device) &&
-      (std::getenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
+      (omarchy::env_str("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
        env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
 }
 
@@ -2375,7 +2376,7 @@ bool fused_gemv_swiglu_enabled(const Device& device) {
 // rows 2..16 (the token column; OFF by default on AGX pending the
 // data-dependent divergence bisect).
 bool gemv_token_multi_enabled(const Device& device) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
   return fused_gemv_enabled(device) && env != nullptr && env[0] != '\0' &&
       std::strcmp(env, "0") != 0;
 }
@@ -2387,13 +2388,13 @@ bool fused_trio_enabled(const Device& device) {
 
 bool kv_direct_enabled() {
   return fused_chain_enabled() &&
-      (std::getenv("MLX_OMARCHY_KV_DIRECT") == nullptr ||
+      (omarchy::env_str("MLX_OMARCHY_KV_DIRECT") == nullptr ||
        env_flag("MLX_OMARCHY_KV_DIRECT"));
 }
 
 bool rope_norm_fold_enabled() {
   return fused_chain_enabled() &&
-      (std::getenv("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
+      (omarchy::env_str("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
        env_flag("MLX_OMARCHY_ROPE_NORM_FOLD"));
 }
 
@@ -2530,7 +2531,7 @@ bool dispatch_rope_norm_fold(
         view->offset() % view->itemsize() != 0 ||
         view->shape(-1) != x.shape(-1)))) {
     static int fold_run_trace = 0;
-    if (std::getenv("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr &&
+    if (omarchy::env_str("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr &&
         fold_run_trace < 4) {
       ++fold_run_trace;
       std::fprintf(
@@ -2794,7 +2795,7 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     bool fired = dispatch_rope_pair(pair.nodes, stream);
     pair.state = fired ? RopePair::State::done : RopePair::State::failed;
     static int trio_run_trace = 0;
-    if (!fired && std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+    if (!fired && omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
         trio_run_trace < 3) {
       ++trio_run_trace;
       std::fprintf(

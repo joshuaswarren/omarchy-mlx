@@ -1172,16 +1172,64 @@ bool runtime_alive() {
 // Compiled-tape debug switch plumbing (device.h). At omarchy scope, not
 // in the anonymous namespace above: the encoder and allocator call these
 // through the header declarations.
+namespace {
+struct EnvCache {
+  // 0 = no eval boundary seen on this thread yet: every lookup reads
+  // fresh, so pre-eval env mutation keeps full std::getenv semantics.
+  uint64_t epoch = 0;
+  // name -> (epoch read, getenv result copy; nullopt = unset).
+  std::unordered_map<std::string, std::pair<uint64_t, std::optional<std::string>>>
+      values;
+};
+thread_local EnvCache env_cache_;
+
+const char* env_lookup(const char* name) {
+  if (env_cache_.epoch == 0) {
+    return std::getenv(name);
+  }
+  auto it = env_cache_.values.find(name);
+  if (it == env_cache_.values.end() || it->second.first != env_cache_.epoch) {
+    const char* v = std::getenv(name);
+    auto [pos, _] = env_cache_.values.insert_or_assign(
+        name,
+        std::pair{
+            env_cache_.epoch,
+            v == nullptr ? std::nullopt : std::optional<std::string>(v)});
+    it = pos;
+  }
+  const auto& stored = it->second.second;
+  return stored ? stored->c_str() : nullptr;
+}
+} // namespace
+
+void env_note_eval() {
+  ++env_cache_.epoch;
+}
+
+const char* env_str(const char* name) {
+  return env_lookup(name);
+}
+
+bool env_set(const char* name) {
+  return env_lookup(name) != nullptr;
+}
+
 bool env_flag(const char* name) {
-  const char* v = std::getenv(name);
+  const char* v = env_lookup(name);
   if (!v) {
     return false;
   }
-  std::string s = v;
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return s == "1" || s == "on" || s == "true" || s == "yes";
+  auto ieq = [v](const char* word) {
+    size_t i = 0;
+    for (; word[i] != '\0'; ++i) {
+      if (v[i] == '\0' ||
+          std::tolower(static_cast<unsigned char>(v[i])) != word[i]) {
+        return false;
+      }
+    }
+    return v[i] == '\0';
+  };
+  return ieq("1") || ieq("on") || ieq("true") || ieq("yes");
 }
 
 // Heap formula (device.h). max(50%, MemTotal - 16 GiB), 1 MiB-rounded
