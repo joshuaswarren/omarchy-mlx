@@ -1848,22 +1848,24 @@ TEST_CASE("the OOM retry settles on progress, not global idleness") {
   alloc.free(scratch);
 }
 
-// Wave scheduling defaults on per part: G16S, G14C and G17C;
+// Wave scheduling defaults on for every part (no-gating default); the
+// encoder-side capability checks still confine dispatch.
 // MLX_OMARCHY_WAVE_SCHED overrides either way.
-TEST_CASE("wave scheduling is a per-part default") {
+TEST_CASE("wave scheduling is on for every part") {
   CHECK(omarchy::wave_sched_default_part("Apple M4 Pro (G16S B1)"));
   CHECK(omarchy::wave_sched_default_part("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::wave_sched_default_part("Apple M5 Max (G17C B1)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M4 (G16G B1)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
 }
 
 // The fused f16 decode SDPA arm drops its cooperative-matrix clause on G16S at
 // every length and on G15S in the one-pass range; MLX_OMARCHY_SDPA_F16_NO_COOPMAT
 // overrides either way.
-TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on G16S and G15S one-pass") {
+TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on everywhere except G15S two-pass") {
   struct EnvGuard {
     const char* name;
     bool had_value = false;
@@ -1902,11 +1904,19 @@ TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on G16S and G
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 1024u));
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 8192u));
 
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 64u));
+
+  // An unlisted part gets the fused kernel only in the one-pass
+  // range: two-pass pass 1 can overflow f16 past 1024 keys.
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 1023u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 1024u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 2048u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 4096u));
 
   setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "1", 1);
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 8192u));
