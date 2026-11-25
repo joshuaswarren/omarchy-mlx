@@ -17716,7 +17716,7 @@ void ScaledDotProductAttention::eval_gpu(
           if (split_merge) {
             std::array<omarchy::ComputeBinding, 6> merge_bindings{
                 binding(q), binding(k), binding(v), binding(scratch), binding(out),
-                binding(encoder.sdpa_merge_counters(split_params.matrix_m))};
+                encoder.sdpa_merge_counters(split_params.matrix_m)};
             encoder.dispatch_compute(omarchy::ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128,
                                      merge_bindings, split_params, split_params.matrix_n, row_blocks);
           } else {

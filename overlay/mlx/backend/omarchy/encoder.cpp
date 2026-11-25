@@ -1537,21 +1537,24 @@ void CommandEncoder::wait_outstanding_submissions() {
   add_semaphore_wait(device_.completions().semaphore(), value, nullptr);
 }
 
-array& CommandEncoder::sdpa_merge_counters(uint32_t heads) {
-  // Two words per head: an arrival count and a block-publish mask for the
+ComputeBinding CommandEncoder::sdpa_merge_counters(uint32_t heads) {
+  // Two words per head: an arrival count and a publish count for the
   // single-dispatch split-K merge (sdpa_decode_split_p1m.comp).
   const uint32_t words = std::max<uint32_t>(2u * heads, 128u);
-  if (sdpa_counters_.size() < static_cast<int64_t>(words)) {
-    array counters(Shape{static_cast<int>(words)}, uint32, nullptr, {});
-    counters.set_data(omarchy::allocator().malloc(counters.nbytes()));
-    auto* vb = static_cast<VulkanBuffer*>(counters.buffer().ptr());
-    // In-stream fill (the resnorm ticket's pattern): a host memset can land
-    // on a buffer the device never sees, so the pool's one-time zeroing is a
-    // recorded vkCmdFillBuffer ordered before the first merge dispatch.
-    fill_buffer(vb->buffer, 0u, counters.nbytes(), 0u);
-    sdpa_counters_ = std::move(counters);
+  if (sdpa_counter_words_ < words) {
+    sdpa_counter_buf_ = omarchy::allocator().malloc(
+        static_cast<size_t>(words) * sizeof(uint32_t));
+    auto* vb = static_cast<VulkanBuffer*>(sdpa_counter_buf_.ptr());
+    // In-stream fill (the resnorm ticket's pattern): the pool's one-time
+    // zeroing is a recorded vkCmdFillBuffer ordered before the first merge
+    // dispatch, so it can never land on a buffer the device never sees.
+    fill_buffer(
+        vb->buffer, 0u, static_cast<VkDeviceSize>(words) * sizeof(uint32_t), 0u);
+    sdpa_counter_words_ = words;
   }
-  return sdpa_counters_;
+  auto* vb = static_cast<VulkanBuffer*>(sdpa_counter_buf_.ptr());
+  return ComputeBinding{
+      vb->buffer, 0u, static_cast<VkDeviceSize>(sdpa_counter_words_) * sizeof(uint32_t), vb};
 }
 
 void CommandEncoder::submit() {
