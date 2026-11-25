@@ -5,6 +5,14 @@ option(MLX_OMARCHY_GPU_PROFILING
        "Compile in the env-gated GPU profiling harness" OFF)
 if(MLX_OMARCHY_GPU_PROFILING)
   target_compile_definitions(mlx PRIVATE MLX_OMARCHY_GPU_PROFILING)
+  # Wheel version + source stamp reach the profiler through compile
+  # definitions so every profile self-identifies its binary.
+  if(NOT DEFINED MLX_OMARCHY_PROFILE_TAG OR MLX_OMARCHY_PROFILE_TAG STREQUAL "")
+    set(MLX_OMARCHY_PROFILE_TAG "$ENV{MLX_OMARCHY_LOCAL_VERSION}")
+  endif()
+  target_compile_definitions(mlx PRIVATE
+    MLX_OMARCHY_PROFILE_VERSION="${MLX_VERSION}"
+    MLX_OMARCHY_PROFILE_TAG="${MLX_OMARCHY_PROFILE_TAG}")
 endif()
 target_compile_definitions(mlx PRIVATE MLX_OMARCHY_BACKEND)
 # System prefix holding the packaged Honeykrisp ICD JSON and Mesa git SHA
@@ -1022,6 +1030,22 @@ omarchy_shader(fill_c64 shaders/fill.comp -DUSE_COMPLEX64=1)
 omarchy_shader(copy_general_c64 shaders/copy_general.comp -DUSE_COMPLEX64=1)
 omarchy_shader(fill_u64 shaders/fill.comp -DUSE_U64=1)
 omarchy_shader(fill_u16 shaders/fill.comp -DUSE_U16=1)
+# Kernel-name table: the profiler records kernel names from the loaded
+# library at dispatch time, not an enum index mapped against a possibly
+# different compute.h later. Regenerates whenever compute.h changes.
+add_custom_command(
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/kernel_names.h"
+  COMMAND
+    "${CMAKE_COMMAND}"
+    -DCOMPUTE_H=${CMAKE_CURRENT_SOURCE_DIR}/compute.h
+    -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/shaders/kernel_names.h
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/gen_kernel_names.cmake"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/compute.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/gen_kernel_names.cmake"
+  VERBATIM)
+list(APPEND OMARCHY_SHADER_HEADERS
+     "${CMAKE_CURRENT_BINARY_DIR}/shaders/kernel_names.h")
+
 add_custom_target(omarchy_shaders DEPENDS ${OMARCHY_SHADER_HEADERS})
 add_dependencies(mlx omarchy_shaders)
 

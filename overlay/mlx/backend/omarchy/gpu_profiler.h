@@ -14,7 +14,11 @@
 // per-dispatch mode):
 //
 //   {"k":"meta",...}  once: device name, timestamp period and valid bits,
-//                     pool capacity, label, host clock start
+//                     pool capacity, label, host clock start, wheel version
+//                     and local tag of the loaded library
+//   {"k":"kn",...}    once, after meta: ordered kernel-name table from the
+//                     loaded library ("d".e indexes into it); kills
+//                     compute.h enum drift between profile and analyzer
 //   {"k":"b",...}     per command buffer begin: host cost of the ring
 //                     slot wait (when all slots are executing) plus
 //                     BeginCommandBuffer, and the host clock at begin.
@@ -106,6 +110,14 @@
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/device.h"
+#include "kernel_names.h"
+
+#ifndef MLX_OMARCHY_PROFILE_VERSION
+#define MLX_OMARCHY_PROFILE_VERSION "unknown"
+#endif
+#ifndef MLX_OMARCHY_PROFILE_TAG
+#define MLX_OMARCHY_PROFILE_TAG ""
+#endif
 #include "mlx/backend/omarchy/vulkan.h"
 
 namespace mlx::core::omarchy::prof {
@@ -608,13 +620,24 @@ class GpuProfiler {
     const char* label = std::getenv("MLX_OMARCHY_GPU_PROFILE_LABEL");
     emitf("{\"k\":\"meta\",\"device\":\"%s\",\"period_ns\":%.6f"
           ",\"valid_bits\":%u,\"pool\":%u,\"label\":\"%s\",\"host_t0\":%"
-          PRIu64 "}\n",
+          PRIu64 ",\"wheel\":\"%s\",\"tag\":\"%s\"}\n",
           device.capabilities().device_name.c_str(),
           static_cast<double>(period_ns_),
           valid_bits_,
           kPoolQueries,
           label != nullptr ? label : "",
-          host_t0_);
+          host_t0_,
+          MLX_OMARCHY_PROFILE_VERSION,
+          MLX_OMARCHY_PROFILE_TAG);
+    // Kernel names resolved from the loaded library at record time; a
+    // compute.h from another commit cannot rename them.
+    emitf("{\"k\":\"kn\",\"names\":[");
+    for (size_t i = 0;
+         i < sizeof(kComputeKernelNames) / sizeof(kComputeKernelNames[0]);
+         ++i) {
+      emitf("%s\"%s\"", i ? "," : "", kComputeKernelNames[i]);
+    }
+    emitf("]}\n");
     if (board_blocks_ticks_) {
       std::fprintf(
           stderr,

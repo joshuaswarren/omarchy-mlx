@@ -38,7 +38,10 @@ MARKERS = [
 # two unknowables must stay distinct.
 PROFILE = [
     {"k": "meta", "device": "llvmpipe", "period_ns": 33.333,
-     "valid_bits": 64, "pool": 65536, "label": "t", "host_t0": 100},
+     "valid_bits": 64, "pool": 65536, "label": "t", "host_t0": 100,
+     "wheel": "0.32.4.dev1+diag.testsha", "tag": "diag.testsha"},
+    {"k": "kn", "names": ["K0", "K1", "K2", "K3", "K4",
+                          "KernelFive", "K6", "KernelSeven"]},
     {"k": "d", "s": 3, "e": 7, "op": 0, "n": 1, "gx": 1, "gy": 1, "gz": 1,
      "h": 120, "t0": 5200, "t1": 8200, "b": [[1, 0, 256]]},
     {"k": "d", "s": 2, "e": 7, "op": 0, "n": 1, "gx": 1, "gy": 1, "gz": 1,
@@ -73,10 +76,12 @@ def write_fixture(dirpath, records, markers=None):
     return profile, markers_path
 
 
-def run_analyzer(profile, markers_path=None):
+def run_analyzer(profile, markers_path=None, extra=None):
     cmd = [sys.executable, str(SCRIPT), str(profile)]
     if markers_path:
         cmd += ["--markers", str(markers_path)]
+    if extra:
+        cmd += extra
     return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
 
@@ -134,13 +139,61 @@ class AttributionTests(unittest.TestCase):
         self.assertIn("compute-binding", r.stdout)
         self.assertIn("not a barrier-correctness bound", r.stdout)
 
-    def test_kernel_enum_grouping_without_header(self):
+    def test_kn_record_names_kernels(self):
         with tempfile.TemporaryDirectory() as td:
             profile, markers_path = write_fixture(td, PROFILE, MARKERS)
             r = run_analyzer(profile, markers_path)
-        # No --compute-h: enum 7 must surface as kernel_7, not crash or
-        # group by anything else.
-        self.assertIn("kernel_7", r.stdout)
+        # The kn record names enum 7/5 at record time; no compute.h needed.
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("KernelSeven", r.stdout)
+        self.assertIn("KernelFive", r.stdout)
+        self.assertIn("wheel=0.32.4.dev1+diag.testsha", r.stdout)
+
+    def test_no_names_source_exits_2(self):
+        legacy = [r for r in PROFILE if r.get("k") != "kn"]
+        with tempfile.TemporaryDirectory() as td:
+            profile, markers_path = write_fixture(td, legacy, MARKERS)
+            r = run_analyzer(profile, markers_path)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no kn record", r.stderr)
+
+    def test_legacy_compute_h_maps_names(self):
+        header = (
+            "enum class ComputeKernel : uint16_t {\n"
+            "  Zero,\n  One,\n  Two,\n  Three,\n  Four,\n"
+            "  HeaderFive,\n  Six,\n  HeaderSeven,\n  Count,\n};\n")
+        legacy = [r for r in PROFILE if r.get("k") != "kn"]
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "compute.h"
+            path.write_text(header, encoding="utf-8")
+            profile, markers_path = write_fixture(td, legacy, MARKERS)
+            r = run_analyzer(profile, markers_path,
+                             ["--compute-h", str(path)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("HeaderSeven", r.stdout)
+
+    def test_malformed_kn_exits_2(self):
+        bad = PROFILE[:1] + [{"k": "kn", "names": "notalist"}] + PROFILE[2:]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, bad)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("malformed kn record", r.stderr)
+
+    def test_expect_wheel_refuses_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, PROFILE)
+            r = run_analyzer(profile, extra=[
+                "--expect-wheel", "0.32.4.dev1+diag.other"])
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("wheel mismatch", r.stderr)
+
+    def test_expect_tag_match_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            profile, markers_path = write_fixture(td, PROFILE, MARKERS)
+            r = run_analyzer(profile, markers_path,
+                             ["--expect-tag", "diag.testsha"])
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_enum_parse_keeps_enumerators_with_trailing_comments(self):
         # A retired enumerator keeps its id (append-only) and is written
@@ -274,6 +327,7 @@ class HoneykrispDt1Tests(unittest.TestCase):
             {"k": "meta", "device": "Apple M1 Max (G13C C0)",
              "period_ns": 1.0, "valid_bits": 64, "pool": 65536,
              "label": "hk", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
             {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
              "gz": 1, "h": 10, "t0": 1000000, "t1": 1010000, "b": []},
             {"k": "d", "s": 1, "e": 1, "op": 4, "n": 1, "gx": 1, "gy": 1,
@@ -304,6 +358,7 @@ class HoneykrispDt1Tests(unittest.TestCase):
             {"k": "meta", "device": "Apple M1 Max (G13C C0)",
              "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
              "label": "wrap", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
             {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
              "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
             {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
@@ -318,6 +373,7 @@ class HoneykrispDt1Tests(unittest.TestCase):
             {"k": "meta", "device": "Apple M1 Max (G13C C0)",
              "period_ns": 1000.0, "valid_bits": 64, "pool": 65536,
              "label": "gap", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
             {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
              "gz": 1, "h": 10, "t0": 100, "t1": 105, "b": []},
             {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
@@ -347,6 +403,7 @@ class HoneykrispDt1Tests(unittest.TestCase):
             {"k": "meta", "device": "Apple M1 Max (G13C C0)",
              "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
              "label": "split-wrap", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
             {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
              "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
             {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
@@ -371,6 +428,7 @@ class HoneykrispDt1Tests(unittest.TestCase):
             rec = [
                 {"k": "meta", "device": device, "period_ns": 1.0,
                  "valid_bits": 64, "pool": 65536, "label": "mid", "host_t0": 0},
+                {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
                 {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
                  "gz": 1, "h": 10, "t0": 100, "t1": 110, "b": [[1, 0, 64]]},
                 {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
