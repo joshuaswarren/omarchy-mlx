@@ -44,6 +44,10 @@ MAX_BODY_BYTES = 8 * 1024 * 1024
 # detected so older checkouts degrade safely; --managed accepts nothing less.
 _ATOMIC_API_NAMES = ("admit_and_reserve",)
 
+# Mirrors mlx_omarchy_serve.budget.CLAIM_FD_ENV; read without importing the
+# budget module so a claim fd is never ignored when the module is absent.
+_CLAIM_FD_ENV = "MLX_OMARCHY_CLAIM_FD"
+
 _DTYPE_SIZES = {"float16": 2, "bfloat16": 2, "float32": 4}
 
 _MAX_OPTIONS = 64  # per-question option bound used in the workspace estimate
@@ -183,7 +187,8 @@ def _memory_api_tier(budget):
 
 
 class ManagedBudgetUnavailable(RuntimeError):
-    """managed co-serving cannot run against this budget module (exit 3)."""
+    """managed co-serving cannot run against this budget module, or a claimed
+    child cannot bind its batch reservation (exit 3)."""
 
 
 def _budget_or_fail(managed):
@@ -312,45 +317,74 @@ def _budget_or_none():
     return budget
 
 
-def _read_claim_payload(fd: int) -> dict:
-    budget = _budget_or_none()
-    if budget is None:
-        raise RuntimeError(
-            "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH")
-    return budget.read_claim_fd(fd)
+def _read_claim_payload(budget, raw_fd: str) -> dict:
+    try:
+        fd = int(raw_fd)
+    except ValueError as exc:
+        raise ManagedBudgetUnavailable(
+            "claim refused: %s=%.40r is not an fd number"
+            % (_CLAIM_FD_ENV, raw_fd)) from exc
+    try:
+        return budget.read_claim_fd(fd)
+    except (ValueError, OverflowError, RecursionError) as exc:
+        # ValueError covers BudgetError; budget.read_claim_fd before input
+        # hardening lets OverflowError (huge fd) and RecursionError (deeply
+        # nested payload) through unwrapped
+        raise ManagedBudgetUnavailable(
+            "claim refused: cannot read the claim from %s=%.40r: %s"
+            % (_CLAIM_FD_ENV, raw_fd, exc)) from exc
 
 
-def _claim_reserved(model_dir: Path, catalog_id: str, payload: dict, managed: bool,
+def _claim_reserved(budget, model_dir: Path, catalog_id: str, payload: dict,
                     dtype: str, max_questions: int):
     """Bind this child to the parent's batch reservation instead of running
     its own admission. The claimed allocation is validated against THIS
     child's recomputed requirement (manifest + run args) — a mismatch is a
     fatal refusal, never a silent growth — and against the record under the
-    budget lock (token, bytes, parent identity)."""
+    budget lock (token, bytes, parent identity). Every refusal is a
+    ManagedBudgetUnavailable (exit 3)."""
     from .model import load_encoder_config
 
-    name = str(payload["name"])
+    name = payload["name"]
+    token = payload["claim_token"]
+    if not isinstance(name, str) or not isinstance(token, str):
+        raise ManagedBudgetUnavailable(
+            "claim refused: batch record name and claim_token must be strings, "
+            "got %s and %s" % (type(name).__name__, type(token).__name__))
     if name != catalog_id:
-        raise RuntimeError(
-            "claim refused: batch record %r does not match this checkpoint's "
+        raise ManagedBudgetUnavailable(
+            "claim refused: batch record %.40r does not match this checkpoint's "
             "catalog_id %r" % (name, catalog_id))
     enc_cfg = load_encoder_config(model_dir / "encoder")
     total = total_estimate_bytes(_read_manifest(model_dir), enc_cfg, dtype, max_questions)
-    if int(payload["bytes"]) != int(total):
-        raise RuntimeError(
-            "claim refused: batch record %r reserves %d bytes but this run "
+    claimed_bytes = payload["bytes"]
+    # require an exact int (never coerced): a float, string, list or Infinity
+    # is a mismatch, not a traceback or an accidental equal comparison
+    if isinstance(claimed_bytes, bool) or not isinstance(claimed_bytes, int):
+        raise ManagedBudgetUnavailable(
+            "claim refused: batch record %.40r bytes must be an int, got %s"
+            % (name, type(claimed_bytes).__name__))
+    if claimed_bytes != total:
+        raise ManagedBudgetUnavailable(
+            "claim refused: batch record %.40r reserves %d bytes but this run "
             "(dtype=%s, max_questions=%d) requires %d; claims never change an "
-            "allocation" % (name, int(payload["bytes"]), dtype, max_questions, total))
+            "allocation" % (name, claimed_bytes, dtype, max_questions, total))
+    pair_id = payload.get("pair_id")
+    if pair_id is not None and not isinstance(pair_id, str):
+        raise ManagedBudgetUnavailable(
+            "claim refused: batch record %.40r pair_id must be a string or None, got %s"
+            % (name, type(pair_id).__name__))
     try:
-        from mlx_omarchy_serve import budget
-    except ImportError as exc:
-        raise RuntimeError(
-            "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH: %s" % exc) from exc
-    record = budget.claim_reservation(
-        name, str(payload["claim_token"]), expected_bytes=int(payload["bytes"]),
-        home=budget.default_home(), expected_pair=payload.get("pair_id"))
+        record = budget.claim_reservation(
+            name, token, expected_bytes=claimed_bytes,
+            home=budget.default_home(), expected_pair=pair_id)
+    except (budget.BudgetError, OSError) as exc:
+        msg = str(exc)
+        if not msg.startswith("claim refused"):
+            msg = "claim refused: %s" % msg
+        raise ManagedBudgetUnavailable(msg) from exc
     print("laya: claimed %s (%d bytes) from pair %s" % (
-        name, int(payload["bytes"]), payload.get("pair_id")), file=sys.stderr)
+        name, claimed_bytes, pair_id), file=sys.stderr)
     return {"state": "pending", "claimed": record["claimed"]}, record["owner"], int(total)
 
 
@@ -369,21 +403,24 @@ class LayaState:
         self.catalog_id = str(self.manifest.get("catalog_id") or self.engine_id_fallback(args))
         claim_payload = None
         budget = _budget_or_none()
-        raw_fd = os.environ.get(budget.CLAIM_FD_ENV) if budget is not None else None
-        if raw_fd:
+        raw_fd = os.environ.get(_CLAIM_FD_ENV)
+        if raw_fd is not None:
             if not self.managed:
-                raise RuntimeError(
+                raise ManagedBudgetUnavailable(
                     "claim mode (managed pair child) requires --managed; refusing "
                     "to bind a batch reservation without fail-closed admission")
-            claim_payload = _read_claim_payload(int(raw_fd))
+            if budget is None:
+                raise ManagedBudgetUnavailable(
+                    "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH")
+            claim_payload = _read_claim_payload(budget, raw_fd)
         if claim_payload is not None:
             # Claimed child: the parent manager fit-checked and reserved this
             # worker's allocation in the atomic batch transaction. The child
             # re-derives its own requirement with the SAME run-args math and
             # refuses any mismatch before a single weight loads.
             self.reservation, self.owner, self.admitted_total = _claim_reserved(
-                self.model_dir, self.catalog_id, claim_payload,
-                self.managed, args.dtype, args.max_questions)
+                budget, self.model_dir, self.catalog_id, claim_payload,
+                args.dtype, args.max_questions)
         else:
             # pending phase: dtype-aware atomic admit + reserve BEFORE any weight
             # is resident; concurrent admissions subtract it from MemAvailable
@@ -560,7 +597,14 @@ def serve_main(argv):
     # Managed pair child: stop when the parent manager's lifetime pipe closes
     # (manager exited or died), so workers never outlive their owner.
     budget = _budget_or_none()
-    if budget is not None and budget.watch_parent_from_env():
+    watching = False
+    if budget is not None:
+        try:
+            watching = budget.watch_parent_from_env()
+        except budget.BudgetError as exc:
+            print("laya: %s" % exc, file=sys.stderr)
+            sys.exit(3)
+    if watching:
         print("laya: watching parent lifetime fd %s" % os.environ[budget.LIFETIME_FD_ENV],
               file=sys.stderr)
     state = None

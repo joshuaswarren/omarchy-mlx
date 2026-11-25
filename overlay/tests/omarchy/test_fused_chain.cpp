@@ -2059,14 +2059,7 @@ TEST_CASE("gemv epilogue-only route: the part rule") {
   CHECK_FALSE(omarchy::gemv_epilogue_only_part(""));
 }
 
-TEST_CASE("qmm residual norm default: the part rule and overrides") {
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)"));
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 (G13G B1)"));
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M4 (G16G B1)"));
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M6 (G18G B1)"));
-  CHECK(omarchy::qmm_residual_norm_default_part(""));
-
+TEST_CASE("qmm residual norm default: shape, device capabilities and overrides") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};
   std::vector<std::optional<std::string>> saved;
@@ -2075,28 +2068,44 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
     saved.push_back(v ? std::optional<std::string>(v) : std::nullopt);
     unsetenv(var);
   }
-  const std::string g13c = "Apple M1 Max (G13C C0)";
-  const std::string g13g = "Apple M1 (G13G B1)";
-  const std::string g14c = "Apple M2 Max (G14C B1)";
-  CHECK(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g13g));
+  omarchy::CapabilityReport caps;
+  caps.device_name = "Unlisted Vulkan GPU";
+  caps.subgroup_size = 32;
+  caps.subgroup_operations = VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+  caps.max_compute_work_group_invocations = 512;
+  caps.max_compute_work_group_size[0] = 512;
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 256, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2048, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 0, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4095, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4097, false));
+
+  auto limited = caps;
+  limited.device_name = "Apple M2 Max (G14C B1)";
+  limited.subgroup_size = 16;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  limited.subgroup_size = 32;
+  limited.subgroup_operations = 0;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  limited.subgroup_operations = caps.subgroup_operations;
+  limited.max_compute_work_group_invocations = 256;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
+  limited.max_compute_work_group_size[0] = 255;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
-  CHECK(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {

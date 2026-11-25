@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include "mlx/backend/omarchy/device.h"
 
 namespace mlx::core::omarchy {
 
@@ -35,7 +36,7 @@ namespace mlx::core::omarchy {
 // grid clears the per-core floor sooner, so the wider tile wins), which
 // is the safe direction.
 inline uint32_t apple_gpu_cores(const std::string& device_name) {
-  if (const char* env = std::getenv("MLX_OMARCHY_GPU_CORES")) {
+  if (const char* env = omarchy::env_str("MLX_OMARCHY_GPU_CORES")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
   if (device_name == "Apple M1 (G13G B1)") {
@@ -90,7 +91,7 @@ constexpr uint32_t kCoopmatWorkgroupsPerCore = 6u;
 
 inline uint32_t coopmat_workgroups_per_core() {
   static const uint32_t value = [] {
-    const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE");
+    const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE");
     if (env == nullptr) {
       return kCoopmatWorkgroupsPerCore;
     }
@@ -123,7 +124,7 @@ inline uint32_t coopmat_workgroups_per_core() {
 // are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
 // cost 400-950 us each, 133 of them per first token.
 inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
     if (v == "32" || v == "0" || v == "16") {
@@ -141,7 +142,7 @@ inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
 }
 
 inline bool qmm_coopmat_sg4_requested(const std::string& device_name) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
     if (v == "64sg4") {
@@ -156,7 +157,7 @@ inline bool qmm_coopmat_sg4_requested(const std::string& device_name) {
 
 inline uint32_t qmm_coopmat_stepk_requested(
     const std::string& device_name, uint32_t rows, bool sg4) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_STEPK");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
     if (v == "32") {
@@ -176,7 +177,7 @@ inline uint32_t qmm_coopmat_stepk_requested(
 }
 
 inline bool qmm_cheap_deq_env() {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_CHEAP_DEQ");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_CHEAP_DEQ");
   return env != nullptr && env[0] == '1';
 }
 

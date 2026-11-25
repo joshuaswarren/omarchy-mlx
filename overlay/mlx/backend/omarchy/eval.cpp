@@ -48,7 +48,7 @@ void eval(array& arr) {
     // A nested settle eval (rope-pair pre-settle) already ran this
     // node and detached it: its kernel is recorded and its data is
     // resident. Re-running it would dispatch on detached inputs.
-    if (std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr) {
+    if (omarchy::env_set("MLX_OMARCHY_TRIO_TRACE")) {
       std::fprintf(
           stderr,
           "[omarchy-eval] skip id=%zu settled=%d status=%d prim=%d\n",
@@ -63,7 +63,7 @@ void eval(array& arr) {
   ++omarchy::trace::prim_counts()[arr.primitive().name()];
 #endif
   auto outputs = arr.outputs();
-  if (std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr) {
+  if (omarchy::env_set("MLX_OMARCHY_TRIO_TRACE")) {
     std::fprintf(
         stderr,
         "[omarchy-eval] run id=%zu prim=%s ninputs=%zu settled=%d\n",

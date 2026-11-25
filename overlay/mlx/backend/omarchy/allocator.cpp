@@ -576,19 +576,31 @@ void Device::download_device_to_host(
 }
 
 bool device_local_activations_enabled() {
-  if (!is_available()) {
-    return false;
+  // Memoized on the env epoch: this runs per malloc and its inputs (one
+  // env var, process-stable device caps and memory types) cannot change
+  // inside an eval. Epoch 0 keeps fresh reads pre-first-eval.
+  static thread_local uint64_t memo_epoch = 0;
+  static thread_local bool memo = false;
+  const uint64_t epoch = omarchy::env_epoch();
+  if (epoch != 0 && epoch == memo_epoch) {
+    return memo;
   }
-  auto& dev = device();
-  const int env_setting = std::getenv("MLX_OMARCHY_VRAM_ACTIVATIONS") == nullptr
-      ? -1
-      : (env_flag("MLX_OMARCHY_VRAM_ACTIVATIONS") ? 1 : 0);
-  if (!device_local_activations_default(dev.physical_type(), env_setting)) {
-    return false;
+  bool result = false;
+  if (is_available()) {
+    auto& dev = device();
+    const int env_setting =
+        !omarchy::env_set("MLX_OMARCHY_VRAM_ACTIVATIONS")
+        ? -1
+        : (env_flag("MLX_OMARCHY_VRAM_ACTIVATIONS") ? 1 : 0);
+    result =
+        device_local_activations_default(dev.physical_type(), env_setting) &&
+        vram_activation_memory_type(
+            true, dev.physical_type(), dev.memory_properties(), UINT32_MAX) !=
+            UINT32_MAX;
   }
-  return vram_activation_memory_type(
-             true, dev.physical_type(), dev.memory_properties(), UINT32_MAX) !=
-      UINT32_MAX;
+  memo = result;
+  memo_epoch = epoch;
+  return result;
 }
 
 uint32_t VulkanAllocator::find_memory_type(
