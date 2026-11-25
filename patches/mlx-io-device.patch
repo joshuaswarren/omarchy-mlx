@@ -197,7 +197,7 @@ diff --git a/mlx/array.h b/mlx/array.h
  
    /** The array's siblings. */
 --- a/python/src/convert.cpp	2026-09-30 08:29:59.000000000 -0500
-+++ b/python/src/convert.cpp	2026-11-25 12:09:03.896072759 -0600
++++ python/src/convert.cpp	2026-11-25 13:45:20.115865167 -0600
 @@ -18,6 +18,9 @@
  #include "mlx/dtype_utils.h"
  #include "mlx/ops.h"
@@ -231,10 +231,14 @@ diff --git a/mlx/array.h b/mlx/array.h
    data = device_type == nb::device::cpu::value ? arr.buffer().raw_ptr()
                                                 : arr.buffer().ptr();
    byte_offset = arr.offset();
-@@ -384,6 +403,21 @@
+@@ -382,11 +401,32 @@
+ 
+ nb::ndarray<> mlx_to_dlpack(
      const mx::array& a,
-     bool force_copy,
+-    bool force_copy,
++    std::optional<bool> copy_state,
      std::optional<std::tuple<int, int>> dl_device) {
+-  if (force_copy) {
 +  bool shadow = false;
 +#ifdef MLX_OMARCHY_BACKEND
 +  {
@@ -245,11 +249,31 @@ diff --git a/mlx/array.h b/mlx/array.h
 +    arr.eval();
 +    shadow = mx::omarchy::buffer_is_shadow(arr.buffer());
 +  }
-+  if (!force_copy && shadow) {
++  // Array API copy contract: nullopt (default) may copy when the shadow
++  // contract requires it; explicit false refuses to alias a shadow and is
++  // rejected; explicit true copies.
++  if (shadow && copy_state.has_value() && !*copy_state) {
 +    throw nb::buffer_error(
 +        "no-copy DLPack export of shadow-backed buffers is unsupported");
 +  }
-+#endif
-   if (force_copy) {
++  if (shadow || (copy_state.has_value() && *copy_state)) {
      return mlx_to_nd_array<>(mx::astype(a, a.dtype(), true), dl_device);
    }
++#endif
++  if (copy_state.has_value() && *copy_state) {
++    return mlx_to_nd_array<>(mx::astype(a, a.dtype(), true), dl_device);
++  }
+   return mlx_to_nd_array<>(a, dl_device);
+ }
+ 
+--- a/python/src/array.cpp	2026-09-30 08:29:59.000000000 -0500
++++ python/src/array.cpp	2026-11-25 13:45:20.115865167 -0600
+@@ -530,7 +530,7 @@
+              nb::object,
+              std::optional<std::tuple<int, int>> dl_device,
+              std::optional<bool> copy) {
+-            return mlx_to_dlpack(a, copy.value_or(false), dl_device);
++            return mlx_to_dlpack(a, copy, dl_device);
+           },
+           nb::kw_only(),
+           "stream"_a = nb::none(),

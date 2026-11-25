@@ -1,5 +1,5 @@
---- a/python/src/buffer.h	2026-11-25 11:55:09.640271563 -0600
-+++ b/python/src/buffer.h	2026-11-25 12:08:53.362163755 -0600
+--- buffer.orig	2026-11-25 11:55:09.640271563 -0600
++++ buffer.h	2026-11-25 13:45:09.243956796 -0600
 @@ -7,6 +7,9 @@
  #include "mlx/array.h"
  #include "mlx/utils.h"
@@ -10,7 +10,7 @@
  
  // Only defined in >= Python 3.9
  // https://github.com/python/cpython/blob/f6cdc6b4a191b75027de342aa8b5d344fb31313e/Include/typeslots.h#L2-L3
-@@ -133,8 +136,24 @@
+@@ -133,15 +136,34 @@
      bool copied = false;
      mx::array* src = &a;
      std::optional<mx::array> packed;
@@ -37,3 +37,14 @@
        if ((flags & PyBUF_WRITABLE) != 0) {
          PyErr_SetString(
              PyExc_BufferError,
+             "cannot provide a writable buffer for a non-contiguous array");
+         return -1;
+       }
+-      packed.emplace(mx::contiguous(a));
++      // astype with force_copy materializes fresh storage even for
++      // already-contiguous arrays, whose contiguous() fast path would
++      // alias the shadow instead of snapshotting it.
++      packed.emplace(mx::astype(a, a.dtype(), true));
+       src = &*packed;
+       copied = true;
+       {
