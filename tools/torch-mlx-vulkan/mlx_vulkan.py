@@ -1549,37 +1549,44 @@ def _adaptive_avg_pool2d_backward(grad_output, a):
 def _bn3(x, w, b, rm, rv, training, momentum, eps):
     """batch-norm forward, channel dim 1 (N,C,... layout). Training
     normalizes with the biased batch variance (torch semantics); eval
-    reads the running stats. Returns (out, save_mean, save_invstd)."""
+    reads the running stats. Returns (out, save_mean, save_invstd).
+
+    The normalize runs in an (N*H*W, C) layout: multi-axis mean/var over
+    a 4-D tensor produced wrong values on the Vulkan backend (PAR-41),
+    while the 2-D column reductions are exact."""
     x = _mx(x)
-    bc = [1, -1] + [1] * (x.ndim - 2)
+    C = x.shape[1]
+    N = x.shape[0]
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
     if training:
-        axes = tuple(d for d in range(x.ndim) if d != 1)
-        mean = mx.mean(x, axis=axes, keepdims=True)
-        var = mx.var(x, axis=axes, keepdims=True)
+        mean = mx.mean(x2, axis=0)
+        var = mx.var(x2, axis=0)
     else:
-        mean = mx.reshape(_mx(rm), bc)
-        var = mx.reshape(_mx(rv), bc)
+        mean = mx.reshape(_mx(rm), (-1,))
+        var = mx.reshape(_mx(rv), (-1,))
     invstd = mx.rsqrt(var + eps)
-    y = (x - mean) * invstd
+    y = (x2 - mean) * invstd
     if w is not None:
-        y = y * mx.reshape(_mx(w), bc)
+        y = y * mx.reshape(_mx(w), (1, C))
     if b is not None:
-        y = y + mx.reshape(_mx(b), bc)
-    squeeze = lambda t: mx.reshape(t, (-1,)) if t.ndim > 1 else t
-    return y, squeeze(mean), squeeze(invstd)
+        y = y + mx.reshape(_mx(b), (1, C))
+    y = mx.moveaxis(y.reshape(N, *x.shape[2:], C), -1, 1)
+    return y, mean, invstd
 
 def _bn_legit_functional(x, w, b, rm, rv, training, momentum, eps):
     """aten._native_batch_norm_legit_functional (aot train path): same core as
     _bn3 but returns updated running stats: (out, save_mean, save_invstd,
     new_running_mean, new_running_var). Torch updates running_var with the
-    UNBIASED batch var while normalizing with the biased one."""
+    UNBIASED batch var while normalizing with the biased one. Uses the same
+    (N*H*W, C) layout as _bn3 (PAR-41)."""
     x = _mx(x)
     out, sm, si = _bn3(x, w, b, rm, rv, training, momentum, eps)
     rmx, rvx = _mx(rm), _mx(rv)
     if training:
-        axes = tuple(d for d in range(x.ndim) if d != 1)
-        n = x.size / x.shape[1]
-        var_b = mx.var(x, axis=axes)
+        C = x.shape[1]
+        x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
+        n = x2.shape[0]
+        var_b = mx.var(x2, axis=0)
         unbias = var_b * (n / (n - 1)) if n > 1 else var_b
         new_rm = (1.0 - momentum) * rmx + momentum * sm
         new_rv = (1.0 - momentum) * rvx + momentum * unbias
@@ -1601,26 +1608,31 @@ def _select_backward(g, sizes, dim, index):
 
 
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
-    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask."""
+    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask.
+    Same (N*H*W, C) layout as _bn3 (PAR-41)."""
     dy, x = _mx(dy), _mx(x)
-    axes = tuple(d for d in range(x.ndim) if d != 1)
-    bc = [1, -1] + [1] * (x.ndim - 2)
+    C = x.shape[1]
+    N = x.shape[0]
+    dy2 = mx.moveaxis(dy, 1, -1).reshape(-1, C)
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
     if training:
-        mean = mx.reshape(_mx(save_mean), bc)
-        invstd = mx.reshape(_mx(save_invstd), bc)
+        mean = _mx(save_mean)
+        invstd = _mx(save_invstd)
     else:
-        mean = mx.reshape(_mx(rm), bc)
-        invstd = mx.rsqrt(mx.reshape(_mx(rv), bc) + eps)
-    wb = mx.reshape(_mx(w), bc) if w is not None else 1.0
-    xh = (x - mean) * invstd
+        mean = mx.reshape(_mx(rm), (-1,))
+        invstd = mx.rsqrt(mx.reshape(_mx(rv), (-1,)) + eps)
+    wb = mx.reshape(_mx(w), (1, C)) if w is not None else 1.0
+    xh = (x2 - mean) * invstd
     if training:
-        dx = (dy - mx.mean(dy, axis=axes, keepdims=True)
-              - xh * mx.mean(dy * xh, axis=axes, keepdims=True)) * invstd * wb
+        dx2 = (dy2 - mx.mean(dy2, axis=0)
+               - xh * mx.mean(dy2 * xh, axis=0)) * invstd * wb
     else:
-        dx = dy * invstd * wb
-    dw = mx.sum(dy * xh, axis=axes) if (w is not None and out_mask[1]) else None
-    db = mx.sum(dy, axis=axes) if out_mask[2] else None
-    return (dx if out_mask[0] else None), dw, db
+        dx2 = dy2 * invstd * wb
+    dw = mx.sum(dy2 * xh, axis=0) if (w is not None and out_mask[1]) else None
+    db = mx.sum(dy2, axis=0) if out_mask[2] else None
+    dx = (mx.moveaxis(dx2.reshape(N, *x.shape[2:], C), -1, 1)
+          if out_mask[0] else None)
+    return dx, dw, db
 
 # ---------------- lowering tables ----------------
 
@@ -1777,6 +1789,10 @@ _FUNC_SPECS = {
     "batch_norm": lambda x, w, b, rm, rv, training, momentum, eps, *k: _bn3(x, w, b, rm, rv, training, momentum, eps)[0],
     "native_batch_norm": lambda x, w, b, rm, rv, training, momentum, eps: _bn3(x, w, b, rm, rv, training, momentum, eps),
     "_native_batch_norm_legit_functional": _bn_legit_functional,
+    # the aot/functional EVAL graph lowers to this op; without an entry
+    # every eval batch-norm through torch.compile is unlowerable (PAR-41)
+    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, eps, *k: _bn3(
+        x, w, b, rm, rv, False, 0.0, eps)[0],
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
