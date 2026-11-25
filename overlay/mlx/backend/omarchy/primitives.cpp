@@ -10930,7 +10930,7 @@ bool dispatch_quantized_gemv_group(
       auto write_all = [](const std::string& path, const array& a) {
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
         f.write(
-            static_cast<const char*>(a.data<uint8_t>()),
+            reinterpret_cast<const char*>(a.data<uint8_t>()),
             static_cast<std::streamsize>(a.nbytes()));
       };
       write_all(base + "qmember.bin", q_member);
