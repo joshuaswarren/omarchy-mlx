@@ -404,7 +404,7 @@ class LayaState:
         claim_payload = None
         budget = _budget_or_none()
         raw_fd = os.environ.get(_CLAIM_FD_ENV)
-        if raw_fd:
+        if raw_fd is not None:
             if not self.managed:
                 raise ManagedBudgetUnavailable(
                     "claim mode (managed pair child) requires --managed; refusing "

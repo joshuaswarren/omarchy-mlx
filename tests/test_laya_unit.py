@@ -553,12 +553,13 @@ class ClaimModeFailClosedTests(unittest.TestCase):
             "mlx_omarchy_laya.api": api, "mlx_omarchy_laya.model": model}))
         self.enterContext(mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(tmp / "home")}))
         os.environ.pop(budget.LIFETIME_FD_ENV, None)
+        os.environ.pop(budget.CLAIM_FD_ENV, None)
         self.enterContext(mock.patch.object(srv.signal, "signal"))
         self.claim_reservation = self.enterContext(
             mock.patch.object(budget, "claim_reservation", wraps=budget.claim_reservation))
 
     def serve(self, payload=None, raw_fd=None, managed=True, expect=SystemExit):
-        """serve_main as a claimed child; returns (raised exception, stderr)."""
+        """Run serve_main; returns (raised exception, stderr)."""
         self.claim_reservation.reset_mock()
         if payload is not None:
             r, w = os.pipe()
@@ -566,7 +567,10 @@ class ClaimModeFailClosedTests(unittest.TestCase):
             os.write(w, payload if isinstance(payload, bytes) else json.dumps(payload).encode())
             os.close(w)
             raw_fd = str(r)
-        os.environ[self.budget.CLAIM_FD_ENV] = raw_fd
+        if raw_fd is None:
+            os.environ.pop(self.budget.CLAIM_FD_ENV, None)
+        else:
+            os.environ[self.budget.CLAIM_FD_ENV] = raw_fd
         argv = ["--model", str(self.ckpt), "--allow-cpu"] + (["--managed"] if managed else [])
         err = self.io.StringIO()
         with self.contextlib.redirect_stderr(err), self.assertRaises(expect) as ctx:
@@ -589,7 +593,7 @@ class ClaimModeFailClosedTests(unittest.TestCase):
     def test_malformed_claim_fd_exits_3(self):
         self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
         sys.set_int_max_str_digits(4300)
-        for raw in ("abc", " ", "x" * 500, "9" * 5000):
+        for raw in ("", "abc", " ", "x" * 500, "9" * 5000):
             with self.subTest(raw=raw[:12]):
                 outcome = self.serve(raw_fd=raw)
                 expected = ("laya: claim refused: MLX_OMARCHY_CLAIM_FD=%.40r "
@@ -760,6 +764,22 @@ class ClaimModeFailClosedTests(unittest.TestCase):
                     "laya-test", "tok", expected_bytes=self.total,
                     home=self.budget.default_home(), expected_pair=expected_pair)
                 self.engine.assert_called_once()
+
+    def test_unset_claim_fd_uses_ordinary_admission(self):
+        class Admitted(Exception):
+            pass
+
+        reg = self.enterContext(self.mock.patch.object(
+            self.srv, "_register_pending", side_effect=Admitted))
+        read_claim = self.enterContext(self.mock.patch.object(
+            self.srv, "_read_claim_payload"))
+        for managed in (False, True):
+            with self.subTest(managed=managed):
+                reg.reset_mock()
+                self.serve(managed=managed, expect=Admitted)
+                reg.assert_called_once()
+                read_claim.assert_not_called()
+                self.claim_reservation.assert_not_called()
 
 
 class _RecordFile(str):
