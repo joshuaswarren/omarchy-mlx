@@ -511,12 +511,8 @@ class ManagedCoServingTests(unittest.TestCase):
         self.assertNotIn("managed co-serving", (out + err).lower())
 
 
-class ClaimModeFailClosedTests(unittest.TestCase):
-    """A managed pair child whose claim cannot bind (malformed fd or payload,
-    no --managed, a record for another model or allocation, a refusal under
-    the budget lock) exits 3 with one `laya:` refusal line before any weight
-    loads. Runs without a parent-lifetime fd or mlx: the mlx, engine and
-    encoder-config imports are stubs."""
+class _StubbedServerTestCase(unittest.TestCase):
+    """Shared stubbed-mlx setup for serve_main fail-closed tests."""
 
     def setUp(self):
         import contextlib
@@ -529,17 +525,17 @@ class ClaimModeFailClosedTests(unittest.TestCase):
         from mlx_omarchy_serve import budget
 
         self.srv, self.budget, self.mock = srv, budget, mock
-        self.contextlib, self.io = contextlib, io
+        self.contextlib, self.io, self.tempfile = contextlib, io, tempfile
         self.tmp = tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.home = tmp / "home"
         self.ckpt = tmp / "ckpt"
         (self.ckpt / "encoder").mkdir(parents=True)
-        manifest = {"catalog_id": "laya-test", "context_max_tokens": 16,
-                    "weights_header": {"param_elements": 1000}}
-        (self.ckpt / "manifest.json").write_text(json.dumps(manifest))
-        cfg = types.SimpleNamespace(hidden_size=8, num_attention_heads=2, intermediate_size=16)
-        self.total = srv.total_estimate_bytes(manifest, cfg, "float16", 64)
-        self.claim = {"name": "laya-test", "claim_token": "tok", "bytes": self.total,
-                      "pair_id": "pair"}
+        self.manifest = {"catalog_id": "laya-test", "context_max_tokens": 16,
+                         "weights_header": {"param_elements": 1000}}
+        (self.ckpt / "manifest.json").write_text(json.dumps(self.manifest))
+        self.cfg = cfg = types.SimpleNamespace(
+            hidden_size=8, num_attention_heads=2, intermediate_size=16)
+        self.total = srv.total_estimate_bytes(self.manifest, cfg, "float16", 64)
 
         core = types.ModuleType("mlx.core")
         core.float16, core.bfloat16, core.float32 = "float16", "bfloat16", "float32"
@@ -548,16 +544,31 @@ class ClaimModeFailClosedTests(unittest.TestCase):
         api = types.ModuleType("mlx_omarchy_laya.api")
         api.LayaEngine = self.engine = mock.Mock(side_effect=AssertionError("weights loaded"))
         model = types.ModuleType("mlx_omarchy_laya.model")
-        model.load_encoder_config = lambda path: cfg
+        self.load_encoder_config = mock.Mock(return_value=cfg)
+        model.load_encoder_config = self.load_encoder_config
         self.enterContext(mock.patch.dict(sys.modules, {
             "mlx": mlx_pkg, "mlx.core": core,
             "mlx_omarchy_laya.api": api, "mlx_omarchy_laya.model": model}))
-        self.enterContext(mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(tmp / "home")}))
+        self.enterContext(mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(self.home)}))
         os.environ.pop(budget.LIFETIME_FD_ENV, None)
         os.environ.pop(budget.CLAIM_FD_ENV, None)
         self.enterContext(mock.patch.object(srv.signal, "signal"))
+
+
+class ClaimModeFailClosedTests(_StubbedServerTestCase):
+    """A managed pair child whose claim cannot bind (malformed fd or payload,
+    no --managed, a record for another model or allocation, a refusal under
+    the budget lock) exits 3 with one `laya:` refusal line before any weight
+    loads. Runs without a parent-lifetime fd or mlx: the mlx, engine and
+    encoder-config imports are stubs."""
+
+    def setUp(self):
+        super().setUp()
+        self.claim = {"name": "laya-test", "claim_token": "tok", "bytes": self.total,
+                      "pair_id": "pair"}
         self.claim_reservation = self.enterContext(
-            mock.patch.object(budget, "claim_reservation", wraps=budget.claim_reservation))
+            self.mock.patch.object(
+                self.budget, "claim_reservation", wraps=self.budget.claim_reservation))
 
     def serve(self, payload=None, raw_fd=None, managed=True, expect=SystemExit):
         """Run serve_main; returns (raised exception, stderr)."""
@@ -783,6 +794,233 @@ class ClaimModeFailClosedTests(unittest.TestCase):
                 self.assertIs(kwargs["managed"] if "managed" in kwargs else args[2], managed)
                 read_claim.assert_not_called()
                 self.claim_reservation.assert_not_called()
+
+
+class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
+    """Under --managed, every pre-load admission or post-load relabel refusal
+    exits 3 with a single `laya:` refusal line and no leaked reservation."""
+
+    def _run_case(self, *, manifest=None, manifest_present=True, home_setup=None,
+                  managed=True, expect=SystemExit, engine_ok=False, engine_exc=None,
+                  err=None):
+        case_tmp = Path(self.enterContext(self.tempfile.TemporaryDirectory()))
+        ckpt = case_tmp / "ckpt"
+        (ckpt / "encoder").mkdir(parents=True)
+        if manifest_present:
+            raw = self.manifest if manifest is None else manifest
+            data = raw if isinstance(raw, bytes) else json.dumps(raw).encode()
+            (ckpt / "manifest.json").write_bytes(data)
+        home = case_tmp / "home"
+        if home_setup is not None:
+            home_setup(home)
+        self.engine.reset_mock()
+        self.engine.side_effect = engine_exc or (
+            None if engine_ok else AssertionError("weights loaded"))
+        self.engine.return_value = self.mock.Mock(device=lambda: "Device(cpu, 0)", max_len=16)
+        argv = ["--model", str(ckpt), "--allow-cpu"] + (["--managed"] if managed else [])
+        err = err or self.io.StringIO()
+        # every case must stop before serving: fail fast instead of binding a port
+        with self.mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(home)}), \
+                self.mock.patch.object(self.srv, "ThreadingHTTPServer",
+                                       side_effect=AssertionError("server started")), \
+                self.contextlib.redirect_stderr(err), self.assertRaises(expect) as ctx:
+            self.srv.serve_main(argv)
+        return ctx.exception, err.getvalue(), home
+
+    def _assert_preload_refused(self, outcome, *expected_substrings, check_empty_registry=True):
+        exc, err, home = outcome
+        self.assertEqual(exc.code, 3, err)
+        lines = err.splitlines()
+        self.assertEqual(len(lines), 1, err)
+        self.assertTrue(lines[0].startswith("laya: "), err)
+        for text in expected_substrings:
+            self.assertIn(text, lines[0], err)
+        self.engine.assert_not_called()
+        if check_empty_registry:
+            regs = self.budget.load_reservations(home) if home.is_dir() else {}
+            self.assertEqual(regs, {})
+
+    def test_preload_manifest_and_config_errors_exit_3(self):
+        manifest_cases = (
+            ("no manifest", dict(manifest_present=False),
+             ("managed co-serving requires a converted manifest",)),
+            ("bad json", dict(manifest=b"{not json"),
+             ("managed admission failed", "JSONDecodeError")),
+            ("non-utf8", dict(manifest=b"\xff\xfe"),
+             ("managed admission failed", "UnicodeDecodeError")),
+            ("non-object manifest", dict(manifest=[1]),
+             ("managed admission failed", "AttributeError")),
+            ("weights_header not object", dict(manifest=dict(self.manifest, weights_header=[1])),
+             ("managed admission failed", "laya-test", "AttributeError")),
+            ("param_elements Infinity",
+             dict(manifest=b'{"catalog_id":"laya-test","weights_header":{"param_elements":Infinity}}'),
+             ("managed admission failed", "laya-test", "OverflowError")),
+            ("param_elements str",
+             dict(manifest=dict(self.manifest, weights_header={"param_elements": "x"})),
+             ("managed admission failed", "laya-test", "ValueError")),
+            ("context_max_tokens list",
+             dict(manifest=dict(self.manifest, context_max_tokens=[1])),
+             ("managed admission failed", "laya-test", "TypeError")),
+        )
+        for label, kwargs, expected in manifest_cases:
+            with self.subTest(case=label):
+                self._assert_preload_refused(self._run_case(**kwargs), *expected)
+
+        # stack-independent: raised, not produced by nesting depth
+        for exc in (IsADirectoryError(21, "Is a directory"), RecursionError("deep manifest")):
+            with self.subTest(case=type(exc).__name__), \
+                    self.mock.patch.object(self.srv, "_read_manifest", side_effect=exc):
+                self._assert_preload_refused(
+                    self._run_case(), "managed admission failed", type(exc).__name__)
+
+        enc_cases = (
+            ("encoder OSError", FileNotFoundError(2, "missing encoder config"), "FileNotFoundError"),
+            ("encoder ValueError", ValueError("invalid encoder config"), "ValueError"),
+            ("encoder KeyError", KeyError("num_attention_heads"), "KeyError"),
+        )
+        for label, exc, exc_name in enc_cases:
+            with self.subTest(case=label):
+                self.load_encoder_config.side_effect = exc
+                try:
+                    self._assert_preload_refused(
+                        self._run_case(), "managed admission failed", "laya-test", exc_name)
+                finally:
+                    self.load_encoder_config.side_effect = None
+
+    def test_preload_budget_errors_exit_3(self):
+        with self.subTest(case="does not fit"), \
+                self.mock.patch.object(self.budget, "mem_available", return_value=1):
+            self._assert_preload_refused(
+                self._run_case(), "managed admission failed", "laya-test", "BudgetError", "does not fit")
+
+        with self.subTest(case="corrupt registry"):
+            self._assert_preload_refused(
+                self._run_case(home_setup=lambda h: (h.mkdir(), (h / "reservations.json").write_text("{bad"))),
+                "managed admission failed", "laya-test", "BudgetError", "unreadable",
+                check_empty_registry=False)
+
+        with self.subTest(case="registry home is a file"):
+            self._assert_preload_refused(
+                self._run_case(home_setup=lambda h: h.write_text("not a dir")),
+                "managed admission failed", "laya-test", "FileExistsError")
+
+        with self.subTest(case="held by another owner"), \
+                self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40):
+            outcome = self._run_case(
+                home_setup=lambda h: self.budget.set_reservation("laya-test", 10, home=h, owner="other"))
+            self._assert_preload_refused(
+                outcome, "managed admission failed", "laya-test", "BudgetError", "already held",
+                check_empty_registry=False)
+            regs = self.budget.load_reservations(outcome[2])
+            self.assertEqual(list(regs), ["laya-test"])
+            self.assertEqual(regs["laya-test"]["owner"], "other")
+
+    def test_relabel_failures_clear_reservation_and_exit_3(self):
+        cases = (
+            ("relabel BudgetError",
+             lambda: self.mock.patch.object(
+                 self.budget, "set_reservation_state",
+                 side_effect=self.budget.BudgetError("no reservation named 'laya-test'")),
+             ("managed relabel failed", "laya-test", "BudgetError")),
+            ("relabel OSError",
+             lambda: self.mock.patch.object(
+                 self.budget, "set_reservation_state",
+                 side_effect=OSError(28, "No space left on device")),
+             ("managed relabel failed", "laya-test", "OSError", "No space left on device")),
+            ("relabel floor mismatch",
+             lambda: self.mock.patch.object(self.srv, "relabel_admissible", return_value=False),
+             ("refusing to relabel", "laya-test")),
+        )
+        for label, patch_fn, expected in cases:
+            with self.subTest(case=label), \
+                    self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40), \
+                    self.mock.patch.object(self.budget, "clear_reservation",
+                                           wraps=self.budget.clear_reservation) as clear_spy, \
+                    self.mock.patch.object(self.srv, "_clear_memory",
+                                           wraps=self.srv._clear_memory) as why_spy, \
+                    patch_fn():
+                exc, err, home = self._run_case(engine_ok=True)
+                self.assertEqual(exc.code, 3, err)
+                self.assertNotIn("Traceback", err)
+                lines = err.splitlines()
+                refusal_lines = [ln for ln in lines if not ln.startswith("laya: admit | ")]
+                self.assertEqual(len(refusal_lines), 1, err)
+                self.assertEqual(refusal_lines[0], lines[-1], err)
+                self.assertTrue(refusal_lines[0].startswith("laya: "), err)
+                for text in expected:
+                    self.assertIn(text, refusal_lines[0], err)
+                self.engine.assert_called_once()
+                clear_spy.assert_called_once()
+                self.assertEqual(why_spy.call_args.kwargs["why"], "failed-relabel")
+                self.assertEqual(self.budget.load_reservations(home), {})
+
+    def _stderr_failing_on(self, prefix):
+        io = self.io
+
+        class Stream(io.StringIO):
+            def write(self, text):
+                if text.startswith(prefix):
+                    raise OSError(28, "No space left on device")
+                return super().write(text)
+
+        return Stream()
+
+    def test_failure_after_admission_clears_reservation(self):
+        # the reservation is committed before the admit lines print
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40):
+            exc, err, home = self._run_case(err=self._stderr_failing_on("laya: admit |"))
+        self.assertEqual(exc.code, 3, err)
+        self.assertEqual(err.splitlines(), [
+            "laya: managed admission failed for laya-test: OSError: "
+            "[Errno 28] No space left on device"])
+        self.engine.assert_not_called()
+        self.assertEqual(self.budget.load_reservations(home), {})
+
+    def test_failure_after_claim_clears_reservation(self):
+        payload = {"name": "laya-test", "claim_token": "tok", "bytes": self.total,
+                   "pair_id": "pair"}
+        with self.mock.patch.dict(os.environ, {self.budget.CLAIM_FD_ENV: "3"}), \
+                self.mock.patch.object(self.srv, "_read_claim_payload", return_value=payload), \
+                self.mock.patch.object(self.budget, "claim_reservation",
+                                       return_value={"claimed": [1, 2], "owner": "tok"}), \
+                self.mock.patch.object(self.srv, "_clear_memory") as clear:
+            exc, err, _ = self._run_case(err=self._stderr_failing_on("laya: claimed"))
+        self.assertEqual(exc.code, 3, err)
+        self.assertIn("managed admission failed for laya-test: OSError", err)
+        self.engine.assert_not_called()
+        clear.assert_called_once_with("laya-test", True, why="failed-startup", owner="tok")
+
+    def test_multiline_refusal_is_collapsed_to_one_line(self):
+        manifest = dict(self.manifest, catalog_id="laya\ntest")
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1):
+            self._assert_preload_refused(
+                self._run_case(manifest=manifest),
+                "managed admission failed", "laya test", "BudgetError", "does not fit")
+
+    def test_managed_engine_load_error_keeps_original_exception(self):
+        # weight loading is not admission: its errors are not converted to exit 3
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40):
+            exc, err, home = self._run_case(engine_exc=OSError("weights unreadable"),
+                                            expect=OSError)
+        self.assertEqual(str(exc), "weights unreadable")
+        self.assertEqual(self.budget.load_reservations(home), {})
+
+    def test_standalone_relabel_error_keeps_original_exception(self):
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40), \
+                self.mock.patch.object(self.budget, "set_reservation_state",
+                                       side_effect=self.budget.BudgetError("relabel boom")):
+            exc, err, home = self._run_case(managed=False, engine_ok=True,
+                                            expect=self.budget.BudgetError)
+        self.assertEqual(str(exc), "relabel boom")
+        self.assertEqual(self.budget.load_reservations(home), {})
+
+    def test_standalone_corrupt_manifest_keeps_original_exception(self):
+        exc, err, home = self._run_case(
+            manifest=b"{not json", managed=False, expect=json.JSONDecodeError)
+        self.assertIsInstance(exc, json.JSONDecodeError)
+        self.assertEqual(err, "")
+        self.engine.assert_not_called()
+        self.assertEqual(self.budget.load_reservations(home) if home.is_dir() else {}, {})
 
 
 class _RecordFile(str):
