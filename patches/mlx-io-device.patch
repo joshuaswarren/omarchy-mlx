@@ -244,37 +244,3 @@ diff --git a/mlx/array.h b/mlx/array.h
    if (force_copy) {
      return mlx_to_nd_array<>(mx::astype(a, a.dtype(), true), dl_device);
    }
---- a/python/src/buffer.h	2026-09-30 08:29:59.000000000 -0500
-+++ b/python/src/buffer.h	2026-11-25 10:47:56.401121802 -0600
-@@ -6,6 +6,9 @@
- 
- #include "mlx/array.h"
- #include "mlx/utils.h"
-+#ifdef MLX_OMARCHY_BACKEND
-+#include "mlx/backend/omarchy/allocator.h"
-+#endif
- 
- // Only defined in >= Python 3.9
- // https://github.com/python/cpython/blob/f6cdc6b4a191b75027de342aa8b5d344fb31313e/Include/typeslots.h#L2-L3
-@@ -105,6 +108,21 @@
-   buffer_info* info =
-       new buffer_info(buffer_format(a), std::move(shape), std::move(strides));
- 
-+#ifdef MLX_OMARCHY_BACKEND
-+  // Shadow-backed buffers (device-local or inference-weight placement) are
-+  // unmapped: their host storage is a detached shadow that device writes can
-+  // rewrite. Buffer views over them are read-only snapshots, and writable
-+  // requests fail rather than exposing an alias whose edits never reach the
-+  // device. Hold mx.array(np.frombuffer(...)) copies for stable data.
-+  if (mx::omarchy::buffer_is_shadow(a.buffer())) {
-+    if ((flags & PyBUF_WRITABLE) == PyBUF_WRITABLE) {
-+      PyErr_SetString(PyExc_BufferError,
-+                      "buffer is read-only: shadow-backed device memory");
-+      return -1;
-+    }
-+    view->readonly = true;
-+  }
-+#endif
-   view->obj = obj;
-   view->ndim = a.ndim();
-   view->internal = info;
