@@ -678,9 +678,10 @@ def test_reductions():
     # #867; var/var_mean/std_mean had no spec at all; and the std lambda
     # ignored `correction` so it silently computed ddof=0 (biased) where torch
     # defaults to ddof=1 (unbiased). Covers dim lists, keepdim, empty-dims,
-    # correction values, 0-d tensors, dtype cast, fp32 + bf16.
+    # correction values, 0-d tensors, dtype cast, fp32 + bf16 + fp16.
     x32 = torch.tensor([[1.5, -2.0, 0.25], [3.0, -1.0, 2.0]])
     xb = x32.bfloat16()
+    xh = x32.half()
     x0 = torch.tensor(5.0)
 
     def run_one(target, ins, kw):
@@ -696,6 +697,10 @@ def test_reductions():
         # #864: _torch widens bf16 outputs to f32 (numpy has no bf16 buffer)
         assert out.dtype == ref.dtype or (ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
             (str(target), out.dtype, ref.dtype)
+        # allclose broadcasts — pin the shape too so a scalar-vs-(1,1)
+        # keepdim slip can't pass silently
+        assert torch.as_tensor(out).shape == ref.shape, \
+            (str(target), kw, torch.as_tensor(out).shape, ref.shape)
         assert np.allclose(torch.as_tensor(out).float().numpy(), ref.float().numpy(), atol=2e-2), \
             (str(target), kw, torch.as_tensor(out).float().numpy(), ref.float().numpy())
 
@@ -707,13 +712,22 @@ def test_reductions():
         (torch.ops.aten.mean.dim, (x0,), {"dim": [0]}),
         (torch.ops.aten.mean.dim, (x0,), {"dim": [-1], "keepdim": True}),
         (torch.ops.aten.mean.dim, (xb,), {"dim": [1]}),
+        (torch.ops.aten.mean.dim, (xh,), {"dim": [1]}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [1], "unbiased": False}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [0], "keepdim": True}),
         (torch.ops.aten.var.dim, (x32,), {"dim": []}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
+        (torch.ops.aten.var.dim, (xh,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [0], "keepdim": True}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
         (torch.ops.aten.std.dim, (xb,), {"dim": [1]}),
+        (torch.ops.aten.std.dim, (xh,), {"dim": [1]}),
     ]:
         run_one(target, ins, kw)
 
