@@ -534,7 +534,8 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
       - `route != None` and `timed_out == False` for a successful call
         whose answer passes the frozen thresholds;
       - `route is None` and `reason != ""` for any skip path, including
-        budget refusal, deadline miss, invalid output, or threshold miss.
+        budget refusal, deadline miss, worker error, invalid output, or
+        threshold miss.
     """
     pol = policy or ROUTING_POLICY
 
@@ -579,6 +580,8 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
     if raw.get("timed_out"):
         return RoutingOutcome(reason="deadline_miss", timed_out=True,
                               latency_ms=latency_ms)
+    if len(raw) == 1 and isinstance(raw.get("error"), str):
+        return RoutingOutcome(reason="worker_error", latency_ms=latency_ms)
 
     answers = raw.get("answers") or {}
     answer = answers.get("route") if isinstance(answers, dict) else None
