@@ -427,6 +427,10 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16 shaders/qmm_vec.comp
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+# M1MD-2 register/occupancy screen: narrower or scale-first SwiGLU tiles.
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2h shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_SWIGLU_HOIST=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)

@@ -1670,6 +1670,32 @@ void main() {
         precise float dot_g[ROWS_PER_SLOT];
         precise float dot_u[ROWS_PER_SLOT];
         precise float input_sum = 0.0;
+        float sg[ROWS_PER_SLOT];
+        float bg[ROWS_PER_SLOT];
+        float su[ROWS_PER_SLOT];
+        float bu[ROWS_PER_SLOT];
+#ifdef QMM_SWIGLU_HOIST
+        // Scale-first hoist (M1MD-2): the eight small scale/bias loads
+        // issue before the weight streams so their latency hides under
+        // the wide weight reads instead of serializing behind them.
+        // Same addresses, same arithmetic order: bit-exact.
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          dot_g[r] = 0.0;
+          dot_u[r] = 0.0;
+          sg[r] = LOAD_VALUE(scales0.values[sp[r]]);
+          bg[r] = LOAD_VALUE(biases0.values[sp[r]]);
+          su[r] = LOAD_VALUE(scales1.values[sp[r]]);
+          bu[r] = LOAD_VALUE(biases1.values[sp[r]]);
+          sp[r] += 8u;
+        }
+        uvec2 wvg[ROWS_PER_SLOT];
+        uvec2 wvu[ROWS_PER_SLOT];
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          wvg[r] = input_w0.values[wp[r]];
+          wvu[r] = input_w1.values[wp[r]];
+          wp[r] += 32u;
+        }
+#else
         uvec2 wvg[ROWS_PER_SLOT];
         uvec2 wvu[ROWS_PER_SLOT];
         for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
@@ -1679,10 +1705,6 @@ void main() {
           wvu[r] = input_w1.values[wp[r]];
           wp[r] += 32u;
         }
-        float sg[ROWS_PER_SLOT];
-        float bg[ROWS_PER_SLOT];
-        float su[ROWS_PER_SLOT];
-        float bu[ROWS_PER_SLOT];
         for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
           sg[r] = LOAD_VALUE(scales0.values[sp[r]]);
           bg[r] = LOAD_VALUE(biases0.values[sp[r]]);
@@ -1690,6 +1712,7 @@ void main() {
           bu[r] = LOAD_VALUE(biases1.values[sp[r]]);
           sp[r] += 8u;
         }
+#endif
         uvec4 xa = input_x.values[xp];
         uvec4 xb = input_x.values[xp + 1u];
         xp += 64u;

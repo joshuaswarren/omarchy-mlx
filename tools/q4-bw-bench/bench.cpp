@@ -404,6 +404,12 @@ static const Shape kShapes2B[] = {
     {"ab", 2048, 2, {16, 16, 0}},
     {"lm_head", 2048, 1, {248320, 0, 0}, true},
 };
+// M1MD-2 SwiGLU screen geometries: the 4B fused gate+up pair (N=9728,
+// K=2560) plus the 2B in-model pair for cross-model shape coverage.
+static const Shape kShapesSwiglu[] = {
+    {"sw4b", 2560, 2, {9728, 9728, 0}},
+    {"sw2b", 2048, 2, {6144, 6144, 0}},
+};
 static const Shape* g_shapes = kShapes;
 // --cand <path>[:columns]: screen ONE candidate shader against base (default
 // mode: iso timing + bit compare; gap mode: iso4/widedep arms) instead of the
@@ -413,6 +419,9 @@ static std::string g_cand_src;
 static uint32_t g_cand_columns = 8u;
 // --cand-def "-DX=1 ...": extra compile defines for the candidate only.
 static std::string g_cand_defs;
+// --swiglu: dedicated-SwiGLU tile screen (M1MD-2). gate = slot0 buffers,
+// up = slot1 buffers, silu product written to slot0 out; iso mode only.
+static bool g_swiglu = false;
 // --grid-cap N: dispatch at most N workgroups per candidate GEMV (gap mode);
 // params.count keeps the logical group count for grid-stride shaders.
 static uint32_t g_grid_cap = 0u;
@@ -1784,6 +1793,7 @@ int main(int argc, char** argv) {
     if (std::string(argv[i]) == "--bf16eq") bf16_eq = true;
     if (std::string(argv[i]) == "--gap") gap_mode = true;
     if (std::string(argv[i]) == "--roof") roof_mode = true;
+    if (std::string(argv[i]) == "--swiglu") g_swiglu = true;
     if (std::string(argv[i]) == "--2b") {
       g_shapes = kShapes2B;
       g_num_shapes = std::uint32_t{sizeof(kShapes2B) / sizeof(kShapes2B[0])};
@@ -1817,6 +1827,7 @@ int main(int argc, char** argv) {
     const char* src;
     const char* spv;
     uint32_t columns;
+    const char* defines;
   };
   std::vector<SideSpec> specs = {
       {"base", "tools/q4-bw-bench/shaders/qmm_vec_base.comp",
@@ -1837,7 +1848,27 @@ int main(int argc, char** argv) {
   if (!g_cand_src.empty()) {
     specs.resize(1);
     specs.push_back({"cand", g_cand_src.c_str(), "/tmp/q4cand_c.spv",
-        g_cand_columns});
+        g_cand_columns, nullptr});
+  }
+  if (g_swiglu) {
+    // All four sides are the same bench-remapped SwiGLU shader; only the
+    // tile defines differ. columns = rows per workgroup (16 for r2s8w2
+    // and the hoist arm, 8 for the two 8-column arms).
+    static const char* sw =
+        "tools/q4-bw-bench/shaders/qmm_vec_swiglu.comp";
+    static const std::string d_base =
+        std::string("-DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 "
+        "-DQMM_VEC_SWIGLU=1 -DQMM_W2=1");
+    static const std::string d_r2s8 = d_base + " -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8";
+    static const std::string d_r1s8 = d_base + " -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8";
+    static const std::string d_r2s4 = d_base + " -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4";
+    static const std::string d_hoist = d_r2s8 + " -DQMM_SWIGLU_HOIST=1";
+    specs = {
+        {"r2s8w2", sw, "/tmp/q4sw_r2s8w2.spv", 16u, d_r2s8.c_str()},
+        {"r1s8w2", sw, "/tmp/q4sw_r1s8w2.spv", 8u, d_r1s8.c_str()},
+        {"r2s4w2", sw, "/tmp/q4sw_r2s4w2.spv", 8u, d_r2s4.c_str()},
+        {"r2s8w2h", sw, "/tmp/q4sw_hoist.spv", 16u, d_hoist.c_str()},
+    };
   }
   constexpr int kMaxSides = 5;
   const int num_sides = (int)specs.size();
@@ -1845,12 +1876,18 @@ int main(int argc, char** argv) {
   for (int i = 0; i < num_sides; ++i) {
     // loadfirst cannot compile under bf16 defines (f16-only form).
     if (bf16_eq && std::string(specs[i].tag) == "loadfirst") continue;
-    std::string sdefs = std::string(variant_defines) +
+    std::string sdefs = specs[i].defines != nullptr
+        ? std::string(specs[i].defines)
+        : std::string(variant_defines) +
         (std::string(specs[i].tag) == "cand" ? g_cand_defs : std::string());
     if (compile_shader(specs[i].src, sdefs.c_str(), specs[i].spv) != 0)
       die("compile %s", specs[i].tag);
   }
 
+  if (g_swiglu) {
+    g_shapes = kShapesSwiglu;
+    g_num_shapes = 2;
+  }
   if (vk_init() != 0) return 1;
   DeviceCtx ctx = setup_device();
   if (alu_mode) {
@@ -1953,6 +1990,13 @@ int main(int argc, char** argv) {
     }
     for (uint32_t d = 0; d < sh.dims; ++d) {
       void* p;
+      if (g_swiglu) {
+        g_vk.MapMemory(g_vk.dev, inputs[s].w[d].mem, 0, inputs[s].w[d].size, 0, &p);
+        uint32_t* wp = (uint32_t*)p;
+        for (size_t e = 0; e < inputs[s].w[d].size / 4; ++e)
+          wp[e] = 0x10203040u + (uint32_t)(e * 2654435761u) + d;
+        g_vk.UnmapMemory(g_vk.dev, inputs[s].w[d].mem);
+      }
       g_vk.MapMemory(g_vk.dev, inputs[s].scales[d].mem, 0, inputs[s].scales[d].size, 0, &p);
       std::memset(p, 0, inputs[s].scales[d].size);
       for (size_t e = 0; e < inputs[s].scales[d].size / 2; ++e) ((uint16_t*)p)[e] = 0x3F80;
@@ -1969,7 +2013,8 @@ int main(int argc, char** argv) {
           shape_params[s], groups_v[s][i]);
     }
     // Side 0 is the base; every other side must reproduce its bits.
-    for (uint32_t d = 0; d < sh.dims; ++d) {
+    // SwiGLU writes only dim 0 (slot1 feeds the up stream, not an out).
+    for (uint32_t d = 0; d < (g_swiglu ? 1u : sh.dims); ++d) {
       void* p;
       g_vk.MapMemory(g_vk.dev, outs[s][0].out[d].mem, 0,
           outs[s][0].out[d].size, 0, &p);

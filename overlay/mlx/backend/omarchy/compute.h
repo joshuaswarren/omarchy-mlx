@@ -1245,6 +1245,13 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  // M1MD-2 SwiGLU tile/register screen variants of the dedicated 1-pass
+  // kernel: 8 cols/WG single-row r1s8w2, 8 cols/WG 128-thread r2s4w2, and
+  // the scale-first r2s8w2h. Selected by MLX_OMARCHY_SWIGLU_GEOM on the
+  // 2x8w2 geometry; appended to keep profile kernel ids stable.
+  QmmVecQ4SwigluBF16R1S8W2,
+  QmmVecQ4SwigluBF16R2S4W2,
+  QmmVecQ4SwigluBF16R2S8W2H,
   Count,
 };
 

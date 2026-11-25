@@ -187,7 +187,7 @@ const QmmGeometry& qmm_geometry() {
   static const QmmGeometry geometry = [] {
     using K = omarchy::ComputeKernel;
     auto make_2x8w2 = [] {
-      return QmmGeometry{
+      QmmGeometry g{
           16u,
           K::QmmVecQ4WordSubgroupBF16R2S8W2,
           K::QmmVecQ4MultiSubgroupBF16R2S8W2,
@@ -200,6 +200,35 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4ResNormBF16R2S8W2,
           16u,
           K::QmmVecQ4OutgateResNormBF16R2S8W2};
+      // M1MD-2 screen: MLX_OMARCHY_SWIGLU_GEOM picks the dedicated SwiGLU
+      // tile inside the 2x8w2 family; "unfused" keeps the fold off so the
+      // pair runs the multi dispatch plus the standalone swiglu epilogue.
+      const char* sw = omarchy::env_str("MLX_OMARCHY_SWIGLU_GEOM");
+      const std::string sv = sw == nullptr ? std::string() : std::string(sw);
+      if (sv.empty() || sv == "r2s8w2") {
+        return g;
+      }
+      if (sv == "r1s8w2") {
+        g.swiglu = K::QmmVecQ4SwigluBF16R1S8W2;
+        g.swiglu_columns = 8u;
+        return g;
+      }
+      if (sv == "r2s4w2") {
+        g.swiglu = K::QmmVecQ4SwigluBF16R2S4W2;
+        g.swiglu_columns = 8u;
+        return g;
+      }
+      if (sv == "hoist") {
+        g.swiglu = K::QmmVecQ4SwigluBF16R2S8W2H;
+        return g;
+      }
+      if (sv == "unfused") {
+        g.dedicated_swiglu = false;
+        return g;
+      }
+      throw std::invalid_argument(
+          "[mlx-omarchy] MLX_OMARCHY_SWIGLU_GEOM must be one of "
+          "r2s8w2 r1s8w2 r2s4w2 hoist unfused");
     };
     const char* env = omarchy::env_str("MLX_OMARCHY_QMM_GEOM");
     const std::string v = env == nullptr ? std::string() : std::string(env);
