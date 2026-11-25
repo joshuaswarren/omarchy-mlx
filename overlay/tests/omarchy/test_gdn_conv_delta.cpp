@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "mlx/backend/gpu/device_info.h"
@@ -352,5 +353,36 @@ TEST_CASE("the fused GDN op rejects invalid head ratios before dispatch") {
             in.delta_state, KEY_DIM, INV * INV, INV, EPS, in.gate, in.norm_w, EPS, s),
         "[gdn_conv_delta_update] value heads must be a positive multiple of key heads",
         std::invalid_argument);
+  }
+}
+
+TEST_CASE("the 16:32 GDN path preserves bytes with nonzero input offsets") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  Inputs base = make_inputs(42, 0.05f, s, 16, 32);
+  const auto offset_view = [s](const array& x) {
+    const int size = static_cast<int>(x.size());
+    auto flat = reshape(x, {size}, s);
+    auto padded = concatenate({full({8}, array(-123.0f), x.dtype(), s), flat}, 0, s);
+    auto view = reshape(slice(padded, {8}, {size + 8}, s), x.shape(), s);
+    view.eval();
+    REQUIRE(view.offset() != 0);
+    REQUIRE(view.flags().row_contiguous);
+    return view;
+  };
+  Inputs offset = base;
+  offset.conv_state = offset_view(base.conv_state);
+  offset.qkv = offset_view(base.qkv);
+  offset.weight = offset_view(base.weight);
+  Run want = production_pair(base, s, true, 16, 32);
+  Run stock = production_pair(offset, s, true, 16, 32);
+  fused(offset, s, true, 16);
+  Run got = fused(offset, s, true, 16);
+  for (int i = 0; i < 3; ++i) {
+    CHECK(array_equal(stock.out[i], want.out[i], s).item<bool>());
+    CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+  }
+  if (std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") != nullptr) {
+    CHECK_MESSAGE(got.dispatches == 1, "16:32 offset case must engage the fused kernel");
   }
 }
