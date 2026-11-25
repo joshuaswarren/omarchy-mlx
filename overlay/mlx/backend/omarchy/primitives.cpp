@@ -10352,6 +10352,8 @@ bool dispatch_quantized_gemv_group(
       encoder.device().compute().binding_limit() >=
           kQmmVecMultiBindings + 1u) {
     rope_epi_active = true;
+    const bool epi_ctrace =
+        std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr;
     const RopeEpiSide* epi_sides[2] = {&rope_epi->q, &rope_epi->k};
     for (size_t s = 0; s < 2u && rope_epi_active; ++s) {
       const auto& side = *epi_sides[s];
@@ -10368,6 +10370,29 @@ bool dispatch_quantized_gemv_group(
           wnorm.size() != static_cast<size_t>(view.shape(-1)) ||
           !whole_dense(wnorm, wnorm.size()) ||
           !input_ready(wnorm, stream)) {
+        if (epi_ctrace) {
+          static int trc = 0;
+          if (trc++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] side%zu mi=%zu/%zu out_view=%d dtype=%d ndim=%d "
+                "t=%d/%u d=%d istr=%lld wdtype=%d wsize=%zu dense=%d ready=%d\n",
+                s,
+                side.member_index,
+                members.size(),
+                members[side.member_index].out_view != nullptr,
+                static_cast<int>(view.dtype()),
+                view.ndim(),
+                view.shape(-2),
+                rows,
+                view.shape(-1),
+                static_cast<long long>(view.strides()[view.ndim() - 1]),
+                static_cast<int>(wnorm.dtype()),
+                wnorm.size(),
+                whole_dense(wnorm, wnorm.size()),
+                input_ready(wnorm, stream));
+          }
+        }
         rope_epi_active = false;
         break;
       }
@@ -10400,6 +10425,21 @@ bool dispatch_quantized_gemv_group(
           view.strides()[vndim - 2] == vd) {
         epi_pattern[s] = 0;
       } else {
+        if (epi_ctrace) {
+          static int trp = 0;
+          if (trp++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] side%zu strides: -3=%lld -2=%lld vn=%lld vt=%lld vd=%lld ndim=%d\n",
+                s,
+                static_cast<long long>(view.strides()[vndim - 3]),
+                static_cast<long long>(view.strides()[vndim - 2]),
+                static_cast<long long>(vn),
+                static_cast<long long>(vt),
+                static_cast<long long>(vd),
+                vndim);
+          }
+        }
         rope_epi_active = false;
         break;
       }
@@ -10416,8 +10456,46 @@ bool dispatch_quantized_gemv_group(
           !input_ready(offset, stream) ||
           !input_ready(k_offset, stream) ||
           window.strides[2] != 1u) {
+        if (epi_ctrace) {
+          static int trw = 0;
+          if (trw++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] off: dims=%d/%lld osize=%zu odtype=%d ksize=%zu "
+                "kdtype=%d oready=%d kready=%d wstride2=%u\n",
+                rope_epi->dims,
+                static_cast<long long>(epi_d),
+                offset.size(),
+                static_cast<int>(offset.dtype()),
+                k_offset.size(),
+                static_cast<int>(k_offset.dtype()),
+                input_ready(offset, stream),
+                input_ready(k_offset, stream),
+                window.strides[2]);
+          }
+        }
         rope_epi_active = false;
       }
+    }
+  } else if (
+      rope_epi != nullptr &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+    static int trg = 0;
+    if (trg++ < 4) {
+      std::fprintf(
+          stderr,
+          "[epi-ctr] gate: trad=%d tok=%d rows=%u og=%d sw=%d rn=%d "
+          "bf16=%d sg=%d mem=%zu bind=%u\n",
+          rope_epi->traditional,
+          token_route,
+          rows,
+          outgate != nullptr,
+          swiglu_out != nullptr,
+          res_norm != nullptr,
+          dtype == bfloat16,
+          subgroup_ready,
+          members.size(),
+          encoder.device().compute().binding_limit());
     }
   }
   ComputeParams params;
