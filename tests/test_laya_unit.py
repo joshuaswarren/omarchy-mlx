@@ -514,8 +514,9 @@ class ManagedCoServingTests(unittest.TestCase):
 class ClaimModeFailClosedTests(unittest.TestCase):
     """A managed pair child whose claim cannot bind (malformed fd or payload,
     no --managed, a record for another model or allocation, a refusal under
-    the budget lock) exits 3 with one `laya:` line before any weight loads.
-    Runs without mlx: the mlx, engine and encoder-config imports are stubs."""
+    the budget lock) exits 3 with one `laya:` refusal line before any weight
+    loads. Runs without a parent-lifetime fd or mlx: the mlx, engine and
+    encoder-config imports are stubs."""
 
     def setUp(self):
         import contextlib
@@ -561,6 +562,7 @@ class ClaimModeFailClosedTests(unittest.TestCase):
     def serve(self, payload=None, raw_fd=None, managed=True, expect=SystemExit):
         """Run serve_main; returns (raised exception, stderr)."""
         self.claim_reservation.reset_mock()
+        self.engine.reset_mock()
         if payload is not None:
             r, w = os.pipe()
             self.addCleanup(os.close, r)
@@ -758,7 +760,6 @@ class ClaimModeFailClosedTests(unittest.TestCase):
         for label, payload, expected_pair in cases:
             with self.subTest(pair_id=label):
                 claim.reset_mock()
-                self.engine.reset_mock()
                 self.serve(payload=payload, expect=Loaded)
                 claim.assert_called_once_with(
                     "laya-test", "tok", expected_bytes=self.total,
@@ -778,6 +779,8 @@ class ClaimModeFailClosedTests(unittest.TestCase):
                 reg.reset_mock()
                 self.serve(managed=managed, expect=Admitted)
                 reg.assert_called_once()
+                args, kwargs = reg.call_args
+                self.assertIs(kwargs["managed"] if "managed" in kwargs else args[2], managed)
                 read_claim.assert_not_called()
                 self.claim_reservation.assert_not_called()
 
