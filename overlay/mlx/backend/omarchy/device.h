@@ -1209,6 +1209,37 @@ inline bool gemv_epilogue_only_part(const std::string& device_name) {
   return fused_gemv_off_default_part(device_name);
 }
 
+// Balanced 3-member attention QKV GEMV groups on parts where general
+// multi-weight FUSED_GEMV defaults off (G14C): admits 3-member bf16
+// groups whose output widths are all >= 512 and within an 8:1 max/min
+// ratio (e.g. Qwen3-4B 4096/1024/1024, Qwen3.8-2B 4096/512/512,
+// Qwen3.8-9B 8192/1024/1024) while excluding 4-member asymmetric GDN
+// in_proj groups (tiny 16/32-row a/b tails) and 2-member MLP gate/up
+// pairs. Pure.
+inline bool gemv_balanced_qkv_part(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
+inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
+  if (widths.size() != 3) {
+    return false;
+  }
+  int64_t min_w = widths[0];
+  int64_t max_w = widths[0];
+  for (int64_t w : widths) {
+    if (w < 512) {
+      return false;
+    }
+    if (w < min_w) {
+      min_w = w;
+    }
+    if (w > max_w) {
+      max_w = w;
+    }
+  }
+  return max_w <= min_w * 8;
+}
+
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):
 // the parts where greedy_quantized_argmax (8 sequential stages) defaults off because
 // full projection + argmax (as_linear) was measured faster with bit-identical tokens:
