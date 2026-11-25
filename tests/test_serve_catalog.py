@@ -5,14 +5,17 @@ touches the network.
 """
 
 import contextlib
+import errno
 import unittest.mock
 import http.server
 import io
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
+import tracemalloc
 import unittest
 from pathlib import Path
 
@@ -329,10 +332,69 @@ class ValidateTests(unittest.TestCase):
             path.write_bytes(b" " + b'"x":' * (catalog.CATALOG_MAX_BYTES // 4))
             with self.assertRaises(catalog.CatalogError):
                 catalog.validate_file(path)
+            exact = Path(tmp) / "exact.json"
+            raw = catalog.bundled_path().read_bytes()
+            exact.write_bytes(raw + b" " * (catalog.CATALOG_MAX_BYTES - len(raw)))
+            catalog.validate_file(exact)  # the cap itself is accepted
             bad = Path(tmp) / "bad.json"
             bad.write_bytes(b"{not json")
             with self.assertRaises(catalog.CatalogError):
                 catalog.validate_file(bad)
+
+    def test_oversized_sparse_file_rejected_without_reading(self):
+        if tracemalloc.is_tracing():  # the peak belongs to whoever started tracing
+            self.skipTest("tracemalloc is already tracing")
+        size = 64 * 1024 * 1024
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sparse.json"
+            with open(path, "wb") as fh:
+                fh.truncate(size)
+            tracemalloc.start()
+            try:
+                with self.assertRaisesRegex(
+                    catalog.CatalogError,
+                    f"{size} bytes exceeds {catalog.CATALOG_MAX_BYTES}",
+                ):
+                    catalog.validate_file(path)
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            self.assertLess(peak, 4 * 1024 * 1024)
+
+    def test_short_reads_are_joined(self):
+        expected = bundled_catalog()
+        real_open = open
+
+        def short_open(*args, **kwargs):  # a short read is not end of file
+            fh = real_open(*args, **kwargs)
+            read = fh.read
+            fh.read = lambda n=-1: read(min(n, 4096))
+            return fh
+
+        with unittest.mock.patch.object(catalog, "open", short_open, create=True):
+            self.assertEqual(catalog.validate_file(catalog.bundled_path()), expected)
+
+    def test_file_growth_after_fstat_rejected_with_bounded_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "grew.json"
+            path.write_bytes(b" " * (catalog.CATALOG_MAX_BYTES + 4096))
+            real_fstat = os.fstat
+            dups = []  # a dup shares the file offset, so it shows how far the read went
+
+            def small_fstat(fd):
+                dups.append(os.dup(fd))
+                self.addCleanup(os.close, dups[-1])
+                vals = list(real_fstat(fd))
+                vals[stat.ST_SIZE] = 16
+                return os.stat_result(vals)
+
+            with unittest.mock.patch.object(catalog.os, "fstat", side_effect=small_fstat):
+                with self.assertRaisesRegex(
+                    catalog.CatalogError,
+                    f"{catalog.CATALOG_MAX_BYTES + 1} bytes exceeds {catalog.CATALOG_MAX_BYTES}",
+                ):
+                    catalog.validate_file(path)
+            self.assertEqual(os.lseek(dups[0], 0, os.SEEK_CUR), catalog.CATALOG_MAX_BYTES + 1)
 
 
 class LoadTests(unittest.TestCase):
@@ -376,6 +438,43 @@ class LoadTests(unittest.TestCase):
                                             return_value=Path(tmp) / "missing.json"):
                 with self.assertRaises(catalog.CatalogError):
                     catalog.load_catalog(Path(tmp))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires os.mkfifo")
+    def test_fifo_cache_is_rejected_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            cache = catalog.cache_path(home)
+            cache.parent.mkdir()
+            os.mkfifo(cache)
+            outcome: dict[str, object] = {}
+
+            def run():
+                try:
+                    with self.assertRaisesRegex(catalog.CatalogError, "not a regular file"):
+                        catalog.validate_file(cache)
+                    outcome["loaded"] = catalog.load_catalog(home)
+                except BaseException as exc:
+                    outcome["error"] = exc
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            worker.join(timeout=10.0)
+            self.assertFalse(worker.is_alive(), "FIFO catalog read blocked")
+            if "error" in outcome:
+                raise outcome["error"]
+            self.assertEqual(outcome["loaded"], bundled_catalog())
+
+    def test_symlink_to_valid_catalog_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            target = home / "target-catalog.json"
+            cached = catalog_of(entry(id="via-symlink"))
+            target.write_text(json.dumps(cached), encoding="utf-8")
+            cache = catalog.cache_path(home)
+            cache.parent.mkdir()
+            cache.symlink_to(target)
+            self.assertEqual(catalog.validate_file(cache)["models"][0]["id"], "via-symlink")
+            self.assertEqual(catalog.load_catalog(home)["models"][0]["id"], "via-symlink")
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -624,6 +723,63 @@ class RefreshTests(unittest.TestCase):
         result = self.refresh(ttl_hours=0)
         self.assertEqual(result["status"], "updated")
 
+    def test_latin1_etag_is_revalidated(self):
+        # obs-text (0x80-0xFF) is valid in an entity-tag, including non-printing 0xA0.
+        for tag in ('"caf\u00e9"', '"a\u00a0b"'):
+            with self.subTest(tag=tag):
+                self.store["etag"] = tag
+                self.assertEqual(self.refresh(ttl_hours=0)["status"], "updated")
+                self.assertEqual(self.refresh(ttl_hours=0)["status"], "not-modified")
+                self.assertEqual(self.store["if_none_match"][-1], tag)
+
+    def test_damaged_etag_is_ignored(self):
+        self.assertEqual(self.refresh(ttl_hours=0)["status"], "updated")
+        etag = catalog.cache_path(self.home).with_name("recommended-catalog.json.etag")
+        # Undecodable, header line breaks, and text a header cannot encode.
+        for raw in (b"\xff\xfe", b"a\nb", b"a\rb", "\u20ac".encode()):
+            with self.subTest(raw=raw):
+                etag.write_bytes(raw)
+                self.store["if_none_match"].clear()
+                self.assertEqual(self.refresh(ttl_hours=0)["status"], "updated")
+                self.assertEqual(self.store["if_none_match"], [None])
+
+    def test_untraversable_cache_dir_returns_fallback_on_fetch_failure(self):
+        # An untraversable cache dir: stat() of the cache path fails with EACCES,
+        # which Python 3.11's Path.is_file() raises instead of returning False.
+        dest = str(catalog.cache_path(self.home))
+        real_stat = os.stat
+
+        def denied_stat(path, *args, **kwargs):
+            if os.fspath(path) == dest:
+                raise PermissionError(errno.EACCES, "Permission denied", dest)
+            return real_stat(path, *args, **kwargs)
+
+        stat_patch = unittest.mock.patch("os.stat", denied_stat)
+        stat_patch.start()
+        self.addCleanup(stat_patch.stop)
+
+        with self.subTest("http_error"):
+            self.store["fail"] = True
+            try:
+                self.assertEqual(self.refresh(ttl_hours=0)["status"], "fallback")
+            finally:
+                self.store["fail"] = False
+
+        with self.subTest("url_error"):
+            refused = catalog.urllib.error.URLError("connection refused")
+            with unittest.mock.patch.object(catalog.urllib.request.OpenerDirector, "open",
+                                            side_effect=refused):
+                self.assertEqual(self.refresh(ttl_hours=0)["status"], "fallback")
+
+        with self.subTest("oversized_body"):
+            self.store["fail"] = False
+            self.store["body"] = b" " * (catalog.CATALOG_MAX_BYTES + 1)
+            self.assertEqual(self.refresh(ttl_hours=0)["status"], "fallback")
+
+        with self.subTest("invalid_body"):
+            self.store["fail"] = False
+            self.store["body"] = b"{broken"
+            self.assertEqual(self.refresh(ttl_hours=0)["status"], "fallback")
 
 
 

@@ -23,6 +23,7 @@ import math
 import mlx_omarchy_paths
 import os
 import re
+import stat
 import sys
 import tempfile
 import urllib.error
@@ -385,7 +386,23 @@ def _check_iso(value, field: str) -> None:
 
 
 def validate_file(path: Path) -> dict:
-    raw = Path(path).read_bytes()
+    with open(
+        path,
+        "rb",
+        buffering=0,  # a buffered read would read ahead past the cap
+        opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+    ) as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise CatalogError(f"{path}: not a regular file")
+        if st.st_size > CATALOG_MAX_BYTES:
+            raise CatalogError(f"{path}: {st.st_size} bytes exceeds {CATALOG_MAX_BYTES}")
+        raw = bytearray()
+        while len(raw) <= CATALOG_MAX_BYTES:  # a short read is not EOF; stop at cap + 1
+            chunk = fh.read(CATALOG_MAX_BYTES + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
     if len(raw) > CATALOG_MAX_BYTES:
         raise CatalogError(f"{path}: {len(raw)} bytes exceeds {CATALOG_MAX_BYTES}")
     try:
@@ -530,9 +547,10 @@ def refresh(
     try:
         if cache_ok and etag_path.is_file():
             stored = etag_path.read_text(encoding="utf-8").strip()
-            if stored:
+            # Send it only as one Latin-1 header line (read_text already turned CR into LF).
+            if stored and max(stored) <= "\xff" and "\n" not in stored:
                 headers["If-None-Match"] = stored
-    except OSError:
+    except (OSError, ValueError):  # unreadable or undecodable: fetch without it
         pass
 
     try:
@@ -551,19 +569,19 @@ def refresh(
                 pass
             else:
                 return {"status": "not-modified", "path": str(dest), "detail": "etag match"}
-        status = "fallback" if not dest.is_file() else "kept"
+        status = "fallback" if not os.path.isfile(dest) else "kept"
         return {"status": status, "path": str(dest), "detail": f"fetch failed: {exc}"}
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        status = "fallback" if not dest.is_file() else "kept"
+        status = "fallback" if not os.path.isfile(dest) else "kept"
         return {"status": status, "path": str(dest), "detail": f"fetch failed: {exc}"}
 
     if len(body) > CATALOG_MAX_BYTES:
-        return {"status": "kept" if dest.is_file() else "fallback", "path": str(dest),
+        return {"status": "kept" if os.path.isfile(dest) else "fallback", "path": str(dest),
                 "detail": f"catalog exceeds {CATALOG_MAX_BYTES} bytes"}
     try:
         validate_catalog(json.loads(body))
     except (ValueError, RecursionError, CatalogError) as exc:
-        return {"status": "kept" if dest.is_file() else "fallback", "path": str(dest),
+        return {"status": "kept" if os.path.isfile(dest) else "fallback", "path": str(dest),
                 "detail": f"fetched catalog rejected: {exc}"}
 
     _atomic_write(dest, body)
