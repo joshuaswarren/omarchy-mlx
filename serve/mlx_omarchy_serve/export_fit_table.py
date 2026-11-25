@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from . import budget
-from .catalog import bundled_path, validate_catalog
+from .catalog import CatalogError, bundled_path, validate_file
 
 MEMORY_SIZES_GIB = [8, 16, 24, 32, 36, 48, 64, 96, 128, 192]
 
@@ -90,8 +91,10 @@ def _model_row(entry: dict) -> dict:
 
 def build_fit_table(catalog_path: Path | None = None) -> dict:
     path = catalog_path or bundled_path()
-    cat = json.loads(path.read_text(encoding="utf-8"))
-    validate_catalog(cat)
+    try:
+        cat = validate_file(path)
+    except OSError as exc:
+        raise CatalogError(f"{path}: {exc.strerror or exc}") from exc
     # No generated timestamp here on purpose: the site's sync test re-runs
     # this export and deep-compares it, so it must be byte-reproducible.
     return {
@@ -113,14 +116,31 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--catalog", type=Path, default=None, help="catalog.json path (default: bundled)")
     ap.add_argument("-o", "--out", type=Path, default=None, help="write JSON here (default: stdout)")
     args = ap.parse_args(argv)
-    table = build_fit_table(args.catalog)
-    text = json.dumps(table, indent=2, sort_keys=False) + "\n"
-    if args.out:
-        args.out.write_text(text, encoding="utf-8")
-    else:
-        sys.stdout.write(text)
+    try:
+        table = build_fit_table(args.catalog)
+        text = json.dumps(table, indent=2, sort_keys=False) + "\n"
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+        else:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+    except (CatalogError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    status = main()
+    if status and sys.stdout is not None:
+        # Redirect stdout to devnull only when it still holds a failed write;
+        # exit-time flush would retry it (Python docs: signal module, "Note on SIGPIPE").
+        try:
+            sys.stdout.flush()
+        except OSError:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull, sys.stdout.fileno())
+            finally:
+                os.close(devnull)
+    raise SystemExit(status)
