@@ -1128,17 +1128,21 @@ def _sub_inplace(a, b, alpha=1, **k):
         raise RuntimeError("Boolean alpha only supported for Boolean results.")
     d = _mx(a)
     mb = _mx(b)
-    # Scale in the destination dtype when dest and rhs share a family:
-    # (d - k*rhs) mod 2^n equals torch's promote-then-wrap for integral
-    # alpha, and the destination is the computation width for float pairs,
-    # so a narrow rhs (int8, float16) cannot overflow before the subtract.
-    # Mixed families keep MLX promotion: float rhs over an integral dest
-    # computes float and the writeback rejects the cast-back, matching
-    # torch.
-    if ((_is_integral_dtype(d.dtype) and _is_integral_dtype(mb.dtype))
-            or (_is_floatish_dtype(d.dtype) and _is_floatish_dtype(mb.dtype))):
-        mb = mb.astype(d.dtype)
-    return _inplace_writeback(d, d - mb * alpha)
+    # Compute in the torch operation dtype: both operands promoted, a
+    # python float alpha lifting an integral pair to the default float
+    # (a python int alpha is weak and changes nothing). Cast both sides
+    # there BEFORE scaling so a narrow operand (int8, float16) cannot
+    # wrap or overflow early - fp16 rhs 70000 * 0.5 stays finite in the
+    # fp32 computation, int8 100 * 2 stays 200 instead of wrapping. The
+    # destination only rules the final writeback: shape check, then the
+    # comp->dest cast with float->int rejected (torch's in-place error).
+    comp = mx.result_type(d.dtype, mb.dtype)
+    if (not _is_floatish_dtype(d.dtype) and not _is_floatish_dtype(mb.dtype)
+            and isinstance(alpha, float)):
+        comp = mx.float32
+    dc = d.astype(comp) if comp != d.dtype else d
+    mb = mb.astype(comp) if comp != mb.dtype else mb
+    return _inplace_writeback(d, dc - mb * alpha)
 
 
 def _rsub(a, b, alpha=1, **k):

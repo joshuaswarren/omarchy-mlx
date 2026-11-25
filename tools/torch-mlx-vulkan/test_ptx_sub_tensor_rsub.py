@@ -209,10 +209,47 @@ def test_sub_tensor_w91_round3():
     assert raised, "bool alpha must raise"
     print("test_sub_tensor_w91_round3 PASS")
 
+
+
+def test_sub_tensor_w91_round4():
+    """w91 round 4: both mixed-width directions, operation-dtype scaling."""
+    # float16 dest [0] -= float32 rhs [70000] alpha=0.5: compute in the
+    # promoted fp32 so the rhs cannot narrow before scaling; torch writes
+    # back -35008 (fp16 rounding of -35000)
+    x = torch.tensor([0.0], dtype=torch.float16)
+    y = torch.tensor([70000.0], dtype=torch.float32)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 0.5})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x, y)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert out.dtype == torch.float16, out.dtype
+    assert np.array_equal(out.numpy(), np.array([-35008.0], dtype=np.float16)), out
+
+    # float32 dest [500000] -= int8 rhs [100] alpha=2: compute in the
+    # promoted fp32 so the int8 product cannot wrap; torch returns 499800
+    x2 = torch.tensor([500000.0], dtype=torch.float32)
+    y2 = torch.tensor([100], dtype=torch.int8)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 2})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x2, y2)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert out.dtype == torch.float32, out.dtype
+    assert np.array_equal(out.numpy(), np.array([499800.0], dtype=np.float32)), out
+    print("test_sub_tensor_w91_round4 PASS")
+
 if __name__ == "__main__":
     test_sub_tensor()
     test_rsub()
     test_sub_tensor_w91_edges()
     test_sub_tensor_w91_round2()
     test_sub_tensor_w91_round3()
+    test_sub_tensor_w91_round4()
     print("ALL PASS")
