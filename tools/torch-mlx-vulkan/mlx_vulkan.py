@@ -820,6 +820,42 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
 
+def _is_integral_dtype(dt):
+    return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
+
+
+def _is_floatish_dtype(dt):
+    return (mx.issubdtype(dt, mx.floating)
+            or mx.issubdtype(dt, mx.complexfloating))
+
+
+def _dtype_of(v):
+    # dtype of a resolved operand: mx arrays carry theirs; torch Scalar
+    # arguments arrive as python numbers and promote like wrapped scalars
+    # (float scalar -> default float, int scalar stays integral).
+    if isinstance(v, mx.array):
+        return v.dtype
+    if isinstance(v, bool):
+        return mx.bool_
+    if isinstance(v, int):
+        return mx.int64
+    if isinstance(v, float):
+        return mx.float32
+    return getattr(v, "dtype", mx.float32)
+
+
+def _rsub(a, b, alpha=1, **k):
+    # aten.rsub.Scalar(self, other, alpha): other - alpha * self. Torch
+    # rejects a floating alpha only when the promoted operand type is
+    # integral (an int64 self with float other returns float).
+    if (isinstance(alpha, float) and
+            _is_integral_dtype(mx.result_type(_dtype_of(a), _dtype_of(b)))):
+        raise RuntimeError(
+            "For integral input tensors, the argument alpha must not be a "
+            "floating point number")
+    return _mx(b) - _mx(a) * alpha
+
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -1328,7 +1364,7 @@ _FUNC_SPECS = {
     "invert": lambda a: mx.logical_not(a),
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "rsub": lambda a, b, alpha=1, **k: _mx(b) - _mx(a) * alpha,
+    "rsub": _rsub,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
@@ -2025,25 +2061,17 @@ def _fuse_rope(nodes):
     return skip, final
 
 
-def _is_integral_dtype(dt):
-    return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
-
-
-def _is_floatish_dtype(dt):
-    return (mx.issubdtype(dt, mx.floating)
-            or mx.issubdtype(dt, mx.complexfloating))
-
-
 def _inplace_writeback(dst, upd):
     # torch in-place contract: the result must fit the destination shape and
-    # cast back to the destination dtype (float-family -> integral/bool is
-    # rejected; everything else casts, e.g. int64 -> int8 wraps).
+    # cast back to the destination dtype (float-family -> integral is
+    # rejected, and nothing casts into bool; int64 -> int8 wraps fine).
     if upd.shape != dst.shape:
         raise RuntimeError(
             "output with shape %s doesn't match the broadcast shape %s"
             % (list(dst.shape), list(upd.shape)))
     if upd.dtype != dst.dtype:
-        if _is_floatish_dtype(upd.dtype) and _is_integral_dtype(dst.dtype):
+        if (dst.dtype == mx.bool_ or
+                (_is_floatish_dtype(upd.dtype) and _is_integral_dtype(dst.dtype))):
             raise RuntimeError(
                 "result type %s can't be cast to the desired output type %s"
                 % (upd.dtype, dst.dtype))
@@ -2271,12 +2299,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name in ("rsub", "rsub.Scalar") and n.op == "call_function":
                 alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
-                if (isinstance(alpha, float) and
-                        _is_integral_dtype(getattr(args[0], "dtype", mx.float32))):
-                    raise RuntimeError(
-                        "For integral input tensors, the argument alpha must "
-                        "not be a floating point number")
-                env[n] = args[1] - args[0] * alpha
+                env[n] = _rsub(args[0], args[1], alpha)
                 continue
             if name == "mul_":
                 upd = _inplace_writeback(env[n.args[0]], env[n.args[0]] * args[1])

@@ -163,6 +163,40 @@ def test_rsub_alpha_kwarg():
     print("test_rsub_alpha_kwarg PASS")
 
 
+def test_sub_inplace_rejects_bool_dst():
+    # nothing casts into a bool destination; torch rejects bool subtraction
+    # and the int->bool writeback alike.
+    z = torch.tensor([True, False])
+    s = torch.tensor([1, 1], dtype=torch.int64)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor, (phs[0], phs[1]), {})
+
+    try:
+        _compiled_run(nodes, [z, s])
+    except (RuntimeError, ValueError):
+        print("test_sub_inplace_rejects_bool_dst PASS")
+        return
+    raise AssertionError("sub_ accepted an int result into a bool destination")
+
+
+def test_mul_inplace_rejects_bool_dst():
+    # same writeback contract on mul_: int64 result into bool dst is a
+    # torch error, not a silent bool round-trip.
+    z = torch.tensor([True, False])
+    s = torch.tensor([2, 3], dtype=torch.int64)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.mul_.Tensor, (phs[0], phs[1]), {})
+
+    try:
+        _compiled_run(nodes, [z, s])
+    except (RuntimeError, ValueError):
+        print("test_mul_inplace_rejects_bool_dst PASS")
+        return
+    raise AssertionError("mul_ accepted an int result into a bool destination")
+
+
 def test_rsub_rejects_float_alpha_on_int():
     # integral input + floating alpha is a torch error on the rsub path too.
     x = torch.tensor([1, 2, 3], dtype=torch.int64)
@@ -177,6 +211,34 @@ def test_rsub_rejects_float_alpha_on_int():
         print("test_rsub_rejects_float_alpha_on_int PASS")
         return
     raise AssertionError("rsub accepted floating alpha on integral input")
+
+
+def test_rsub_float_other_alpha_ok():
+    # the alpha check is on the promoted type: int64 self + float other +
+    # alpha=0.5 is legal and returns float [9.5, 9.0] like torch.
+    x = torch.tensor([1, 2], dtype=torch.int64)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.rsub.Scalar,
+                               (phs[0], 10.0), {"alpha": 0.5})
+
+    out = _compiled_run(nodes, [x])
+    o = out[0] if isinstance(out, (tuple, list)) else out
+    want = torch.tensor([9.5, 9.0])
+    assert np.allclose(_np(o), want.numpy(), atol=1e-5), (_np(o), want.numpy())
+    print("test_rsub_float_other_alpha_ok PASS")
+
+
+def test_rsub_eager_rejects_float_alpha_on_int():
+    # same rule on the per-node eager spec: integral operands + floating
+    # alpha defers to torch, which raises.
+    mxa = mlx_vulkan._mx(torch.tensor([1, 2], dtype=torch.int64))
+    try:
+        mlx_vulkan._FUNC_SPECS["rsub"](mxa, 10, 0.5)
+    except RuntimeError:
+        print("test_rsub_eager_rejects_float_alpha_on_int PASS")
+        return
+    raise AssertionError("eager rsub accepted floating alpha on integral input")
 
 
 def test_rsub_scalar_reflected():
@@ -231,8 +293,12 @@ if __name__ == "__main__":
     test_sub_inplace_dtype_narrowing()
     test_sub_inplace_rejects_float_to_int()
     test_sub_inplace_rejects_float_alpha_on_int()
+    test_sub_inplace_rejects_bool_dst()
+    test_mul_inplace_rejects_bool_dst()
     test_rsub_alpha_kwarg()
     test_rsub_rejects_float_alpha_on_int()
+    test_rsub_float_other_alpha_ok()
+    test_rsub_eager_rejects_float_alpha_on_int()
     test_rsub_scalar_reflected()
     test_rsub_alpha()
     test_rsub_eager_spec()
