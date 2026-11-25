@@ -1345,6 +1345,9 @@ def test_group_norm():
     x = torch.tensor(rng.randn(N, C, HxW).astype(np.float32))
     w = torch.tensor(rng.randn(C).astype(np.float32))
     b = torch.tensor(rng.randn(C).astype(np.float32))
+    # the diffusion/vision case: 4-D NCHW input (HxW = H*W); aten
+    # returns out shaped like the INPUT, mean/rstd still (N, group)
+    x4 = torch.tensor(rng.randn(2, 8, 2, 8).astype(np.float32))
 
     def fx_run(ins, atol=2e-2):
         ref = torch.ops.aten.native_group_norm.default(*ins)
@@ -1371,6 +1374,9 @@ def test_group_norm():
     fx_run((x, w, b, N, C, HxW, group, 1e-5))
     fx_run((x, w, None, N, C, HxW, group, 1e-5))
     fx_run((x, None, b, N, C, HxW, 2, 1e-5))
+    # 4-D NCHW: out must come back rank-4 with the affine applied over
+    # the channel axis of the real trailing dims
+    fx_run((x4, w, b, 2, C, 16, group, 1e-5))
     xb = x.bfloat16()
     fx_run((xb, None, None, N, C, HxW, group, 1e-5))
     print("test_group_norm PASS")

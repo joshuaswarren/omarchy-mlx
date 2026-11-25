@@ -1750,16 +1750,17 @@ def _blas_beta(b, beta):
 
 def _gn_native(a, w, b, N, C, HxW, group, eps):
     """aten.native_group_norm: normalize over (C/group * HxW) per
-    (N, group); returns (out, mean(N,group), rstd(N,group)) like aten."""
+    (N, group); returns (out shaped like a, mean(N,group),
+    rstd(N,group)) like aten."""
     x = _mx(a).reshape(N, group, (C // group) * HxW)
     mu = mx.mean(x, axis=2, keepdims=True)
     xc = x - mu
     rstd = 1.0 / mx.sqrt(mx.mean(xc * xc, axis=2, keepdims=True) + eps)
-    out = (xc * rstd).reshape(N, C, HxW)
+    out = (xc * rstd).reshape(a.shape)
     if w is not None:
-        out = out * _mx(w).reshape(1, C, 1)
+        out = out * _mx(w).reshape(1, C, *(1,) * (a.ndim - 2))
     if b is not None:
-        out = out + _mx(b).reshape(1, C, 1)
+        out = out + _mx(b).reshape(1, C, *(1,) * (a.ndim - 2))
     return out, mu.reshape(N, group), rstd.reshape(N, group)
 
 
