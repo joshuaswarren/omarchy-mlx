@@ -2155,23 +2155,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       if (cur->primitive().stream() != node.primitive().stream()) {
         continue;
       }
-      if (epi_trace) {
-        static int trc0 = 0;
-        if (trc0++ < 4) {
-          const array& v0 = node.inputs()[0];
-          std::fprintf(
-              stderr,
-              "[rope-epi] chain0: id=%p op=%s shape=[%d,%d,%d,%d] "
-              "strides=[%lld,%lld,%lld,%lld]\n",
-              reinterpret_cast<void*>(v0.id()),
-              typeid(v0.primitive()).name(),
-              v0.shape(0), v0.shape(1), v0.shape(2), v0.shape(3),
-              static_cast<long long>(v0.strides()[0]),
-              static_cast<long long>(v0.strides()[1]),
-              static_cast<long long>(v0.strides()[2]),
-              static_cast<long long>(v0.strides()[3]));
-        }
-      }
       cands[mit->second.first].push_back(
           RopeCand{&node, std::move(chain), mit->second.second});
     }
