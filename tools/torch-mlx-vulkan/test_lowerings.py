@@ -1204,6 +1204,67 @@ def test_addcmul_addcdiv():
               torch.full((3,), 2, dtype=torch.int8)), {"value": 1})
     print("test_addcmul_addcdiv PASS")
 
+def test_blas_accum():
+    # PT-AJ: the BLAS accumulate family — aten.addmv, aten.addbmm,
+    # aten.addr, aten.vdot (receipt-zero rows in the PAR-41 census).
+    # Prove the eager executor lowers all four (stats["mlx"]) and matches
+    # torch CPU at fp32 and bf16, including non-default beta/alpha, the
+    # aten beta=0 input-drop rule (NaN payload must NOT leak), batch-sum
+    # semantics for addbmm, and complex-conjugate vdot.
+    rng = np.random.RandomState(11)
+    inp_mv = torch.tensor(rng.randn(3).astype(np.float32))
+    inp_bmm = torch.tensor(rng.randn(3, 4).astype(np.float32))
+    inp_addr = torch.tensor(rng.randn(4, 6).astype(np.float32))
+    mat = torch.tensor(rng.randn(3, 5).astype(np.float32))
+    vec = torch.tensor(rng.randn(5).astype(np.float32))
+    v1 = torch.tensor(rng.randn(4).astype(np.float32))
+    v2 = torch.tensor(rng.randn(6).astype(np.float32))
+    b1 = torch.tensor(rng.randn(2, 3, 5).astype(np.float32))
+    b2 = torch.tensor(rng.randn(2, 5, 4).astype(np.float32))
+    nanmv = inp_mv.clone()
+    nanmv[1] = float("nan")
+
+    def fx_run(target, ins, kw, atol=2e-2):
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        raw = getattr(target, "__name__", None) or str(target)
+        name = raw.split("aten.")[-1].split(".")[0]
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        got = torch.as_tensor(out).float().numpy()
+        refn = ref.float().numpy() if torch.is_tensor(ref) else np.asarray(ref)
+        assert got.shape == refn.shape, (str(target), got.shape, refn.shape)
+        assert np.allclose(got, refn, atol=atol), (str(target), kw, got, refn)
+
+    fx_run(torch.ops.aten.addmv.default, (inp_mv, mat, vec), {})
+    fx_run(torch.ops.aten.addmv.default, (inp_mv, mat, vec), {"beta": 0.5, "alpha": 2.0})
+    fx_run(torch.ops.aten.addmv.default, (nanmv, mat, vec), {"beta": 0})
+    fx_run(torch.ops.aten.addbmm.default, (inp_bmm, b1, b2), {})
+    fx_run(torch.ops.aten.addbmm.default, (inp_bmm, b1, b2), {"beta": 0.5, "alpha": 2.0})
+    fx_run(torch.ops.aten.addr.default, (inp_addr, v1, v2), {})
+    fx_run(torch.ops.aten.addr.default, (inp_addr, v1, v2), {"beta": 0.5, "alpha": 3.0})
+    fx_run(torch.ops.aten.addr.default, (inp_addr, v1, v2), {"beta": 0})
+    fx_run(torch.ops.aten.vdot.default, (vec, vec), {})
+    # vdot conjugates the first argument for complex inputs
+    ca = torch.tensor(rng.randn(4) + 1j * rng.randn(4)).cfloat()
+    cb = torch.tensor(rng.randn(4) + 1j * rng.randn(4)).cfloat()
+    fx_run(torch.ops.aten.vdot.default, (ca, cb), {}, atol=2e-3)
+    # bf16 dtype fidelity for this family (aten requires one dtype here):
+    xb = mat.bfloat16()
+    vb = vec.bfloat16()
+    ib = inp_mv.bfloat16()
+    fx_run(torch.ops.aten.addmv.default, (ib, xb, vb), {})
+    # torch.* functional entrypoints take the same lowering
+    fx_run(torch.addmv, (inp_mv, mat, vec), {})
+    fx_run(torch.addr, (inp_addr, v1, v2), {})
+    print("test_blas_accum PASS")
+
 def test_random_family():
     # PT-U12: the aten sampling family (uniform/cauchy/exponential/
     # geometric/log_normal/normal.*) was evaluated for lowering and
@@ -1357,4 +1418,5 @@ if __name__ == "__main__":
     test_addcmul_addcdiv()
     test_hyperbolic()
     test_random_family()
+    test_blas_accum()
     print("ALL PASS")
