@@ -1744,6 +1744,10 @@ _FUNC_SPECS = {
     "div": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
     "truediv": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
     "true_divide": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    # aten.remainder: divisor's-sign convention; mx.remainder matches torch
+    # exactly on all sign/dtype combos (verified -7%3=2, 7%-3=-2). Operands
+    # box via _ar so scalar-only calls produce int64, not mlx's int32.
+    "remainder": lambda a, b, *k: mx.remainder(_ar(_mx(a)), _ar(_mx(b))),
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
     "addcdiv": _addcdiv,
@@ -1969,6 +1973,7 @@ def _build_func_table():
         ("operator.sub", _FUNC_SPECS["sub"]),
         ("operator.mul", _FUNC_SPECS["mul"]),
         ("operator.truediv", _FUNC_SPECS["div"]),
+        ("operator.mod", _FUNC_SPECS["remainder"]),
         ("operator.floordiv", _FUNC_SPECS["div"]),
         ("operator.neg", _FUNC_SPECS["neg"]),
         ("operator.and_", _FUNC_SPECS["and_"]),
@@ -2021,7 +2026,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "_adaptive_avg_pool2d_backward", "convolution_backward",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
-                 "add", "sub", "mul", "div", "truediv", "true_divide"}
+                 "add", "sub", "mul", "div", "truediv", "true_divide",
+                 "remainder"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}

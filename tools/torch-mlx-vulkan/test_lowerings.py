@@ -817,6 +817,54 @@ def test_reductions():
     print("test_reductions PASS")
 
 
+def test_remainder():
+    _provenance()
+    # PT-AN: aten.remainder.default (PAR-41 rank 132, receipt-zero) had no
+    # spec. torch.remainder takes the DIVISOR's sign; mx.remainder matches on
+    # every sign/dtype combo (verified -7%3=2, 7%-3=-2 in both).
+    x32 = torch.tensor([7.0, -7.0, 7.5, -7.5])
+    y32 = torch.tensor([3.0, 3.0, -2.0, -2.0])
+    i64 = torch.tensor([7, -7, 7, -7], dtype=torch.int64)
+    j64 = torch.tensor([3, 3, -4, -4], dtype=torch.int64)
+
+    def fx_fn(target, args, ins):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        a = tuple(next(it) if torch.is_tensor(v) else v for v in args)
+        n = g.call_function(target, a)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        return run(*ins), stats
+
+    def check(name, target, args, ins, ref):
+        out, stats = fx_fn(target, args, ins)
+        assert stats["cpu"] == [], (name, stats)
+        assert name in stats["mlx"], (name, stats)
+        out = torch.as_tensor(_np(out))
+        ref = torch.as_tensor(ref)
+        assert out.dtype == ref.dtype, (name, out.dtype, ref.dtype)
+        assert np.allclose(_np(out.float()), ref.float().numpy()), \
+            (name, _np(out), ref)
+
+    # sign matrix: (dividend sign, divisor sign) for fp32 + int64
+    check("remainder", torch.ops.aten.remainder.Tensor, (x32, y32),
+          [x32, y32], torch.remainder(x32, y32))
+    check("remainder", torch.ops.aten.remainder.Tensor, (i64, j64),
+          [i64, j64], torch.remainder(i64, j64))
+    # scalar divisor, both signs, int + float
+    check("remainder", torch.ops.aten.remainder.Scalar, (x32, -2.0), [x32],
+          torch.remainder(x32, -2.0))
+    check("remainder", torch.ops.aten.remainder.Scalar, (i64, 3), [i64],
+          torch.remainder(i64, 3))
+    # scalar-only aten.remainder.default(7,3): the census hand-sample and the
+    # _ALWAYS_LOWER gate; int64 boxing via _ar (assert_close checks dtype)
+    check("remainder", torch.ops.aten.remainder.default, (7, 3), [],
+          torch.remainder(torch.tensor(7), torch.tensor(3)))
+    print("test_remainder PASS")
+
+
 def test_hyperbolic():
     # PT-U11: the hyperbolic family — the top unclaimed aten family in
     # w7R's PAR-41 fallback census once the circular arc-trig ops went to
@@ -1482,6 +1530,7 @@ if __name__ == "__main__":
     test_arc_trig()
     test_addcmul_addcdiv()
     test_sub_div()
+    test_remainder()
     test_hyperbolic()
     test_random_family()
     print("ALL PASS")
