@@ -1209,13 +1209,12 @@ inline bool gemv_epilogue_only_part(const std::string& device_name) {
   return fused_gemv_off_default_part(device_name);
 }
 
-// Balanced 3-member attention QKV GEMV groups on parts where general
+// Balanced multi-member GEMV groups on parts where general
 // multi-weight FUSED_GEMV defaults off (G14C): admits 3-member bf16
 // groups whose output widths are all >= 512 and within an 8:1 max/min
 // ratio (e.g. Qwen3-4B 4096/1024/1024, Qwen3.8-2B 4096/512/512,
-// Qwen3.8-9B 8192/1024/1024) while excluding 4-member asymmetric GDN
-// in_proj groups (tiny 16/32-row a/b tails) and 2-member MLP gate/up
-// pairs. Pure.
+// Qwen3.8-9B 8192/1024/1024), and balanced 2-member pairs
+// (gemv_balanced_pair_widths_ok). Pure.
 inline bool gemv_balanced_qkv_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
@@ -1238,6 +1237,19 @@ inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
     }
   }
   return max_w <= min_w * 8;
+}
+
+// A consecutive 2-member slice plans as its own GEMV dispatch when its
+// output widths sit within a 4:1 ratio: MLP gate/up pairs (equal
+// widths) and the two pairs a 4-member GDN in_proj window splits into
+// (e.g. [6144, 2048] + [16, 16]). Pure.
+inline bool gemv_balanced_pair_widths_ok(int64_t a, int64_t b) {
+  if (a <= 0 || b <= 0) {
+    return false;
+  }
+  const int64_t lo = a < b ? a : b;
+  const int64_t hi = a < b ? b : a;
+  return hi <= lo * 4;
 }
 
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):

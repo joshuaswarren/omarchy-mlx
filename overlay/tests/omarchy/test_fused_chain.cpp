@@ -2075,6 +2075,23 @@ TEST_CASE("gemv balanced QKV route: part and width guards") {
   CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 512, 512}));
 }
 
+TEST_CASE("gemv balanced pair route: width guard") {
+  // MLP gate/up pairs (equal widths).
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 6144));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(9728, 9728));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(12288, 12288));
+  // Split-pair GDN in_proj: [6144, 2048] + [16, 16].
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 2048));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(16, 16));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(8192, 2048));
+  // Pairs beyond the 4:1 ratio stay per-node.
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(6144, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 512));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 1023));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(0, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(-1, 16));
+}
+
 TEST_CASE("qmm residual norm default: shape, device capabilities and overrides") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};
