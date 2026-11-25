@@ -17246,7 +17246,9 @@ void RoPE::eval_gpu(
                  encoder.device(),
                  static_cast<size_t>(params.reduce_size),
                  static_cast<size_t>(params.count))
-        ? omarchy::ComputeKernel::FastRopeNormAppleBF16
+        ? (params.reduce_size <= 128u
+               ? omarchy::ComputeKernel::FastRopeNormAppleBF16N128
+               : omarchy::ComputeKernel::FastRopeNormAppleBF16)
         : omarchy::ComputeKernel::FastRopeNormBF16;
   } else if (direct_bf16) {
     kernel = half_split

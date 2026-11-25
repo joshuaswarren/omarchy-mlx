@@ -1245,6 +1245,11 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  // FastRopeNormAppleBF16 with a 128-thread workgroup (M2D-3): the
+  // Qwen3-4B Q/K rows are 128 wide, so half the shipped 256-thread
+  // workgroup idles. Same subgroup reduction with N_SUBGROUPS=4.
+  // Appended to keep profile kernel ids stable.
+  FastRopeNormAppleBF16N128,
   Count,
 };
 

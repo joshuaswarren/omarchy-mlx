@@ -80,7 +80,17 @@ layout(set = 0, binding = 4, std430) readonly buffer Weight {
   uint values[];
 } weight_data;
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+// Workgroup width. 256 = the shipped build (threads past the row length
+// idle). ROPE_NORM_THREADS=128 builds the M2D-3 D<=128 variant: every
+// thread active at the 128-wide Q/K rows. N_SUBGROUPS scales the
+// second-level reduction read so the 128 build (4 subgroups) never
+// consumes stale shared slots.
+#ifndef ROPE_NORM_THREADS
+#define ROPE_NORM_THREADS 256u
+#endif
+const uint N_SUBGROUPS = ROPE_NORM_THREADS / 32u;
+
+layout(local_size_x = ROPE_NORM_THREADS, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -180,7 +190,7 @@ void main() {
     subgroup_values[gl_SubgroupID] = subgroup_sum;
   }
   barrier();
-  float partial = gl_SubgroupID == 0u && gl_SubgroupInvocationID < 8u
+  float partial = gl_SubgroupID == 0u && gl_SubgroupInvocationID < N_SUBGROUPS
       ? subgroup_values[gl_SubgroupInvocationID]
       : 0.0;
   float row_sum = subgroupAdd(partial);
