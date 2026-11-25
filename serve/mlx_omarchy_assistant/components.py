@@ -135,7 +135,7 @@ def _only_keys(component_type: str, obj: dict, allowed: set, where: str = ""):
 def _v_options(component_type, field, value):
     value = _list_value(component_type, field, value, 2, 8)
     return [
-        {"id": _id_value(component_type, field, _obj(component_type, o, field)["id"]),
+        {"id": _id_value(component_type, field, _obj(component_type, o, field).get("id")),
          "label": _str_value(component_type, field, _obj(component_type, o, field).get("label"), 120)}
         for o in value
     ]
@@ -150,7 +150,7 @@ def _v_columns(component_type, field, value):
         kind = col.get("kind", "text")
         if kind not in ("text", "number"):
             _fail(component_type, field, "column kind must be 'text' or 'number'")
-        out.append({"id": _id_value(component_type, field, col["id"]),
+        out.append({"id": _id_value(component_type, field, col.get("id")),
                     "label": _str_value(component_type, field, col.get("label"), 120),
                     "kind": kind})
     ids = [c["id"] for c in out]
@@ -177,7 +177,7 @@ def _v_rows(component_type, field, value, columns):
                 clean.append(_str_value(component_type, field, cell, 300, allow_empty=True))
             else:
                 clean.append(_finite_number(component_type, field, cell))
-        out.append({"id": _id_value(component_type, field, row["id"]),
+        out.append({"id": _id_value(component_type, field, row.get("id")),
                     "label": _str_value(component_type, field, row.get("label"), 120),
                     "values": clean})
     ids = [r["id"] for r in out]
@@ -199,11 +199,11 @@ def _v_series(component_type, field, value):
             p = _obj(component_type, p, "series.values[]")
             _only_keys(component_type, p, {"label", "value"}, "series.values[]")
             clean_points.append({
-                "label": _str_value(component_type, "series.values[]", p["label"], 40),
-                "value": _finite_number(component_type, "series.values[]", p["value"]),
+                "label": _str_value(component_type, "series.values[]", p.get("label"), 40),
+                "value": _finite_number(component_type, "series.values[]", p.get("value")),
             })
         out.append({
-            "id": _id_value(component_type, field, s["id"]),
+            "id": _id_value(component_type, field, s.get("id")),
             "label": _str_value(component_type, field, s.get("label"), 120),
             "unit": _str_value(component_type, field, s.get("unit", ""), 16, allow_empty=True),
             # Where the numbers came from. Estimates must say so; the renderer
@@ -224,7 +224,7 @@ def _v_checklist(component_type, field, value, require_text=True, text_cap=200):
     for item in value:
         item = _obj(component_type, item, field)
         _only_keys(component_type, item, {"id", "text", "done"}, field)
-        entry = {"id": _id_value(component_type, field, item["id"]),
+        entry = {"id": _id_value(component_type, field, item.get("id")),
                  "done": _bool_value(component_type, field, item.get("done", False))}
         if require_text:
             entry["text"] = _str_value(component_type, field, item.get("text"), text_cap)
@@ -247,7 +247,7 @@ def _v_form_fields(component_type, field, value):
                    "choices", "min", "max", "step", "initial"}
         _only_keys(component_type, f, allowed, field)
         entry = {
-            "id": _id_value(component_type, field, f["id"]),
+            "id": _id_value(component_type, field, f.get("id")),
             "label": _str_value(component_type, field, f.get("label"), 120),
             "kind": kind,
             "required": _bool_value(component_type, field, f.get("required", False)),
@@ -257,7 +257,7 @@ def _v_form_fields(component_type, field, value):
         if kind == "choice":
             choices = _list_value(component_type, "choices", f.get("choices"), 2, 12)
             entry["choices"] = [
-                {"id": _id_value(component_type, "choices", _obj(component_type, c, "choices")["id"]),
+                {"id": _id_value(component_type, "choices", _obj(component_type, c, "choices").get("id")),
                  "label": _str_value(component_type, "choices", _obj(component_type, c, "choices").get("label"), 120)}
                 for c in choices
             ]
@@ -347,7 +347,7 @@ SPECS = {
         {"entries"},
         lambda ctype, comp: {
             "entries": [
-                {"id": _id_value(ctype, "entries", _obj(ctype, e, "entries")["id"]),
+                {"id": _id_value(ctype, "entries", _obj(ctype, e, "entries").get("id")),
                  "when": _str_value(ctype, "entries", _obj(ctype, e, "entries").get("when", ""), 40,
                                     allow_empty=True),
                  "text": _str_value(ctype, "entries", _obj(ctype, e, "entries").get("text"), 300)}
@@ -380,9 +380,9 @@ def _v_confidence(ctype, value):
     if value.get("runner_up") is not None:
         ru = _obj(ctype, value["runner_up"], "confidence.runner_up")
         _only_keys(ctype, ru, {"id", "probability"}, "confidence.runner_up")
-        out["runner_up"] = {"id": _id_value(ctype, "confidence.runner_up", ru["id"]),
+        out["runner_up"] = {"id": _id_value(ctype, "confidence.runner_up", ru.get("id")),
                             "probability": _probability(
-                                ctype, "confidence.runner_up.probability", ru["probability"])}
+                                ctype, "confidence.runner_up.probability", ru.get("probability"))}
     out["abstained"] = _bool_value(ctype, "confidence.abstained", value.get("abstained", False))
     if value.get("entropy") is not None:
         out["entropy"] = _probability(ctype, "confidence.entropy", value["entropy"])
@@ -395,7 +395,7 @@ def _v_cards(ctype, value):
     for card in value:
         card = _obj(ctype, card, "cards")
         _only_keys(ctype, card, {"id", "heading", "text", "sources"}, "cards")
-        entry = {"id": _id_value(ctype, "cards", card["id"]),
+        entry = {"id": _id_value(ctype, "cards", card.get("id")),
                  "heading": _str_value(ctype, "cards", card.get("heading"), 120),
                  "text": _str_value(ctype, "cards", card.get("text"), 600)}
         if card.get("sources") is not None:
@@ -435,7 +435,11 @@ def parse_envelope(payload) -> dict:
         except UnicodeDecodeError as exc:
             raise ComponentError(f"envelope is not valid UTF-8: {exc}") from exc
     if isinstance(payload, str):
-        if len(payload.encode("utf-8")) > ENVELOPE_MAX_BYTES:
+        try:
+            encoded = payload.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ComponentError("envelope must be valid Unicode") from exc
+        if len(encoded) > ENVELOPE_MAX_BYTES:
             raise ComponentError(
                 f"envelope exceeds the {ENVELOPE_MAX_BYTES} byte bound")
         try:
@@ -475,6 +479,8 @@ def validate_components(payload) -> list[dict]:
         if not isinstance(raw, dict):
             raise ComponentError("each component must be an object")
         ctype = raw.get("type")
+        if ctype is not None and not isinstance(ctype, str):
+            raise ComponentError(f"unknown component type: {type(ctype).__name__}")
         if ctype not in SPECS:
             raise ComponentError(f"unknown component type: {ctype!r}")
         present = set(raw)
@@ -536,7 +542,7 @@ def _validated_form_values(ctype, values, component):
         if spec["kind"] == "text":
             clean[fid] = _str_value(ctype, f"values.{fid}", values[fid], 500, allow_empty=True)
         elif spec["kind"] == "choice":
-            if values[fid] not in {c["id"] for c in spec["choices"]}:
+            if values[fid] not in [c["id"] for c in spec["choices"]]:
                 _fail(ctype, f"values.{fid}", "must be one of the field choices")
             clean[fid] = values[fid]
         else:
@@ -556,13 +562,19 @@ def validate_action(component: dict, action: str, values=None) -> dict:
     if not isinstance(component, dict) or component.get("type") not in SPECS:
         raise ComponentError("action against an unknown component type")
     ctype = component["type"]
+    if not isinstance(action, str):
+        raise ComponentError("action must be a string")
     if action not in component_actions(component):
         raise ComponentError(f"action {action!r} is not allowed on a {ctype} card")
     if values is None:
         values = {}
     if not isinstance(values, dict):
         raise ComponentError("action values must be an object")
-    if len(json.dumps(values)) > 16 * 1024:
+    try:
+        encoded = json.dumps(values, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise ComponentError("action values must be JSON data") from exc
+    if len(encoded) > 16 * 1024:
         raise ComponentError("action values exceed the 16 KiB bound")
 
     clean: dict = {}
@@ -604,7 +616,7 @@ def validate_action(component: dict, action: str, values=None) -> dict:
                 if iid not in known or iid in seen:
                     _fail(ctype, "items", f"unknown or duplicate item id {iid!r}")
                 seen.add(iid)
-            clean = {"items": [{"id": e["id"], "done": _bool_value(ctype, "items.done", e["done"])}
+            clean = {"items": [{"id": e["id"], "done": _bool_value(ctype, "items.done", e.get("done"))}
                                for e in edits]}
         # decision/comparison edit carries no values; the composer prefills
         # from the card data server-side.

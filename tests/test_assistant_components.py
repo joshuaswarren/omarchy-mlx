@@ -8,6 +8,7 @@ content-bound guard without depending on the network or on the renderer.
 import json
 import math
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,6 +16,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
+from mlx_omarchy_assistant import components  # noqa: E402
 from mlx_omarchy_assistant.components import (  # noqa: E402
     ComponentError, MAX_COMPONENTS, MAX_DATA_VALUES, MAX_FORM_FIELDS,
     SCHEMA_PROMPT, ENVELOPE_MAX_BYTES, ENVELOPE_VERSION, FORBIDDEN_IDENTITY_KEYS,
@@ -265,6 +267,184 @@ class MalformedInputTests(unittest.TestCase):
                                  {"id": "r2", "label": "B", "values": [2]}]})
         with self.assertRaisesRegex(ComponentError, "array directly inside an array"):
             validate_components(bad)
+
+    def test_missing_nested_item_keys_rejected(self):
+        opts = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
+        decision = {"type": "decision", "selected": "a", "criteria": "c", "options": opts}
+        cols = [{"id": "c1", "label": "C"}]
+        rows = [{"id": "r1", "label": "R", "values": [1]},
+                {"id": "r2", "label": "S", "values": [2]}]
+        pts = [{"label": "x", "value": 1}, {"label": "y", "value": 2}]
+        series = {"id": "s1", "label": "S", "source": "src", "values": pts}
+        choice_field = {"id": "f1", "label": "F", "kind": "choice",
+                        "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]}
+        cases = [
+            ("options[0] missing id", dict(decision, options=[{"label": "A"}, opts[1]])),
+            ("columns[0] missing id", {"type": "comparison", "columns": [{"label": "C"}], "rows": rows}),
+            ("rows[0] missing id", {"type": "comparison", "columns": cols,
+                                    "rows": [{"label": "R", "values": [1]}, rows[1]]}),
+            ("series[0] missing id", {"type": "chart", "kind": "bar",
+                                      "series": [{k: v for k, v in series.items() if k != "id"}]}),
+            ("series point missing label", {"type": "chart", "kind": "bar",
+                                            "series": [dict(series, values=[{"value": 1}, pts[1]])]}),
+            ("series point missing value", {"type": "chart", "kind": "bar",
+                                            "series": [dict(series, values=[{"label": "x"}, pts[1]])]}),
+            ("checklist item missing id", {"type": "checklist", "items": [{"text": "t"}]}),
+            ("form field missing id", {"type": "form", "fields": [{"label": "F", "kind": "text"}]}),
+            ("form choice missing id", {"type": "form", "fields": [
+                dict(choice_field, choices=[{"label": "A"}, {"id": "b", "label": "B"}])]}),
+            ("timeline entry missing id", {"type": "timeline", "entries": [{"text": "t"}]}),
+            ("runner_up missing id", dict(decision, confidence={"runner_up": {"probability": 0.1}})),
+            ("runner_up missing probability", dict(decision, confidence={"runner_up": {"id": "b"}})),
+            ("facts card missing id", {"type": "facts", "cards": [{"heading": "h", "text": "t"}]}),
+        ]
+        for label, comp in cases:
+            with self.subTest(case=label), self.assertRaises(ComponentError):
+                validate_components(envelope(comp))
+
+    def test_non_string_component_type_rejected(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        cases = [
+            ("list type", envelope({"type": ["decision"]})),
+            ("dict type", envelope({"type": {}})),
+            ("dict type JSON text", '{"version": 1, "components": [{"type": {}}]}'),
+            ("int over str digits limit", envelope({"type": 2 ** 16610})),
+            ("set type", envelope({"type": {1}})),
+        ]
+        for label, payload in cases:
+            with self.subTest(case=label), self.assertRaisesRegex(
+                ComponentError, r"\Aunknown component type: (list|dict|int|set)\Z"
+            ):
+                validate_components(payload)
+
+    def test_missing_component_type_rejected(self):
+        with self.assertRaisesRegex(ComponentError, r"\Aunknown component type: None\Z"):
+            validate_components(envelope({}))
+
+    def test_raw_lone_surrogate_envelope_text_rejected(self):
+        raw = ('{"version": 1, "components": [{"type": "checklist", '
+               '"items": [{"id": "a", "text": "x \ud800 y"}]}]}')
+        with self.assertRaisesRegex(ComponentError, "valid Unicode"):
+            validate_components(raw)
+
+    def test_checklist_action_missing_keys_rejected(self):
+        comp = validate_components(envelope({"type": "checklist", "items": [
+            {"id": "t1", "text": "a", "done": False}]}))[0]
+        with self.subTest(case="edit missing done"), self.assertRaises(ComponentError):
+            validate_action(comp, "edit", {"items": [{"id": "t1"}]})
+        with self.subTest(case="submit item missing id"), self.assertRaises(ComponentError):
+            validate_action(comp, "submit", {"items": [{"text": "a"}]})
+
+    def test_form_choice_submit_unhashable_value_rejected(self):
+        comp = validate_components(envelope({"type": "form", "fields": [{
+            "id": "f1", "label": "Pick", "kind": "choice",
+            "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]}]}))[0]
+        for label, bad_val in (("list", ["a"]), ("object", {"id": "a"})):
+            with self.subTest(case=label), self.assertRaisesRegex(ComponentError, "must be one of the field choices"):
+                validate_action(comp, "submit", {"values": {"f1": bad_val}})
+
+    def test_action_values_non_json_nan_and_surrogate_rejected(self):
+        comp = validate_components(decision_envelope())[0]
+        cases = [
+            ("set", {"x": {1}}),
+            ("nan", {"x": float("nan")}),
+            ("inf", {"x": float("inf")}),
+            ("-inf", {"x": float("-inf")}),
+            ("lone surrogate", {"x": "\ud800"}),
+        ]
+        for label, values in cases:
+            with self.subTest(case=label), self.assertRaisesRegex(ComponentError, "must be JSON data"):
+                validate_action(comp, "submit", values)
+
+    def test_action_values_int_over_str_digits_limit_rejected(self):
+        comp = validate_components(decision_envelope())[0]
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        huge = 2 ** 16610
+        with self.assertRaisesRegex(ComponentError, "must be JSON data"):
+            validate_action(comp, "submit", {"x": huge})
+
+    @staticmethod
+    def _run_on_4mib_stack(fn):
+        err = None
+
+        def run():
+            nonlocal err
+            try:
+                fn()
+            except BaseException as exc:
+                err = exc
+
+        old = threading.stack_size(4 * 1024 * 1024)
+        try:
+            t = threading.Thread(target=run)
+            t.start()
+        finally:
+            threading.stack_size(old)
+        t.join()
+        if err is not None:
+            raise err
+
+    def test_action_values_deep_nesting_recursion_error_rejected(self):
+        comp = validate_components(decision_envelope())[0]
+
+        def check():
+            v = []
+            for _ in range(200_000):
+                v = [v]
+            payload = {"x": v}
+            with self.assertRaises(RecursionError):
+                json.dumps(payload)
+            with self.assertRaisesRegex(ComponentError, "must be JSON data"):
+                validate_action(comp, "submit", payload)
+
+        self._run_on_4mib_stack(check)
+
+    def test_non_string_action_rejected(self):
+        comp = validate_components(decision_envelope())[0]
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        cases = [
+            ("huge int", 2 ** 16610),
+            ("list", ["edit"]),
+            ("dict", {"a": 1}),
+        ]
+        for label, bad_action in cases:
+            with self.subTest(case=label), self.assertRaisesRegex(ComponentError, "action must be a string"):
+                validate_action(comp, bad_action)
+
+    def test_action_deep_nesting_recursion_error_rejected(self):
+        comp = validate_components(decision_envelope())[0]
+
+        def check():
+            action = []
+            for _ in range(200_000):
+                action = [action]
+            with self.assertRaises(RecursionError):
+                repr(action)
+            with self.assertRaisesRegex(ComponentError, "action must be a string"):
+                validate_action(comp, action)
+
+        self._run_on_4mib_stack(check)
+
+    def test_action_values_dumps_recursion_error_patched_rejected(self):
+        comp = validate_components(decision_envelope())[0]
+        with mock.patch.object(components.json, "dumps", side_effect=RecursionError):
+            with self.assertRaisesRegex(ComponentError, "must be JSON data"):
+                validate_action(comp, "submit", {"x": 1})
+
+    def test_action_values_utf8_byte_cap(self):
+        fields = [{"id": f"f{i}", "label": f"F{i}", "kind": "text"} for i in range(12)]
+        comp = validate_components(envelope({"type": "form", "fields": fields}))[0]
+        cjk = "\u6f22" * 500
+        ok_values = {f"f{i}": cjk for i in range(6)}
+        result = validate_action(comp, "submit", {"values": ok_values})
+        self.assertEqual(result["values"]["values"], ok_values)
+
+        too_big = {f"f{i}": cjk for i in range(12)}
+        with self.assertRaisesRegex(ComponentError, "exceed the 16 KiB bound"):
+            validate_action(comp, "submit", {"values": too_big})
 
 
 class ComparisonValidationTests(unittest.TestCase):
