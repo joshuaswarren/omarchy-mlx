@@ -1744,6 +1744,13 @@ _FUNC_SPECS = {
     "div": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
     "truediv": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
     "true_divide": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    # aten.remainder: numpy-style modulo (result takes the divisor's sign,
+    # matching torch.remainder); mx.remainder has the same contract and the
+    # omarchy backend implements it for float and int (Remainder eval_gpu).
+    # Go through %, not mx.remainder: scalar-only calls (remainder(7, 3))
+    # evaluate in Python first so _ar boxes int64 like the binop specs, and
+    # a bare scalar stays weak beside a narrow-int tensor operand.
+    "remainder": lambda a, b, *k: _ar(_mx(a) % _mx(b)),
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
     "addcdiv": _addcdiv,
@@ -2021,7 +2028,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "_adaptive_avg_pool2d_backward", "convolution_backward",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
-                 "add", "sub", "mul", "div", "truediv", "true_divide"}
+                 "add", "sub", "mul", "div", "truediv", "true_divide",
+                 "remainder"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
