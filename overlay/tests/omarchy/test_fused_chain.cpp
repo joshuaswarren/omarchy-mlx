@@ -2621,24 +2621,44 @@ TEST_CASE("eager dual-write planner adopts a q/k/v concat parent") {
     }
 
     setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
-    // Planner adoption is unconditional now (no env gate): the concat
-    // dispatch is deleted (1 dispatch), the parent is byte-identical
-    // to the baseline per-node outputs, and every member aliases the
-    // parent buffer.
+    // The adoption is device-scoped: on the measured part (G14C) the
+    // planner hands strided parent outputs - the concat dispatch is
+    // deleted (1 dispatch), the parent is byte-identical to the
+    // baseline per-node outputs, and every member aliases the parent
+    // buffer. On unmeasured devices the grouped FALLBACK stays in
+    // use: the three gemv dispatches merge into one (-2), the concat
+    // still materializes, and the outputs stay byte-identical.
+    const bool measured_device =
+        omarchy::get_command_encoder(stream)
+            .device()
+            .capabilities()
+            .device_name.find("G14C") != std::string::npos;
     auto dual = forward();
     before = counters().vk_compute_dispatches.load();
     eval({dual[3]});
     sync_stream(stream);
-    INFO("dtype ", dtype);
-    CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1u);
+    uint64_t dual_dispatches =
+        counters().vk_compute_dispatches.load() - before;
+    INFO("dtype ", dtype, " measured ", measured_device,
+         " dispatches ", dual_dispatches);
     for (size_t i = 0; i < 4; ++i) {
       expect_bit_exact(baseline[i], dual[i], stream);
       auto raw = dualout_raw16(dual[i]);
       CHECK_EQ(dualout_fnv1a64(raw.data(), raw.size() * 2), digests[i]);
     }
-    CHECK_EQ(dual[0].data_shared_ptr(), dual[3].data_shared_ptr());
-    CHECK_EQ(dual[1].data_shared_ptr(), dual[3].data_shared_ptr());
-    CHECK_EQ(dual[2].data_shared_ptr(), dual[3].data_shared_ptr());
+    if (measured_device) {
+      // G14C: adoption engaged - one dispatch, members alias the parent.
+      CHECK_EQ(dual_dispatches, 1u);
+      CHECK_EQ(dual[0].data_shared_ptr(), dual[3].data_shared_ptr());
+      CHECK_EQ(dual[1].data_shared_ptr(), dual[3].data_shared_ptr());
+      CHECK_EQ(dual[2].data_shared_ptr(), dual[3].data_shared_ptr());
+    } else {
+      // Unmeasured device: grouped fallback in use - the three gemv
+      // dispatches merge into one (-2), the concat still materializes
+      // one dispatch per input, and nothing aliases a parent.
+      CHECK_EQ(dual_dispatches, per_node - 2u);
+      CHECK_FALSE(dual[0].data_shared_ptr() == dual[3].data_shared_ptr());
+    }
     unsetenv("MLX_OMARCHY_FUSED_GEMV");
   }
 }
