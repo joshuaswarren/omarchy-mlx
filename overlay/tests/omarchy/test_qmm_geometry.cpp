@@ -252,6 +252,54 @@ int main(int argc, char** argv) {
       }
     }
   }
+  // MLX_OMARCHY_SWIGLU_GEOM: the dedicated SwiGLU tile inside the 2x8w2
+  // family. Every accepted value must produce the base bytes; "unfused"
+  // drops the fold so the pair runs the multi dispatch plus the swiglu
+  // epilogue, which is the same arithmetic through two dispatches. An
+  // unknown value must refuse loudly where the geometry is read. The env
+  // lives inside the 2x8w2 geometry probe, so devices outside that family
+  // never consult it and the checks pass trivially there.
+  const auto& devname =
+      mlx::core::omarchy::device().capabilities().device_name;
+  const bool has_2x8w2 =
+      devname.find("G13G") != std::string::npos ||
+      devname.find("G13C") != std::string::npos ||
+      devname.find("G14C") != std::string::npos;
+  if (has_2x8w2) {
+    setenv("MLX_OMARCHY_SWIGLU_GEOM", "bogus", 1);
+    int rc = run_child("swiglu", "/tmp/w7p-swgeom-invalid.bin");
+    unsetenv("MLX_OMARCHY_SWIGLU_GEOM");
+    if (rc != 3) {
+      std::cout << "FAIL: an invalid swiglu geometry did not refuse (rc "
+                << rc << ")\n";
+      ++failures;
+    }
+  }
+  for (const char* swgeom :
+       has_2x8w2 ? std::vector<const char*>{"r1s8w2", "r2s4w2", "hoist",
+                                            "unfused"}
+                 : std::vector<const char*>{}) {
+    std::string base = "/tmp/w7p-swgeom-base.bin";
+    std::string other = "/tmp/w7p-swgeom-other.bin";
+    setenv("MLX_OMARCHY_SWIGLU_GEOM", "r2s8w2", 1);
+    int rc = run_child("swiglu", base.c_str());
+    setenv("MLX_OMARCHY_SWIGLU_GEOM", swgeom, 1);
+    int rc2 = run_child("swiglu", other.c_str());
+    unsetenv("MLX_OMARCHY_SWIGLU_GEOM");
+    if (rc != 0 || rc2 != 0) {
+      std::cout << "FAIL: swiglu " << swgeom << " child rc " << rc << "/"
+                << rc2 << "\n";
+      ++failures;
+      continue;
+    }
+    if (fnv(base) != fnv(other)) {
+      std::cout << "FAIL: swiglu " << swgeom
+                << " bytes differ from r2s8w2\n";
+      ++failures;
+    } else {
+      std::cout << "ok: swiglu " << swgeom << " identical\n";
+    }
+  }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
             << " failures " << failures << "\n";
   return failures == 0 ? 0 : 1;
