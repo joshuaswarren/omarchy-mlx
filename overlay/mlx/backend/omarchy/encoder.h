@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -658,6 +659,17 @@ class MLX_API CommandEncoder {
   int node_count_{0};
   uint64_t batch_work_{0};
   uint64_t last_completion_{0};
+  // Shared with the encoder's in-flight submit-worker jobs: a failed
+  // vkQueueSubmit records its error here so the encoder's next submit()
+  // surfaces the same typed error the synchronous path threw. Once set
+  // the encoder stays poisoned - last_completion_ names a value that
+  // can never signal, so new submissions would park the worker's
+  // in-order wait behind a retired batch that was never submitted.
+  struct SubmitErrorState {
+    std::mutex mutex;
+    std::string message;
+  };
+  std::shared_ptr<SubmitErrorState> submit_error_state_;
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};
   std::vector<PendingSemaphore> wait_semaphores_;

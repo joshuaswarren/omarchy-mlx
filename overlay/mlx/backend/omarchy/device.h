@@ -491,6 +491,39 @@ class Device {
     return queue_mutex_;
   }
 
+  // Submit worker: vkQueueSubmit on this stack resolves its in-order
+  // timeline wait on the host (a syncobj spin-poll then a blocking
+  // syncobj wait inside the submit call), so each submission parked the
+  // calling thread for roughly the previous batch's retirement -
+  // measured ~5 ms of a 30 ms decode token on M1. Submissions are
+  // described on the caller's thread and executed by a per-device
+  // worker, so eval keeps building the next batch while the previous
+  // one retires.
+  //
+  // submit_order_mutex_ serializes completion-value reservation with
+  // the job push: the queue requires timeline signal values to increase
+  // along it, so reserve order, FIFO order, and QueueSubmit order must
+  // be one order. It is held only across reservation plus push - never
+  // across a host wait or a driver call. push_submit_job() may block on
+  // queue capacity while that mutex is held; the worker never takes it,
+  // so space always frees.
+  std::mutex& submit_order_mutex() {
+    return submit_order_mutex_;
+  }
+  // Enqueue a submission for the worker. Callers hold
+  // submit_order_mutex() and reserved their completion value inside
+  // that hold, so FIFO order is the queue's signal order.
+  void push_submit_job(std::function<void()> job);
+  // Recovery resubmits bypass the queue bound (a bounded queue full of
+  // unsubmitted work must not starve the recovery ladder) but callers
+  // still hold submit_order_mutex(), keeping their fresh values in
+  // queue order.
+  void push_recovery_job(std::function<void()> job);
+  // Stop the worker after draining the FIFO and join it. Idempotent;
+  // teardown_vulkan() calls it before the device idle wait so queued
+  // submissions reach the driver while the device is still alive.
+  void shutdown_submit_worker();
+
   // Dropped-submission recovery ladder, invoked by the watchdog when a
   // waited completion value stops advancing. Honeykrisp provably swallows
   // submissions (the in-tree empty signal-only QueueSubmit fix documents
@@ -573,6 +606,24 @@ class Device {
   VkDevice device_{VK_NULL_HANDLE};
   VkQueue queue_{VK_NULL_HANDLE};
   std::mutex queue_mutex_;
+  // submit_order_mutex_ guards the reserve()+push pair (see the worker
+  // comment above); submit_queue_mutex_ guards the FIFO, the stop flag,
+  // and the started flag (started is also always touched under
+  // submit_order_mutex_, which every push caller holds).
+  std::mutex submit_order_mutex_;
+  std::mutex submit_queue_mutex_;
+  std::condition_variable submit_queue_cv_;
+  std::condition_variable submit_space_cv_;
+  std::deque<std::function<void()>> submit_queue_;
+  std::thread submit_worker_;
+  bool submit_worker_started_{false};
+  bool submit_worker_stop_{false};
+  // Capacity backpressure: an unbounded FIFO would let eval run
+  // arbitrarily far ahead of the GPU and accumulate keepalive payloads;
+  // the bound restores the submit-side stall the direct path had.
+  static constexpr size_t kSubmitQueueBound = 16;
+  void ensure_submit_worker();
+  void submit_worker_main();
   std::unique_ptr<ComputeRuntime> compute_;
   std::unique_ptr<CompletionDispatcher> completions_;
 
