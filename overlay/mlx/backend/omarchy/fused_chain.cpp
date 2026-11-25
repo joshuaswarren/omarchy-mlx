@@ -1757,6 +1757,114 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   }
   static thread_local TapeIndex<std::vector<const array*>> dense_by_x;
   dense_by_x.prepare(tape.size());
+  // Dual-write parent adoption (FUSE-4 leg 1). Behind
+  // MLX_OMARCHY_QMM_DUAL_OUT, a group whose members are exactly the
+  // inputs of one unclaimed last-axis Concatenate hands strided parent
+  // outputs to the dispatch: each member stores its flat slot of the
+  // concat output and the standalone Concatenate dispatch (one dispatch
+  // per input on the Vulkan path) is deleted. The dispatch re-checks
+  // every contract line; on refusal the group unwinds and the concat
+  // evaluates ordinarily, so nothing here needs the out-gate fold's
+  // throw-on-refusal (every deleted node is replayable). The flag is
+  // read here and again in the route, and the Q4 word gate is consulted
+  // before adoption for the same reason the out-gate fold consults it:
+  // the route refuses every group while it is off.
+  const char* dual_env = std::getenv("MLX_OMARCHY_QMM_DUAL_OUT");
+  if (dual_env != nullptr && dual_env[0] != '\0' &&
+      std::strcmp(dual_env, "0") != 0 && qmm_vec_q4_word_enabled() &&
+      !state->gemv_groups.empty()) {
+    std::unordered_map<std::uintptr_t, std::vector<const array*>>
+        dual_readers;
+    for (const auto& node : tape) {
+      for (const auto& input : node.inputs()) {
+        dual_readers[input.id()].push_back(&node);
+      }
+    }
+    for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+      auto& group = state->gemv_groups[gi];
+      if (group.outgate || group.swiglu_out) {
+        // Both folds own the group's store epilogue; the route refuses
+        // dual-write members beside either.
+        continue;
+      }
+      const array& x = group.members[0].node.inputs()[0];
+      if (x.shape(-2) != 1) {
+        // The token route refuses dual-write members.
+        continue;
+      }
+      bool members_clean = true;
+      for (const auto& member : group.members) {
+        if (member.epilogue || member.sum_window) {
+          // An Add epilogue or KV window mixes store contracts with
+          // the strided parent writes; the route refuses the mix
+          // (wAP review of #798), so the group is not adoptable.
+          members_clean = false;
+          break;
+        }
+      }
+      if (!members_clean) {
+        continue;
+      }
+      // The adoptable shape: every member's only reader is one
+      // unclaimed Concatenate.
+      const array* cat = nullptr;
+      bool sole_reader = true;
+      for (const auto& member : group.members) {
+        auto& readers = dual_readers[member.node.id()];
+        if (readers.size() != 1 || !is_op(readers[0], typeid(Concatenate))) {
+          sole_reader = false;
+          break;
+        }
+        if (cat == nullptr) {
+          cat = readers[0];
+        } else if (cat->id() != readers[0]->id()) {
+          sole_reader = false;
+          break;
+        }
+      }
+      if (cat == nullptr || !sole_reader || claimed.count(cat->id())) {
+        continue;
+      }
+      // Full-member last-axis concat: every concat input is this
+      // group's member with its own shape, so the flat slot offsets
+      // are the prefix sums of the input sizes (single-row members).
+      if (cat->inputs().size() != group.members.size() ||
+          static_cast<const Concatenate&>(cat->primitive()).state() !=
+              static_cast<int>(cat->ndim()) - 1) {
+        continue;
+      }
+      bool adoptable = cat->dtype() == group.members[0].node.dtype() &&
+          cat->primitive().stream() ==
+              group.members[0].node.primitive().stream();
+      std::unordered_map<std::uintptr_t, GemvFusionMember*> slot_of;
+      for (auto& member : group.members) {
+        slot_of.emplace(member.node.id(), &member);
+      }
+      uint32_t offset = 0;
+      for (const auto& input : cat->inputs()) {
+        auto slot = slot_of.find(input.id());
+        if (slot == slot_of.end() ||
+            input.shape() != slot->second->node.shape() ||
+            input.dtype() != slot->second->node.dtype()) {
+          adoptable = false;
+          break;
+        }
+        slot->second->out_view = {*cat, offset};
+        offset += static_cast<uint32_t>(input.size());
+      }
+      if (!adoptable || offset != cat->size() ||
+          cat->size() > 0xFFFFFFFFull) {
+        for (auto& member : group.members) {
+          member.out_view.reset();
+        }
+        continue;
+      }
+      // The concat's eval fires the group and never dispatches; its
+      // output is the parent the members wrote.
+      state->gemv_roles.emplace(cat->id(), gi);
+      claimed.insert(cat->id());
+    }
+  }
   std::vector<std::uintptr_t> dense_x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(Matmul)) || node.inputs().size() != 2 ||
@@ -2958,6 +3066,17 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       gemv != nullptr) {
     auto& group = eager_state->gemv_groups[*gemv];
     if (group.state == GemvGroup::State::pending) {
+      // Dual-write parents (adopted Concatenate outputs) are fresh tape
+      // nodes without storage; the member views bind into the parent's
+      // buffer, so it is allocated here, before the stores. On a route
+      // refusal the concat replays into the buffer and nothing is lost.
+      for (auto& member : group.members) {
+        if (member.out_view &&
+            member.out_view->parent.data_shared_ptr() == nullptr) {
+          member.out_view->parent.set_data(
+              allocator().malloc(member.out_view->parent.nbytes()));
+        }
+      }
       group.state = dispatch_quantized_gemv_group(
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,

@@ -2593,4 +2593,155 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   CHECK(t.find(42) == nullptr);
   CHECK(t.put_if_absent(42, 8));
   CHECK(*t.find(42) == 8);
+// FUSE-4 leg 1: the group PLANNER adopts the dual-write route. When the
+// graph shows the adoptable shape - every group member the sole input
+// of one unclaimed last-axis Concatenate - the flagged planner hands
+// strided parent outputs and the standalone Concatenate dispatch is
+// deleted. Unset or "0" must keep today's route dispatch for dispatch.
+TEST_CASE("eager dual-write planner adopts a q/k/v concat parent") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  for (Dtype dtype : {bfloat16, float16}) {
+    // The q/k/v triple of the direct tests: three linears of different
+    // N against one x, assembled by one whole dense Concatenate.
+    auto q = make_linear(96, k, dtype, stream);
+    auto kk = make_linear(64, k, dtype, stream);
+    auto v = make_linear(32, k, dtype, stream);
+    array x = astype(
+        random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+        dtype,
+        stream);
+    x.eval();
+    sync_stream(stream);
+    auto forward = [&] {
+      array a = project(x, q, stream);
+      array b = project(x, kk, stream);
+      array c = project(x, v, stream);
+      array cat = concatenate({a, b, c}, -1, stream);
+      return std::vector<array>{a, b, c, cat};
+    };
+    // Per-node baseline: 3 gemv + the concat (which costs one dispatch
+    // per input on the Vulkan path). Only the merge/adoption deltas
+    // below are hardware-independent, so the exact total is not pinned.
+    unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    auto baseline = forward();
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({baseline[3]});
+    sync_stream(stream);
+    uint64_t per_node = counters().vk_compute_dispatches.load() - before;
+    REQUIRE(per_node > 3u);
+    std::vector<uint64_t> digests;
+    for (const auto& out : baseline) {
+      auto raw = dualout_raw16(out);
+      digests.push_back(dualout_fnv1a64(raw.data(), raw.size() * 2));
+    }
+
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    // Dual-write off: the whole-buffer group route merges the three
+    // gemv dispatches into one (-2), the concat still materializes.
+    // A "0" value behaves exactly like unset.
+    for (const char* flag : {(const char*)nullptr, "0"}) {
+      if (flag) {
+        setenv("MLX_OMARCHY_QMM_DUAL_OUT", flag, 1);
+      } else {
+        unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+      }
+      auto grouped = forward();
+      before = counters().vk_compute_dispatches.load();
+      eval({grouped[3]});
+      sync_stream(stream);
+      INFO("dtype ", dtype, " flag ", flag ? flag : "unset");
+      CHECK_EQ(counters().vk_compute_dispatches.load() - before, per_node - 2u);
+      for (size_t i = 0; i < 4; ++i) {
+        expect_bit_exact(baseline[i], grouped[i], stream);
+      }
+    }
+
+    // Flag on: the planner hands strided parent outputs, the concat
+    // dispatch is deleted (1 dispatch), the parent is byte-identical
+    // to the baseline per-node outputs, and every member aliases the
+    // parent buffer.
+    setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+    auto dual = forward();
+    before = counters().vk_compute_dispatches.load();
+    eval({dual[3]});
+    sync_stream(stream);
+    INFO("dtype ", dtype);
+    CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1u);
+    for (size_t i = 0; i < 4; ++i) {
+      expect_bit_exact(baseline[i], dual[i], stream);
+      auto raw = dualout_raw16(dual[i]);
+      CHECK_EQ(dualout_fnv1a64(raw.data(), raw.size() * 2), digests[i]);
+    }
+    CHECK_EQ(dual[0].data_shared_ptr(), dual[3].data_shared_ptr());
+    CHECK_EQ(dual[1].data_shared_ptr(), dual[3].data_shared_ptr());
+    CHECK_EQ(dual[2].data_shared_ptr(), dual[3].data_shared_ptr());
+    unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+    unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  }
+}
+
+// The adoption needs the FULL-member shape: a concat with an input no
+// group member writes keeps the standalone Concatenate dispatch (the
+// planner leaves the route untouched and the result stays correct).
+TEST_CASE("eager dual-write planner refuses a concat with a non-member input") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  auto q = make_linear(96, k, bfloat16, stream);
+  auto kk = make_linear(64, k, bfloat16, stream);
+  auto v = make_linear(32, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+  array pad = zeros({1, 1, 8}, bfloat16, stream);
+  pad.eval();
+  sync_stream(stream);
+  auto forward = [&] {
+    array a = project(x, q, stream);
+    array b = project(x, kk, stream);
+    array c = project(x, v, stream);
+    array cat = concatenate({a, b, c, pad}, -1, stream);
+    return std::vector<array>{a, b, c, cat};
+  };
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  auto baseline = forward();
+  uint64_t before = counters().vk_compute_dispatches.load();
+  eval({baseline[3]});
+  sync_stream(stream);
+  uint64_t per_node = counters().vk_compute_dispatches.load() - before;
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+  auto candidate = forward();
+  before = counters().vk_compute_dispatches.load();
+  eval({candidate[3]});
+  sync_stream(stream);
+  // The merged gemv group (-2) with the concat the planner refused to
+  // delete still dispatching per input: no adoption, no corruption.
+  // A concat dispatch per input means the group + concat total exceeds
+  // 1, and the member outputs stay in their own buffers.
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, per_node - 2u);
+  for (size_t i = 0; i < 4; ++i) {
+    expect_bit_exact(baseline[i], candidate[i], stream);
+  }
+  CHECK_FALSE(candidate[0].data_shared_ptr() == candidate[3].data_shared_ptr());
+  CHECK_FALSE(candidate[1].data_shared_ptr() == candidate[3].data_shared_ptr());
+  CHECK_FALSE(candidate[2].data_shared_ptr() == candidate[3].data_shared_ptr());
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
