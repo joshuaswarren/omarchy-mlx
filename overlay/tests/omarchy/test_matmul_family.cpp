@@ -37,6 +37,7 @@
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
+#include "mlx/primitives.h"
 #include "mlx/random.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
@@ -2824,6 +2825,102 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
     REQUIRE_EQ(wide_out.shape(), Shape{1, 2, 8});
     std::vector<float> wide_expected(16, 256.0f * 0.25f * 0.5f);
     expect_close_tol(readback_f32(stream, wide_out), wide_expected, 1e-5, 1e-4);
+  }
+}
+
+TEST_CASE("gather qmm casts tape-produced non-uint32 indices") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(11);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+  // Small affine transposed case (the decode gather shape class):
+  // 3 experts, x batch 2, m=1, k=64, n=32, group 32, 4-bit.
+  constexpr int experts = 3, x_batch = 2, m = 1, k = 64, n = 32,
+                    group_size = 32, bits = 4;
+  const int groups = k / group_size;
+
+  std::vector<HostQuantizedWeights> host_w;
+  std::vector<uint32_t> w_all;
+  std::vector<float> scales_all, biases_all;
+  for (int e = 0; e < experts; ++e) {
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights host =
+        host_affine_quantize(matrix, n, k, group_size, bits);
+    host_w.push_back(host);
+    w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+    scales_all.insert(scales_all.end(), host.scales.begin(),
+                      host.scales.end());
+    biases_all.insert(biases_all.end(), host.biases.begin(),
+                      host.biases.end());
+  }
+  array w_words(w_all.begin(), Shape{experts, n, k * bits / 32}, uint32);
+  array scales(scales_all.begin(), Shape{experts, n, groups}, float32);
+  array biases(biases_all.begin(), Shape{experts, n, groups}, float32);
+  std::vector<float> x_all;
+  std::vector<std::vector<float>> x_batches;
+  for (int b = 0; b < x_batch; ++b) {
+    std::vector<float> batch(static_cast<size_t>(m) * k);
+    for (auto& value : batch) {
+      value = dist(gen);
+    }
+    x_batches.push_back(batch);
+    x_all.insert(x_all.end(), batch.begin(), batch.end());
+  }
+  array x(x_all.begin(), Shape{x_batch, m, k}, float32);
+
+  std::vector<uint32_t> lhs_v{0u, 1u};
+  std::vector<uint32_t> rhs_v{2u, 0u};
+  array lhs(lhs_v.begin(), Shape{2}, uint32);
+  array rhs(rhs_v.begin(), Shape{2}, uint32);
+
+  // uint32-index reference through the public op.
+  array ref = gather_qmm(
+      x,
+      w_words,
+      scales,
+      biases,
+      lhs,
+      rhs,
+      true,
+      group_size,
+      bits,
+      "affine",
+      std::nullopt,
+      false,
+      stream);
+  REQUIRE(evaluation_error(ref).empty());
+
+  // The same gather with the indices held as bf16, built on the
+  // primitive directly the way a tape-produced node arrives. Indices
+  // are integral-valued, so the astype to uint32 is exact.
+  array lhs_bf = astype(lhs, bfloat16, stream);
+  array rhs_bf = astype(rhs, bfloat16, stream);
+  eval(lhs_bf);
+  eval(rhs_bf);
+  Shape out_shape{2, m, n};
+  array out(
+      std::move(out_shape),
+      float32,
+      std::make_shared<GatherQMM>(
+          to_stream(stream),
+          group_size,
+          bits,
+          QuantizationMode::Affine,
+          true),
+      std::vector<array>{x, w_words, scales, biases, lhs_bf, rhs_bf});
+  REQUIRE(evaluation_error(out).empty());
+
+  auto ref_v = readback_f32(stream, ref);
+  auto out_v = readback_f32(stream, out);
+  REQUIRE(ref_v.size() == out_v.size());
+  for (size_t i = 0; i < ref_v.size(); ++i) {
+    REQUIRE(out_v[i] == ref_v[i]);
   }
 }
 

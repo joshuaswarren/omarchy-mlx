@@ -3623,9 +3623,6 @@ void dispatch_gather_qmm(
   if (biases && biases->shape() != scales.shape()) {
     omarchy::unsupported(tag + " scales shape", out);
   }
-  if (lhs.dtype() != uint32 || rhs.dtype() != uint32) {
-    omarchy::unsupported(tag + " index dtype", out);
-  }
   if (lhs.shape() != rhs.shape()) {
     omarchy::unsupported(tag + " index shape", out);
   }
@@ -3639,6 +3636,20 @@ void dispatch_gather_qmm(
        out_global_scale->size() == 0)) {
     omarchy::unsupported(tag + " global scale", out);
   }
+  // ops.cpp feeds gather indices as uint32 (indices_or_default's
+  // astype); a tape-produced index in another dtype takes the same cast
+  // through the general copy, which also materializes a dense uint32
+  // buffer.
+  auto index_u32 = [&encoder, &s](const array& idx,
+                                  std::optional<array>& temp) -> const array& {
+    if (idx.dtype() == uint32) {
+      return idx;
+    }
+    temp = array(idx.shape(), uint32, nullptr, {});
+    copy_gpu(idx, *temp, CopyType::General, s);
+    encoder.add_temporary(*temp);
+    return *temp;
+  };
   std::optional<array> x_temp;
   std::optional<array> w_temp;
   std::optional<array> scales_temp;
@@ -3646,6 +3657,8 @@ void dispatch_gather_qmm(
   std::optional<array> rhs_temp;
   std::optional<array> bias_temp;
   std::optional<array> gs_temp;
+  std::optional<array> lhs_index;
+  std::optional<array> rhs_index;
   const array& x_d =
       ensure_dense(x, x.flags().row_contiguous, x_temp, encoder, s);
   const array& w_d =
@@ -3660,10 +3673,12 @@ void dispatch_gather_qmm(
               encoder,
               s)
       : nullptr;
-  const array& lhs_d =
-      ensure_dense(lhs, lhs.flags().row_contiguous, lhs_temp, encoder, s);
-  const array& rhs_d =
-      ensure_dense(rhs, rhs.flags().row_contiguous, rhs_temp, encoder, s);
+  const array& lhs_u32 = index_u32(lhs, lhs_index);
+  const array& rhs_u32 = index_u32(rhs, rhs_index);
+  const array& lhs_d = ensure_dense(
+      lhs_u32, lhs_u32.flags().row_contiguous, lhs_temp, encoder, s);
+  const array& rhs_d = ensure_dense(
+      rhs_u32, rhs_u32.flags().row_contiguous, rhs_temp, encoder, s);
   const array* gs_d = out_global_scale.has_value()
       ? &ensure_dense(
             *out_global_scale,
@@ -4880,18 +4895,33 @@ void GatherMM::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& rhs = inputs[3];
   require_float_dtype(tag, a_in, out, encoder);
   require_float_dtype(tag, b_in, out, encoder);
-  if (lhs.dtype() != uint32 || rhs.dtype() != uint32) {
-    omarchy::unsupported(tag + " index dtype", out);
-  }
   if (lhs.shape() != rhs.shape()) {
     omarchy::unsupported(tag + " index shape", out);
   }
+  // ops.cpp feeds gather indices as uint32 (indices_or_default's
+  // astype); a tape-produced index in another dtype takes the same cast
+  // through the general copy, which also materializes a dense uint32
+  // buffer.
+  auto index_u32 = [&encoder, &s](const array& idx,
+                                  std::optional<array>& temp) -> const array& {
+    if (idx.dtype() == uint32) {
+      return idx;
+    }
+    temp = array(idx.shape(), uint32, nullptr, {});
+    copy_gpu(idx, *temp, CopyType::General, s);
+    encoder.add_temporary(*temp);
+    return *temp;
+  };
   std::optional<array> lhs_temp;
   std::optional<array> rhs_temp;
-  const array& lhs_d =
-      ensure_dense(lhs, lhs.flags().row_contiguous, lhs_temp, encoder, s);
-  const array& rhs_d =
-      ensure_dense(rhs, rhs.flags().row_contiguous, rhs_temp, encoder, s);
+  std::optional<array> lhs_index;
+  std::optional<array> rhs_index;
+  const array& lhs_u32 = index_u32(lhs, lhs_index);
+  const array& rhs_u32 = index_u32(rhs, rhs_index);
+  const array& lhs_d = ensure_dense(
+      lhs_u32, lhs_u32.flags().row_contiguous, lhs_temp, encoder, s);
+  const array& rhs_d = ensure_dense(
+      rhs_u32, rhs_u32.flags().row_contiguous, rhs_temp, encoder, s);
 
   // The gathered base offsets are index * matrix_size, so both operands
   // must be dense batched stacks; a uniform in-matrix transposition keeps
