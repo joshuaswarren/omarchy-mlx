@@ -9115,6 +9115,27 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       coopmat_caps.cooperative_matrix_f32_8 && coopmat_shape_advertised &&
       coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
       kQmmCoopmatSharedBytes <= coopmat_caps.max_compute_shared_memory_size;
+  // 16x16x16 fp16-operand twin (shaders/qmm_coopmat.comp -DCMAT16): the
+  // route for devices whose coopmat list has no fp32 8x8x8 shape but
+  // lists the subgroup 16x16x16 fp16 x fp16 -> fp32 entry (what NVIDIA's
+  // driver advertises). bf16-hybrid 4-bit group-64 transposed only: bf16
+  // x stages as fp16 in shared and the dequantized B stores fp16, so the
+  // output is not bit-equal to the fp32 routes - generated ids are the
+  // measured contract. Device creation chains the cooperative-matrix
+  // feature behind an advertised bf16 subgroup shape, so
+  // cooperative_matrix_bf16 is the extension-enabled gate here.
+  constexpr uint32_t kQmmCoopmat16SharedBytes =
+      (32u * 16u + 16u * 32u) * 2u + 2u * 16u * 16u * 4u;
+  const bool coopmat16_shape_advertised =
+      omarchy::cooperative_matrix_advertises(
+          coopmat_caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape_f16x16());
+  bool coopmat16_reachable =
+      !coopmat_reachable && tile_path && rb_enabled && q4_g64_transpose &&
+      out.dtype() == bfloat16 && x.ndim() >= 2 && x.shape(-2) > 1 &&
+      coopmat_caps.cooperative_matrix_bf16 && coopmat16_shape_advertised &&
+      coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
+      kQmmCoopmat16SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
   bool qmm_fma_reachable = false;
   // Driver split, measured (receipts/2026-09-12-prefill-fma-qualify): the
   // scalar-FMA kernel loses to the 8x8x8 cooperative-matrix route wherever
@@ -9124,8 +9145,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // FMA route is therefore only the non-coopmat driver's prefill path; on
   // a coopmat-capable driver the dispatch falls through to the shipped
   // cooperative-matrix pick by name and the FMA kernels stay reserved.
-  if (!qmm_fma_disabled && !coopmat_reachable && tile_path && rb_enabled &&
-      q4_g64_transpose &&
+  if (!qmm_fma_disabled && !coopmat_reachable && !coopmat16_reachable &&
+      tile_path && rb_enabled && q4_g64_transpose &&
       (out.dtype() == float16 ||
        (out.dtype() == bfloat16 && !qmm_fma_bf16_disabled)) &&
       x.ndim() >= 2 && x.shape(-2) > 1) {
@@ -9168,6 +9189,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       (!packed_q4_x || x.offset() % (8 * x.itemsize()) == 0) &&
       (!qmm6_stream || x.offset() % (8 * x.itemsize()) == 0) &&
       (!coopmat_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
+      (!coopmat16_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
       (!qmm_fma_reachable || x.offset() % (8 * x.itemsize()) == 0);
   std::optional<array> x_temp;
   std::optional<array> w_temp;
@@ -9690,6 +9712,48 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       }
     }
 #endif
+    // 16x16x16 fp16-operand coopmat prefill (shaders/qmm_coopmat.comp
+    // -DCMAT16): the staged-x build on devices whose coopmat list lacks
+    // the fp32 8x8x8 shape (NVIDIA advertises only 16-wide f16/bf16
+    // entries). bf16 x stages straight into shared as fp16 and the
+    // dequantized B stores fp16; the accumulator stays fp32. The x_s
+    // staging zero-fills rows past matrix_m, so unlike the Intel direct
+    // route above the tile height needs no m alignment. Selected ahead
+    // of the scalar-FMA route below (qmm_fma_reachable excludes it); the
+    // tile path stays for the formats it does not cover.
+    if (rb_enabled && out.dtype() == bfloat16 && coopmat16_reachable) {
+      if ((params.lhs_offset | params.output_offset) & 1u) {
+        omarchy::unsupported(tag + " coopmat16 operand alignment", out);
+      }
+      const auto& c16_hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          coopmat_caps,
+          coopmat16_reachable,
+          "QmmPrefillCoopmat16BF16",
+          "cooperative_matrix_fp16_16x16x16",
+          omarchy::cooperative_matrix_advertises(
+              c16_hw.cooperative_matrix_shapes,
+              omarchy::qmm_prefill_coopmat_shape_f16x16()));
+      dispatch_qmm_out_rows(
+          encoder,
+          out,
+          bindings,
+          params,
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::QmmPrefillCoopmat16BF16,
+                cb,
+                cp,
+                std::min((cp.matrix_n + 31u) / 32u,
+                         omarchy::kMaxComputeGroupCountX),
+                std::min((cp.matrix_m + 31u) / 32u,
+                         omarchy::kMaxComputeGroupCountX),
+                1u);
+          });
+      return;
+    }
     if (rb_enabled && out.dtype() == bfloat16 && qmm_fma_reachable) {
       if ((params.lhs_offset & 7u) != 0u ||
           (params.output_offset & 1u) != 0u) {

@@ -29,4 +29,20 @@ CoopmatShape qmm_prefill_coopmat_shape() {
   return shape;
 }
 
+CoopmatShape qmm_prefill_coopmat_shape_f16x16() {
+  CoopmatShape shape;
+  shape.m = 16u;
+  shape.n = 16u;
+  shape.k = 16u;
+  // The CMAT16 build keeps fp16 operands (bf16 x is staged as fp16, the
+  // dequantized weights store as fp16) with the fp32 accumulator.
+  shape.a = CoopmatType::Float16;
+  shape.b = CoopmatType::Float16;
+  shape.c = CoopmatType::Float32;
+  shape.result = CoopmatType::Float32;
+  shape.scope = CoopmatScope::Subgroup;
+  shape.saturating = false;
+  return shape;
+}
+
 } // namespace mlx::core::omarchy

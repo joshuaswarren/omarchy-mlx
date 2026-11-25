@@ -437,6 +437,7 @@
 #include "qmm_coopmat_f16.h"
 #include "qmm_coopmat_m16_f16.h"
 #include "qmm_coopmat_bf16.h"
+#include "qmm_coopmat_c16_bf16.h"
 #include "qmm_coopmat_m16_bf16.h"
 #include "qmm_coopmat_x32.h"
 #include "qmm_coopmat_m16_x32.h"
@@ -1630,6 +1631,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_m16_f16, qmm_coopmat_m16_f16_size};
     case ComputeKernel::QmmPrefillCoopmatBF16:
       return {qmm_coopmat_bf16, qmm_coopmat_bf16_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16:
+      return {qmm_coopmat_c16_bf16, qmm_coopmat_c16_bf16_size};
     case ComputeKernel::QmmPrefillCoopmatM16BF16:
       return {qmm_coopmat_m16_bf16, qmm_coopmat_m16_bf16_size};
     case ComputeKernel::QmmPrefillCoopmatBF16X32:
