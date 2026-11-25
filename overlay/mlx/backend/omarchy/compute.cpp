@@ -2009,6 +2009,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p1v_bk32, sdpa_decode_split_p1v_bk32_size};
     case ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128:
       return {sdpa_decode_split_p2_bk32, sdpa_decode_split_p2_bk32_size};
+    case ComputeKernel::SdpaDecodeSplitP2G4BF16Hd128:
+      return {sdpa_decode_split_p2_g4, sdpa_decode_split_p2_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP2G4Bk32BF16Hd128:
+      return {sdpa_decode_split_p2_g4_bk32, sdpa_decode_split_p2_g4_bk32_size};
     case ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256:
       return {sdpa_decode_split_p1_hd256_g1, sdpa_decode_split_p1_hd256_g1_size};
     case ComputeKernel::SdpaDecodeSplitP1R2BF16Hd256:

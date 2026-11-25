@@ -510,6 +510,8 @@ omarchy_shader(sdpa_decode_split_p1v_bk64 shaders/sdpa_decode_split_p1v_bk64.com
 omarchy_shader(sdpa_decode_split_p2_bk64 shaders/sdpa_decode_split_p2.comp -DBK_KEYS=64)
 omarchy_shader(sdpa_decode_split_p1v_bk32 shaders/sdpa_decode_split_p1v_bk64.comp -DSPLIT_R=4 -DBK=32)
 omarchy_shader(sdpa_decode_split_p2_bk32 shaders/sdpa_decode_split_p2.comp -DBK_KEYS=32)
+omarchy_shader(sdpa_decode_split_p2_g4 shaders/sdpa_decode_split_p2_g4.comp -DBK_KEYS=64)
+omarchy_shader(sdpa_decode_split_p2_g4_bk32 shaders/sdpa_decode_split_p2_g4.comp -DBK_KEYS=32)
 omarchy_shader(sdpa_decode_split_p1_hd256_g1 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=1 -DHD=256)
 omarchy_shader(sdpa_decode_split_p1_hd256_g2 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=2 -DHD=256)
 omarchy_shader(sdpa_decode_split_p1_hd256_g4 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=4 -DHD=256)

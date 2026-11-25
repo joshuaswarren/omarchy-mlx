@@ -1081,6 +1081,9 @@ enum class ComputeKernel : uint16_t {
   // The BK=32 occupancy screen of the same pair (sdpa_decode_split_p1v_bk64.comp -DBK=32 / sdpa_decode_split_p2.comp -DBK_KEYS=32), selected by MLX_OMARCHY_SDPA_SPLIT_BK=32.
   SdpaDecodeSplitP1VBk32R4BF16Hd128,
   SdpaDecodeSplitP2Bk32BF16Hd128,
+  // The M2D-5 head-fold pass 2 (sdpa_decode_split_p2_g4.comp): one workgroup per key-value head covers its four query heads, cutting the p2 dispatch count from heads to key-value heads. Selected by MLX_OMARCHY_SDPA_P2_G4=1 (works with both block widths).
+  SdpaDecodeSplitP2G4BF16Hd128,
+  SdpaDecodeSplitP2G4Bk32BF16Hd128,
   // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
   SdpaDecodeSplitP1R1BF16Hd256,
   SdpaDecodeSplitP1R2BF16Hd256,

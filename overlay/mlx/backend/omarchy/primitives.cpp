@@ -17661,6 +17661,11 @@ void ScaledDotProductAttention::eval_gpu(
         // memory is about 12.6 KB per workgroup, so the occupancy question is workgroup count, not shared memory.
         const int bk_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK");
         const bool bk32 = bk64 && bk_env == 32;
+        // The M2D-5 head-fold pass 2: MLX_OMARCHY_SDPA_P2_G4=1 selects one workgroup per
+        // key-value head covering its four query heads, cutting the p2 dispatch count from
+        // heads (36/tok on 4B) to key-value heads (8/tok). Works with both block widths.
+        const int p2g4_env = decode_path_override("MLX_OMARCHY_SDPA_P2_G4");
+        const bool p2g4 = pv && split_group == 4u && !split_wide && p2g4_env > 0;
         const uint32_t split_block_keys = bk32 ? 32u : bk64 ? 64u : 128u;
         // Width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the value-phase variant has its own rule, omarchy::sdpa_split_pv_wide
         // (unset follows the per-chip default, "0" keeps the old pass 1, any other value selects the variant).
@@ -17686,8 +17691,11 @@ void ScaledDotProductAttention::eval_gpu(
         }
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
         const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
-            : bk32 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128
-            : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
+            : bk32 ? (p2g4 ? omarchy::ComputeKernel::SdpaDecodeSplitP2G4Bk32BF16Hd128
+                           : omarchy::ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128)
+            : bk64 ? (p2g4 ? omarchy::ComputeKernel::SdpaDecodeSplitP2G4BF16Hd128
+                           : omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128)
+                   : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
         const uint32_t split_q_offset = split_params.lhs_offset;
         const uint32_t split_out_offset = split_params.output_offset;
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
