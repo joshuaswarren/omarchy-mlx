@@ -34,7 +34,9 @@ class _Fast:
     @staticmethod
     def gated_delta_update(q, k, v, g, beta, state, mask):
         calls.append(("gdu", q, k, v, g, beta, state, mask))
-        return ("y", state)
+        # The real binding returns a list; the caller-facing contract is
+        # the (y, state) tuple the stock function returns.
+        return ["y", state]
 
     @staticmethod
     def gated_delta_update_raw(q, k, v, a, b, A_log, dt_bias, state, mask):
@@ -154,6 +156,7 @@ class GdnRouteShimTest(unittest.TestCase):
         call = mx.calls[-1]
         self.assertEqual(call[0], "gdu")
         self.assertEqual(call[4], ("g", "Al", "a", "dtb"))
+        self.assertIsInstance(out, tuple)
         self.assertEqual(out[0], "y")
 
     def test_decode_routes_to_raw(self):

@@ -83,7 +83,8 @@ def _wrap(module):
         if q.shape[1] == 1 and hasattr(mx.fast, "gated_delta_update_raw"):
             return mx.fast.gated_delta_update_raw(
                 q, k, v, a, b, A_log, dt_bias, state, mask)
-        return mx.fast.gated_delta_update(q, k, v, g, beta, state, mask)
+        out, st = mx.fast.gated_delta_update(q, k, v, g, beta, state, mask)
+        return out, st
 
     routed._omarchy_route = orig
     module.gated_delta_update = routed
