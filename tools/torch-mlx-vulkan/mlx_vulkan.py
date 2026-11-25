@@ -1748,6 +1748,22 @@ def _blas_beta(b, beta):
     return beta * b
 
 
+def _gn_native(a, w, b, N, C, HxW, group, eps):
+    """aten.native_group_norm: normalize over (C/group * HxW) per
+    (N, group); returns (out shaped like a, mean(N,group),
+    rstd(N,group)) like aten."""
+    x = _mx(a).reshape(N, group, (C // group) * HxW)
+    mu = mx.mean(x, axis=2, keepdims=True)
+    xc = x - mu
+    rstd = 1.0 / mx.sqrt(mx.mean(xc * xc, axis=2, keepdims=True) + eps)
+    out = (xc * rstd).reshape(a.shape)
+    if w is not None:
+        out = out * _mx(w).reshape(1, C, *(1,) * (a.ndim - 2))
+    if b is not None:
+        out = out + _mx(b).reshape(1, C, *(1,) * (a.ndim - 2))
+    return out, mu.reshape(N, group), rstd.reshape(N, group)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -1836,6 +1852,7 @@ _FUNC_SPECS = {
         lambda r: (r[0].astype(_mx(x).dtype), _mx(rm).reshape(-1)[:0], _mx(rv).reshape(-1)[:0]))(_bn3(
             x, w, b, rm, rv, False, momentum, eps)),
     "native_batch_norm_backward": _bn_backward,
+    "native_group_norm": _gn_native,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
     "max_pool2d_with_indices": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices=True),
