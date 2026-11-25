@@ -2294,6 +2294,131 @@ TEST_CASE("fused trio override plans the rope pair with the gemv route off") {
   expect_bit_exact(k_solo, k_pair, stream);
 }
 
+// FastRopeNormPair*: one dispatch rotates the bf16 rope_rms_norm pair of
+// one decode step when the two calls share state but differ in head
+// count (8 q heads, 2 kv heads). Phase A evals only the pair so the
+// kernel id and the 2->1 dispatch merge are observable; phase B places
+// the k output behind a producer-direct KV window into the keys cache
+// (with a GEMV-epilogue values member) and requires bit-exact agreement
+// with the unpaired run.
+TEST_CASE("rope norm pair covers unequal heads and the kv window") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int D = 64;
+  array xq = astype(
+      random::normal(Shape{1, 8, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xk = astype(
+      random::normal(Shape{1, 2, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wq = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array wk = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array offset = array(17, int32);
+  array keys_init = astype(
+      random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array values_init = astype(
+      random::normal(Shape{1, 2, 8, 4}, float32, std::nullopt, stream),
+      float16, stream);
+  // The values member of the producer-direct pair: a 4-bit decode GEMV
+  // row plus its Add epilogue, reshaped into the cache append row, as
+  // in the kv_ops window cases.
+  std::vector<uint32_t> words(64, 0xA5A5A5A5u);
+  array vw(words.data(), {8, 8}, uint32);
+  std::vector<float> vscale_float(8, 0.25f);
+  std::vector<float> vbias_float(8, -0.5f);
+  std::vector<float> xv_float(64, 0.125f);
+  std::vector<float> vadd_float(8, -0.25f);
+  array vscales =
+      astype(array(vscale_float.data(), {8, 1}, float32), float16, stream);
+  array vbiases =
+      astype(array(vbias_float.data(), {8, 1}, float32), float16, stream);
+  array xv =
+      astype(array(xv_float.data(), {1, 64}, float32), float16, stream);
+  array vadd =
+      astype(array(vadd_float.data(), {8}, float32), float16, stream);
+  const int64_t norm_pair_a = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairBF16);
+  const int64_t norm_pair_b = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairAppleBF16);
+  auto pair_kernel_seen = [&](int64_t last) {
+    return last == norm_pair_a || last == norm_pair_b;
+  };
+  // Phase A: only the two rope outputs on the tape. The pair collapses
+  // two rope dispatches into one and leaves its kernel id as the most
+  // recent dispatch.
+  auto run_pair = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    array qr = fast::rope_rms_norm(
+        xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({qr, kr});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, kr, counters().vk_compute_dispatches.load() - before,
+        counters().last_dispatched_kernel.load());
+  };
+  eval({xq, xk, wq, wk, offset, keys_init, values_init, vw, vscales,
+        vbiases, xv, vadd});
+  sync_stream(stream);
+  auto [q_pair, k_pair, n_pair, last_pair] = run_pair("1");
+  auto [q_solo, k_solo, n_solo, last_solo] = run_pair("0");
+  CHECK_EQ(n_pair, 1);
+  CHECK(pair_kernel_seen(last_pair));
+  CHECK_EQ(n_solo, 2);
+  CHECK_FALSE(pair_kernel_seen(last_solo));
+  expect_bit_exact(q_solo, q_pair, stream);
+  expect_bit_exact(k_solo, k_pair, stream);
+  // Phase B: the k rope output feeds slice_update into the keys cache
+  // while a GEMV-epilogue values row feeds the values cache — the
+  // producer-direct window pair. Both arms write the same result
+  // whether or not the planner arms the direct write.
+  auto run_window = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    array keys_cache = copy(keys_init, stream);
+    array values_cache = copy(values_init, stream);
+    eval({keys_cache, values_cache});
+    sync_stream(stream);
+    const void* keys_before = keys_cache.data<void>();
+    array vproj = quantized_matmul(
+        xv, vw, vscales, vbiases, true, 64, 4, "affine", stream);
+    array vsum = add(vproj, vadd, stream);
+    array vrow = reshape(vsum, Shape{1, 2, 1, 4}, stream);
+    array qr = fast::rope_rms_norm(
+        xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array keys_out = slice_update(
+        keys_cache, kr, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
+    array values_out = slice_update(
+        values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
+    eval({keys_out, values_out, qr});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, keys_out, values_out, keys_out.data<void>() == keys_before);
+  };
+  auto [wq_pair, keys_pair, values_pair, in_place_pair] = run_window("1");
+  auto [wq_solo, keys_solo, values_solo, in_place_solo] = run_window("0");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  CHECK(in_place_pair);
+  expect_bit_exact(wq_solo, wq_pair, stream);
+  expect_bit_exact(keys_solo, keys_pair, stream);
+  expect_bit_exact(values_solo, values_pair, stream);
+}
+
 // The planner decides per node from the node's own stream: in one eval
 // that mixes the GPU stream and a CPU stream, CPU nodes of the shapes the
 // fused routes plan on the GPU (a single-row 4-bit projection, a
