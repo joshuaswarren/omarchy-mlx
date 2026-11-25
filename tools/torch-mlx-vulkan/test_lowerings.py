@@ -784,6 +784,82 @@ def test_reductions():
     print("test_reductions PASS")
 
 
+def test_bitwise_and_():
+    # PT-X: aten.bitwise_and_.Tensor (PAR-41 census rank 45) — the last
+    # unclaimed in-place _ op, built on PT-W's mul_ propagation (#861).
+    # Covers the Tensor + bool/logical paths, write-back so downstream
+    # reads of the mutated arg see the update, and stats['mlx'] proof.
+    xi = torch.tensor([[0b1100, 0b1010], [0b1111, 0b0000]], dtype=torch.int32)
+    yi = torch.tensor([[0b1010, 0b1100], [0b1111, 0b1111]], dtype=torch.int32)
+    xb = torch.tensor([[True, False], [True, True]])
+    yb = torch.tensor([[True, True], [False, True]])
+    for ins in ((xi.clone(), yi), (xb.clone(), yb), (xi.clone(), torch.tensor(0b1100, dtype=torch.int32))):
+        g = torch.fx.Graph()
+        px, py = g.placeholder("x"), g.placeholder("y")
+        args = (px, py) if torch.is_tensor(ins[1]) else (px, ins[1])
+        n = g.call_function(torch.ops.aten.bitwise_and_.Tensor, args)
+        # downstream read of the ORIGINAL placeholder must see the mutation:
+        # x | (x&y) = x if stale, (x&y) | (x&y) = x&y if write-back landed
+        n2 = g.call_function(torch.ops.aten.bitwise_or.Tensor, (px, n))
+        g.output(n2)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        targs = [a for a in ins if torch.is_tensor(a)]
+        out = run(*[mx.array(t.numpy()) for t in targs])
+        ref = ins[0].clone()
+        torch.ops.aten.bitwise_and_.Tensor(ref, ins[1])
+        exp = torch.ops.aten.bitwise_or.Tensor(ref, ref)
+        got = torch.as_tensor(_np(out))
+        assert got.shape == exp.shape and torch.equal(got, exp), (got, exp)
+        assert "bitwise_and_" in stats["mlx"], stats
+        assert "bitwise_and_" not in stats["cpu"], stats
+
+    # In-place contract: the broadcast result keeps the destination's shape
+    # and dtype kind (int64->int8 narrows back; int64->bool and shape growth
+    # refuse the same way torch does, verified 2026-11-24).
+    di8 = torch.tensor([[127, 6]], dtype=torch.int8)
+    ri64 = torch.tensor([[255, 3]], dtype=torch.int64)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.bitwise_and_.Tensor, (px, py))
+    n2 = g.call_function(torch.ops.aten.bitwise_or.Tensor, (px, n))
+    g.output(n2)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(mx.array(di8.numpy()), mx.array(ri64.numpy()))
+    ref = di8.clone()
+    torch.ops.aten.bitwise_and_.Tensor(ref, ri64)
+    exp = torch.ops.aten.bitwise_or.Tensor(ref, ref)
+    got = torch.as_tensor(_np(out))
+    assert got.dtype == torch.int8 and torch.equal(got, exp), (got, exp)
+    assert "bitwise_and_" in stats["mlx"] and "bitwise_and_" not in stats["cpu"], stats
+
+    for xt, yt in (
+        (torch.tensor([[True, False]]), torch.tensor([[1, 0]], dtype=torch.int64)),
+        (torch.tensor([[1, 2]], dtype=torch.int32), torch.tensor([[3, 4], [5, 6]], dtype=torch.int32)),
+    ):
+        try:
+            torch.ops.aten.bitwise_and_.Tensor(xt.clone(), yt)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("torch itself accepts this case; not a refusal test")
+        g = torch.fx.Graph()
+        px, py = g.placeholder("x"), g.placeholder("y")
+        n = g.call_function(torch.ops.aten.bitwise_and_.Tensor, (px, py))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        try:
+            run(mx.array(xt.numpy()), mx.array(yt.numpy()))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(
+                f"in-place refusal expected: {xt.dtype}{tuple(xt.shape)} & {yt.dtype}{tuple(yt.shape)}")
+    print("test_bitwise_and_ PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -806,4 +882,5 @@ if __name__ == "__main__":
     test_cat_clone()
     test_sum()
     test_reductions()
+    test_bitwise_and_()
     print("ALL PASS")
