@@ -2168,6 +2168,16 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       state->add_norm_pairs.push_back(AddNormPair{{node, *norm}});
       claimed.put_if_absent(norm->id(), 1);
     }
+    static int add_norm_trace_plans = 0;
+    if (omarchy::env_str("MLX_OMARCHY_ADD_NORM_TRACE") != nullptr &&
+        add_norm_trace_plans < 4) {
+      ++add_norm_trace_plans;
+      std::fprintf(
+          stderr,
+          "[addnorm-plan] candidates=%zu pairs_planned=%zu\n",
+          norm_by_in.size(),
+          state->add_norm_pairs.size());
+    }
   }
 
   // RMSNorm -> RoPE fold: a plain two-input fast::RoPE whose input is a

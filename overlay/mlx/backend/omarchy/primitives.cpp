@@ -11406,18 +11406,25 @@ bool dispatch_add_norm_pair(
   // nodes[0] = the residual Add, nodes[1] = the RMSNorm that reads it.
   // Contract mirrors the plan-time guards; any refusal leaves both
   // arrays unallocated so their ordinary primitives run unchanged.
+#define ADD_NORM_REFUSE(code)                                              \
+  do {                                                                     \
+    if (omarchy::env_str("MLX_OMARCHY_ADD_NORM_TRACE") != nullptr) {       \
+      std::fprintf(stderr, "[addnorm-fire] refuse %s\n", code);            \
+    }                                                                      \
+    return false;                                                          \
+  } while (0)
   auto& encoder = get_command_encoder(stream);
   const auto& caps = encoder.device().capabilities();
   if (encoder.device().compute().binding_limit() < 5 ||
       !caps.storage_buffer_16bit_access) {
-    return false;
+    ADD_NORM_REFUSE("device");
   }
   array& add_node = nodes[0];
   array& norm_node = nodes[1];
   if (add_node.dtype() != bfloat16 || norm_node.dtype() != bfloat16 ||
       add_node.shape() != norm_node.shape() ||
       add_node.primitive().stream() != norm_node.primitive().stream()) {
-    return false;
+    ADD_NORM_REFUSE("shape_or_stream");
   }
   const auto& add_in = add_node.inputs();
   const auto& norm_in = norm_node.inputs();
@@ -11425,7 +11432,7 @@ bool dispatch_add_norm_pair(
       add_in[0].dtype() != bfloat16 || add_in[1].dtype() != bfloat16 ||
       add_in[0].shape() != add_node.shape() ||
       add_in[1].shape() != add_node.shape()) {
-    return false;
+    ADD_NORM_REFUSE("inputs");
   }
   const auto& norm_prim =
       static_cast<const mlx::core::fast::RMSNorm&>(norm_node.primitive());
@@ -11434,13 +11441,13 @@ bool dispatch_add_norm_pair(
   size_t rows = norm_node.size() / row_length;
   if (rows == 0 || row_length == 0 ||
       !apple_norm_enabled(encoder.device(), row_length, rows)) {
-    return false;
+    ADD_NORM_REFUSE("apple_gate");
   }
   const array& w = norm_in[1];
   if (w.dtype() != bfloat16 ||
       (w.size() != 1 && w.size() != row_length) ||
       !whole_dense(w, w.size())) {
-    return false;
+    ADD_NORM_REFUSE("weight");
   }
   auto settled = [](const array& a) {
     return a.data_shared_ptr() != nullptr;
@@ -11450,7 +11457,7 @@ bool dispatch_add_norm_pair(
     // the ordinary path evaluates it in order. Un-plan rather than
     // settle here: the composed path is bit-exact either way, and the
     // O(graph) settle walk is not worth it for a 1-dispatch saving.
-    return false;
+    ADD_NORM_REFUSE("unsettled");
   }
   const std::string tag = "add_rms_norm_pair";
   add_node.set_data(allocate_omarchy(add_node.nbytes()));
@@ -11480,7 +11487,12 @@ bool dispatch_add_norm_pair(
       bindings,
       params,
       std::min(params.output_size, omarchy::kMaxComputeGroupCountX));
+  if (omarchy::env_str("MLX_OMARCHY_ADD_NORM_TRACE") != nullptr) {
+    std::fprintf(
+        stderr, "[addnorm-fire] fired rows=%u k=%u\n", params.output_size, params.reduce_size);
+  }
   return true;
+#undef ADD_NORM_REFUSE
 }
 
 SliceUpdatePairDispatch dispatch_slice_update_pair(
