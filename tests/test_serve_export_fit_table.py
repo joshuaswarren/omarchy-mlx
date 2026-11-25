@@ -242,8 +242,16 @@ def test_main_reports_error_on_full_stdout(tmp_path, catalog_kind):
 
 
 @pytest.mark.skipif(not Path("/bin/sh").exists(), reason="/bin/sh not available")
-def test_main_reports_error_when_stdout_closed_at_launch(tmp_path):
+@pytest.mark.parametrize("case", ["missing_catalog", "valid_stdout", "valid_out"])
+def test_main_reports_error_when_stdout_closed_at_launch(tmp_path, capsys, case):
     missing = tmp_path / "missing.json"
+    out_path = tmp_path / "out.json"
+    if case == "missing_catalog":
+        cli_args = ["--catalog", str(missing)]
+    elif case == "valid_out":
+        cli_args = ["-o", str(out_path)]
+    else:
+        cli_args = []
     env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "serve"))
     proc = subprocess.run(
         [
@@ -253,19 +261,30 @@ def test_main_reports_error_when_stdout_closed_at_launch(tmp_path):
             sys.executable,
             "-m",
             "mlx_omarchy_serve.export_fit_table",
-            "--catalog",
-            str(missing),
+            *cli_args,
         ],
         cwd=REPO_ROOT / "serve",
         env=env,
         stderr=subprocess.PIPE,
         text=True,
     )
+    if case == "valid_out":
+        assert proc.returncode == 0
+        assert proc.stderr == ""
+        assert main([]) == 0
+        expected = capsys.readouterr()
+        assert expected.err == ""
+        assert out_path.read_bytes() == expected.out.encode("utf-8")
+        return
     lines = proc.stderr.splitlines()
     assert proc.returncode == 1
     assert len(lines) == 1
     assert lines[0].startswith("error: ")
     assert "Traceback" not in proc.stderr
+    if case == "missing_catalog":
+        assert str(missing) in lines[0]
+    else:
+        assert "stdout" in lines[0].lower()
 
 
 def test_main_module_keeps_healthy_stdout_on_error(tmp_path, monkeypatch, capsys):

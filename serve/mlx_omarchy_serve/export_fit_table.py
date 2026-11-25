@@ -24,6 +24,7 @@ Usage (from serve/):  python3 -m mlx_omarchy_serve.export_fit_table [-o out.json
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import sys
@@ -121,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         text = json.dumps(table, indent=2, sort_keys=False) + "\n"
         if args.out:
             args.out.write_text(text, encoding="utf-8")
+        elif sys.stdout is None:
+            raise OSError(errno.EBADF, "stdout is closed")
         else:
             sys.stdout.write(text)
             sys.stdout.flush()
