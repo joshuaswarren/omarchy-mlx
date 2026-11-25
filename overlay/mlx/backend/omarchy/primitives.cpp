@@ -17237,12 +17237,19 @@ void RoPE::eval_gpu(
     // row_length rides reduce_size (== D) and the row count is B*N*T; the
     // shared shape guard keeps the fused kernel's row-reduction order
     // identical to the composed rms_norm the fallback would select.
+    // (M2D-3) D <= 128 rows dispatch the 128-thread builds: the 256-thread
+    // build idles threads 128..255 there, and the 128-thread reduction is
+    // bit-identical because the dropped threads contribute exact +0.0 (the
+    // 256-thread tree's stride-128 step is (+0.0)-neutral at these rows).
+    const bool w128 = static_cast<size_t>(D) <= 128u;
     kernel = apple_norm_enabled(
                  encoder.device(),
                  static_cast<size_t>(params.reduce_size),
                  static_cast<size_t>(params.count))
-        ? omarchy::ComputeKernel::FastRopeNormAppleBF16
-        : omarchy::ComputeKernel::FastRopeNormBF16;
+        ? (w128 ? omarchy::ComputeKernel::FastRopeNormAppleBF16W128
+                : omarchy::ComputeKernel::FastRopeNormAppleBF16)
+        : (w128 ? omarchy::ComputeKernel::FastRopeNormBF16W128
+                : omarchy::ComputeKernel::FastRopeNormBF16);
   } else if (direct_bf16) {
     kernel = half_split
         ? (with_freqs ? omarchy::ComputeKernel::FastRopeFreqsHalfSplitBF16

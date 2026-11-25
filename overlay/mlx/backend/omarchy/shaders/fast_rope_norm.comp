@@ -80,7 +80,10 @@ layout(set = 0, binding = 4, std430) readonly buffer Weight {
   uint values[];
 } weight_data;
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#ifndef ROPE_NORM_THREADS
+#define ROPE_NORM_THREADS 256
+#endif
+layout(local_size_x = ROPE_NORM_THREADS, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -106,11 +109,11 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared float block_values[256];
+shared float block_values[ROPE_NORM_THREADS];
 #ifdef APPLE_REDUCTION
-shared float subgroup_values[8];
+shared float subgroup_values[ROPE_NORM_THREADS / 32u];
 #endif
-shared float rounded[256];
+shared float rounded[ROPE_NORM_THREADS];
 
 float rope_load(uint abs_index) {
   uint word = input_data.values[abs_index >> 1u];
@@ -180,7 +183,8 @@ void main() {
     subgroup_values[gl_SubgroupID] = subgroup_sum;
   }
   barrier();
-  float partial = gl_SubgroupID == 0u && gl_SubgroupInvocationID < 8u
+  float partial = gl_SubgroupID == 0u &&
+      gl_SubgroupInvocationID < (ROPE_NORM_THREADS / 32u)
       ? subgroup_values[gl_SubgroupInvocationID]
       : 0.0;
   float row_sum = subgroupAdd(partial);
@@ -190,7 +194,15 @@ void main() {
   barrier();
   float mean_square = block_values[0] / float(row_length);
   precise float norm = inversesqrt(mean_square + eps);
-  barrier();
+  // (M2D-3) The composed path's mirror barrier between the norm and the
+  // weight load is omitted here: this variant keeps `value` in a register
+  // across the reduction (no re-load), `rounded[]` and `block_values[]` are
+  // distinct, and block_values[0] is only rewritten after the end-of-row
+  // barrier below, so there is no shared-memory hazard for a barrier to
+  // order, and the precise qualifiers already pin the multiply chain
+  // against nir_opt_reassociate. Verified hazard-free by inspection; the
+  // bit-exactness gate is the composed-vs-fused test plus identical greedy
+  // token IDs on the 5-pair ABBA.
   precise float weight = (thread < row_length)
       ? weight_load(params.aux_offset + thread)
       : 0.0;
@@ -212,7 +224,12 @@ void main() {
   }
   block_values[thread] = squared;
   barrier();
-  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+  // (M2D-3) With ROPE_NORM_THREADS=128 on rows of D <= 128, the 256-thread
+  // tree's stride-128 step pairs every element with a +0.0 (threads past
+  // the row length store exactly 0.0; squares are never -0.0), so starting
+  // the tree at ROPE_NORM_THREADS/2 computes the identical per-element sums
+  // in the identical order. The 256-thread build is unchanged.
+  for (uint stride = ROPE_NORM_THREADS / 2u; stride > 0u; stride >>= 1u) {
     if (thread < stride) {
       block_values[thread] += block_values[thread + stride];
     }
