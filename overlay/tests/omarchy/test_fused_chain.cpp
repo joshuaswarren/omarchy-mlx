@@ -2082,6 +2082,10 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4095, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4097, false));
 
+  auto g14c_caps = caps;
+  g14c_caps.device_name = "Apple M2 Max (G14C B1)";
+  CHECK(omarchy::qmm_residual_norm_enabled(g14c_caps, 2560, false));
+
   auto limited = caps;
   limited.device_name = "Apple M2 Max (G14C B1)";
   limited.subgroup_size = 16;

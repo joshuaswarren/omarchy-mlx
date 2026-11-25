@@ -2403,6 +2403,10 @@ bool qmm_residual_norm_enabled(
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
+  if (norm_cols == 2560 &&
+      caps.device_name.find("G14C") != std::string::npos) {
+    return true;
+  }
   return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
 }
 

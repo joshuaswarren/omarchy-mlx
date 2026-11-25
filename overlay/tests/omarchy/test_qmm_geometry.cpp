@@ -212,9 +212,11 @@ int main(int argc, char** argv) {
   {
     const auto& dev = mlx::core::omarchy::device().capabilities().device_name;
     std::string want =
-        (dev.find("G13G") != std::string::npos || dev.find("G13C") != std::string::npos)
+        (dev.find("G13G") != std::string::npos ||
+         dev.find("G13C") != std::string::npos ||
+         dev.find("G14C") != std::string::npos)
         ? "2x8w2"
-        : (dev.find("G14C") != std::string::npos ? "2x4w2" : "2x4");
+        : "2x4";
     int rc = run_child("name", "/tmp/w7p-geom-name.bin");
     std::ifstream f("/tmp/w7p-geom-name.bin");
     std::string got;
