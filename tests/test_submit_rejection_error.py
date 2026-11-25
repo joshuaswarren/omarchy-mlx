@@ -42,8 +42,13 @@ import unittest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Short watchdog interval so the recovery ladder fires quickly; the
-# resubmit round-trip itself is sub-second.
+# resubmit round-trip itself is sub-second. The started-submission
+# grace (MLX_OMARCHY_SUBMIT_STUCK_S) must also be short: a batch that
+# began executing counts as progress for that interval before the
+# ladder treats it as executed-but-unsignaled, so the strip test only
+# reaches recovery once the grace expires.
 FAST_WATCHDOG = str(3 * 1000 * 1000 * 1000)
+FAST_STUCK_S = "4"
 
 # Back-to-back submissions with a single host read at the end: every
 # eval is its own submit, each later submit waits in-order on the
@@ -81,6 +86,7 @@ def _outputs(res):
 def _run(prog, env_extra, timeout=60):
     env = dict(os.environ)
     env["MLX_OMARCHY_HANG_NO_PROGRESS_NS"] = FAST_WATCHDOG
+    env["MLX_OMARCHY_SUBMIT_STUCK_S"] = FAST_STUCK_S
     env.update(env_extra)
     try:
         return subprocess.run(
@@ -92,9 +98,10 @@ def _run(prog, env_extra, timeout=60):
             cwd=REPO_ROOT,
         )
     except subprocess.TimeoutExpired as e:
+        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
         return subprocess.CompletedProcess(
-            e.args, -9, e.stdout or "",
-            (e.stderr or "") + f"\nTIMED OUT after {timeout}s")
+            e.args, -9, out, err + f"\nTIMED OUT after {timeout}s")
 
 
 class TestSubmitFaultInjection(unittest.TestCase):

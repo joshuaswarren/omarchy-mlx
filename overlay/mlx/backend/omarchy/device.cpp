@@ -2187,84 +2187,33 @@ Device::RecoveryResult Device::recover_stalled_submissions(
             executing ? 1 : 0);
   }
 
-  // Split the stranded batches by execution evidence, in ascending value
-  // order (take_resubmit_batches is a map walk, so replays publish
-  // increasing values):
+  // One lane for both stranded classes, with retirement proven by a
+  // fence before the batch's value publishes:
   //
-  // - started event SET: the batch's kernels ran and only the completion
-  //   signal was lost. Mesa will not publish ANY queue-based signal once
-  //   it has wedged a submission's timeline points (measured: fresh-value
-  //   resubmission executed, timeline stayed at 0) - but vkSignalSemaphore
-  //   from the host cannot be dropped (the in-tree empty-shape fix relies
-  //   on exactly that). The wait has seen a full no-progress interval by
-  //   definition of this call, so short kernels have long finished.
-  //   Replay the batch's ORIGINAL completion value: every lower
-  //   reservation was submitted before this batch could run, so the
-  //   replayed signal can never land ahead of a queued or in-flight
-  //   submission the way a freshly reserved value would.
+  // - started event SET: the batch's kernels already ran (or are still
+  //   running) and only the completion signal was lost. Submit a
+  //   command-free probe with the fence: the probe is ordered behind
+  //   the batch on the queue, so the fence retiring proves the original
+  //   execution finished before the host publishes the value. The host
+  //   then publishes the ORIGINAL completion value, which can never
+  //   land ahead of queued work the way a fresh reservation would and
+  //   cannot be dropped the way the queue signal was. Re-submitting
+  //   the command buffer itself would double-execute it.
   //
   // - started event UNSET (or absent): the batch never began. Resubmit
-  //   it below with fresh signal values - the dropped submission still
-  //   holds its original timeline points inside Mesa, and re-signaling
-  //   the same value creates a duplicate point Mesa does not publish.
-  //   Timeline waits are >=, so strictly higher values satisfy every
-  //   existing waiter.
+  //   its commands with every signal stripped: the dropped submission
+  //   still holds its original timeline points inside Mesa, and
+  //   re-signaling the same value creates a duplicate point Mesa does
+  //   not publish, while a fresh value would violate non-decreasing
+  //   order against the jobs still queued behind it.
   auto stranded = completions.take_resubmit_batches(reserved_through);
-  std::vector<CompletionDispatcher::ResubmitBatch> batches;
   static PFN_vkSignalSemaphore signal_fn = nullptr;
   if (!signal_fn) {
     signal_fn = reinterpret_cast<PFN_vkSignalSemaphore>(
         vk::device_table().GetDeviceProcAddr(
             handle(), "vkSignalSemaphore"));
   }
-  bool replayed = false;
-  for (auto& batch : stranded) {
-    // A batch whose resubmit is already on the queue waits on its own
-    // fence below: it may NOT take the replay branch (host-publishing
-    // would mark the value complete while the resubmitted commands are
-    // still executing, and the fence would leak) and it may NOT be
-    // resubmitted again (re-submitting a command buffer that is still
-    // pending execution is illegal).
-    const bool ran = batch.pending_fence == VK_NULL_HANDLE &&
-        batch.started != VK_NULL_HANDLE &&
-        vk::device_table().GetEventStatus(device_, batch.started) ==
-            VK_EVENT_SET;
-    if (!ran) {
-      batches.push_back(std::move(batch));
-      continue;
-    }
-    replayed = true;
-    // The batch's user (event) semaphores are equally stranded: their
-    // ride-along signals were swallowed with the submission. Host-signal
-    // each at a bumped fresh value (timeline waits are >=), and replay
-    // the original completion value.
-    VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-    cc.semaphore = completions.semaphore();
-    cc.value = batch.value;
-    VKX_CHECK(signal_fn(handle(), &cc));
-    for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
-      uint64_t current = 0;
-      if (vk::device_table().GetSemaphoreCounterValue(
-              device_, batch.signal_sems[i], &current) != VK_SUCCESS) {
-        current = 0;
-      }
-      VkSemaphoreSignalInfo us{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-      us.semaphore = batch.signal_sems[i];
-      us.value = std::max(batch.signal_values[i], current) + 1;
-      VKX_CHECK(signal_fn(handle(), &us));
-    }
-    fprintf(
-        stderr,
-        "[rtmod] SUBMIT-RECOVER tid=%lu host-signaled completion cv=%llu "
-        "replaying executed-but-unsignaled batch (round %u)\n",
-        (unsigned long)syscall(SYS_gettid),
-        (unsigned long long)batch.value,
-        round + 1);
-  }
-  if (batches.empty()) {
-    if (replayed) {
-      return RecoveryResult::kRecovered;
-    }
+  if (stranded.empty()) {
     if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
       fprintf(stderr, "[rtmod] RECOVER-FALSE tid=%lu empty-batches\n", (unsigned long)syscall(SYS_gettid));
     }
@@ -2284,9 +2233,9 @@ Device::RecoveryResult Device::recover_stalled_submissions(
 
   lk.unlock();
 
-  size_t count = batches.size();
+  size_t count = stranded.size();
   size_t published = 0;
-  for (auto& batch : batches) {
+  for (auto& batch : stranded) {
     // Resolve the batch's waits first (they are the original list and
     // either already landed or were just published by this round's
     // earlier replays/resubmits).
@@ -2320,12 +2269,29 @@ Device::RecoveryResult Device::recover_stalled_submissions(
     si.waitSemaphoreCount = static_cast<uint32_t>(batch.wait_sems.size());
     si.pWaitSemaphores = batch.wait_sems.data();
     si.pWaitDstStageMask = wait_stages.data();
-    si.commandBufferCount = batch.cmd != VK_NULL_HANDLE ? 1u : 0u;
-    si.pCommandBuffers =
-        batch.cmd != VK_NULL_HANDLE ? &batch.cmd : nullptr;
     si.signalSemaphoreCount = 0;
     si.pSignalSemaphores = nullptr;
     if (batch.pending_fence == VK_NULL_HANDLE) {
+      // A batch whose commands already ran gets a command-free probe:
+      // re-submitting the buffer would double-execute it, and the
+      // probe's queue position still proves retirement.
+      const bool commands_ran =
+          batch.started != VK_NULL_HANDLE &&
+          dt.GetEventStatus(device_, batch.started) == VK_EVENT_SET;
+      si.commandBufferCount =
+          !commands_ran && batch.cmd != VK_NULL_HANDLE ? 1u : 0u;
+      si.pCommandBuffers =
+          !commands_ran && batch.cmd != VK_NULL_HANDLE ? &batch.cmd
+                                                     : nullptr;
+      if (commands_ran) {
+        fprintf(
+            stderr,
+            "[rtmod] SUBMIT-RECOVER tid=%lu cv=%llu probing retirement "
+            "for executed-but-unsignaled batch (round %u)\n",
+            (unsigned long)syscall(SYS_gettid),
+            (unsigned long long)batch.value,
+            round + 1);
+      }
       // The resubmit reports completion through a FENCE, not a
       // timeline signal: fences carry no ordering rule, and the fence
       // proves the batch's commands retired before the host publishes
@@ -2427,7 +2393,7 @@ Device::RecoveryResult Device::recover_stalled_submissions(
   // allocation failed, resubmit rejected) are still outstanding work,
   // and claiming recovery would reset the waiter's no-progress clock
   // on nothing.
-  if (replayed || published > 0) {
+  if (published > 0) {
     return RecoveryResult::kRecovered;
   }
   return RecoveryResult::kNotRecoverable;
@@ -2518,6 +2484,10 @@ void wait_for_timeline_progress(
   const auto wall_deadline = start + std::chrono::nanoseconds(max_wall_ns);
   uint64_t last_observed = 0;
   auto last_advance = start;
+  // The last time the timeline counter actually moved: bounds the
+  // started-submission grace below. Distinct from stuck_since, which
+  // the stuck warning re-arms every interval.
+  auto last_counter_move = start;
   uint32_t recovery_round = 0;
   // Stuck-submit diagnostic: the counter froze while a waiter held the
   // timeline. Fires the named warning line every stuck interval - the
@@ -2574,6 +2544,7 @@ void wait_for_timeline_progress(
       last_observed = current;
       last_advance = clock::now();
       stuck_since = clock::now();
+      last_counter_move = clock::now();
     }
 
     const auto now = clock::now();
@@ -2620,7 +2591,17 @@ void wait_for_timeline_progress(
         progress_generation ? progress_generation() : 0;
     const bool executing = progress && progress_through != 0 &&
         progress->has_active_submission(progress_through);
-    if (executing) {
+    // A submission that started counts as progress only for the stuck
+    // grace (submit_stuck_s, the same bound the stuck diagnostic warns
+    // at): a batch whose commands began but whose value never publishes
+    // past that point is the executed-but-unsignaled class the recovery
+    // ladder's host-replay rung exists for - refreshing forever parks
+    // the wait to the wall deadline and the rung can never fire.
+    // stuck_ns == 0 opts out entirely (the documented "0 disables"
+    // contract), matching the previous unbounded refresh.
+    if (executing &&
+        (stuck_ns == 0 ||
+         now - last_counter_move < std::chrono::nanoseconds(stuck_ns))) {
       last_advance = now;
     } else if ((now - last_advance) > std::chrono::nanoseconds(hang_ns)) {
       // Foreign/stale waiter: the waited value was never reserved by any
