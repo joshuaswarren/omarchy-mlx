@@ -11281,6 +11281,13 @@ bool dispatch_rope_pair(
     }
     return refuse("partner input not settled");
   }
+  if (settled(q_node) || settled(k_node)) {
+    // The settle's nested evals can reach a member through an ancestor
+    // chain: the fold fallback materializes it without its partner, and
+    // this dispatch would set_data over the live buffer and write it a
+    // second time.
+    return refuse("pair member materialized during settle");
+  }
   // A fold side whose rope read the norm through a view replays that
   // view over the contiguous pre-norm buffer, exactly like
   // dispatch_rope_norm_fold: per-row norm and the view commute, so the
@@ -11557,8 +11564,17 @@ bool dispatch_rope_pair(
         !compute_index_span_fits(
             side_norms[1]->w.offset() / side_norms[1]->w.itemsize(),
             side_norms[1]->w.size()) ||
-        (kv_window && (kv_window->offset & 1u) != 0u)) {
+        (kv_window &&
+         ((kv_window->offset | kv_window->strides[0] |
+           kv_window->strides[1]) &
+          1u) != 0u)) {
       return refuse("norm pair offsets do not fit");
+    }
+    // The kernel stages each norm row through shared rounded[256] and
+    // block_values[256] (shaders/fast_rope_norm_pair.comp); the single
+    // fused-norm route carries the same D <= 256 host guard.
+    if (D > 256) {
+      return refuse("norm pair row over shared bound");
     }
   }
   if (kv_window) {
@@ -11637,7 +11653,7 @@ bool dispatch_rope_pair(
             : ComputeKernel::FastRopeNormPairBF16,
         bindings,
         params,
-        params.count);
+        std::min(params.count, omarchy::kMaxComputeGroupCountX));
     if (kv_window) {
       commit_rope_kv_redirect(k_node);
     }

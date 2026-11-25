@@ -299,7 +299,7 @@ void main() {
         float xc = rope_round(x1 * sin_t);
         float xd = rope_round(x2 * cos_t);
         vals[side] = (d < half_dims) ? (forward ? (xa - xb) : (xb + xa))
-                                     : (forward ? (xc + xd) : (xd - xa));
+                                     : (forward ? (xc + xd) : (xd - xc));
       }
       v0 = vals[0];
       v1 = vals[1];
