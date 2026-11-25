@@ -762,7 +762,8 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
 // identical tokens, dispatches per token 251 to 215, 5 pairs x 128 tokens at ctx 512).
 // The 14-inch (receipts/2026-11-14-g14c-gdn-conv-delta, ABBA, 128 tokens, identical tokens in every pair): Qwen3.8-2B +2.00 percent at ctx 512 and +1.22 at
 // ctx 2048; Qwen3.8-9B -0.08 (flat) and -0.14 (0.03 ms per token; both flag arms slower than both default arms: a small steady loss, not noise). The 2B gain is
-// larger and one rule covers both models.
+// larger and one rule covers both models. Re-measured 2026-11-25 (receipts/2026-11-25-w7x-dec03-m2-gdn-conv-delta-abba, 5-pair ABBA, identical ids):
+// Qwen3.8-2B +4.35 percent at ctx 512 and +6.59 at ctx 2048, 5813 to 5489 dispatches over 8 decode steps on the production wheel.
 // An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this everywhere.
 inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
   // Correctness exclusion (not measured-perf): G18G's fused
