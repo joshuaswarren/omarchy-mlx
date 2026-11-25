@@ -5,7 +5,7 @@ Runs under plain python3 (no pytest needed) or pytest.
 Requires torch + mlx on the path; run from this directory or set
 PYTHONPATH to it.
 """
-import os, sys
+import math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
@@ -909,6 +909,23 @@ def test_arc_trig():
         assert stats["cpu"] == [], stats
         assert bool(torch.isnan(out).all()) == bool(
             torch.isnan(target(oob)).all()), target
+    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
+    # Pin both values and sign bits for all four (+/-0, +/-0) pairs.
+    for yv, xv in ((0.0, 0.0), (0.0, -0.0), (-0.0, 0.0), (-0.0, -0.0)):
+        yt = torch.tensor([yv])
+        xt = torch.tensor([xv])
+        g = torch.fx.Graph()
+        py, px = g.placeholder("y"), g.placeholder("x")
+        n = g.call_function(torch.ops.aten.atan2.default, (py, px), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(yt, xt)
+        ref = torch.atan2(yt, xt)
+        assert stats["cpu"] == [], stats
+        assert out.item() == ref.item(), (yv, xv, out.item(), ref.item())
+        assert math.copysign(1.0, out.item()) == math.copysign(1.0, ref.item()), \
+            (yv, xv, out.item(), ref.item())
     print("test_arc_trig PASS")
 
 

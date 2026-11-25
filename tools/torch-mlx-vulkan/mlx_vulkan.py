@@ -969,6 +969,17 @@ def _rsub(a, b, alpha=1, **k):
     return _mx(b) - _mx(a) * alpha
 
 
+def _atan2(y, x):
+    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi,
+    # atan2(y, -0) = +/-pi/2 by sign(y). The Vulkan atan2 kernel drops the
+    # sign of a zero x; 1/+-0 = +-inf recovers it (no mx.signbit in the wheel).
+    y, x = _mx(y), _mx(x)
+    x_neg0 = (x == 0) & (1.0 / x < 0)
+    fix = (mx.where(y == 0, math.pi, math.pi / 2)
+           * mx.where(1.0 / y < 0, -1.0, 1.0))
+    return mx.where(x_neg0, fix, mx.atan2(y, x))
+
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -1464,7 +1475,7 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
-    "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": mx.atan2,
+    "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
