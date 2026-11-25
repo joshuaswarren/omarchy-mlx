@@ -443,7 +443,7 @@ omarchy_shader(qmm_vec_q4_multi_token4_resnorm_subgroup_bf16 shaders/qmm_vec.com
 # FastRopeNormBF16 row math), storing queries into the rope's buffer
 # and keys through the pair's KV window. Epilogue bindings ride the
 # free weight slots 19..24 of a <=3-member group.
-omarchy_shader(qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_ROPE_EPI=1)
+omarchy_shader(qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_ROPE_EPI=1 -DQMM_VEC_EPI_NOTAILCODE=1)
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)
