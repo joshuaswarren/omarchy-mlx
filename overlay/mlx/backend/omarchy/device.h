@@ -1127,42 +1127,46 @@ inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, 
 
 // Fused GEMV groups (MLX_OMARCHY_FUSED_GEMV) with the variable unset: the parts where the route defaults off because
 // the per-node decode GEMV was measured faster than the fused groups:
-//   G16G (Apple M4, Honeykrisp Apple9 port): 2026-11-01 calibration.
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, bit-identical tokens, FUSED_GEMV=0 vs unset):
-//     ctx128 +3.51% (7.8867 -> 7.6186 ms/tok, 5/5), ctx512 +1.98% (7.9255 -> 7.7665 ms/tok, 5/5), ctx2048 +0.41% (8.1436 -> 8.1300 ms/tok, 5/5).
+//   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-decode-defaults.
+// G14C keeps FUSED_GEMV on to retain the full residual-norm and direct-KV
+// routes; the original FUSED_GEMV-off comparison regressed Qwen3-4B decode.
+// The epilogue-only route remains available as an explicit override.
 // The trio (MLX_OMARCHY_FUSED_TRIO) keeps its default on every part: on G16G the numerics gate found that the
 // standalone trio kernels move Qwen2.5-0.5B perplexity away from the reference.
 // Keyed on the device name so an unmeasured part keeps the route on; callers pass the executing device's name
 // (fused_route_enabled). An explicit setting wins. Pure.
 inline bool fused_gemv_off_default_part(const std::string& device_name) {
-  return device_name.find("G16G") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
+  return device_name.find("G16G") != std::string::npos;
 }
 
 // Fused Qmm + ResidualAdd + RMSNorm decode epilogue
-// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the parts where the epilogue is
-// on by default because matched ABBA decode measured faster with
-// bit-identical output and token ids:
+// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the default parts and widths:
 //   G13C (16-inch Apple M1 Max): Qwen3.8-2B 4-bit ctx 512 decode
 //     7.689 -> 7.547 ms/tok (-0.142 ms, +1.84%, 3/3 ABBA pairs, chunk=1)
 //     and 7.699 -> 7.564 ms/tok (-0.135 ms, +1.75%, 3/3 ABBA pairs, chunk=16),
 //     -48 dispatches/tok, identical ids_sha 4784df039da0.
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, bit-identical tokens):
-//     ctx128 +1.99% (7.8896 -> 7.7281 ms/tok, 5/5), ctx512 +2.17% (8.0410 -> 7.8628 ms/tok, 5/5), ctx2048 +2.06% (8.1166 -> 7.9517 ms/tok, 5/5).
+//   G14C (14-inch Apple M2 Max), norm_cols <= 2048: Qwen3.8-2B (hidden=2048)
+//     gains across ctx 128/512/2048 (+0.37%/+1.36%/+3.03% atop greedy-prune-off,
+//     3/3 pairs), whereas Qwen3-4B (hidden=2560) regresses (-2.26%/-1.91%/-1.61%,
+//     0/3 pairs). Qwen3.8-9B uses exactly 4096 columns, not a higher cutoff.
+//     Nonpositive width is the device precheck before the shape is known.
 // Other parts stay off until measured; MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0
-// overrides on any part, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
-inline bool qmm_residual_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13C") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
+// overrides on any part/width, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
+inline bool qmm_residual_norm_default_part(
+    const std::string& device_name, int norm_cols = 0) {
+  if (device_name.find("G13C") != std::string::npos) {
+    return true;
+  }
+  if (device_name.find("G14C") != std::string::npos) {
+    return norm_cols <= 2048 || norm_cols == 4096;
+  }
+  return false;
 }
 
 // Single-member residual-Add epilogue GEMV groups
 // (MLX_OMARCHY_QMM_EPILOGUE_GEMV unset): parts where the multi-weight
-// fused GEMV fold defaults off but the residual-norm epilogue defaults on
-// (G14C today). The measured G14C loss on the fused GEMV route is the
-// multi-weight x-sharing fold; a single-member group carrying an Add
-// epilogue only ever removes dispatches, so those plan on their own
-// route. MLX_OMARCHY_QMM_EPILOGUE_GEMV=0/1 overrides. Pure.
+// fused GEMV fold defaults off but the residual-norm epilogue defaults on.
+// MLX_OMARCHY_QMM_EPILOGUE_GEMV=0/1 overrides. Pure.
 inline bool gemv_epilogue_only_part(const std::string& device_name) {
   return fused_gemv_off_default_part(device_name) &&
       qmm_residual_norm_default_part(device_name);
