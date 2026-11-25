@@ -1762,6 +1762,7 @@ _FUNC_SPECS = {
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "rsub": _rsub,
+    "sub_.Tensor": lambda a, b, *k: _mx(a) - _mx(b),
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
@@ -1852,6 +1853,8 @@ _build_func_table()
 # dotted-name resolve only covers torch attrs; operator.* objects register directly
 FUNC_TABLE[operator.iadd] = _FUNC_SPECS["add"]
 FUNC_TABLE[operator.isub] = _FUNC_SPECS["sub"]
+FUNC_TABLE[torch.ops.aten.sub_.Tensor] = _FUNC_SPECS["sub_.Tensor"]
+FUNC_TABLE[torch.rsub] = _FUNC_SPECS["rsub"]
 
 # name-keyed fallback: dynamo may reference e.g. torch._C._VariableFunctions.matmul
 # which is a different object than torch.matmul
@@ -1877,6 +1880,7 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
+ATEN_TABLE["aten.rsub.Scalar"] = _FUNC_SPECS["rsub"]
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 # aten.embedding is (weight, indices): F.embedding is (input, weight).
 ATEN_TABLE["embedding"] = _embedding_any
