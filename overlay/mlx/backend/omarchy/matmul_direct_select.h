@@ -21,6 +21,7 @@
 #include <string_view>
 
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/dtype.h"
 
 namespace mlx::core::omarchy {
@@ -108,7 +109,7 @@ inline DirectMatmulRoute select_direct_matmul_route(
     uint32_t m,
     uint32_t n,
     DirectMatmulRoute shipped) {
-  if (const char* env = std::getenv("MLX_OMARCHY_DIRECT_MATMUL")) {
+  if (const char* env = omarchy::env_str("MLX_OMARCHY_DIRECT_MATMUL")) {
     if (std::strcmp(env, "0") == 0) {
       return shipped;
     }
