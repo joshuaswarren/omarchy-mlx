@@ -27,6 +27,26 @@ constexpr uint32_t kAllSubgroupOps = 0xffffffffu;
 // future chip; a bring-up adds a row per docs/new-chip-bringup.md.
 const SimulationProfile kProfiles[] = {
     {
+        "m2max-g14c-sim",
+        "honeykrisp_fork",
+        "Apple M2 Max (G14C B1) stand-in on any host: subgroup size 32 "
+        "with ARITHMETIC/SHUFFLE/SHUFFLE_RELATIVE and the 8x8x8 fp32 "
+        "cooperative matrix - the device the dual-write default is "
+        "measured on, so device-scoped routes can be exercised on a "
+        "non-Apple CI host",
+        32,
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT,
+        kAllSubgroupOps,
+        1,
+        0,
+        0,
+        0,
+        -1,
+        "Apple M2 Max (G14C B1)",
+    },
+    {
         "m1-honeykrisp-fork",
         "honeykrisp_fork",
         "Apple M1 reference: the installed Honeykrisp fork with the "

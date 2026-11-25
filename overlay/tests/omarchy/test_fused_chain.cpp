@@ -2562,9 +2562,21 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
 }
 // FUSE-4 leg 1: the group PLANNER adopts the dual-write route. When the
 // graph shows the adoptable shape - every group member the sole input
-// of one unclaimed last-axis Concatenate - the flagged planner hands
-// strided parent outputs and the standalone Concatenate dispatch is
-// deleted. Unset or "0" must keep today's route dispatch for dispatch.
+// of one unclaimed last-axis Concatenate - the planner hands strided
+// parent outputs and the standalone Concatenate dispatch is deleted.
+// The adoption is device-scoped (see the predicate case below): on
+// unmeasured devices the planner keeps today's route and the outputs
+// stay byte-identical to per-node.
+TEST_CASE("dual-write default is device-scoped to the measured part") {
+  // w7P review of #903: the default is on only where the x8 ABBA has
+  // measured (G14C today); every other device keeps today's route.
+  CHECK(omarchy::dual_write_default_for_device("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(
+      omarchy::dual_write_default_for_device("llvmpipe (LLVM 19.1.7)"));
+  CHECK_FALSE(omarchy::dual_write_default_for_device("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::dual_write_default_for_device("Apple M5 (G17G)"));
+}
+
 TEST_CASE("eager dual-write planner adopts a q/k/v concat parent") {
   if (!compute_available()) {
     return;

@@ -295,6 +295,12 @@ bool qmm_vec_q4_word_enabled();
 // parts other than G13C and off on G14C, on elsewhere.
 bool outgate_fold_default_for_device(const std::string& device_name);
 
+// Returns the chip-keyed default for dual-write group adoption: on for the
+// parts whose x8 ABBA has measured (G14C today), off elsewhere - more
+// parts join as their ABBA lands. No env override: the measured default
+// is the shipped default.
+bool dual_write_default_for_device(const std::string& device_name);
+
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; unset falls back to
 // outgate_fold_default_for_device(device().capabilities().device_name).
 bool outgate_fold_enabled();

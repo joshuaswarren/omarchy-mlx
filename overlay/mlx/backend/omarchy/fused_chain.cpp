@@ -1768,7 +1768,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // throw-on-refusal (every deleted node is replayable). The Q4 word
   // gate is consulted here for the same reason the out-gate fold
   // consults it: the route refuses every group it does not serve.
-  if (qmm_vec_q4_word_enabled() && !state->gemv_groups.empty()) {
+  // The dual-write default is device-scoped to the parts it has been
+  // measured on (w7P review of #903): G14C today; more parts join as
+  // their x8 ABBA lands. Every other device keeps today's route.
+  if (qmm_vec_q4_word_enabled() && !state->gemv_groups.empty() &&
+      dual_write_default_for_device(
+          device().capabilities().device_name)) {
     std::unordered_map<std::uintptr_t, std::vector<const array*>>
         dual_readers;
     for (const auto& node : tape) {
@@ -2478,6 +2483,15 @@ EagerFusionScope::~EagerFusionScope() {
 // ~1.7%, H147) and on G14C (M2 Max B1 paired ABBA across Qwen3.8-2B and
 // Qwen3.8-9B gained +0.97% to +1.92% when disabled, 11/11 pair wins).
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.
+// Chip-keyed like the other decode-path defaults: dual-write group
+// adoption is default-on only for the parts its x8 ABBA has measured.
+// G14C (M2 Max B1) is measured first; more parts join as their ABBA
+// lands. No env override: the measured default is the shipped default
+// (w7P review of #903).
+bool dual_write_default_for_device(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 bool outgate_fold_default_for_device(const std::string& device_name) {
   bool legacy_g13 = device_name.find("G13") != std::string::npos &&
       device_name.find("G13C") == std::string::npos;
