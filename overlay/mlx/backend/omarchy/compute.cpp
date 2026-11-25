@@ -360,6 +360,8 @@
 #include "sdpa_decode_split_p1v_g8.h"
 #include "sdpa_decode_split_p2.h"
 #include "sdpa_decode_split_p1v_bk64.h"
+#include "sdpa_decode_split_p1v_bk32.h"
+#include "sdpa_decode_split_p2_bk32.h"
 #include "sdpa_decode_split_p2_bk64.h"
 #include "sdpa_decode_split_p1_hd256_g1.h"
 #include "sdpa_decode_split_p1_hd256_g2.h"
