@@ -19,20 +19,19 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
  #include "mlx/io.h"
  #include "mlx/io/load.h"
  #include "mlx/ops.h"
-@@ -110,9 +114,47 @@
+@@ -110,9 +114,46 @@
  }
  
 +#ifdef MLX_OMARCHY_BACKEND
 +// Default route stays #871's narrow arm: unset or empty flags a load only
-+// when the device cannot map device-local memory, because inference-only
-+// weight buffers are unmapped and read-only from the host view - writable
-+// host views and re-export round-trips would silently break under a broad
-+// default until inference-only buffers gain full host/device coherence.
-+// The override both ways is unchanged: an absolute path flags only loads
-+// from that checkpoint directory; any other non-empty value forces the
-+// route on every load for callers that accept the read-only weights
-+// semantics; Buffer::raw_ptr() serves host readback through a
-+// device-to-host shadow copy in that case.
++// when the device cannot map device-local memory. Flagged weight buffers
++// are unmapped and use the device_local shadow machinery: raw_ptr()
++// downloads on first host access and the encoder uploads host shadow
++// edits before any GPU read, so writable host views round-trip through
++// the shadow. The override is unchanged: an absolute path flags only
++// loads from that checkpoint directory; any non-absolute non-empty value
++// (including =0) disables the route - there is deliberately no global
++// force-on switch.
 +static bool is_inference_checkpoint(const std::string& file) {
 +  const char* root = std::getenv("MLX_OMARCHY_VRAM_WEIGHTS");
 +  if (root && *root && !std::filesystem::path(root).is_absolute()) {

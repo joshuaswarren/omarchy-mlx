@@ -171,6 +171,16 @@ VulkanBuffer make_weight_buffer(
           vk::result_string(result));
     }
     VKX_CHECK(dt.BindBufferMemory(handle, buf.buffer, buf.memory, 0));
+    if (!staging) {
+      // Weight buffers are unmapped and authoritative on the device: the
+      // upload path stages host bytes and copies, synchronizes, and compute
+      // only ever reads. Flag them device_local so they use the same tested
+      // shadow-coherence machinery as device-local activations: raw_ptr()
+      // downloads on first host access, and the encoder uploads host shadow
+      // edits before any GPU read, so write-through works.
+      buf.device_local = true;
+      buf.sync_state.device_dirty = true;
+    }
     if (staging) {
       buf.coherent = memory.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
       void* data = nullptr;
@@ -1135,21 +1145,6 @@ void* Buffer::raw_ptr() {
     return nullptr;
   }
   auto* buffer = static_cast<omarchy::VulkanBuffer*>(ptr_);
-  if (buffer->inference_weight) {
-    // Weight buffers are unmapped by design; serve host readback through a
-    // device-to-host shadow copy. upload_weights() synchronizes before
-    // returning and compute only ever reads weights, so the device copy is
-    // current whenever host code asks for it.
-    if (buffer->host_shadow == nullptr) {
-      buffer->host_shadow = std::calloc(1, buffer->size);
-      if (buffer->host_shadow == nullptr) {
-        throw std::bad_alloc();
-      }
-    }
-    omarchy::device().download_device_to_host(
-        buffer->buffer, buffer->host_shadow, buffer->size);
-    return buffer->host_shadow;
-  }
   if (buffer->device_local) {
     if (buffer->sync_state.device_dirty) {
       uint64_t comp = omarchy::allocator().buffer_completion(buffer);
@@ -1177,6 +1172,12 @@ void* Buffer::raw_ptr() {
     }
     (void)buffer->sync_state.on_host_raw_ptr();
     return buffer->host_shadow;
+  }
+  if (buffer->inference_weight) {
+    // Unreachable today: every inference-weight buffer is device_local and
+    // took the shadow path above. Kept as a guard against future placement
+    // changes silently handing out unmapped storage.
+    throw std::runtime_error("[omarchy] device-local inference weights are not host-accessible");
   }
   return buffer->data;
 }
