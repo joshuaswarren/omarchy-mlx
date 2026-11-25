@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Same-wheel ABBA: QmmPrefillCoopmat16BF16 vs the FMA route (PR #880).
+"""Same-wheel ABBA: QmmPrefillCoopmatBF16x16 vs the FMA route (PR #880).
 
 Five pairs in A-B-B-A order. Each leg is a fresh subprocess with
 MLX_OMARCHY_NO_COOPMAT16 unset (A, coopmat16 admitted by capability) or
