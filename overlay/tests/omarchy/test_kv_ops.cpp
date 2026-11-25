@@ -575,6 +575,63 @@ TEST_CASE("KV cache growth: slice_update steps then concatenate when full") {
       stream);
 }
 
+TEST_CASE("SliceUpdate appends in place under the eager donation rule") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto fresh_cache = [&] {
+    array cache({0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f,
+                 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f},
+                {1, 4, 4},
+                float32);
+    cache.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    return cache;
+  };
+  array upd({100.0f, 101.0f, 102.0f, 103.0f,
+             200.0f, 201.0f, 202.0f, 203.0f},
+            {1, 2, 4},
+            float32);
+  const std::vector<float> expected{0, 1, 2, 3, 100, 101, 102, 103,
+                                    200, 201, 202, 203, 12, 13, 14, 15};
+
+  // Decode-loop shape: once the caller drops its handle, the update's
+  // input slot is the cache's last holder, so the paste lands in the
+  // cache's own buffer and no full-cache copy exists.
+  std::weak_ptr<void> base_storage;
+  array updated = [&] {
+    array cache = fresh_cache();
+    base_storage = cache.data_shared_ptr();
+    return slice_update(cache, upd, Shape{0, 1, 0}, Shape{1, 3, 4}, stream);
+  }();
+  CHECK_EQ(updated.data_shared_ptr().get(), base_storage.lock().get());
+  check_values(updated, expected, stream);
+
+  // A second holder keeps the copy: the output gets a fresh buffer and
+  // the shared cache still reads its old rows.
+  array held = fresh_cache();
+  array copied = slice_update(held, upd, Shape{0, 1, 0}, Shape{1, 3, 4}, stream);
+  CHECK_NE(copied.data_shared_ptr().get(), held.data_shared_ptr().get());
+  check_values(copied, expected, stream);
+  check_values(
+      held,
+      {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+      stream);
+
+  // MLX_OMARCHY_KV_INPLACE=0 forces the copy on an exclusive cache.
+  setenv("MLX_OMARCHY_KV_INPLACE", "0", 1);
+  std::weak_ptr<void> forced_base;
+  array forced = [&] {
+    array cache = fresh_cache();
+    forced_base = cache.data_shared_ptr();
+    return slice_update(cache, upd, Shape{0, 1, 0}, Shape{1, 3, 4}, stream);
+  }();
+  unsetenv("MLX_OMARCHY_KV_INPLACE");
+  CHECK_NE(forced.data_shared_ptr().get(), forced_base.lock().get());
+  check_values(forced, expected, stream);
+}
+
 TEST_CASE("SliceUpdate add folds the update into the copied window") {
   if (!compute_available()) {
     return;

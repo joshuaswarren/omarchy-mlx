@@ -13506,6 +13506,35 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
 
+  // In-place append: a SliceUpdate holding the last handle to a dense
+  // base pastes the update rows into that buffer instead of copying the
+  // whole base first. This is the eager form of the producer-direct KV
+  // window: the compiled tape's pair planner only exists inside a tape
+  // eval, so eager eval (MLX_DISABLE_COMPILE=1) otherwise pays a
+  // full-cache copy per member per token. Same donation rule as
+  // kv_window_in_place; MLX_OMARCHY_KV_INPLACE=0 forces the copy.
+  if (reduce_type_ == SliceUpdate::None && inputs.size() == 2 &&
+      (std::getenv("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+       omarchy::env_flag("MLX_OMARCHY_KV_INPLACE")) &&
+      in.is_donatable() && in.flags().row_contiguous &&
+      in.size() == in.data_size() && in.offset() % in.itemsize() == 0 &&
+      upd.data_shared_ptr() != in.data_shared_ptr()) {
+    out.copy_shared_buffer(in);
+    auto [data_offset, out_strides] =
+        prepare_slice(out, start_indices_, strides_);
+    copy_gpu_inplace(
+        upd,
+        out,
+        upd.shape(),
+        upd.strides(),
+        out_strides,
+        /* i_offset = */ 0,
+        /* o_offset = */ data_offset,
+        CopyType::GeneralGeneral,
+        stream());
+    return;
+  }
+
   // A plain paste rides the strided-copy engine; the reduce modes run
   // the read-modify-write shader against the copied window.
   auto ctype = in.flags().contiguous && in.size() == in.data_size()
