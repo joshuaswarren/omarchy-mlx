@@ -10506,6 +10506,30 @@ bool dispatch_quantized_gemv_group(
           encoder.device().compute().binding_limit());
     }
   }
+  {
+    static const bool epi_dispatch_off = []() {
+      const char* env = std::getenv("MLX_OMARCHY_ROPE_EPI_DISPATCH");
+      return env != nullptr && env[0] == '0';
+    }();
+    if (epi_dispatch_off) {
+      rope_epi_active = false;
+    }
+  }
+  if (rope_epi != nullptr && !rope_epi_active) {
+    if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+      static int trr = 0;
+      if (trr++ < 4) {
+        std::fprintf(stderr, "[epi-ctr] refuse: contract dead\n");
+      }
+    }
+    // An attached plan whose contract failed anywhere refuses the
+    // whole group BEFORE any allocation or KV-window commit below:
+    // the ropes and their view chain are skip-role'd, so a plain
+    // dispatch here would leave them unmaterialized, and a refusal
+    // after the values window commits leaves it unwritten. The
+    // failed state replays every node ordinarily.
+    return false;
+  }
   ComputeParams params;
   uint32_t total_groups = 0;
   // Columns per workgroup of the kernel selected below: the geometry applies
@@ -10756,28 +10780,6 @@ bool dispatch_quantized_gemv_group(
         params.flags |= 262144u;
       }
     }
-  }
-  {
-    static const bool epi_dispatch_off = []() {
-      const char* env = std::getenv("MLX_OMARCHY_ROPE_EPI_DISPATCH");
-      return env != nullptr && env[0] == '0';
-    }();
-    if (epi_dispatch_off) {
-      rope_epi_active = false;
-    }
-  }
-  if (rope_epi != nullptr && !rope_epi_active) {
-    if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
-      static int trr = 0;
-      if (trr++ < 4) {
-        std::fprintf(stderr, "[epi-ctr] refuse: contract dead\n");
-      }
-    }
-    // An attached plan whose contract failed anywhere refuses the
-    // whole group: the ropes and their view chain are skip-role'd, so
-    // a plain dispatch here would leave them unmaterialized. The
-    // failed state replays every node ordinarily.
-    return false;
   }
   if (rope_epi_active) {
     const array& q_view = rope_epi->q.rope.inputs()[0];
