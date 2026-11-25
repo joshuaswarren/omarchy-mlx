@@ -3,6 +3,7 @@
 
 #include "mlx/backend/omarchy/capability_sim.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -172,6 +173,25 @@ const SimulationProfile kProfiles[] = {
         -1,
         "Apple M6 (G18G B1)",
     },
+    {
+        "nvidia-c16-coopmat",
+        "nvidia_proprietary",
+        "NVIDIA-proprietary coopmat list: no same-operand 8x8x8 shapes, "
+        "the 16x16x16 fp16-operand subgroup shape present (the CMAT16 "
+        "QMM prefill route's axis), subgroup size 32, full op mask",
+        32,
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "NVIDIA GeForce RTX 5060 Ti",
+        1,
+    },
 };
 
 std::string lowered(const char* v) {
@@ -261,6 +281,34 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
           same_operand_8x8x8(CoopmatType::Float32));
       caps.cooperative_matrix_shapes.push_back(
           same_operand_8x8x8(CoopmatType::Float16));
+    }
+  }
+  // The 16x16x16 fp16-operand axis (NVIDIA-style shape lists): insert or
+  // drop exactly the shape the CMAT16 QMM prefill build emits. The
+  // cooperative-matrix device feature is not simulated by this axis -
+  // a profile can select the route only where hardware truth already
+  // enabled the feature (cooperative_matrix_bf16), and require_backed
+  // refuses a claimed dispatch the runtime device cannot run.
+  if (profile.cooperative_matrix_f16_16 >= 0) {
+    auto& shapes = caps.cooperative_matrix_shapes;
+    shapes.erase(
+        std::remove_if(
+            shapes.begin(),
+            shapes.end(),
+            [](const CoopmatShape& s) {
+              return s.m == 16u && s.n == 16u && s.k == 16u &&
+                  s.a == CoopmatType::Float16 &&
+                  s.b == CoopmatType::Float16 &&
+                  s.c == CoopmatType::Float32 &&
+                  s.result == CoopmatType::Float32 &&
+                  s.scope == CoopmatScope::Subgroup && !s.saturating;
+            }),
+        shapes.end());
+    if (profile.cooperative_matrix_f16_16 != 0) {
+      shapes.push_back(CoopmatShape{
+          16u, 16u, 16u, CoopmatType::Float16, CoopmatType::Float16,
+          CoopmatType::Float32, CoopmatType::Float32,
+          CoopmatScope::Subgroup, false});
     }
   }
   if (profile.shared_memory_limit_bytes != 0) {

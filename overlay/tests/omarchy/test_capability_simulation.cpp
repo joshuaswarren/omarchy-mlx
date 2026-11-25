@@ -52,6 +52,7 @@ constexpr const char* kNoCoopmat = "no-cooperative-matrix";
 constexpr const char* kG13Legacy = "m1-g13-legacy";
 constexpr const char* kWorkgroup256 = "workgroup-256";
 constexpr const char* kWorkgroup128 = "workgroup-128";
+constexpr const char* kNvidiaC16 = "nvidia-c16-coopmat";
 
 std::string g_profile;
 
@@ -316,9 +317,12 @@ TEST_CASE("capability report is stamped with the active profile") {
   const auto& h = hw();
   REQUIRE_FALSE(h.simulated);
   // m1-g13-legacy pins the device_name axis (the G13-legacy kernel
-  // selections key on it); every other profile inherits it.
+  // selections key on it), and nvidia-c16-coopmat pins the NVIDIA part
+  // name its route selection reads; every other profile inherits it.
   if (profile_is(kG13Legacy)) {
     CHECK(c.device_name == std::string("Apple M1 (G13G B1)"));
+  } else if (profile_is(kNvidiaC16)) {
+    CHECK(c.device_name == std::string("NVIDIA GeForce RTX 5060 Ti"));
   } else {
     CHECK(h.device_name == c.device_name);
   }
@@ -363,6 +367,18 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK_EQ(c.subgroup_size, h.subgroup_size);
     CHECK(c.cooperative_matrix_f32_8 == h.cooperative_matrix_f32_8);
     CHECK_EQ(c.max_compute_shared_memory_size, h.max_compute_shared_memory_size);
+  } else if (profile_is(kNvidiaC16)) {
+    // NVIDIA-style coopmat list: no fp32 8x8x8, the fp16-operand
+    // 16x16x16 subgroup shape the CMAT16 QMM prefill route emits.
+    CHECK_EQ(c.subgroup_size, 32u);
+    CHECK_FALSE(c.cooperative_matrix_f32_8);
+    CHECK(omarchy::cooperative_matrix_advertises(
+        c.cooperative_matrix_shapes,
+        omarchy::qmm_prefill_coopmat_shape_f16x16()));
+    // The cooperative-matrix device feature itself is never simulated:
+    // it inherits hardware truth, and require_backed refuses a claimed
+    // dispatch the runtime device cannot back.
+    CHECK(c.cooperative_matrix_bf16 == h.cooperative_matrix_bf16);
   } else {
     FAIL("unhandled profile ", g_profile);
   }

@@ -593,6 +593,11 @@ omarchy_shader(qmm_coopmat_m16_f16 shaders/qmm_coopmat.comp -DTILE_ROWS=16)
 # accumulation order as the f16 kernels.
 omarchy_shader(qmm_coopmat_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1)
 omarchy_shader(qmm_coopmat_m16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DTILE_ROWS=16)
+# fp16-operand 16x16x16 twin for devices whose coopmat list has no fp32
+# 8x8x8 shape (NVIDIA lists only 16-wide f16/bf16 entries): bf16 x is
+# staged as fp16 and the dequantized B stores fp16; the accumulator
+# stays fp32. Selected only when the fp32 8x8x8 shape is absent.
+omarchy_shader(qmm_coopmat_c16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1)
 # Direct-global-load A twins: the host widens bf16 x to f32 once (exact),
 # so the shader coopMatLoads A tiles straight from the f32 buffer and the
 # x_s staging disappears; same fp32 coopmat k chain, RNE bfloat16 drain.

@@ -74,10 +74,50 @@ TEST_CASE("a device without the fp32xfp32 shape declines both routes") {
       adv, omarchy::qmm_prefill_coopmat_shape()));
 }
 
+TEST_CASE("qmm_prefill_coopmat_shape_f16x16 names the CMAT16 shape") {
+  // The -DCMAT16 build emits fp16 A and B operands with the fp32
+  // accumulator at 16x16x16 subgroup scope - the entry NVIDIA's coopmat
+  // list carries and no fp32-operand shape.
+  const CoopmatShape c16 = omarchy::qmm_prefill_coopmat_shape_f16x16();
+  CHECK(c16.m == 16u);
+  CHECK(c16.n == 16u);
+  CHECK(c16.k == 16u);
+  CHECK(c16.a == CoopmatType::Float16);
+  CHECK(c16.b == CoopmatType::Float16);
+  CHECK(c16.c == CoopmatType::Float32);
+  CHECK(c16.result == CoopmatType::Float32);
+  CHECK(c16.scope == CoopmatScope::Subgroup);
+  CHECK(c16.saturating == false);
+}
+
+TEST_CASE("an NVIDIA-style list advertises the CMAT16 route only") {
+  // NVIDIA 615.78.08: the same-operand 16x16x16 entries (fp16 and bf16)
+  // and no fp32-operand shape of any size. The fp32 8x8x8 route declines
+  // and the CMAT16 route is selected.
+  auto same_operand_16 = [](CoopmatType t) {
+    return CoopmatShape{16u, 16u, 16u, t, t, CoopmatType::Float32,
+        CoopmatType::Float32, CoopmatScope::Subgroup, false};
+  };
+  const std::vector<CoopmatShape> adv = {
+      same_operand_16(CoopmatType::Float16),
+      same_operand_16(CoopmatType::BFloat16)};
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape()));
+  CHECK(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape_f16x16()));
+  // The bf16 twin is a different shape: the fp16-operand selector must
+  // not alias onto it.
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      {same_operand_16(CoopmatType::BFloat16)},
+      omarchy::qmm_prefill_coopmat_shape_f16x16()));
+}
+
 TEST_CASE("no coopmat device advertises nothing") {
   const std::vector<CoopmatShape> adv;
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
       adv, omarchy::qmm_prefill_coopmat_shape()));
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      adv, omarchy::qmm_prefill_coopmat_shape_f16x16()));
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
       adv, omarchy::qmm_prefill_coopmat_shape()));
 }

@@ -1224,6 +1224,12 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM,
   QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64,
   QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM,
+  // fp16-operand 16x16x16 build of the QMM prefill coopmat kernel for
+  // devices whose coopmat list has no fp32 8x8x8 shape (NVIDIA advertises
+  // only 16-wide f16/bf16 entries): bf16 x staged as fp16, the
+  // dequantized B stored fp16, fp32 accumulator (shaders/qmm_coopmat.comp
+  // -DCMAT16). Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16BF16,
   Count,
 };
 
