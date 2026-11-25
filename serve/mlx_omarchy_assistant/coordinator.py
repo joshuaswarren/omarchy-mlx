@@ -391,6 +391,11 @@ def typed_results(spec, answers, text):
     return {"type": "typed", "model": "laya-mlx", "input_scope": text, "results": results}
 
 
+def _refused(what, raw):
+    """A refusal of a malformed worker payload that names its first 200 bytes."""
+    return RuntimeError("%s: %r" % (what, raw[:200].decode("utf-8", "replace")))
+
+
 class LocalModels:
     def __init__(self, manager):
         self.manager = manager
@@ -448,7 +453,13 @@ class LocalModels:
             if response.status != 200:
                 raise RuntimeError("Decision worker refused the request (HTTP %d): %s"
                                    % (response.status, raw[:500].decode("utf-8", "replace")))
-            return json.loads(raw)
+            try:
+                answer = json.loads(raw)
+            except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting too deep
+                raise _refused("Decision worker sent a response that is not JSON", raw) from exc
+            if not isinstance(answer, dict) or not isinstance(answer.get("answers"), dict):
+                raise _refused("Decision worker sent a response without an answers object", raw)
+            return answer
         finally:
             self.close_connection()
 
@@ -487,17 +498,33 @@ class LocalModels:
                 data = line[5:].strip()
                 if data == b"[DONE]":
                     break
-                event = json.loads(data)
+                try:
+                    event = json.loads(data)
+                except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting too deep
+                    raise _refused("Chat worker sent an event that is not JSON", data) from exc
+                if not isinstance(event, dict):
+                    raise _refused("Chat worker sent a malformed event", data)
                 if event.get("error"):
                     raise RuntimeError("Chat worker returned an inference error")
-                for choice in event.get("choices", []):
+                # A usage chunk has no choices; a role-only or finish chunk has
+                # an absent or null delta or content.
+                choices = event.get("choices")
+                if choices is not None and not isinstance(choices, list):
+                    raise _refused("Chat worker sent a malformed event", data)
+                for choice in choices or ():
+                    if not isinstance(choice, dict):
+                        raise _refused("Chat worker sent a malformed event", data)
                     reason = choice.get("finish_reason")
+                    delta = choice.get("delta")
+                    if delta is not None and not isinstance(delta, dict):
+                        raise _refused("Chat worker sent a malformed event", data)
+                    text = delta.get("content") if delta else None
+                    if (reason is not None and not isinstance(reason, str)) \
+                            or (text is not None and not isinstance(text, str)):
+                        raise _refused("Chat worker sent a malformed event", data)
                     if reason:
                         finish = reason
-                    text = choice.get("delta", {}).get("content", "")
                     if text:
-                        if not isinstance(text, str):
-                            raise ValueError("Chat worker returned invalid text")
                         yield ("delta", text)
             if not cancel.is_set():
                 yield ("finish", finish)
