@@ -697,6 +697,10 @@ def test_reductions():
         # #864: _torch widens bf16 outputs to f32 (numpy has no bf16 buffer)
         assert out.dtype == ref.dtype or (ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
             (str(target), out.dtype, ref.dtype)
+        # allclose broadcasts — pin the shape too so a scalar-vs-(1,1)
+        # keepdim slip can't pass silently
+        assert torch.as_tensor(out).shape == ref.shape, \
+            (str(target), kw, torch.as_tensor(out).shape, ref.shape)
         assert np.allclose(torch.as_tensor(out).float().numpy(), ref.float().numpy(), atol=2e-2), \
             (str(target), kw, torch.as_tensor(out).float().numpy(), ref.float().numpy())
 
@@ -721,6 +725,7 @@ def test_reductions():
         (torch.ops.aten.std.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [0], "keepdim": True}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1]}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1], "keepdim": True}),
         (torch.ops.aten.std.dim, (xb,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (xh,), {"dim": [1]}),
     ]:
