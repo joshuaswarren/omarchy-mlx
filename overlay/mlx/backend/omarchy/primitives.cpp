@@ -10921,6 +10921,62 @@ bool dispatch_quantized_gemv_group(
         total_groups,
         1u,
         1u);
+    if (std::getenv("MLX_OMARCHY_ROPE_EPI_DUMP") != nullptr) {
+      encoder.synchronize("rope-epi debug dump");
+      static int dmp = 0;
+      const int idx = dmp++;
+      const std::string base =
+          "/tmp/ropeepi_" + std::to_string(idx) + "_";
+      auto write_all = [](const std::string& path, const array& a) {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        f.write(
+            static_cast<const char*>(a.data<uint8_t>()),
+            static_cast<std::streamsize>(a.nbytes()));
+      };
+      write_all(base + "qmember.bin", q_member);
+      write_all(base + "kmember.bin", k_member);
+      write_all(base + "qropeout.bin", rope_epi->q.rope);
+      write_all(base + "kwindow.bin", window.node);
+      write_all(base + "qoff.bin", offset);
+      write_all(base + "koff.bin", rope_epi->k.rope.inputs()[1]);
+      write_all(base + "qnormw.bin", rope_epi->q.rope.inputs()[2]);
+      write_all(base + "knormw.bin", rope_epi->k.rope.inputs()[2]);
+      std::ofstream mf(base + "meta.txt", std::ios::trunc);
+      mf << "qview ndim=" << q_view.ndim() << " shape=";
+      for (auto s : q_view.shape()) mf << s << ",";
+      mf << " strides=";
+      for (auto s : q_view.strides()) mf << s << ",";
+      mf << " off=" << q_view.offset() << "\n";
+      mf << "kview ndim=" << k_view.ndim() << " shape=";
+      for (auto s : k_view.shape()) mf << s << ",";
+      mf << " strides=";
+      for (auto s : k_view.strides()) mf << s << ",";
+      mf << " off=" << k_view.offset() << "\n";
+      mf << "qmember shape=";
+      for (auto s : q_member.shape()) mf << s << ",";
+      mf << " off=" << q_member.offset() << "\n";
+      mf << "kmember shape=";
+      for (auto s : k_member.shape()) mf << s << ",";
+      mf << " off=" << k_member.offset() << "\n";
+      mf << "qropeout shape=";
+      for (auto s : rope_epi->q.rope.shape()) mf << s << ",";
+      mf << " strides=";
+      for (auto s : rope_epi->q.rope.strides()) mf << s << ",";
+      mf << " off=" << rope_epi->q.rope.offset() << "\n";
+      mf << "window node_shape=";
+      for (auto s : window.node.shape()) mf << s << ",";
+      mf << " off=" << window.offset << " strides=" << window.strides[0]
+         << "," << window.strides[1] << "," << window.strides[2]
+         << " ndim=" << window.ndim << "\n";
+      mf << "epi_d=" << epi_d << " dims=" << rope_epi->dims
+         << " heads=" << epi_heads[0] << "," << epi_heads[1]
+         << " pat=" << epi_pattern[0] << "," << epi_pattern[1]
+         << " mi=" << rope_epi->q.member_index << ","
+         << rope_epi->k.member_index << " eps=" << rope_epi->norm_eps
+         << " scale=" << rope_epi->scale << " base=" << rope_epi->base
+         << " count=" << params.count << " rhsoff=" << params.rhs_offset
+         << " rows=" << rows << "\n";
+    }
     commit_rope_kv_redirect(rope_epi->k.rope);
     if (rope_epi_done) {
       *rope_epi_done = true;
