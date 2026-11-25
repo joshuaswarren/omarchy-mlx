@@ -1284,13 +1284,19 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable.
   QmmVecQ4MultiToken4ResNormSubgroupBF16,
   // QMM_VEC_TOKENS+ROPE_EPI): the last finishing workgroup norms and
-  // rotates the Q/K member rows for the layer's two fused-norm ropes,
+  // rotates the Q/K member rows of the layer's two fused-norm ropes,
   // storing queries to a fresh buffer and keys through the slice
   // pair's KV window. Appended to keep profile kernel ids stable.
   QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
   // Per-member twin of the rope epilogue above: the same tail on the
   // single-weight Rows8 column, one dispatch per group member.
   QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+  // Both rope_rms_norm calls of one layer in one dispatch (the
+  // FastTrioRopePair idea for the norm-carrying bf16 form). One
+  // workgroup per rotation row per side; see shaders/fast_rope_norm_pair.comp.
+  // Appended to keep profile kernel ids stable.
+  FastRopeNormPairBF16,
+  FastRopeNormPairAppleBF16,
   Count,
 };
 

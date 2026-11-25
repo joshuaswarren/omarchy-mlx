@@ -18,6 +18,7 @@
 #include <string_view>
 #include <initializer_list>
 #include <optional>
+#include <unordered_set>
 #include <numeric>
 #include <string>
 #include <typeinfo>
@@ -86,6 +87,7 @@
 #include "mlx/fast_primitives.h"
 #include "mlx/backend/gpu/copy.h"
 #include "mlx/backend/gpu/eval.h"
+#include "mlx/backend/cpu/eval.h"
 #include "mlx/primitives.h"
 #include "mlx/ops.h"
 
@@ -11734,6 +11736,7 @@ bool dispatch_dense_gemv_group(
 }
 bool dispatch_rope_pair(
     std::array<array, 2>& nodes,
+    const std::array<const RopePairNorm*, 2>& norms,
     const Stream& stream) {
   auto& encoder = get_command_encoder(stream);
   const auto& caps = encoder.device().capabilities();
@@ -11758,13 +11761,39 @@ bool dispatch_rope_pair(
       static_cast<const mlx::core::fast::RoPE&>(q_node.primitive());
   const auto& rope_k =
       static_cast<const mlx::core::fast::RoPE&>(k_node.primitive());
-  const array& q_in = q_node.inputs()[0];
-  const array& k_in = k_node.inputs()[0];
+  // Norm payload: the planner passes each side's fold-stashed pre-norm
+  // input, weight and eps; a 3-input rope_rms_norm primitive carries the
+  // same payload inline. Either way the pair kernel folds the RMSNorm
+  // inside the launch, so the side input is the PRE-NORM tensor (for a
+  // fold pair the rope's own inputs()[0] is the norm output the claimed
+  // norm node never materialized).
+  std::optional<RopePairNorm> prim_norms[2];
+  const RopePairNorm* side_norms[2]{norms[0], norms[1]};
+  if (side_norms[0] == nullptr && q_node.inputs().size() == 3 &&
+      rope.has_norm() && k_node.inputs().size() == 3 &&
+      rope_k.has_norm()) {
+    prim_norms[0].emplace(RopePairNorm{
+        q_node.inputs()[0], q_node.inputs()[2], rope.norm_eps()});
+    prim_norms[1].emplace(RopePairNorm{
+        k_node.inputs()[0], k_node.inputs()[2], rope_k.norm_eps()});
+    side_norms[0] = &*prim_norms[0];
+    side_norms[1] = &*prim_norms[1];
+  }
+  if ((side_norms[0] != nullptr) != (side_norms[1] != nullptr)) {
+    return refuse("one-sided norm pair");
+  }
+  // The settle roots are the raw side inputs: the pre-norm x for a
+  // fold side, the rope's own input otherwise. A fold view replays on
+  // top after its x is resident (below).
+  const array& q_in_raw =
+      side_norms[0] != nullptr ? side_norms[0]->x : q_node.inputs()[0];
+  const array& k_in_raw =
+      side_norms[1] != nullptr ? side_norms[1]->x : k_node.inputs()[0];
   const array& offset = q_node.inputs()[1];
   auto settled = [](const array& a) {
     return a.data_shared_ptr() != nullptr;
   };
-  if (!settled(q_in) || !settled(k_in)) {
+  if (!settled(q_in_raw) || !settled(k_in_raw)) {
     // Pre-settle the unsettled producer chains: the pair fires at the
     // first member while bfs_max_width tape segments can leave that
     // member's own producers unscheduled. The single path tolerates
@@ -11783,11 +11812,11 @@ bool dispatch_rope_pair(
     // residual stream makes every earlier layer one - which is O(graph)
     // host work per pair and O(graph^2) per token: the measured ctx1053
     // bottleneck. Any chain that is not a linear same-stream run
-    // (fan-in, tracer, odd status) falls back to settle(), which
-    // produces the identical dispatch schedule.
+    // (fan-in, tracer, odd status) falls back to the bounded ancestor
+    // eval below, which produces the identical dispatch schedule.
     std::vector<array> chain;
     bool linear = true;
-    for (const array* leaf : {&q_in, &k_in}) {
+    for (const array* leaf : {&q_in_raw, &k_in_raw}) {
       array cur = *leaf;
       while (linear && cur.data_shared_ptr() == nullptr) {
         if (chain.size() >= 64 || cur.is_tracer() || !cur.has_primitive() ||
@@ -11822,6 +11851,14 @@ bool dispatch_rope_pair(
     }
     if (linear) {
       for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        // The two leaves can share an ancestor (a fused QKV projection
+        // feeding both sides through different views): the first eval
+        // detaches it, so a second gpu::eval would dispatch a detached
+        // node. Skip anything that came resident between the walk and
+        // this pass, or already produced by an earlier chain member.
+        if (it->data_shared_ptr() != nullptr) {
+          continue;
+        }
         gpu::eval(*it);
         it->set_status(array::Status::evaluated);
         for (auto& sib : it->siblings()) {
@@ -11829,17 +11866,77 @@ bool dispatch_rope_pair(
         }
       }
     } else {
-      std::vector<array> chains;
-      if (!settled(q_in)) {
-        chains.push_back(q_in);
+      // Non-linear roots (shared QKV producer, residual fan-in).
+      // settle() runs a fresh eval_impl whose nested fusion scope
+      // re-plans roles on a partial tape window: an ancestor rope the
+      // outer scope pairs or folds can land there uncovered and reach
+      // eval_gpu with its claimed-norm input never materialized.
+      // Evaluate the unsettled ancestors directly in dependency order
+      // instead; every gpu::eval resolves through this scope's roles
+      // exactly as the outer tape loop resolves it.
+      std::vector<array> order;
+      bool same_stream = true;
+      {
+        std::unordered_set<uintptr_t> seen;
+        std::vector<std::pair<array, size_t>> stack;
+        stack.emplace_back(q_in_raw, 0);
+        stack.emplace_back(k_in_raw, 0);
+        while (!stack.empty() && same_stream) {
+          auto& [cur, idx] = stack.back();
+          if (idx == 0 &&
+              (!seen.insert(cur.id()).second || !cur.has_primitive() ||
+               cur.data_shared_ptr() != nullptr ||
+               cur.status() != array::Status::unscheduled)) {
+            stack.pop_back();
+            continue;
+          }
+          if (idx == 0 && cur.primitive().stream() != stream) {
+            same_stream = false;
+            break;
+          }
+          if (idx < cur.inputs().size()) {
+            array in = cur.inputs()[idx];
+            ++idx;
+            stack.emplace_back(std::move(in), 0);
+            continue;
+          }
+          order.push_back(std::move(cur));
+          stack.pop_back();
+        }
       }
-      if (!settled(k_in)) {
-        chains.push_back(k_in);
+      if (!same_stream) {
+        // A cross-stream ancestor needs eval_impl's fence pass. The
+        // stream mix has never shipped an uncovered rope ancestor, so
+        // keep the historical settle() fallback for it.
+        std::vector<array> chains;
+        if (!settled(q_in_raw)) {
+          chains.push_back(q_in_raw);
+        }
+        if (!settled(k_in_raw)) {
+          chains.push_back(k_in_raw);
+        }
+        settle(chains);
+      } else {
+        for (auto& n : order) {
+          if (n.data_shared_ptr() != nullptr ||
+              n.status() != array::Status::unscheduled ||
+              !n.has_primitive()) {
+            continue;
+          }
+          if (n.primitive().device() == mlx::core::Device::gpu) {
+            gpu::eval(n);
+          } else {
+            cpu::eval(n);
+          }
+          n.set_status(array::Status::evaluated);
+          for (auto& sib : n.siblings()) {
+            sib.set_status(array::Status::evaluated);
+          }
+        }
       }
-      settle(chains);
     }
   }
-  if (!settled(q_in) || !settled(k_in) || !settled(offset)) {
+  if (!settled(q_in_raw) || !settled(k_in_raw) || !settled(offset)) {
     auto dump_settled = [](const array& in, const char* side) {
       array cur = in;
       for (int hop = 0; hop < 5 && cur.has_primitive(); ++hop) {
@@ -11861,22 +11958,132 @@ bool dispatch_rope_pair(
     std::fprintf(
         stderr,
         "[trio-pair] unsettled: q=%d k=%d off=%d\n",
-        static_cast<int>(settled(q_in)),
-        static_cast<int>(settled(k_in)),
+        static_cast<int>(settled(q_in_raw)),
+        static_cast<int>(settled(k_in_raw)),
         static_cast<int>(settled(offset)));
-    if (!settled(q_in)) {
-      dump_settled(q_in, "q");
+    if (!settled(q_in_raw)) {
+      dump_settled(q_in_raw, "q");
     }
-    if (!settled(k_in)) {
-      dump_settled(k_in, "k");
+    if (!settled(k_in_raw)) {
+      dump_settled(k_in_raw, "k");
     }
     return refuse("partner input not settled");
   }
-  if (q_node.dtype() != float16 || k_node.dtype() != float16 ||
-      q_in.dtype() != float16 || k_in.dtype() != float16) {
-    return refuse("dtype not f16");
+  // A fold side whose rope read the norm through a view replays that
+  // view over the contiguous pre-norm buffer, exactly like
+  // dispatch_rope_norm_fold: per-row norm and the view commute, so the
+  // kernel addresses x with the view's layout.
+  auto contiguous_strides = [](const Shape& shape) {
+    Strides strides(shape.size(), 0);
+    strides.back() = 1;
+    for (int ax = static_cast<int>(shape.size()) - 2; ax >= 0; --ax) {
+      strides[ax] = strides[ax + 1] * shape[ax + 1];
+    }
+    return strides;
+  };
+  std::optional<array> side_views[2];
+  if (side_norms[0] != nullptr) {
+    for (int s = 0; s < 2; ++s) {
+      if (!side_norms[s]->view.has_value()) {
+        continue;
+      }
+      const array& xv = side_norms[s]->x;
+      const array& view = *side_norms[s]->view;
+      Strides src_strides;
+      if (typeid(*side_norms[s]->view_prim) == typeid(Transpose)) {
+        const auto& axes =
+            static_cast<const Transpose&>(*side_norms[s]->view_prim)
+                .state();
+        Strides parent = contiguous_strides(xv.shape());
+        if (axes.size() != static_cast<size_t>(view.ndim())) {
+          return refuse("norm pair view axes");
+        }
+        src_strides = Strides(axes.size(), 0);
+        for (size_t ax = 0; ax < axes.size(); ++ax) {
+          if (axes[ax] < 0 ||
+              static_cast<size_t>(axes[ax]) >= parent.size()) {
+            return refuse("norm pair view axes");
+          }
+          src_strides[ax] = parent[axes[ax]];
+        }
+      } else {
+        src_strides = contiguous_strides(view.shape());
+      }
+      if (src_strides.back() != 1 || !xv.flags().row_contiguous ||
+          xv.size() != xv.data_size() ||
+          view.offset() % view.itemsize() != 0 ||
+          view.shape(-1) != xv.shape(-1)) {
+        return refuse("norm pair view contract");
+      }
+      array vx(view.shape(), xv.dtype(), nullptr, {});
+      array::Flags vflags{};
+      vflags.contiguous = true;
+      vflags.row_contiguous = true;
+      vflags.col_contiguous = true;
+      int64_t f_stride = 1;
+      int64_t b_stride = 1;
+      for (int i = 0, ri = view.ndim() - 1; i < view.ndim(); ++i, --ri) {
+        vflags.col_contiguous &=
+            (src_strides[i] == f_stride || view.shape(i) == 1);
+        f_stride *= view.shape(i);
+        vflags.row_contiguous &=
+            (src_strides[ri] == b_stride || view.shape(ri) == 1);
+        b_stride *= view.shape(ri);
+      }
+      vx.copy_shared_buffer(
+          xv,
+          src_strides,
+          vflags,
+          xv.data_size(),
+          view.offset() / view.itemsize());
+      vx.set_status(array::Status::available);
+      side_views[s] = std::move(vx);
+    }
   }
-  if (rope.state() != rope_k.state() || k_node.inputs().size() != 2) {
+  const array& q_in = side_views[0] ? *side_views[0] : q_in_raw;
+  const array& k_in = side_views[1] ? *side_views[1] : k_in_raw;
+  // Two pairable forms: the f16 elementwise pair (FastTrioRopePairF16,
+  // 2-input ropes) and the bf16 norm-carrying pair (FastRopeNormPair*
+  // kernels). The norm payload is the planner's fold stash (pre-norm
+  // input + RMSNorm weight + eps) or a 3-input rope_rms_norm primitive;
+  // either way the pair reproduces each side's fused norm+rope dispatch
+  // bit for bit, so one launch replaces the two per-layer norm+rope
+  // launches of the decode step.
+  const bool norm_pair = side_norms[0] != nullptr;
+  const Dtype pair_dtype = norm_pair ? bfloat16 : float16;
+  if (q_node.inputs().size() != k_node.inputs().size() ||
+      (!norm_pair && q_node.inputs().size() != 2) ||
+      q_node.dtype() != pair_dtype || k_node.dtype() != pair_dtype ||
+      q_in.dtype() != pair_dtype || k_in.dtype() != pair_dtype ||
+      (norm_pair && side_norms[0]->eps != side_norms[1]->eps)) {
+    return refuse("dtype or rope form mismatch");
+  }
+  if (norm_pair) {
+    const array& w_q = side_norms[0]->w;
+    const array& w_k = side_norms[1]->w;
+    if (std::get<2>(rope.state()) ||
+        fast::RoPE::use_fallback(q_node.primitive().stream()) ||
+        w_q.dtype() != bfloat16 || w_k.dtype() != bfloat16 ||
+        w_q.size() != w_k.size() ||
+        !settled(w_q) || !settled(w_k) ||
+        w_q.offset() % w_q.itemsize() != 0 ||
+        w_k.offset() % w_k.itemsize() != 0 ||
+        ((w_q.offset() / w_q.itemsize()) |
+         (w_k.offset() / w_k.itemsize()) |
+         (q_in.offset() / q_in.itemsize()) |
+         (k_in.offset() / k_in.itemsize())) % 2 != 0) {
+      return refuse("norm pair contract mismatch");
+    }
+    // The packed word store covers a word only when both lanes are
+    // written: the rotation half must be even (RoPE::eval_gpu's
+    // "bf16 odd rotation pair" contract), and the weight covers the row.
+    if (w_q.size() != static_cast<size_t>(q_in.shape(-1)) ||
+        (std::get<1>(rope.state()) / 2) % 2 != 0) {
+      return refuse("norm pair weight or rotation size");
+    }
+  }
+  if (rope.state() != rope_k.state() ||
+      k_node.inputs().size() != q_node.inputs().size()) {
     return refuse("rope state mismatch");
   }
   if (offset.size() != 1) {
@@ -11950,22 +12157,25 @@ bool dispatch_rope_pair(
   auto k_layout = side_layout(k_in);
   if (!q_layout || !k_layout) {
     if (trace_refusals) {
+      auto stride_at = [](const array& a, int i) {
+        return i < a.ndim() ? a.strides()[i] : int64_t(-1);
+      };
       std::fprintf(
           stderr,
           "[trio-pair] layout: q ndim=%d rowc=%d strides=%lld,%lld,%lld,%lld"
           " k ndim=%d rowc=%d strides=%lld,%lld,%lld,%lld\n",
           static_cast<int>(q_in.ndim()),
           static_cast<int>(q_in.flags().row_contiguous),
-          static_cast<long long>(q_in.strides()[0]),
-          static_cast<long long>(q_in.strides()[1]),
-          static_cast<long long>(q_in.strides()[2]),
-          static_cast<long long>(q_in.strides()[3]),
+          static_cast<long long>(stride_at(q_in, 0)),
+          static_cast<long long>(stride_at(q_in, 1)),
+          static_cast<long long>(stride_at(q_in, 2)),
+          static_cast<long long>(stride_at(q_in, 3)),
           static_cast<int>(k_in.ndim()),
           static_cast<int>(k_in.flags().row_contiguous),
-          static_cast<long long>(k_in.strides()[0]),
-          static_cast<long long>(k_in.strides()[1]),
-          static_cast<long long>(k_in.strides()[2]),
-          static_cast<long long>(k_in.strides()[3]));
+          static_cast<long long>(stride_at(k_in, 0)),
+          static_cast<long long>(stride_at(k_in, 1)),
+          static_cast<long long>(stride_at(k_in, 2)),
+          static_cast<long long>(stride_at(k_in, 3)));
     }
     return refuse("input layout unsupported");
   }
@@ -12013,7 +12223,7 @@ bool dispatch_rope_pair(
     auto& window = *kv_window;
     if (window.node.data_shared_ptr() != nullptr ||
         window.base.data_shared_ptr() == nullptr ||
-        window.base.dtype() != float16 ||
+        window.base.dtype() != k_node.dtype() ||
         !window.base.flags().row_contiguous ||
         window.base.size() != window.base.data_size() ||
         window.base.offset() % window.base.itemsize() != 0 ||
@@ -12025,6 +12235,20 @@ bool dispatch_rope_pair(
   // and scale make the theta bound identical.
   fast::rope_trig_gate(
       "rope_pair", q_in, offset, nullptr, dims, base, scale, q_node);
+  if (norm_pair) {
+    // Refuse before any buffer is bound or allocated below: the pair
+    // kernel carries the weight element offsets and the kv-window word
+    // parity in 32-bit fields.
+    if (!compute_index_span_fits(
+            side_norms[0]->w.offset() / side_norms[0]->w.itemsize(),
+            side_norms[0]->w.size()) ||
+        !compute_index_span_fits(
+            side_norms[1]->w.offset() / side_norms[1]->w.itemsize(),
+            side_norms[1]->w.size()) ||
+        (kv_window && (kv_window->offset & 1u) != 0u)) {
+      return refuse("norm pair offsets do not fit");
+    }
+  }
   if (kv_window) {
     auto& window = *kv_window;
     bind_kv_window_storage(window, stream);
@@ -12033,6 +12257,80 @@ bool dispatch_rope_pair(
   }
   q_node.set_data(allocator().malloc(q_node.nbytes()));
   array& k_out = kv_window ? kv_window->node : k_node;
+  if (norm_pair) {
+    // One workgroup per rotation row per side. The fields carry the
+    // fast_rope_norm.comp contract doubled per side; see
+    // shaders/fast_rope_norm_pair.comp for the mapping. The query side
+    // writes a fresh row-contiguous output; the keys side writes the
+    // same or the producer-direct KV window when one is planned.
+    const array& w_q = side_norms[0]->w;
+    const array& w_k = side_norms[1]->w;
+    const uint64_t wq_off = w_q.offset() / w_q.itemsize();
+    const uint64_t wk_off = w_k.offset() / w_k.itemsize();
+    const uint32_t rows_q = static_cast<uint32_t>(
+        q_in.shape(0) * static_cast<int64_t>(heads_q) * T);
+    const uint32_t rows_k = static_cast<uint32_t>(
+        k_in.shape(0) * static_cast<int64_t>(heads_k) * T);
+    ComputeParams params;
+    params.count = rows_q + rows_k;
+    params.lhs_size = rows_q;
+    params.rhs_size = rows_k;
+    params.operation = std::bit_cast<uint32_t>(side_norms[0]->eps);
+    params.reduce_size = static_cast<uint32_t>(D);
+    params.lhs_offset = static_cast<uint32_t>(q_off);
+    params.rhs_offset = static_cast<uint32_t>(k_off);
+    params.output_offset = 0u;
+    params.aux_size = kv_window ? kv_window->offset : 0u;
+    params.aux_offset = static_cast<uint32_t>(off_off);
+    // Same offset-stride contract as the single norm dispatch: a scalar
+    // offset broadcasts to every batch row, anything else strides by row.
+    params.matrix_m = static_cast<uint32_t>(
+        offset.size() == 1 || offset.ndim() == 0 ? 0 : offset.strides()[0]);
+    params.matrix_n = static_cast<uint32_t>(wq_off);
+    params.matrix_k = static_cast<uint32_t>(wk_off);
+    params.flags = 1u | (q_transposed ? 4u : 0u) | (k_transposed ? 8u : 0u);
+    params.alpha = scale;
+    params.beta = static_cast<float>(std::log(base) / half);
+    params.dims = half;
+    params.shape[0] = static_cast<uint32_t>(heads_q);
+    params.shape[1] = static_cast<uint32_t>(heads_k);
+    params.shape[2] = static_cast<uint32_t>(T);
+    params.shape[3] = static_cast<uint32_t>(D);
+    params.in_strides[0] = q_layout->first;
+    params.in_strides[1] = q_layout->second;
+    params.in_strides[2] = k_layout->first;
+    params.in_strides[3] = k_layout->second;
+    params.out_strides[0] = static_cast<uint32_t>(T * D);
+    params.out_strides[1] = static_cast<uint32_t>(D);
+    params.out_strides[2] = kv_window ? kv_window->strides[0]
+                                      : static_cast<uint32_t>(T * D);
+    params.out_strides[3] = kv_window ? kv_window->strides[1]
+                                      : static_cast<uint32_t>(D);
+    const ComputeBinding filler = binding(q_in);
+    std::array<ComputeBinding, 8> bindings{
+        binding(q_in),
+        binding(k_in),
+        binding(q_node),
+        binding(k_out),
+        binding(w_q),
+        binding(w_k),
+        binding(offset),
+        filler};
+    encoder.dispatch_compute(
+        apple_norm_enabled(
+            encoder.device(),
+            static_cast<size_t>(params.reduce_size),
+            static_cast<size_t>(params.count))
+            ? ComputeKernel::FastRopeNormPairAppleBF16
+            : ComputeKernel::FastRopeNormPairBF16,
+        bindings,
+        params,
+        params.count);
+    if (kv_window) {
+      commit_rope_kv_redirect(k_node);
+    }
+    return true;
+  }
   ComputeParams params;
   params.count = static_cast<uint32_t>(total);
   params.lhs_size = static_cast<uint32_t>(cnt_q);

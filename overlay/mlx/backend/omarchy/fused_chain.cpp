@@ -723,6 +723,9 @@ struct EagerRole {
 // outputs) or failed (both nodes take the ordinary RoPE path).
 struct RopePair {
   std::array<array, 2> nodes;
+  // Indices into rope_norms for norm-carrying members (the fold the
+  // pair dispatch absorbs); -1 means the plain 2-input form.
+  std::array<int, 2> norm_folds{-1, -1};
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -2555,139 +2558,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       claimed.put_if_absent(node.id(), 1);
     }
   }
-  // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
-  // scalar offset input, one stream, float16 storage, identical rope
-  // state (dims, traditional, base, scale, forward; no freqs), and no
-  // passthrough tail (dims == last-axis extent) fuse into ONE
-  // FastTrioRopePairF16 rope-pair dispatch when the first member evaluates.
-  // The keys side keeps any planned producer-direct KV window; the
-  // query side must not be one. Any runtime refusal un-plans the pair
-  // and both nodes take the ordinary RoPE path unchanged.
-  // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
-  // not by this f16-only rope-pair plan.)
-  // Per node: MLX_OMARCHY_FUSED_TRIO for the device that executes it,
-  // independent of MLX_OMARCHY_FUSED_GEMV.
-  {
-    RopePairScanTrace trace;
-    // The RoPE nodes of one decode step are NOT tape-adjacent: each
-    // rope call materializes its scalar offset between them and the
-    // cache write views interleave, so collect the rope subsequence in
-    // tape order and pair consecutive members (query, key).
-    std::vector<const array*> rope_nodes;
-    for (const auto& node : tape) {
-      if (!is_op(&node, typeid(fast::RoPE)) || !node_trio_enabled(node)) {
-        continue;
-      }
-      if (node.inputs().size() != 2) {
-        trace.rej_node_inputs += 1;
-        continue;
-      }
-      if (node.inputs()[1].size() != 1) {
-        trace.rej_node_offset += 1;
-        continue;
-      }
-      if (node.dtype() != float16) {
-        trace.rej_node_dtype += 1;
-        continue;
-      }
-      if (!std::get<5>(
-              static_cast<const fast::RoPE&>(node.primitive()).state())) {
-        trace.rej_node_notforward += 1;
-        continue;
-      }
-      if (trace.rope_shapes.size() < 6) {
-        trace.rope_shapes.push_back(
-            "idx" + std::to_string(static_cast<long>(&node - &tape.front())) +
-            ":" + std::to_string(node.shape(-2)) + "x" +
-            std::to_string(node.shape(-1)) + ":f" +
-            std::to_string(std::get<1>(
-                static_cast<const fast::RoPE&>(node.primitive()).state())) +
-            ":off" +
-            std::to_string(node.inputs()[1].status() ==
-                           array::Status::available));
-      }
-      rope_nodes.push_back(&node);
-    }
-    trace.rope_nodes = rope_nodes.size();
-    // Greedy sliding pairing: a stray unpairable rope node (47 vs 48 in
-    // one measured plan) shifts fixed-parity pairs onto cross-layer
-    // neighbors the runtime would have to refuse, so slide by one on a
-    // failed pair instead.
-    size_t i = 1;
-    while (i < rope_nodes.size()) {
-      const array& first = *rope_nodes[i - 1];
-      const array& second = *rope_nodes[i];
-      const auto& rope_first =
-          static_cast<const fast::RoPE&>(first.primitive());
-      const auto& rope_second =
-          static_cast<const fast::RoPE&>(second.primitive());
-      if (rope_second.state() != rope_first.state() ||
-          std::get<1>(rope_first.state()) % 2 != 0 ||
-          first.primitive().stream() != second.primitive().stream()) {
-        trace.rej_state += 2;
-        i += 1;
-        continue;
-      }
-      if (!rope_offset_shared(first.inputs()[1], second.inputs()[1])) {
-        trace.rej_offset += 2;
-        i += 1;
-        continue;
-      }
-      if (first.shape().size() != second.shape().size() ||
-          first.shape(-1) != second.shape(-1) ||
-          first.shape(-2) != second.shape(-2) ||
-          first.shape(-1) != std::get<1>(rope_first.state())) {
-        trace.rej_shape += 2;
-        i += 1;
-        continue;
-      }
-      if (claimed.count(first.id()) || claimed.count(second.id())) {
-        trace.rej_claimed += 2;
-        i += 1;
-        continue;
-      }
-      if (state->rope_redirect_roles.count(first.id())) {
-        trace.rej_redirect += 2;
-        i += 1;
-        continue;
-      }
-      const size_t index = state->rope_pairs.size();
-      state->rope_pair_roles.put_if_absent(first.id(), index);
-      state->rope_pair_roles.put_if_absent(second.id(), index);
-      state->rope_pairs.push_back(RopePair{{first, second}});
-      claimed.put_if_absent(first.id(), 1);
-      claimed.put_if_absent(second.id(), 1);
-      trace.pairs += 1;
-      i += 2;
-    }
-    static int trio_trace_plans = 0;
-    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
-        trace.rope_nodes > 0 && trio_trace_plans < 3) {
-      ++trio_trace_plans;
-      std::fprintf(
-          stderr,
-          "[trio-plan] rope_nodes=%zu rope_forward_scalar=%zu "
-          "rej_node_inputs=%zu rej_node_offset=%zu rej_node_dtype=%zu "
-          "rej_node_notforward=%zu rej_state=%zu rej_offset=%zu "
-          "rej_shape=%zu rej_claimed=%zu rej_redirect=%zu "
-          "pairs_planned=%zu rope_neighbor_after=%s rope_shapes=%s\n",
-          trace.rope_nodes,
-          trace.rope_forward_scalar,
-          trace.rej_node_inputs,
-          trace.rej_node_offset,
-          trace.rej_node_dtype,
-          trace.rej_node_notforward,
-          trace.rej_state,
-          trace.rej_offset,
-          trace.rej_shape,
-          trace.rej_claimed,
-          trace.rej_redirect,
-          trace.pairs,
-          joined_rope_neighbors(trace.rope_neighbor_after).c_str(),
-          joined_rope_neighbors(trace.rope_shapes).c_str());
-    }
-  }
-
   // RMSNorm -> RoPE fold: a plain two-input fast::RoPE whose input is a
   // single-use fast::RMSNorm output gets the norm computed inside the
   // rope dispatch (the FastRopeNorm build; bf16 only). The claimed norm
@@ -2810,6 +2680,200 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           cand);
     }
   }
+  // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
+  // scalar offset input, one stream, float16 storage, identical rope
+  // state (dims, traditional, base, scale, forward; no freqs), and no
+  // passthrough tail (dims == last-axis extent) fuse into ONE
+  // FastTrioRopePairF16 rope-pair dispatch when the first member evaluates.
+  // The keys side keeps any planned producer-direct KV window; the
+  // query side must not be one. Any runtime refusal un-plans the pair
+  // and both nodes take the ordinary RoPE path unchanged.
+  // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
+  // not by this f16-only rope-pair plan.)
+  // Per node: MLX_OMARCHY_FUSED_TRIO for the device that executes it,
+  // independent of MLX_OMARCHY_FUSED_GEMV.
+  {
+    RopePairScanTrace trace;
+    // The RoPE nodes of one decode step are NOT tape-adjacent: each
+    // rope call materializes its scalar offset between them and the
+    // cache write views interleave, so collect the rope subsequence in
+    // tape order and pair consecutive members (query, key).
+    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr) {
+      size_t rope_ops = 0;
+      size_t trio_ok = 0;
+      for (const auto& node : tape) {
+        if (is_op(&node, typeid(fast::RoPE))) {
+          rope_ops += 1;
+          trio_ok += node_trio_enabled(node) ? 1 : 0;
+        }
+      }
+      std::fprintf(
+          stderr,
+          "[trio-scan] tape=%zu rope_ops=%zu trio_ok=%zu\n",
+          tape.size(),
+          rope_ops,
+          trio_ok);
+    }
+    std::vector<const array*> rope_nodes;
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RoPE)) || !node_trio_enabled(node)) {
+        continue;
+      }
+      const auto& node_rope =
+          static_cast<const fast::RoPE&>(node.primitive());
+      // A bf16 rope the RMSNorm->RoPE fold claimed (or a 3-input
+      // rope_rms_norm carrying its weight) pairs through the
+      // FastRopeNormPair kernels; the pair absorbs the fold so its
+      // claimed norm nodes stay skipped. Plain ropes keep the 2-input
+      // f16 contract.
+      const bool norm_rope =
+          state->rope_norm_roles.count(node.id()) ||
+          (node.inputs().size() == 3 && node_rope.has_norm());
+      if (node.inputs().size() != 2 && !norm_rope) {
+        trace.rej_node_inputs += 1;
+        continue;
+      }
+      if (node.inputs()[1].size() != 1) {
+        trace.rej_node_offset += 1;
+        continue;
+      }
+      if (node.dtype() != float16 &&
+          !(norm_rope && node.dtype() == bfloat16)) {
+        trace.rej_node_dtype += 1;
+        continue;
+      }
+      if (!std::get<5>(
+              static_cast<const fast::RoPE&>(node.primitive()).state())) {
+        trace.rej_node_notforward += 1;
+        continue;
+      }
+      if (trace.rope_shapes.size() < 6) {
+        trace.rope_shapes.push_back(
+            "idx" + std::to_string(static_cast<long>(&node - &tape.front())) +
+            ":" + std::to_string(node.shape(-2)) + "x" +
+            std::to_string(node.shape(-1)) + ":f" +
+            std::to_string(std::get<1>(
+                static_cast<const fast::RoPE&>(node.primitive()).state())) +
+            ":off" +
+            std::to_string(node.inputs()[1].status() ==
+                           array::Status::available));
+      }
+      rope_nodes.push_back(&node);
+    }
+    trace.rope_nodes = rope_nodes.size();
+    // Greedy sliding pairing: a stray unpairable rope node (47 vs 48 in
+    // one measured plan) shifts fixed-parity pairs onto cross-layer
+    // neighbors the runtime would have to refuse, so slide by one on a
+    // failed pair instead.
+    size_t i = 1;
+    while (i < rope_nodes.size()) {
+      const array& first = *rope_nodes[i - 1];
+      const array& second = *rope_nodes[i];
+      const auto& rope_first =
+          static_cast<const fast::RoPE&>(first.primitive());
+      const auto& rope_second =
+          static_cast<const fast::RoPE&>(second.primitive());
+      auto fold_index_of = [&](const array& n) -> int {
+        auto it = state->rope_norm_roles.find(n.id());
+        return it ? static_cast<int>(*it) : -1;
+      };
+      const int fold_first = fold_index_of(first);
+      const int fold_second = fold_index_of(second);
+      // Both sides take the same form: two plain ropes, two fold-claimed
+      // ropes with one eps, or two 3-input rope_rms_norm ropes. A
+      // fold/3-input mix is exotic enough to leave to the ordinary
+      // paths.
+      const bool first_3in =
+          first.inputs().size() == 3 && rope_first.has_norm();
+      const bool second_3in =
+          second.inputs().size() == 3 && rope_second.has_norm();
+      const bool fold_pair = fold_first >= 0 && fold_second >= 0;
+      const bool prim_pair = first_3in && second_3in;
+      if (rope_second.state() != rope_first.state() ||
+          (fold_first >= 0) != (fold_second >= 0) ||
+          first_3in != second_3in || (!fold_pair && !prim_pair &&
+          (fold_first >= 0 || first_3in)) ||
+          (fold_pair &&
+           (state->rope_norms[fold_first].eps !=
+            state->rope_norms[fold_second].eps)) ||
+          (prim_pair && rope_first.norm_eps() != rope_second.norm_eps()) ||
+          std::get<1>(rope_first.state()) % 2 != 0 ||
+          first.primitive().stream() != second.primitive().stream()) {
+        trace.rej_state += 2;
+        i += 1;
+        continue;
+      }
+      if (!rope_offset_shared(first.inputs()[1], second.inputs()[1])) {
+        trace.rej_offset += 2;
+        i += 1;
+        continue;
+      }
+      if (first.shape().size() != second.shape().size() ||
+          first.shape(-1) != second.shape(-1) ||
+          first.shape(-2) != second.shape(-2) ||
+          first.shape(-1) != std::get<1>(rope_first.state())) {
+        trace.rej_shape += 2;
+        i += 1;
+        continue;
+      }
+      // A fold-claimed rope's only claim is the fold the pair absorbs
+      // (the fold itself refuses already-claimed ropes), so its claim
+      // does not block pairing; any other claim does.
+      auto non_fold_claim = [&](const array& n) {
+        return claimed.count(n.id()) &&
+            !state->rope_norm_roles.count(n.id());
+      };
+      if (non_fold_claim(first) || non_fold_claim(second)) {
+        trace.rej_claimed += 2;
+        i += 1;
+        continue;
+      }
+      if (state->rope_redirect_roles.count(first.id())) {
+        trace.rej_redirect += 2;
+        i += 1;
+        continue;
+      }
+      const size_t index = state->rope_pairs.size();
+      state->rope_pair_roles.put_if_absent(first.id(), index);
+      state->rope_pair_roles.put_if_absent(second.id(), index);
+      RopePair new_pair{{first, second}};
+      new_pair.norm_folds = {fold_first, fold_second};
+      state->rope_pairs.push_back(std::move(new_pair));
+      claimed.put_if_absent(first.id(), 1);
+      claimed.put_if_absent(second.id(), 1);
+      trace.pairs += 1;
+      i += 2;
+    }
+    static int trio_trace_plans = 0;
+    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+        trace.rope_nodes > 0 && trio_trace_plans < 3) {
+      ++trio_trace_plans;
+      std::fprintf(
+          stderr,
+          "[trio-plan] rope_nodes=%zu rope_forward_scalar=%zu "
+          "rej_node_inputs=%zu rej_node_offset=%zu rej_node_dtype=%zu "
+          "rej_node_notforward=%zu rej_state=%zu rej_offset=%zu "
+          "rej_shape=%zu rej_claimed=%zu rej_redirect=%zu "
+          "pairs_planned=%zu rope_neighbor_after=%s rope_shapes=%s\n",
+          trace.rope_nodes,
+          trace.rope_forward_scalar,
+          trace.rej_node_inputs,
+          trace.rej_node_offset,
+          trace.rej_node_dtype,
+          trace.rej_node_notforward,
+          trace.rej_state,
+          trace.rej_offset,
+          trace.rej_shape,
+          trace.rej_claimed,
+          trace.rej_redirect,
+          trace.pairs,
+          joined_rope_neighbors(trace.rope_neighbor_after).c_str(),
+          joined_rope_neighbors(trace.rope_shapes).c_str());
+    }
+  }
+
+  }
+
 
   // Quantized-embedding prologue fold: a dequantize-direction
   // fast::Quantize whose three inputs each trace through single-use
@@ -3502,6 +3566,64 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
   }
+  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
+      rope_pair != nullptr) {
+    auto& pair = eager_state->rope_pairs[*rope_pair];
+    if (pair.state == RopePair::State::done) {
+      return true;
+    }
+    if (pair.state == RopePair::State::pending) {
+      if (pair.nodes[0].status() == array::Status::evaluated &&
+          pair.nodes[1].status() == array::Status::evaluated) {
+        // A settle pass already evaluated both members: the pair can
+        // pop inside a nested settle scope before the outer tape
+        // reaches it, and each scope plans the same pairs. One
+        // dispatch wrote both outputs; re-firing only rewrites them.
+        pair.state = RopePair::State::done;
+        return true;
+      }
+      // A fold-carrying pair passes each side's stashed pre-norm input,
+      // weight and eps; a successful dispatch owns the fold's norm
+      // math, so the folds are consumed (their claimed norms stay
+      // skipped).
+      std::optional<RopePairNorm> pair_norms[2];
+      std::array<const RopePairNorm*, 2> norm_ptrs{nullptr, nullptr};
+      for (int s = 0; s < 2; ++s) {
+        if (pair.norm_folds[s] >= 0) {
+          const auto& f = eager_state->rope_norms[pair.norm_folds[s]];
+          pair_norms[s].emplace(
+              RopePairNorm{f.x, f.w, f.eps, f.view, f.view_prim});
+          norm_ptrs[s] = &*pair_norms[s];
+        }
+      }
+      bool fired = dispatch_rope_pair(pair.nodes, norm_ptrs, stream);
+      pair.state = fired ? RopePair::State::done : RopePair::State::failed;
+      if (fired) {
+        for (int s = 0; s < 2; ++s) {
+          if (pair.norm_folds[s] >= 0) {
+            eager_state->rope_norms[pair.norm_folds[s]].state =
+                RopeNormFold::State::done;
+          }
+        }
+        return true;
+      }
+      static int trio_run_trace = 0;
+      if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+          trio_run_trace < 3) {
+        ++trio_run_trace;
+        std::fprintf(
+            stderr,
+            "[trio-run] pair un-planned: runtime contract refused\n");
+      }
+    }
+    // The pair is failed (refused now or on the other member's eval).
+    // A fold-claimed rope still has its fold below: it replays the
+    // claimed norm and view so the ordinary rope eval reads settled
+    // inputs. A plain rope has no second coverage, so refuse it.
+    if (eager_state->rope_norm_roles.find(node.id()) == nullptr) {
+      return false;
+    }
+  }
   if (auto fold_it = eager_state->rope_norm_roles.find(node.id());
       fold_it != nullptr) {
     auto& fold = eager_state->rope_norms[*fold_it];
@@ -3534,35 +3656,6 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       return false;
     }
     return true;
-  }
-  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
-      rope_pair != nullptr) {
-    auto& pair = eager_state->rope_pairs[*rope_pair];
-    if (pair.state == RopePair::State::done) {
-      return true;
-    }
-    if (pair.state == RopePair::State::failed) {
-      return false;
-    }
-    if (pair.nodes[0].status() == array::Status::evaluated &&
-        pair.nodes[1].status() == array::Status::evaluated) {
-      // A settle pass already evaluated both members: the pair can pop
-      // inside a nested settle scope before the outer tape reaches it,
-      // and each scope plans the same pairs. One dispatch wrote both
-      // outputs; re-firing would only rewrite them.
-      pair.state = RopePair::State::done;
-      return true;
-    }
-    bool fired = dispatch_rope_pair(pair.nodes, stream);
-    pair.state = fired ? RopePair::State::done : RopePair::State::failed;
-    static int trio_run_trace = 0;
-    if (!fired && omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
-        trio_run_trace < 3) {
-      ++trio_run_trace;
-      std::fprintf(
-          stderr, "[trio-run] pair un-planned: runtime contract refused\n");
-    }
-    return pair.state == RopePair::State::done;
   }
   if (auto update = eager_state->slice_update_roles.find(node.id());
       update != nullptr) {
