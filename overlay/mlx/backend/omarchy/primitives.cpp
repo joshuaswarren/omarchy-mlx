@@ -17703,9 +17703,12 @@ void ScaledDotProductAttention::eval_gpu(
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
         split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
         // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
+        // The merge kernel is the 128-key pass 1 even when the bk64 default is on — its grid must count 128-key blocks
+        // or the extra workgroups write out-of-range headers into the next head's block 0.
+        const uint32_t p1_block_keys = split_merge ? 128u : split_block_keys;
         for (uint32_t row = 0; row < split_rows; ++row) {
           const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
-          const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
+          const uint32_t row_blocks = (row_k + p1_block_keys - 1u) / p1_block_keys;
           const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 4);
           array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
           scratch.set_data(allocate_omarchy(scratch.nbytes()));
