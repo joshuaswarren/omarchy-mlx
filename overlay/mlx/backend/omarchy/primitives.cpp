@@ -12581,9 +12581,20 @@ bool dispatch_add_norm_pair(
       static_cast<const mlx::core::fast::RMSNorm&>(norm_node.primitive());
   const float eps = norm_prim.state().second;
   size_t row_length = norm_node.shape(-1);
+  if (row_length == 0) {
+    return false;
+  }
   size_t rows = norm_node.size() / row_length;
-  if (rows == 0 || row_length == 0 ||
+  if (rows == 0 ||
       !apple_norm_enabled(encoder.device(), row_length, rows)) {
+    return false;
+  }
+  // Dense row-contiguous operands only (w8E review of #944): the raw
+  // std430 bindings read the flat row layout; a transposed or broadcast
+  // addend would corrupt the outputs or read out of bounds. The
+  // composed path handles any layout, so refuse and let it run.
+  if (!add_in[0].flags().row_contiguous || !add_in[1].flags().row_contiguous ||
+      !norm_node.flags().row_contiguous || !add_node.flags().row_contiguous) {
     return false;
   }
   const array& w = norm_in[1];

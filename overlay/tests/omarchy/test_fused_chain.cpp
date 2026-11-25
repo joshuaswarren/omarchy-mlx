@@ -3378,16 +3378,22 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   // Widths: 2048 exercises the register path (the M2 decode rows),
   // 512 the strided fallback; rows > 1 exercises the row loop.
   for (Shape shape : {Shape{1, 2048}, Shape{1, 512}, Shape{2, 2048}}) {
+    // Materialize x, r, w ONCE per shape so the baseline and candidate
+    // graphs consume the identical tensors (w8E review of #944: fresh
+    // random::normal inside forward() gave the two arms different
+    // inputs and the bit-exact compare meant nothing).
+    array x = astype(
+        random::normal(shape, float32, std::nullopt, stream), bfloat16,
+        stream);
+    array r = astype(
+        random::normal(shape, float32, std::nullopt, stream), bfloat16,
+        stream);
+    array w = astype(
+        random::normal(Shape{shape.back()}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    eval({x, r, w});
+    sync_stream(stream);
     auto forward = [&]() {
-      array x = astype(
-          random::normal(shape, float32, std::nullopt, stream), bfloat16,
-          stream);
-      array r = astype(
-          random::normal(shape, float32, std::nullopt, stream), bfloat16,
-          stream);
-      array w = astype(
-          random::normal(Shape{shape.back()}, float32, std::nullopt, stream),
-          bfloat16, stream);
       array h = add(x, r, stream);
       array out = fast::rms_norm(h, w, 1e-5, stream);
       return std::vector<array>{h, out};

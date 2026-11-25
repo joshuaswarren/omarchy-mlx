@@ -2671,11 +2671,24 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       const array* norm = it->second;
       size_t row_length = norm->shape(-1);
+      if (row_length == 0) {
+        continue;
+      }
       size_t rows = norm->size() / row_length;
       const array& w = norm->inputs()[1];
-      if (rows == 0 || row_length == 0 || w.dtype() != bfloat16 ||
+      if (rows == 0 || w.dtype() != bfloat16 ||
           (w.size() != 1 && w.size() != row_length) ||
+          norm->primitive().stream() != node.primitive().stream() ||
           norm->inputs()[0].primitive().stream() != node.primitive().stream()) {
+        continue;
+      }
+      // Dense row-contiguous operands only: a transposed or broadcast
+      // addend would be read through the wrong strides (w8E review of
+      // #944). The composed path handles any layout; the fold takes the
+      // decode-shaped one or nothing.
+      if (!norm->inputs()[0].flags().row_contiguous ||
+          !norm->inputs()[1].flags().row_contiguous ||
+          !norm->flags().row_contiguous) {
         continue;
       }
       // The apple_norm_enabled device gate lives at fire time (it is
