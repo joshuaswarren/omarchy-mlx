@@ -1204,6 +1204,131 @@ def test_addcmul_addcdiv():
               torch.full((3,), 2, dtype=torch.int8)), {"value": 1})
     print("test_addcmul_addcdiv PASS")
 
+def test_random_family():
+    # PT-U12: the aten sampling family (uniform/cauchy/exponential/
+    # geometric/log_normal/normal.*) was evaluated for lowering and
+    # deliberately deferred: mx.random cannot reproduce torch's
+    # generator-state consumption, exclusive-bound semantics, or weak
+    # promotion. Every op must land in stats["cpu"], freshness and
+    # seed-replay must hold, and torch's param checks must surface.
+    def _fx(target, arglist, kw=None):
+        ins = [a for a in arglist if isinstance(a, torch.Tensor)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        n = g.call_function(
+            target, tuple(
+                next(it) if isinstance(a, torch.Tensor) else a
+                for a in arglist), kw or {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        name = str(target).split("aten.")[1].split(".")[0]
+        return torch.as_tensor(out), stats, name
+
+    def fx_defer(target, arglist, kw=None):
+        out, stats, name = _fx(target, arglist, kw)
+        assert name in stats["cpu"], (stats, name)
+        return out
+
+    big = torch.zeros(20000)
+    # each member of the family defers to torch and draws correctly
+    o = fx_defer(torch.ops.aten.uniform.default, [big, 2.0, 5.0])
+    assert o.shape == big.shape and o.min() >= 2.0 and o.max() < 5.0
+    o = fx_defer(torch.ops.aten.exponential.default, [big],
+                 {"lambd": 0.5})
+    assert o.min() >= 0 and 1.6 < o.mean() < 2.4
+    o = fx_defer(torch.ops.aten.geometric.default, [big], {"p": 0.25})
+    assert o.min() >= 1 and 3.6 < o.mean() < 4.4
+    o = fx_defer(torch.ops.aten.cauchy.default, [big],
+                 {"median": 2.0, "sigma": 0.5})
+    assert 1.9 < o.median() < 2.1
+    o = fx_defer(torch.ops.aten.log_normal.default, [big],
+                 {"mean": 1.0, "std": 0.5})
+    lo = torch.log(o)
+    assert 0.9 < lo.mean() < 1.1 and 0.4 < lo.std() < 0.6
+    mt = torch.full((20000,), 2.0)
+    st = torch.full((20000,), 0.5)
+    for arglist in ([mt, st], [mt, 0.5], [2.0, st], [2.0, 0.5, (4, 3)]):
+        target = (torch.ops.aten.normal.Tensor_Tensor
+                  if len(arglist) == 2
+                  and all(isinstance(a, torch.Tensor) for a in arglist)
+                  else torch.ops.aten.normal.Tensor_float
+                  if isinstance(arglist[0], torch.Tensor)
+                  else torch.ops.aten.normal.float_Tensor
+                  if isinstance(arglist[1], torch.Tensor)
+                  else torch.ops.aten.normal.float_float)
+        fx_defer(target, arglist)
+
+    # deferred draws stay fresh across calls through the registered
+    # backend, and a torch.manual_seed reset replays the same sample
+    def reg_uniform():
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch.ops.aten.uniform.default, (ph,))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        return mlx_vulkan.mlx_vulkan_backend(gm, [])
+    runner = reg_uniform()
+    x = torch.zeros(4096)
+
+    def r1():
+        o = runner(x)
+        return torch.as_tensor(
+            o[0] if isinstance(o, (tuple, list)) else o)
+
+    o1, o2 = r1(), r1()
+    assert not torch.equal(o1, o2)
+    torch.manual_seed(1729)
+    s1 = r1()
+    torch.manual_seed(1729)
+    s2 = r1()
+    assert torch.equal(s1, s2)
+    # and the deferred op consumed torch's generator: the next torch
+    # draw after our call matches eager torch's next draw
+    torch.manual_seed(1729)
+    defer_then_torch = r1(), torch.zeros(4096).uniform_()
+    torch.manual_seed(1729)
+    eager_then_torch = torch.zeros(4096).uniform_(), torch.zeros(4096).uniform_()
+    assert torch.equal(defer_then_torch[1], eager_then_torch[1])
+
+    # torch's parameter checks surface through the fallback
+    def fx_raise(target, arglist, kw=None):
+        ins = [a for a in arglist if isinstance(a, torch.Tensor)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        n = g.call_function(
+            target, tuple(
+                next(it) if isinstance(a, torch.Tensor) else a
+                for a in arglist), kw or {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, _stats = mlx_vulkan.make_executor(gm)
+        try:
+            run(*ins)
+        except RuntimeError:
+            return
+        raise AssertionError(f"{target} accepted invalid params")
+
+    fx_raise(torch.ops.aten.uniform.default, [big, 5.0, 2.0])
+    fx_raise(torch.ops.aten.exponential.default, [big], {"lambd": 0.0})
+    fx_raise(torch.ops.aten.exponential.default, [big], {"lambd": -0.5})
+    fx_raise(torch.ops.aten.geometric.default, [big], {"p": 0.0})
+    fx_raise(torch.ops.aten.geometric.default, [big], {"p": 1.0})
+    fx_raise(torch.ops.aten.geometric.default, [big], {"p": 1.5})
+    fx_raise(torch.ops.aten.cauchy.default, [big], {"sigma": 0.0})
+    fx_raise(torch.ops.aten.log_normal.default, [big], {"std": 0.0})
+    fx_raise(torch.ops.aten.log_normal.default, [big], {"std": -1.0})
+    fx_raise(torch.ops.aten.normal.Tensor_float, [big, -0.5])
+    st_bad = torch.full((20000,), 0.5)
+    st_bad[0] = -1.0
+    fx_raise(torch.ops.aten.normal.Tensor_Tensor, [big, st_bad])
+    fx_raise(torch.ops.aten.uniform.default,
+             [torch.zeros(4, dtype=torch.int32)])
+    print("test_random_family PASS")
+
 
 if __name__ == "__main__":
     test_topk()
@@ -1231,4 +1356,5 @@ if __name__ == "__main__":
     test_arc_trig()
     test_addcmul_addcdiv()
     test_hyperbolic()
+    test_random_family()
     print("ALL PASS")

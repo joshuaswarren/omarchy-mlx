@@ -1607,6 +1607,13 @@ def _acosh(a):
     return mx.where(a == float("inf"), a, mx.acosh(a))
 
 
+# aten sampling family (uniform/cauchy/exponential/geometric/
+# log_normal/normal.*) deliberately stays on torch: mx.random cannot
+# reproduce torch's generator-state consumption, exclusive-bound
+# semantics, or weak promotion — the CPU fallback keeps the RNG
+# contract exact. test_random_family pins the deferral.
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
@@ -1864,6 +1871,13 @@ _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
               "new_empty", "new_full", "scalar_tensor"}
+
+# sampling ops: mx.compile would trace an mx.random draw once and replay
+# it, and mx.random cannot honor torch's RNG contract anyway — the family
+# deliberately falls back to torch (see the note above _FUNC_SPECS); this
+# guard keeps a future re-lowering out of the compiled path
+_SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
+             "log_normal"}
 
 # ops that must never CPU-fallback: lower even when upstream nodes produced
 # torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)
@@ -2814,6 +2828,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = args[0][_coerce_index(args[1])]
                 continue
             if n.op == "call_function":
+                if name in _SAMPLERS:
+                    raise RuntimeError(
+                        f"unlowerable node {name}: mx.compile freezes "
+                        "mx.random draws; sampling stays on the "
+                        "per-node path")
                 low = (FUNC_TABLE.get(n.target)
                        or FUNC_TABLE_BY_NAME.get(getattr(n.target, "__name__", ""))
                        or ATEN_TABLE.get(name))
