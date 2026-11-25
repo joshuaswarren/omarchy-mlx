@@ -1861,8 +1861,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       // The concat's eval fires the group and never dispatches; its
       // output is the parent the members wrote.
-      state->gemv_roles.emplace(cat->id(), gi);
-      claimed.insert(cat->id());
+      state->gemv_roles.put_if_absent(cat->id(), gi);
+      claimed.put_if_absent(cat->id(), 1);
     }
   }
   std::vector<std::uintptr_t> dense_x_order;
