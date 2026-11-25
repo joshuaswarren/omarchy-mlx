@@ -1987,16 +1987,14 @@ void Device::submit_worker_main() {
     {
       std::unique_lock<std::mutex> lk(submit_queue_mutex_);
       submit_queue_cv_.wait(lk, [this] {
-        return !recovery_jobs_.empty() || !submit_queue_.empty() ||
-            submit_worker_stop_;
+        return !submit_queue_.empty() || submit_worker_stop_;
       });
-      if (recovery_jobs_.empty() && submit_queue_.empty()) {
+      if (submit_queue_.empty()) {
         // Stop was requested and the queue drained.
         return;
       }
-      auto& lane = recovery_jobs_.empty() ? submit_queue_ : recovery_jobs_;
-      job = std::move(lane.front());
-      lane.pop_front();
+      job = std::move(submit_queue_.front());
+      submit_queue_.pop_front();
     }
     submit_space_cv_.notify_one();
     try {
@@ -2035,30 +2033,6 @@ void Device::push_submit_job(std::function<void()> job) {
   submit_queue_cv_.notify_one();
 }
 
-void Device::push_recovery_job(std::function<void()> job) {
-  ensure_submit_worker();
-  std::unique_lock<std::mutex> lk(submit_queue_mutex_);
-  if (submit_worker_stop_) {
-    lk.unlock();
-    job();
-    return;
-  }
-  recovery_jobs_.push_back(std::move(job));
-  lk.unlock();
-  submit_queue_cv_.notify_one();
-}
-
-void Device::run_queued_recovery_jobs() {
-  std::deque<std::function<void()>> jobs;
-  {
-    std::lock_guard<std::mutex> lk(submit_queue_mutex_);
-    jobs.swap(recovery_jobs_);
-  }
-  for (auto& job : jobs) {
-    job();
-  }
-}
-
 bool Device::worker_wait_timeline(
     const std::vector<VkSemaphore>& sems,
     const std::vector<uint64_t>& values) {
@@ -2085,9 +2059,6 @@ bool Device::worker_wait_timeline(
     if (submit_worker_stop_) {
       return false;
     }
-    // A resubmit queued by the watchdog may be what publishes the signal
-    // this job waits on - run it rather than blocking it behind us.
-    run_queued_recovery_jobs();
     // The rejected value itself can never signal: the producing job
     // published an empty entry and retained no resubmitable batch. A
     // wait pinned on exactly that value would park the worker forever
@@ -2300,85 +2271,130 @@ Device::RecoveryResult Device::recover_stalled_submissions(
   VkSubmitInfo kick{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   dt.QueueSubmit(queue_, 1, &kick, VK_NULL_HANDLE);
 
-  // The resubmits cannot run inline here: encoder submissions queue on
-  // the submit worker, and a resubmit pushed straight to the driver
-  // could overtake their smaller signal values on the queue. They are
-  // released below, outside queue_mutex_, through the same FIFO.
   lk.unlock();
 
   size_t count = batches.size();
   for (auto& batch : batches) {
+    // Resolve the batch's waits first (they are the original list and
+    // either already landed or were just published by this round's
+    // earlier replays/resubmits).
+    if (!batch.wait_sems.empty() &&
+        !worker_wait_timeline(batch.wait_sems, batch.wait_values)) {
+      // Shutdown or a wait pinned on a rejected value: keep the batch
+      // for a later round.
+      completions.retain_for_resubmit(batch.value, std::move(batch));
+      continue;
+    }
+    // Resubmit the batch's commands with EVERY timeline signal stripped.
+    // Queue-submitted signal values must be non-decreasing on this
+    // queue, so the resubmit may not carry the completions signal at
+    // any value: a fresh value would jump ahead of the smaller signals
+    // of jobs still queued behind it (out-of-order signals are spec-
+    // illegal, not just bookkeeping), and the original value's point
+    // was already issued - Mesa will not publish a duplicate. The
+    // commands still execute in queue order ahead of the parked
+    // dependent submissions, which is what their data flow needs.
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkTimelineSemaphoreSubmitInfo timeline{
+        VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    std::vector<VkPipelineStageFlags> wait_stages(
+        batch.wait_sems.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    timeline.waitSemaphoreValueCount =
+        static_cast<uint32_t>(batch.wait_values.size());
+    timeline.pWaitSemaphoreValues = batch.wait_values.data();
+    timeline.signalSemaphoreValueCount = 0;
+    timeline.pSignalSemaphoreValues = nullptr;
+    si.pNext = &timeline;
+    si.waitSemaphoreCount = static_cast<uint32_t>(batch.wait_sems.size());
+    si.pWaitSemaphores = batch.wait_sems.data();
+    si.pWaitDstStageMask = wait_stages.data();
+    si.commandBufferCount = batch.cmd != VK_NULL_HANDLE ? 1u : 0u;
+    si.pCommandBuffers =
+        batch.cmd != VK_NULL_HANDLE ? &batch.cmd : nullptr;
+    si.signalSemaphoreCount = 0;
+    si.pSignalSemaphores = nullptr;
+    // The resubmit reports completion through a FENCE, not a timeline
+    // signal: fences carry no ordering rule, and the fence proves the
+    // batch's commands retired before the host publishes its value -
+    // publishing earlier would drain the completion entry (and recycle
+    // its slot/command buffer and temporaries) underneath the still
+    // running resubmit.
+    VkFence resubmit_fence = VK_NULL_HANDLE;
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (dt.CreateFence(device_, &fci, nullptr, &resubmit_fence) !=
+        VK_SUCCESS) {
+      resubmit_fence = VK_NULL_HANDLE;
+    }
+    {
+      std::lock_guard<std::mutex> job_lk(queue_mutex_);
+      try {
+        VKX_CHECK(vk::device_table().QueueSubmit(
+            queue_, 1, &si,
+            resubmit_fence != VK_NULL_HANDLE ? resubmit_fence
+                                             : VK_NULL_HANDLE));
+      } catch (...) {
+        // Resubmit rejected: keep the batch for a later round and let
+        // the waiter's remaining budget decide.
+        if (resubmit_fence != VK_NULL_HANDLE) {
+          dt.DestroyFence(device_, resubmit_fence, nullptr);
+        }
+        completions.retain_for_resubmit(batch.value, std::move(batch));
+        continue;
+      }
+    }
+    bool resubmit_retired = false;
+    if (resubmit_fence != VK_NULL_HANDLE) {
+      for (;;) {
+        const VkResult fence_res = dt.WaitForFences(
+            device_, 1, &resubmit_fence, VK_TRUE, kHangWatchPollNs);
+        if (fence_res == VK_SUCCESS) {
+          resubmit_retired = true;
+          break;
+        }
+        if (fence_res != VK_TIMEOUT || submit_worker_stop_) {
+          break;
+        }
+      }
+      dt.DestroyFence(device_, resubmit_fence, nullptr);
+    }
+    if (resubmit_fence == VK_NULL_HANDLE || !resubmit_retired) {
+      // No fence, or the resubmit never retired (wedged GPU or
+      // teardown): keep the batch and let the waiter's remaining
+      // rounds decide.
+      completions.retain_for_resubmit(batch.value, std::move(batch));
+      continue;
+    }
+    // Publish the completion value by HOST signal at the batch's
+    // ORIGINAL value. vkSignalSemaphore is not a queue submission, so
+    // it carries no ordering constraint against queued jobs' signals;
+    // it cannot be dropped the way the batch's queue signal was (the
+    // in-tree empty-shape fix relies on exactly this); and replaying
+    // the original value can never overtake queued work the way a
+    // freshly reserved value would. The batch's user (event)
+    // semaphores get the same host treatment at bumped values, as in
+    // the replay path.
+    VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+    cc.semaphore = completions.semaphore();
+    cc.value = batch.value;
+    VKX_CHECK(signal_fn(handle(), &cc));
     for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
       uint64_t current = 0;
       if (vk::device_table().GetSemaphoreCounterValue(
               device_, batch.signal_sems[i], &current) != VK_SUCCESS) {
         current = 0;
       }
-      batch.signal_values[i] =
-          std::max(batch.signal_values[i], current) + 1;
+      VkSemaphoreSignalInfo us{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+      us.semaphore = batch.signal_sems[i];
+      us.value = std::max(batch.signal_values[i], current) + 1;
+      VKX_CHECK(signal_fn(handle(), &us));
     }
-    // Reserve under submit_order_mutex_ so the fresh value's FIFO
-    // position matches its reservation order; the worker then submits
-    // every queue-signaled value in increasing order.
-    std::lock_guard<std::mutex> olk(submit_order_mutex_);
-    uint64_t fresh_completion = completions.reserve();
-    completions.enqueue_pending(fresh_completion);
-    batch.value = fresh_completion;
-    batch.signal_values.back() = fresh_completion;
-    push_recovery_job([this, batch = std::move(batch)]() mutable {
-      const uint64_t value = batch.value;
-      if (!batch.wait_sems.empty() &&
-          !worker_wait_timeline(batch.wait_sems, batch.wait_values)) {
-        this->completions().enqueue(value, {}, {});
-        return;
-      }
-      VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-      VkTimelineSemaphoreSubmitInfo timeline{
-          VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-      std::vector<VkPipelineStageFlags> wait_stages(
-          batch.wait_sems.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-      timeline.waitSemaphoreValueCount =
-          static_cast<uint32_t>(batch.wait_values.size());
-      timeline.pWaitSemaphoreValues = batch.wait_values.data();
-      timeline.signalSemaphoreValueCount =
-          static_cast<uint32_t>(batch.signal_values.size());
-      timeline.pSignalSemaphoreValues = batch.signal_values.data();
-      si.pNext = &timeline;
-      si.waitSemaphoreCount = static_cast<uint32_t>(batch.wait_sems.size());
-      si.pWaitSemaphores = batch.wait_sems.data();
-      si.pWaitDstStageMask = wait_stages.data();
-      si.commandBufferCount = batch.cmd != VK_NULL_HANDLE ? 1u : 0u;
-      si.pCommandBuffers =
-          batch.cmd != VK_NULL_HANDLE ? &batch.cmd : nullptr;
-      si.signalSemaphoreCount =
-          static_cast<uint32_t>(batch.signal_sems.size());
-      si.pSignalSemaphores = batch.signal_sems.data();
-      std::lock_guard<std::mutex> job_lk(queue_mutex_);
-      try {
-        VKX_CHECK(
-            vk::device_table().QueueSubmit(queue_, 1, &si, VK_NULL_HANDLE));
-      } catch (...) {
-        // The reserved value can never signal: publish an empty entry
-        // so joins surface the watchdog error instead of hanging
-        // (reserved values must always have a completion entry).
-        this->completions().enqueue(value, {}, {});
-        throw;
-      }
-      // The batch is pending again at its fresh value; retain it for a
-      // further round.
-      this->completions().retain_for_resubmit(value, std::move(batch));
-      // Every reserved value needs a pending completion entry: join
-      // paths wait drained_value_ >= counter, and the fresh value's
-      // drain is what lets drained_value_ catch up past the original
-      // completion. Empty payload - the original completion still owns
-      // handlers/temporaries.
-      this->completions().enqueue(value, {}, {});
-    });
+    // Keep the batch for a further round at its original value.
+    completions.retain_for_resubmit(batch.value, std::move(batch));
   }
   fprintf(
       stderr,
-      "[rtmod] SUBMIT-RECOVER tid=%lu queued resubmit of %zu stalled batch(es) "
-      "through cv>=%llu (round %u, fresh signals)\n",
+      "[rtmod] SUBMIT-RECOVER tid=%lu resubmitted %zu stalled batch(es) "
+      "through cv>=%llu (round %u, host-replayed signals)\n",
       (unsigned long)syscall(SYS_gettid),
       count,
       (unsigned long long)target_value,

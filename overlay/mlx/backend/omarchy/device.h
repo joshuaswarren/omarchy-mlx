@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -539,21 +540,12 @@ class Device {
   // submit_order_mutex() and reserved their completion value inside
   // that hold, so FIFO order is the queue's signal order.
   void push_submit_job(std::function<void()> job);
-  // Recovery resubmits bypass the queue bound (a bounded queue full of
-  // unsubmitted work must not starve the recovery ladder) but callers
-  // still hold submit_order_mutex(), keeping their fresh values in
-  // queue order.
-  void push_recovery_job(std::function<void()> job);
   // True once shutdown_submit_worker() requested the stop. The worker's
   // dependency wait ticks check it so the join can never park behind a
   // lost signal.
   bool submit_worker_stopping() const {
     return submit_worker_stop_;
   }
-  // Run every queued recovery job now, inline on the caller. Called by
-  // the submit worker between dependency-wait ticks: a job waiting on a
-  // dropped signal must not block the resubmission that can publish it.
-  void run_queued_recovery_jobs();
   // Resolve a job's timeline waits on the caller's thread, outside
   // queue_mutex_. Returns false when the worker is stopping; throws on
   // driver error. Honeykrisp resolves in-order waits host-side inside
@@ -658,14 +650,9 @@ class Device {
   std::condition_variable submit_queue_cv_;
   std::condition_variable submit_space_cv_;
   std::deque<std::function<void()>> submit_queue_;
-  // Recovery resubmits jump the normal FIFO: a job parked in a
-  // dependency wait on a dropped signal must not hold back the
-  // resubmission that publishes it. The worker drains this lane first,
-  // including between dependency-wait ticks.
-  std::deque<std::function<void()>> recovery_jobs_;
   std::thread submit_worker_;
   bool submit_worker_started_{false};
-  bool submit_worker_stop_{false};
+  std::atomic<bool> submit_worker_stop_{false};
   // Capacity backpressure: an unbounded FIFO would let eval run
   // arbitrarily far ahead of the GPU and accumulate keepalive payloads;
   // the bound restores the submit-side stall the direct path had.
