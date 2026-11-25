@@ -29,6 +29,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
@@ -964,3 +965,35 @@ TEST_CASE("sdpa g13c fast default: the part rule and env override") {
   CHECK(omarchy::sdpa_g13c_fast_default_part("Apple M2 Max (G14C B1)"));
   unsetenv("MLX_OMARCHY_SDPA_G13C_FAST");
 }
+TEST_CASE("vocab tail: chunked ArgMax keeps the normalized BF16 greedy token") {
+
+@@@SPAN@@@
+  constexpr int cols = 151936; // Qwen3-4B vocabulary.
+  std::vector<float> row(cols, -1.0f);
+  row[4095] = -0x1p-8f;
+  row[4096] = 0.0f;
+  Input logits = make_input(row, 1, cols, bfloat16, stream);
+  CHECK(run_arg(logits.x, true, false, stream).index[0] == 4096u);
+
+  auto run = [&](bool chunk_arg) {
+    set_flags(false);
+    setenv("MLX_OMARCHY_ARGREDUCE_CHUNKED", chunk_arg ? "1" : "0", 1);
+    auto lse = logsumexp(logits.x, std::vector<int>{-1}, true, stream);
+    auto logprobs = subtract(logits.x, lse, stream);
+    logprobs.eval();
+    auto token = argmax(logprobs, -1, false, stream);
+    token.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    return std::pair{token, logprobs};
+  };
+  auto [serial_token, serial_logprobs] = run(false);
+  auto [chunk_token, chunk_logprobs] = run(true);
+  set_flags(std::nullopt);
+
+  // Normalization rounds the two maxima together; the earlier index wins.
+  CHECK(serial_token.data<uint32_t>()[0] == 4095u);
+  CHECK(chunk_token.data<uint32_t>()[0] == 4095u);
+  CHECK(std::memcmp(
+            serial_logprobs.data<uint16_t>(),
+            chunk_logprobs.data<uint16_t>(),
+            serial_logprobs.nbytes()) == 0);
