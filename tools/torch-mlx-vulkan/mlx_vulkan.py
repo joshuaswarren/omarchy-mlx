@@ -489,8 +489,93 @@ def _cat_impl(t, dim=0):
         return keep[0]
     return mx.concatenate(keep, axis=dim % nd)
 
-def _mean(a, dim=None, keepdim=False, **k):
-    return mx.mean(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
+def _mean(a, dim=None, keepdim=False, dtype=None, **k):
+    a = _mx(a)
+    # aten casts the INPUT to dtype before the reduction
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"mean dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])
+    # torch tolerates dim 0/-1 on a 0-d tensor and reduces nothing
+    if a.ndim == 0:
+        return a
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    # an empty dim list reduces all dims in aten
+    return mx.mean(a, axis=None if axis == () else axis, keepdims=keepdim)
+
+def _red_axis(a, dim):
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    return None if axis == () else axis
+
+def _var_impl(a, axis, keepdims, c):
+    ax = (axis,) if isinstance(axis, int) else (axis if axis is not None else tuple(range(a.ndim)))
+    n = 1
+    for d in ax:
+        n *= a.shape[d % a.ndim]
+    dof = n - float(c)
+    if dof <= 0:
+        # torch: positive ssq / nonpositive dof -> +inf, zero ssq -> nan
+        m0 = mx.mean(a, axis=axis, keepdims=True)
+        ssq = mx.sum(mx.square(a - m0), axis=axis, keepdims=keepdims)
+        return mx.where(ssq > 0, mx.array(float("inf"), dtype=ssq.dtype),
+                        mx.array(float("nan"), dtype=ssq.dtype))
+    if float(c).is_integer() and float(c) >= 0:
+        return mx.var(a, axis=axis, keepdims=keepdims, ddof=int(c))
+    # fractional or negative correction: ssq / (n - c)
+    m = mx.mean(a, axis=axis, keepdims=True)
+    return mx.sum(mx.square(a - m), axis=axis, keepdims=keepdims) / dof
+
+def _unbias(dim, correction, unbiased):
+    # the var/std overloads spell the ddof three ways: .default binds a bool
+    # `unbiased` as arg 2 where .dim/.correction bind dim; .dim also takes an
+    # `unbiased` kwarg; .correction takes `correction` — normalize to (dim, c)
+    if isinstance(dim, bool):
+        return None, 1 if dim else 0
+    if unbiased is not None and correction is None:
+        correction = 1 if unbiased else 0
+    return dim, correction
+
+def _var(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    a = _mx(a)
+    dim, correction = _unbias(dim, correction, unbiased)
+    axis = _red_axis(a, dim)
+    if a.ndim == 0 or _red_n(a, axis) == 0:
+        # scalar/empty inputs: inf/nan scalar and empty-reduce semantics are
+        # subtle enough to leave to the CPU fallback (w74 review)
+        return _raise(f"var scalar/empty input")
+    return _var_impl(a, axis, keepdim, 1 if correction is None else correction)
+
+def _red_n(a, axis):
+    if a.ndim == 0:
+        return 1
+    ax = (axis,) if isinstance(axis, int) else (axis if axis is not None else tuple(range(a.ndim)))
+    n = 1
+    for d in ax:
+        n *= a.shape[d % a.ndim]
+    return n
+
+def _std(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    a = _mx(a)
+    dim, correction = _unbias(dim, correction, unbiased)
+    axis = _red_axis(a, dim)
+    if a.ndim == 0 or _red_n(a, axis) == 0:
+        return _raise(f"std scalar/empty input")
+    c = 1 if correction is None else correction
+    if float(c).is_integer() and float(c) >= 0 and _red_n(a, axis) - float(c) > 0:
+        return mx.std(a, axis=axis, keepdims=keepdim, correction=int(c))
+    return mx.sqrt(_var_impl(a, axis, keepdim, c))
+
+def _var_mean(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    dim, correction = _unbias(dim, correction, unbiased)
+    v = _var(a, dim, correction, keepdim)
+    m = _mean(a, dim, keepdim)
+    return v, m
+
+def _std_mean(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    dim, correction = _unbias(dim, correction, unbiased)
+    s = _std(a, dim, correction, keepdim)
+    m = _mean(a, dim, keepdim)
+    return s, m
 
 def _sum(a, dim=None, keepdim=False, dtype=None, **k):
     a = _mx(a)
@@ -1343,7 +1428,7 @@ _FUNC_SPECS = {
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
-    "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
+    "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
     "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim, half_to_float),

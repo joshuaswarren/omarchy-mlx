@@ -673,6 +673,117 @@ def test_sum():
     print("test_sum PASS")
 
 
+def test_reductions():
+    # PT-AB: mean.dim had the same 0-d/empty-dims/dtype gaps fixed for sum in
+    # #867; var/var_mean/std_mean had no spec at all; and the std lambda
+    # ignored `correction` so it silently computed ddof=0 (biased) where torch
+    # defaults to ddof=1 (unbiased). Covers dim lists, keepdim, empty-dims,
+    # correction values, 0-d tensors, dtype cast, fp32 + bf16.
+    x32 = torch.tensor([[1.5, -2.0, 0.25], [3.0, -1.0, 2.0]])
+    xb = x32.bfloat16()
+    x0 = torch.tensor(5.0)
+
+    def run_one(target, ins, kw):
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        # #864: _torch widens bf16 outputs to f32 (numpy has no bf16 buffer)
+        assert out.dtype == ref.dtype or (ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), out.dtype, ref.dtype)
+        assert np.allclose(torch.as_tensor(out).float().numpy(), ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, torch.as_tensor(out).float().numpy(), ref.float().numpy())
+
+    for target, ins, kw in [
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [1]}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [1], "keepdim": True}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": []}),
+        (torch.ops.aten.mean.dim, (x32,), {"dim": [1], "dtype": torch.float32}),
+        (torch.ops.aten.mean.dim, (x0,), {"dim": [0]}),
+        (torch.ops.aten.mean.dim, (x0,), {"dim": [-1], "keepdim": True}),
+        (torch.ops.aten.mean.dim, (xb,), {"dim": [1]}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [1]}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [1], "unbiased": False}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [0], "keepdim": True}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": []}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [1]}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0], "keepdim": True}),
+        (torch.ops.aten.std.dim, (xb,), {"dim": [1]}),
+    ]:
+        run_one(target, ins, kw)
+
+    # correction lives on the .correction overloads (unbiased=1 default)
+    for target in (torch.ops.aten.var.correction, torch.ops.aten.std.correction):
+        for corr in (0, 1, 2):
+            run_one(target, (x32,), {"dim": [1], "correction": corr})
+
+    # .default overloads bind a bool `unbiased` as arg 2, not dim — a missed
+    # rebind once produced per-row vectors instead of scalars (w74 review)
+    for target in (torch.ops.aten.var.default, torch.ops.aten.std.default):
+        for ub in (True, False):
+            ref = target(x32, ub)
+            g = torch.fx.Graph()
+            ph = g.placeholder("p0")
+            n = g.call_function(target, (ph, ub), {})
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(x32)
+            assert stats["cpu"] == [], (stats, str(target), ub)
+            assert np.allclose(torch.as_tensor(out).float().numpy(), ref.float().numpy(), atol=2e-2), \
+                (str(target), ub, torch.as_tensor(out).float().numpy(), ref.float().numpy())
+
+    # dof<=0 semantics (w74 review): positive ssq / nonpositive dof -> +inf,
+    # zero ssq -> nan; negative correction widens dof. Scalar/empty inputs
+    # intentionally fall back to CPU (subtle inf/nan cases) — parity only.
+    x3 = torch.tensor([1.0, 2.0, 3.0])
+    for target, ins, kw, lowers in [
+        (torch.ops.aten.var.correction, (x3,), {"dim": [0], "correction": 3.5}, True),
+        (torch.ops.aten.var.correction, (x3,), {"dim": [0], "correction": 3}, True),
+        (torch.ops.aten.std.correction, (x3,), {"dim": [0], "correction": 3.5}, True),
+        (torch.ops.aten.var.correction, (x3,), {"dim": [0], "correction": -1}, True),
+        (torch.ops.aten.var.correction, (x0,), {"correction": -1}, False),
+        (torch.ops.aten.var.correction, (x0,), {"correction": 1}, False),
+        (torch.ops.aten.std.correction, (x0,), {"correction": 2}, False),
+        (torch.ops.aten.var.correction, (x32,), {"dim": [1], "correction": 0.5}, True),
+    ]:
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        ph = g.placeholder("p0")
+        n = g.call_function(target, (ph,), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert (stats["cpu"] == []) == lowers, (stats, str(target), kw)
+        assert np.allclose(torch.as_tensor(out).float().numpy(), ref.float().numpy(), atol=2e-2, equal_nan=True), \
+            (str(target), kw, torch.as_tensor(out).float().numpy(), ref.float().numpy())
+
+    # tuple-output ops
+    for target, kw in ((torch.ops.aten.var_mean.dim, {"dim": [1]}),
+                       (torch.ops.aten.std_mean.dim, {"dim": [1]}),
+                       (torch.ops.aten.var_mean.default, {}),
+                       (torch.ops.aten.std_mean.default, {})):
+        ref = target(x32, **kw)
+        g = torch.fx.Graph()
+        ph = g.placeholder("p0")
+        n = g.call_function(target, (ph,), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(x32)
+        assert stats["cpu"] == [], (stats, str(target))
+        for o, r in zip(out, ref):
+            assert np.allclose(torch.as_tensor(o).float().numpy(), r.float().numpy(), atol=2e-2), \
+                (str(target), o, r)
+    print("test_reductions PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -694,4 +805,5 @@ if __name__ == "__main__":
     test_transpose_expand()
     test_cat_clone()
     test_sum()
+    test_reductions()
     print("ALL PASS")
