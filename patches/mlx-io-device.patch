@@ -266,8 +266,19 @@ diff --git a/mlx/array.h b/mlx/array.h
    return mlx_to_nd_array<>(a, dl_device);
  }
  
+--- a/python/src/convert.h	2026-09-30 08:29:59.000000000 -0500
++++ b/python/src/convert.h	2026-11-25 13:45:20.115865167 -0600
+@@ -52,7 +52,7 @@
+ nb::ndarray<nb::numpy> mlx_to_np_array(const mx::array& a);
+ nb::ndarray<> mlx_to_dlpack(
+     const mx::array& a,
+-    bool force_copy,
++    std::optional<bool> copy_state,
+     std::optional<std::tuple<int, int>> dl_device);
+ 
+ nb::object to_scalar(mx::array& a);
 --- a/python/src/array.cpp	2026-09-30 08:29:59.000000000 -0500
-+++ python/src/array.cpp	2026-11-25 13:45:20.115865167 -0600
++++ b/python/src/array.cpp	2026-11-25 13:45:20.115865167 -0600
 @@ -530,7 +530,7 @@
               nb::object,
               std::optional<std::tuple<int, int>> dl_device,
