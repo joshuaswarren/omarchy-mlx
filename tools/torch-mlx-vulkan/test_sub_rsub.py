@@ -98,6 +98,56 @@ def test_sub_inplace_rejects_broadcast_growth():
     raise AssertionError("sub_ accepted broadcast growth of the destination")
 
 
+def test_sub_inplace_dtype_narrowing():
+    # in-place writeback casts the result to the destination dtype:
+    # int8 dst - int64 rhs wraps to int8 like torch ([-254,4] -> [2,4]).
+    z = torch.tensor([3, 7], dtype=torch.int8)
+    s = torch.tensor([257, 3], dtype=torch.int64)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor, (phs[0], phs[1]), {})
+
+    out = _compiled_run(nodes, [z, s])
+    o = out[0] if isinstance(out, (tuple, list)) else out
+    want = torch.tensor([3, 7], dtype=torch.int8).sub_(torch.tensor([257, 3]))
+    assert np.array_equal(_np(o), want.numpy()), (_np(o), want.numpy())
+    assert str(o.dtype) == "torch.int8", o.dtype
+    print("test_sub_inplace_dtype_narrowing PASS")
+
+
+def test_sub_inplace_rejects_float_to_int():
+    # int64 dst -= float rhs: torch rejects the float result casting back.
+    z = torch.tensor([3, 7], dtype=torch.int64)
+    s = torch.tensor([1.5, 2.5], dtype=torch.float32)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor, (phs[0], phs[1]), {})
+
+    try:
+        _compiled_run(nodes, [z, s])
+    except RuntimeError:
+        print("test_sub_inplace_rejects_float_to_int PASS")
+        return
+    raise AssertionError("sub_ cast a float result into an integral destination")
+
+
+def test_sub_inplace_rejects_float_alpha_on_int():
+    # integral operands + floating alpha is a torch error, not a float writeback.
+    z = torch.tensor([3, 7], dtype=torch.int64)
+    s = torch.tensor([1, 2], dtype=torch.int64)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor,
+                               (phs[0], phs[1]), {"alpha": 0.5})
+
+    try:
+        _compiled_run(nodes, [z, s])
+    except RuntimeError:
+        print("test_sub_inplace_rejects_float_alpha_on_int PASS")
+        return
+    raise AssertionError("sub_ accepted floating alpha on integral operands")
+
+
 def test_rsub_alpha_kwarg():
     # rsub.Scalar(self, other, *, alpha=1): other - alpha * self, alpha by kwarg.
     x = torch.tensor([1.0, 2.0, 3.0])
@@ -111,6 +161,22 @@ def test_rsub_alpha_kwarg():
     want = 10 - 2 * x
     assert np.allclose(_np(o), want.numpy(), atol=1e-5), (_np(o), want.numpy())
     print("test_rsub_alpha_kwarg PASS")
+
+
+def test_rsub_rejects_float_alpha_on_int():
+    # integral input + floating alpha is a torch error on the rsub path too.
+    x = torch.tensor([1, 2, 3], dtype=torch.int64)
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.rsub.Scalar,
+                               (phs[0], 10), {"alpha": 0.5})
+
+    try:
+        _compiled_run(nodes, [x])
+    except RuntimeError:
+        print("test_rsub_rejects_float_alpha_on_int PASS")
+        return
+    raise AssertionError("rsub accepted floating alpha on integral input")
 
 
 def test_rsub_scalar_reflected():
@@ -162,7 +228,11 @@ if __name__ == "__main__":
     test_sub_inplace_value()
     test_sub_inplace_alpha_kwarg()
     test_sub_inplace_rejects_broadcast_growth()
+    test_sub_inplace_dtype_narrowing()
+    test_sub_inplace_rejects_float_to_int()
+    test_sub_inplace_rejects_float_alpha_on_int()
     test_rsub_alpha_kwarg()
+    test_rsub_rejects_float_alpha_on_int()
     test_rsub_scalar_reflected()
     test_rsub_alpha()
     test_rsub_eager_spec()

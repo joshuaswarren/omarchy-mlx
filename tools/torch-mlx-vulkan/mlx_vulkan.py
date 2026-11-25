@@ -2025,6 +2025,32 @@ def _fuse_rope(nodes):
     return skip, final
 
 
+def _is_integral_dtype(dt):
+    return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
+
+
+def _is_floatish_dtype(dt):
+    return (mx.issubdtype(dt, mx.floating)
+            or mx.issubdtype(dt, mx.complexfloating))
+
+
+def _inplace_writeback(dst, upd):
+    # torch in-place contract: the result must fit the destination shape and
+    # cast back to the destination dtype (float-family -> integral/bool is
+    # rejected; everything else casts, e.g. int64 -> int8 wraps).
+    if upd.shape != dst.shape:
+        raise RuntimeError(
+            "output with shape %s doesn't match the broadcast shape %s"
+            % (list(dst.shape), list(upd.shape)))
+    if upd.dtype != dst.dtype:
+        if _is_floatish_dtype(upd.dtype) and _is_integral_dtype(dst.dtype):
+            raise RuntimeError(
+                "result type %s can't be cast to the desired output type %s"
+                % (upd.dtype, dst.dtype))
+        upd = upd.astype(dst.dtype)
+    return upd
+
+
 def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
@@ -2224,7 +2250,9 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = upd
                 continue
             if name == "add_":
-                upd = env[n.args[0]] + args[1]
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                upd = _inplace_writeback(env[n.args[0]],
+                                         env[n.args[0]] + args[1] * alpha)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
@@ -2234,11 +2262,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
             if name in ("sub_", "sub_.Tensor"):
                 dst = env[n.args[0]]
                 alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
-                upd = dst - args[1] * alpha
-                if upd.shape != dst.shape:
-                    raise RuntimeError(
-                        "output with shape %s doesn't match the broadcast shape %s"
-                        % (list(dst.shape), list(upd.shape)))
+                upd = _inplace_writeback(dst, dst - args[1] * alpha)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
@@ -2247,10 +2271,15 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 continue
             if name in ("rsub", "rsub.Scalar") and n.op == "call_function":
                 alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                if (isinstance(alpha, float) and
+                        _is_integral_dtype(getattr(args[0], "dtype", mx.float32))):
+                    raise RuntimeError(
+                        "For integral input tensors, the argument alpha must "
+                        "not be a floating point number")
                 env[n] = args[1] - args[0] * alpha
                 continue
             if name == "mul_":
-                upd = env[n.args[0]] * args[1]
+                upd = _inplace_writeback(env[n.args[0]], env[n.args[0]] * args[1])
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
