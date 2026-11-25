@@ -1105,6 +1105,16 @@ def _dtype_of(v):
     return getattr(v, "dtype", mx.float32)
 
 
+def _sub_inplace(a, b, alpha=1, **k):
+    # aten.sub_.Tensor(self, other, alpha) eager contract: torch promotes,
+    # computes, then requires the result to fit the destination shape and
+    # cast back to the destination dtype (_inplace_writeback raises the
+    # torch-shaped errors for growth / float->int, which surface as a CPU
+    # fallback running torch's own check).
+    d = _mx(a)
+    return _inplace_writeback(d, d - _mx(b) * alpha)
+
+
 def _rsub(a, b, alpha=1, **k):
     # aten.rsub.Scalar(self, other, alpha): other - alpha * self. Torch
     # rejects subtraction on bool operands, and a floating alpha only when
@@ -1762,7 +1772,8 @@ _FUNC_SPECS = {
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "rsub": _rsub,
-    "sub_.Tensor": lambda a, b, *k: _mx(a) - _mx(b),
+    "sub_": _sub_inplace,
+    "sub_.Tensor": _sub_inplace,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
@@ -2096,7 +2107,7 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
-            if (name in ("mul_", "bitwise_and_") and node.op in ("call_function", "call_method")
+            if (name in ("mul_", "bitwise_and_", "sub_") and node.op in ("call_function", "call_method")
                     and isinstance(node.args[0], torch.fx.Node)):
                 env[node.args[0]] = val
             if _DBG_ENV is not None:

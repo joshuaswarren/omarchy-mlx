@@ -13,6 +13,10 @@ import torch
 import mlx_vulkan
 
 
+def _np(t):
+    return t.detach().numpy()
+
+
 def _run_op(target, ins, ref, name):
     g = torch.fx.Graph()
     phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
@@ -66,7 +70,76 @@ def test_rsub():
     print("test_rsub PASS")
 
 
+
+
+def test_sub_tensor_w91_edges():
+    """w91 CHANGES cases: broadcast growth, mixed-int cast-back, alpha,
+    destination reread."""
+    # 1. invalid broadcast growth: dest [2] - other [2,2] must raise, not
+    #    return the broadcast result (executor falls back to torch, which
+    #    raises the same shape error)
+    x = torch.randn(2)
+    y = torch.randn(2, 2)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    g.call_function(torch.ops.aten.sub_.Tensor, (px, py))
+    g.output(px)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, _ = mlx_vulkan.make_executor(gm)
+    try:
+        run(x, y)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised, "sub_ broadcast growth must raise"
+
+    # 2. mixed-int in-place: int8 dest - int64 other computes in int64 and
+    #    casts back to int8 (wraps)
+    xi = torch.tensor([3, 7], dtype=torch.int8)
+    yi = torch.tensor([257, 3], dtype=torch.int64)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py))
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(xi, yi)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    ref = torch.ops.aten.sub_.Tensor(xi.clone(), yi)
+    assert out.dtype == ref.dtype == torch.int8, (out.dtype, ref.dtype)
+    assert np.array_equal(out.numpy(), ref.numpy()), (out, ref)
+
+    # 3. alpha kwarg lowers (not a CPU fallback) and matches torch
+    xf = torch.randn(4, 8)
+    yf = torch.randn(4, 8)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 0.5})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(xf, yf)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert np.allclose(out.numpy(), xf.numpy() - 0.5 * yf.numpy(), atol=1e-4)
+
+    # 4. destination reread: (sub_(x, y), x) must return the updated value
+    #    for the later x, not the stale pre-mutation input
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py))
+    g.output((n, px))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    x2 = torch.randn(4, 8)
+    y2 = torch.randn(4, 8)
+    o_upd, o_x = run(x2, y2)
+    assert stats["cpu"] == [], stats
+    assert np.array_equal(_np(o_x), _np(o_upd)), "destination reread stale"
+    assert np.allclose(_np(o_upd), x2.numpy() - y2.numpy(), atol=1e-4)
+    print("test_sub_tensor_w91_edges PASS")
+
 if __name__ == "__main__":
     test_sub_tensor()
     test_rsub()
+    test_sub_tensor_w91_edges()
     print("ALL PASS")
