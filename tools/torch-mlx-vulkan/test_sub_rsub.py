@@ -180,6 +180,23 @@ def test_sub_inplace_rejects_bool_dst():
     raise AssertionError("sub_ accepted an int result into a bool destination")
 
 
+def test_sub_inplace_rejects_bool_rhs():
+    # subtraction bans bool OPERANDS, not just bool destinations:
+    # int64 dst -= bool rhs is a torch error too.
+    z = torch.tensor([3, 7], dtype=torch.int64)
+    s = torch.tensor([True, False])
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor, (phs[0], phs[1]), {})
+
+    try:
+        _compiled_run(nodes, [z, s])
+    except (RuntimeError, ValueError):
+        print("test_sub_inplace_rejects_bool_rhs PASS")
+        return
+    raise AssertionError("sub_ accepted a bool operand")
+
+
 def test_mul_inplace_rejects_bool_dst():
     # same writeback contract on mul_: int64 result into bool dst is a
     # torch error, not a silent bool round-trip.
@@ -227,6 +244,37 @@ def test_rsub_float_other_alpha_ok():
     want = torch.tensor([9.5, 9.0])
     assert np.allclose(_np(o), want.numpy(), atol=1e-5), (_np(o), want.numpy())
     print("test_rsub_float_other_alpha_ok PASS")
+
+
+def test_rsub_rejects_bool_operands():
+    # rsub is subtraction: bool self or bool other raises like torch,
+    # on both the compiled and eager paths.
+    x = torch.tensor([True, False])
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.rsub.Scalar, (phs[0], 3), {})
+
+    try:
+        _compiled_run(nodes, [x])
+    except (RuntimeError, ValueError):
+        pass
+    else:
+        raise AssertionError("compiled rsub accepted a bool self")
+    mxb = mlx_vulkan._mx(x)
+    mxi = mlx_vulkan._mx(torch.tensor([2, 3], dtype=torch.int64))
+    try:
+        mlx_vulkan._FUNC_SPECS["rsub"](mxb, mxi)
+    except (RuntimeError, ValueError):
+        pass
+    else:
+        raise AssertionError("eager rsub accepted a bool self")
+    try:
+        mlx_vulkan._FUNC_SPECS["rsub"](mxi, mxb)
+    except (RuntimeError, ValueError):
+        pass
+    else:
+        raise AssertionError("eager rsub accepted a bool other")
+    print("test_rsub_rejects_bool_operands PASS")
 
 
 def test_rsub_eager_rejects_float_alpha_on_int():
@@ -294,11 +342,13 @@ if __name__ == "__main__":
     test_sub_inplace_rejects_float_to_int()
     test_sub_inplace_rejects_float_alpha_on_int()
     test_sub_inplace_rejects_bool_dst()
+    test_sub_inplace_rejects_bool_rhs()
     test_mul_inplace_rejects_bool_dst()
     test_rsub_alpha_kwarg()
     test_rsub_rejects_float_alpha_on_int()
     test_rsub_float_other_alpha_ok()
     test_rsub_eager_rejects_float_alpha_on_int()
+    test_rsub_rejects_bool_operands()
     test_rsub_scalar_reflected()
     test_rsub_alpha()
     test_rsub_eager_spec()

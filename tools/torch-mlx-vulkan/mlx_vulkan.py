@@ -846,10 +846,16 @@ def _dtype_of(v):
 
 def _rsub(a, b, alpha=1, **k):
     # aten.rsub.Scalar(self, other, alpha): other - alpha * self. Torch
-    # rejects a floating alpha only when the promoted operand type is
-    # integral (an int64 self with float other returns float).
-    if (isinstance(alpha, float) and
-            _is_integral_dtype(mx.result_type(_dtype_of(a), _dtype_of(b)))):
+    # rejects subtraction on bool operands, and a floating alpha only when
+    # the promoted operand type is integral (int64 self + float other is
+    # legal and returns float).
+    da, db = _dtype_of(a), _dtype_of(b)
+    if da == mx.bool_ or db == mx.bool_:
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is not "
+            "supported. If you are trying to invert a mask, use the `~` or "
+            "`logical_not()` operator instead.")
+    if isinstance(alpha, float) and _is_integral_dtype(mx.result_type(da, db)):
         raise RuntimeError(
             "For integral input tensors, the argument alpha must not be a "
             "floating point number")
@@ -2290,6 +2296,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
             if name in ("sub_", "sub_.Tensor"):
                 dst = env[n.args[0]]
                 alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                if (dst.dtype == mx.bool_
+                        or _dtype_of(args[1]) == mx.bool_):
+                    raise RuntimeError(
+                        "Subtraction, the `-` operator, with a bool tensor is "
+                        "not supported. If you are trying to invert a mask, "
+                        "use the `~` or `logical_not()` operator instead.")
                 upd = _inplace_writeback(dst, dst - args[1] * alpha)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
