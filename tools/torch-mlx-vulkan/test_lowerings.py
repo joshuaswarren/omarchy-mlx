@@ -813,6 +813,50 @@ def test_bitwise_and_():
         assert got.shape == exp.shape and torch.equal(got, exp), (got, exp)
         assert "bitwise_and_" in stats["mlx"], stats
         assert "bitwise_and_" not in stats["cpu"], stats
+
+    # In-place contract: the broadcast result keeps the destination's shape
+    # and dtype kind (int64->int8 narrows back; int64->bool and shape growth
+    # refuse the same way torch does, verified 2026-11-24).
+    di8 = torch.tensor([[127, 6]], dtype=torch.int8)
+    ri64 = torch.tensor([[255, 3]], dtype=torch.int64)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.bitwise_and_.Tensor, (px, py))
+    n2 = g.call_function(torch.ops.aten.bitwise_or.Tensor, (px, n))
+    g.output(n2)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(mx.array(di8.numpy()), mx.array(ri64.numpy()))
+    ref = di8.clone()
+    torch.ops.aten.bitwise_and_.Tensor(ref, ri64)
+    exp = torch.ops.aten.bitwise_or.Tensor(ref, ref)
+    got = torch.as_tensor(_np(out))
+    assert got.dtype == torch.int8 and torch.equal(got, exp), (got, exp)
+    assert "bitwise_and_" in stats["mlx"] and "bitwise_and_" not in stats["cpu"], stats
+
+    for xt, yt in (
+        (torch.tensor([[True, False]]), torch.tensor([[1, 0]], dtype=torch.int64)),
+        (torch.tensor([[1, 2]], dtype=torch.int32), torch.tensor([[3, 4], [5, 6]], dtype=torch.int32)),
+    ):
+        try:
+            torch.ops.aten.bitwise_and_.Tensor(xt.clone(), yt)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("torch itself accepts this case; not a refusal test")
+        g = torch.fx.Graph()
+        px, py = g.placeholder("x"), g.placeholder("y")
+        n = g.call_function(torch.ops.aten.bitwise_and_.Tensor, (px, py))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        try:
+            run(mx.array(xt.numpy()), mx.array(yt.numpy()))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(
+                f"in-place refusal expected: {xt.dtype}{tuple(xt.shape)} & {yt.dtype}{tuple(yt.shape)}")
     print("test_bitwise_and_ PASS")
 
 

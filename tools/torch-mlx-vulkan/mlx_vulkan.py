@@ -964,6 +964,34 @@ def _bitwise_or_logical(a, b, bitop, logop):
     return bitop(a, b)
 
 
+_KIND_GROUPS = None
+def _dtype_kind(dt):
+    global _KIND_GROUPS
+    if _KIND_GROUPS is None:
+        g = {"bool": ("bool_",),
+             "int": tuple(p + str(w) for p in ("int", "uint") for w in (8, 16, 32, 64)),
+             "float": ("float16", "bfloat16", "float32", "float64"),
+             "complex": ("complex64", "complex128")}
+        _KIND_GROUPS = {k: frozenset(getattr(mx, n) for n in names if hasattr(mx, n))
+                        for k, names in g.items()}
+    return next((k for k, dts in _KIND_GROUPS.items() if dt in dts), str(dt))
+
+
+def _inplace_result(upd, dst):
+    # Torch in-place contract: the broadcast result may not grow the
+    # destination shape, and its dtype must cast back to the destination's
+    # kind (int64->int8 stays, int64->bool raises). Refusals leave the op to
+    # the torch fallback, which raises the same error.
+    dst = _mx(dst)
+    if tuple(upd.shape) != tuple(dst.shape):
+        _raise(f"in-place result shape {tuple(upd.shape)} vs dest {tuple(dst.shape)}")
+    if upd.dtype != dst.dtype:
+        if _dtype_kind(upd.dtype) != _dtype_kind(dst.dtype):
+            _raise(f"in-place result {upd.dtype} cannot cast to dest {dst.dtype}")
+        upd = upd.astype(dst.dtype)
+    return upd
+
+
 # ---------------- pooling (PT-P) ----------------
 # Pure-mx lowerings: fwd via strided window-stack, bwd via zero-insert
 # (fractional stride) + per-offset shift/accumulate. Static shapes only.
@@ -1428,7 +1456,7 @@ _FUNC_SPECS = {
     "bitwise_or": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "bitwise_xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
-    "bitwise_and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
+    "bitwise_and_": lambda a, b: _inplace_result(_bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and), a),
     "or_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
@@ -2347,7 +2375,9 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = upd
                 continue
             if name == "bitwise_and_":
-                upd = _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and)
+                upd = _inplace_result(
+                    _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and),
+                    env[n.args[0]])
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
