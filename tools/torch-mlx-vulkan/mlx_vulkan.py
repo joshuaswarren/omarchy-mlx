@@ -183,6 +183,160 @@ def _reshape(a, *s):
         s = tuple(s[0])
     return mx.reshape(a, tuple(s))
 
+# view/reshape: mx arrays carry no strides, so layout is tracked
+# structurally. aten.view must alias its input storage; mx.reshape silently
+# copies a strided input instead, so a view whose input may be
+# non-contiguous is refused to the CPU path where torch computes the real
+# strides (or the real error). reshape never refuses: torch's own
+# copy-if-needed semantics already match mx.reshape.
+_VIEW_OPS = {"view", "_unsafe_view", "unsafe_view"}
+
+# ops whose output may be non-contiguous regardless of input layout
+_STRIDED_OPS = {
+    "t", "mT", "transpose", "permute", "movedim", "moveaxis", "swapaxes",
+    "swapdims", "expand", "expand_as", "broadcast_to", "unbind", "split",
+    "split_with_sizes", "unsafe_split", "chunk", "tensor_split", "hsplit",
+    "vsplit", "dsplit", "diagonal", "unfold", "as_strided",
+}
+
+# layout-transparent ops: the result shares storage with the input, so the
+# stridedness flag passes through
+_LAYOUT_PASS = {
+    "detach", "detach_", "clone", "alias", "lift_fresh", "lift_fresh_copy",
+    "to", "_to_copy", "type", "cpu", "cuda", "requires_grad",
+    "requires_grad_", "float", "half", "bfloat16", "double", "int", "long",
+    "bool", "short", "byte", "char", "type_as",
+}
+
+
+def _narg(n, i, key, default=None):
+    if key in n.kwargs:
+        return n.kwargs[key]
+    return n.args[i] if len(n.args) > i else default
+
+
+def _aint(v, default=None):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dim0_index(idx):
+    """True when a getitem index provably keeps contiguity: a prefix of
+    integer indices (each removing its dim), then at most one unit-step
+    partial slice on the next dim, then only non-restricting decorations
+    (None, full slices, one Ellipsis). An int or partial slice after a dim
+    survives, a step!=1 slice, or any restriction after an Ellipsis (it may
+    touch a trailing dim while earlier dims survive) can all produce a
+    non-contiguous result."""
+    if isinstance(idx, torch.fx.Node):
+        return False
+    if not isinstance(idx, (tuple, list)):
+        idx = (idx,)
+    pre, post, ell = [], [], False
+    for i in idx:
+        if i is Ellipsis:
+            ell = True
+            continue
+        (post if ell else pre).append(i)
+    for i in post:
+        if i is None:
+            continue
+        if (isinstance(i, slice) and i.start is None and i.stop is None
+                and _aint(i.step) in (None, 1)):
+            continue
+        return False
+    restricted = False
+    for i in pre:
+        if i is None:
+            continue
+        if isinstance(i, torch.fx.Node):
+            return False
+        if isinstance(i, (int, torch.SymInt)):
+            if restricted:
+                return False
+            continue
+        if isinstance(i, slice):
+            if _aint(i.step) not in (None, 1):
+                return False
+            if i.start is not None or i.stop is not None:
+                if restricted:
+                    return False
+            restricted = True
+            continue
+        return False
+    return True
+
+
+def _strided_nodes(nodes):
+    """Graph pass: nodes whose output may be non-contiguous under torch
+    stride semantics. A view on a member is refused rather than silently
+    copied by mx.reshape."""
+    strided = set()
+    for n in nodes:
+        name = _opname(n)
+        a0 = n.args[0] if (n.args and isinstance(n.args[0], torch.fx.Node)) else None
+        if name in _STRIDED_OPS:
+            strided.add(n)
+        elif name in ("select", "narrow"):
+            if a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0:
+                strided.add(n)
+        elif name == "slice":
+            if (a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0
+                    or _aint(_narg(n, 4, "step"), 1) != 1):
+                strided.add(n)
+        elif n.target is operator.getitem or name == "getitem":
+            if a0 in strided or not _dim0_index(n.args[1] if len(n.args) > 1 else None):
+                strided.add(n)
+        elif name in _LAYOUT_PASS:
+            if a0 in strided:
+                strided.add(n)
+    return strided
+
+
+def _view_refused(name, n, strided):
+    return (name in _VIEW_OPS and n.args
+            and isinstance(n.args[0], torch.fx.Node)
+            and n.args[0] in strided)
+
+
+def _node_args(a):
+    if isinstance(a, torch.fx.Node):
+        yield a
+    elif isinstance(a, (tuple, list)):
+        for x in a:
+            yield from _node_args(x)
+    elif isinstance(a, dict):
+        for x in a.values():
+            yield from _node_args(x)
+
+
+def _refused_nodes(nodes, strided):
+    """Nodes refused to the CPU path for view/stride semantics: every view
+    on a flagged input, plus the flagged producers behind it. Refusing the
+    view alone is not enough -- an mx-lowered producer hands the torch
+    fallback a materialized contiguous tensor, so the view then returns
+    strides (or succeeds) where eager would raise. Refusing the strided
+    cone keeps every producer under torch, where real strides are kept."""
+    refused = set()
+    stack = []
+    for n in nodes:
+        if _view_refused(_opname(n), n, strided):
+            refused.add(n)
+            stack.append(n)
+    while stack:
+        n = stack.pop()
+        for a in _node_args(n.args):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+        for a in _node_args(n.kwargs):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+    return refused
+
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
@@ -479,6 +633,9 @@ def _shape_of(a, k):
 def _cat_impl(t, dim=0):
     xs = [_mx(x) for x in t]
     nd = max(x.ndim for x in xs)
+    if not -nd <= dim < nd:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of [{-nd}, {nd - 1}], but got {dim})")
     keep = [x for x in xs if x.size != 0 or x.ndim == nd]
     if not keep:
         keep = xs
@@ -486,11 +643,107 @@ def _cat_impl(t, dim=0):
         return keep[0]
     return mx.concatenate(keep, axis=dim % nd)
 
-def _mean(a, dim=None, keepdim=False, **k):
-    return mx.mean(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
+def _mean(a, dim=None, keepdim=False, dtype=None, **k):
+    a = _mx(a)
+    # aten casts the INPUT to dtype before the reduction
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"mean dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])
+    # torch tolerates dim 0/-1 on a 0-d tensor and reduces nothing
+    if a.ndim == 0:
+        return a
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    # an empty dim list reduces all dims in aten
+    return mx.mean(a, axis=None if axis == () else axis, keepdims=keepdim)
 
-def _sum(a, dim=None, keepdim=False, **k):
-    return mx.sum(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
+def _red_axis(a, dim):
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    return None if axis == () else axis
+
+def _var_impl(a, axis, keepdims, c):
+    ax = (axis,) if isinstance(axis, int) else (axis if axis is not None else tuple(range(a.ndim)))
+    n = 1
+    for d in ax:
+        n *= a.shape[d % a.ndim]
+    dof = n - float(c)
+    if dof <= 0:
+        # torch: positive ssq / nonpositive dof -> +inf, zero ssq -> nan
+        m0 = mx.mean(a, axis=axis, keepdims=True)
+        ssq = mx.sum(mx.square(a - m0), axis=axis, keepdims=keepdims)
+        return mx.where(ssq > 0, mx.array(float("inf"), dtype=ssq.dtype),
+                        mx.array(float("nan"), dtype=ssq.dtype))
+    if float(c).is_integer() and float(c) >= 0:
+        return mx.var(a, axis=axis, keepdims=keepdims, ddof=int(c))
+    # fractional or negative correction: ssq / (n - c)
+    m = mx.mean(a, axis=axis, keepdims=True)
+    return mx.sum(mx.square(a - m), axis=axis, keepdims=keepdims) / dof
+
+def _unbias(dim, correction, unbiased):
+    # the var/std overloads spell the ddof three ways: .default binds a bool
+    # `unbiased` as arg 2 where .dim/.correction bind dim; .dim also takes an
+    # `unbiased` kwarg; .correction takes `correction` — normalize to (dim, c)
+    if isinstance(dim, bool):
+        return None, 1 if dim else 0
+    if unbiased is not None and correction is None:
+        correction = 1 if unbiased else 0
+    return dim, correction
+
+def _var(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    a = _mx(a)
+    dim, correction = _unbias(dim, correction, unbiased)
+    axis = _red_axis(a, dim)
+    if a.ndim == 0 or _red_n(a, axis) == 0:
+        # scalar/empty inputs: inf/nan scalar and empty-reduce semantics are
+        # subtle enough to leave to the CPU fallback (w74 review)
+        return _raise(f"var scalar/empty input")
+    return _var_impl(a, axis, keepdim, 1 if correction is None else correction)
+
+def _red_n(a, axis):
+    if a.ndim == 0:
+        return 1
+    ax = (axis,) if isinstance(axis, int) else (axis if axis is not None else tuple(range(a.ndim)))
+    n = 1
+    for d in ax:
+        n *= a.shape[d % a.ndim]
+    return n
+
+def _std(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    a = _mx(a)
+    dim, correction = _unbias(dim, correction, unbiased)
+    axis = _red_axis(a, dim)
+    if a.ndim == 0 or _red_n(a, axis) == 0:
+        return _raise(f"std scalar/empty input")
+    c = 1 if correction is None else correction
+    if float(c).is_integer() and float(c) >= 0 and _red_n(a, axis) - float(c) > 0:
+        return mx.std(a, axis=axis, keepdims=keepdim, correction=int(c))
+    return mx.sqrt(_var_impl(a, axis, keepdim, c))
+
+def _var_mean(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    dim, correction = _unbias(dim, correction, unbiased)
+    v = _var(a, dim, correction, keepdim)
+    m = _mean(a, dim, keepdim)
+    return v, m
+
+def _std_mean(a, dim=None, correction=None, keepdim=False, unbiased=None, **k):
+    dim, correction = _unbias(dim, correction, unbiased)
+    s = _std(a, dim, correction, keepdim)
+    m = _mean(a, dim, keepdim)
+    return s, m
+
+def _sum(a, dim=None, keepdim=False, dtype=None, **k):
+    a = _mx(a)
+    # aten casts the INPUT to dtype before the reduction
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"sum dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])
+    # torch tolerates dim 0/-1 on a 0-d tensor and reduces nothing
+    if a.ndim == 0:
+        return a
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    # an empty dim list reduces all dims in aten
+    return mx.sum(a, axis=None if axis == () else axis, keepdims=keepdim)
 
 _INT_DT = (mx.int8, mx.int16, mx.int32, mx.int64,
            mx.uint8, mx.uint16, mx.uint32, mx.uint64)
@@ -503,18 +756,29 @@ def _embedding(a, b, *a_, **k_):
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
 
-def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
+def _softmax_fwd(a, dim=-1, half_to_float=False, dtype=None, *, log=False):
     a = _mx(a)
-    # aten casts the INPUT to dtype before the op: fp16/bf16 + dtype=fp32
-    # must compute in fp32, not compute-then-cast.
     if dtype is not None:
         if dtype not in _MX_DT:
-            return _raise(f"log_softmax dtype {dtype}")
+            return _raise(f"softmax dtype {dtype}")
         a = a.astype(_MX_DT[dtype])
-    # aten: half_to_float computes in fp32 and returns fp32 for half inputs
-    if half_to_float and a.dtype in (mx.float16, mx.bfloat16):
+    if not mx.issubdtype(a.dtype, mx.floating):
+        return _raise(f"softmax dtype {a.dtype}")
+
+    use_fp32 = a.dtype in (mx.float16, mx.bfloat16)
+    out_dtype = mx.float32 if half_to_float and use_fp32 else a.dtype
+    if a.size == 0 and -a.ndim <= dim < a.ndim:
+        return a.astype(out_dtype)
+    if use_fp32:
         a = a.astype(mx.float32)
-    return a - mx.logsumexp(a, axis=dim, keepdims=True)
+    shifted = a - mx.max(a, axis=dim, keepdims=True)
+    numer = mx.exp(shifted)
+    denom = mx.sum(numer, axis=dim, keepdims=True)
+    result = shifted - mx.log(denom) if log else numer / denom
+    return result.astype(out_dtype)
+
+def _log_softmax_fwd(a, dim, half_to_float=False, dtype=None):
+    return _softmax_fwd(a, dim, half_to_float, dtype=dtype, log=True)
 
 def _log_softmax_bwd(g, out, dim, input_dtype=None):
     # d/dx log_softmax: g - softmax(x) * sum(g, dim)  with softmax(x)=exp(out)
@@ -817,6 +1081,60 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
 
+def _is_integral_dtype(dt):
+    return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
+
+
+def _is_floatish_dtype(dt):
+    return (mx.issubdtype(dt, mx.floating)
+            or mx.issubdtype(dt, mx.complexfloating))
+
+
+def _dtype_of(v):
+    # dtype of a resolved operand: mx arrays carry theirs; torch Scalar
+    # arguments arrive as python numbers and promote like wrapped scalars
+    # (float scalar -> default float, int scalar stays integral).
+    if isinstance(v, mx.array):
+        return v.dtype
+    if isinstance(v, bool):
+        return mx.bool_
+    if isinstance(v, int):
+        return mx.int64
+    if isinstance(v, float):
+        return mx.float32
+    return getattr(v, "dtype", mx.float32)
+
+
+def _rsub(a, b, alpha=1, **k):
+    # aten.rsub.Scalar(self, other, alpha): other - alpha * self. Torch
+    # rejects subtraction on bool operands, and a floating alpha only when
+    # the promoted operand type is integral (int64 self + float other is
+    # legal and returns float).
+    da, db = _dtype_of(a), _dtype_of(b)
+    if da == mx.bool_ or db == mx.bool_:
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is not "
+            "supported. If you are trying to invert a mask, use the `~` or "
+            "`logical_not()` operator instead.")
+    if isinstance(alpha, float) and _is_integral_dtype(mx.result_type(da, db)):
+        raise RuntimeError(
+            "For integral input tensors, the argument alpha must not be a "
+            "floating point number")
+    return _mx(b) - _mx(a) * alpha
+
+
+def _atan2(y, x):
+    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
+    # The Vulkan atan2 kernel drops the sign of a zero x; 1/+-0 = +-inf
+    # recovers it (no mx.signbit in the wheel). Only the (+/-0, -0) pairs
+    # are wrong: nonzero and NaN y stay on mx.atan2.
+    y, x = _mx(y), _mx(x)
+    r = mx.atan2(y, x)
+    x_neg0 = (x == 0) & (1.0 / x < 0)
+    fix = mx.where(1.0 / y < 0, -math.pi, math.pi).astype(r.dtype)
+    return mx.where(x_neg0 & (y == 0), fix, r)
+
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -852,6 +1170,34 @@ def _bitwise_or_logical(a, b, bitop, logop):
         _b = getattr(mx, "bool_", None) or mx.uint8
         return logop(a.astype(_b), b.astype(_b))
     return bitop(a, b)
+
+
+_KIND_GROUPS = None
+def _dtype_kind(dt):
+    global _KIND_GROUPS
+    if _KIND_GROUPS is None:
+        g = {"bool": ("bool_",),
+             "int": tuple(p + str(w) for p in ("int", "uint") for w in (8, 16, 32, 64)),
+             "float": ("float16", "bfloat16", "float32", "float64"),
+             "complex": ("complex64", "complex128")}
+        _KIND_GROUPS = {k: frozenset(getattr(mx, n) for n in names if hasattr(mx, n))
+                        for k, names in g.items()}
+    return next((k for k, dts in _KIND_GROUPS.items() if dt in dts), str(dt))
+
+
+def _inplace_result(upd, dst):
+    # Torch in-place contract: the broadcast result may not grow the
+    # destination shape, and its dtype must cast back to the destination's
+    # kind (int64->int8 stays, int64->bool raises). Refusals leave the op to
+    # the torch fallback, which raises the same error.
+    dst = _mx(dst)
+    if tuple(upd.shape) != tuple(dst.shape):
+        _raise(f"in-place result shape {tuple(upd.shape)} vs dest {tuple(dst.shape)}")
+    if upd.dtype != dst.dtype:
+        if _dtype_kind(upd.dtype) != _dtype_kind(dst.dtype):
+            _raise(f"in-place result {upd.dtype} cannot cast to dest {dst.dtype}")
+        upd = upd.astype(dst.dtype)
+    return upd
 
 
 # ---------------- pooling (PT-P) ----------------
@@ -1159,6 +1505,24 @@ def _coerce_index(v):
     return v
 
 
+def _local_scalar_dense(a):
+    """aten._local_scalar_dense: the .item() graph op (the whisper
+    getitem-adjacent family) - hand back the Python scalar a 0-dim tensor
+    carries so scalar branches stay Python without a torch round-trip."""
+    a = _mx(a)
+    if a.ndim != 0 and a.size != 1:
+        _raise(f"_local_scalar_dense on shape {tuple(a.shape)}")
+    return a.item()
+
+
+def _float_scalar(t, *a, **k):
+    """aten.Float (the Scalar and Tensor overloads share the opname): torch
+    .float() semantics - a Python number becomes a 0-dim fp32 tensor, any
+    tensor (0-dim or not, any dtype) is cast to fp32. Casting unconditionally
+    matters: int64 tensors previously slipped through uncast."""
+    if isinstance(t, (int, float)):
+        return mx.array(float(t))
+    return _mx(t).astype(mx.float32)
 
 _FUNC_SPECS = {
     "linear": _linear,
@@ -1209,7 +1573,7 @@ _FUNC_SPECS = {
     "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
-    "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a, "contiguous": lambda a, *a_, **k_: a,
+    "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a.clone() if isinstance(a, torch.Tensor) else a, "contiguous": lambda a, *a_, **k_: a,
     "alias": lambda a: a, "lift_fresh": lambda a: a,
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
     "to": lambda a, *a_, **k_: a,
@@ -1245,8 +1609,8 @@ _FUNC_SPECS = {
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
-    "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
-    "_softmax": lambda a, dim, half=False: mx.softmax(a, axis=dim),
+    "softmax": lambda a, dim=-1, dtype=None, **k: _softmax_fwd(a, dim, dtype=dtype),
+    "_softmax": _softmax_fwd,
     "gelu": lambda a, approximate="none": (0.5 * a * (1.0 + mx.tanh(math.sqrt(2.0 / math.pi) * (a + 0.044715 * a * a * a))) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0)))),
     "cross_entropy": lambda logits, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", label_smoothing=0.0, *a_, **k_: (
         _ce(logits, target, weight, ignore_index, label_smoothing, _red(reduction, size_average, reduce))),
@@ -1270,6 +1634,7 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
+    "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
@@ -1304,6 +1669,7 @@ _FUNC_SPECS = {
     "bitwise_or": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "bitwise_xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
+    "bitwise_and_": lambda a, b: _inplace_result(_bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and), a),
     "or_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
@@ -1311,14 +1677,14 @@ _FUNC_SPECS = {
     "invert": lambda a: mx.logical_not(a),
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "rsub": lambda a, b: _mx(b) - _mx(a),
+    "rsub": _rsub,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
-    "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
+    "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
-    "_log_softmax": lambda a, dim, half_to_float=False, **k: _log_softmax_fwd(a, dim, half_to_float),
+    "_log_softmax": _log_softmax_fwd,
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
@@ -1337,6 +1703,8 @@ _FUNC_SPECS = {
     "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
+    "_local_scalar_dense": _local_scalar_dense,
+    "Float": _float_scalar,
 }
 
 def _raise(name):
@@ -1399,6 +1767,7 @@ def _build_func_table():
 _build_func_table()
 # dotted-name resolve only covers torch attrs; operator.* objects register directly
 FUNC_TABLE[operator.iadd] = _FUNC_SPECS["add"]
+FUNC_TABLE[operator.isub] = _FUNC_SPECS["sub"]
 
 # name-keyed fallback: dynamo may reference e.g. torch._C._VariableFunctions.matmul
 # which is a different object than torch.matmul
@@ -1419,7 +1788,8 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
                  "_adaptive_avg_pool2d_backward", "convolution_backward",
-                 "threshold_backward", "native_batch_norm_backward"}
+                 "threshold_backward", "native_batch_norm_backward",
+                 "Float"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
@@ -1504,6 +1874,8 @@ def _run_method(obj, name, args, kwargs):
 
 def make_executor(gm):
     stats = {"mlx": [], "cpu": [], "glue": [], "crossings": 0}
+    strided = _strided_nodes(gm.graph.nodes)
+    refused = _refused_nodes(gm.graph.nodes, strided)
     _nprof = os.environ.get("MV_NODE_PROF")
     if _nprof:
         stats["node_ms"] = {}
@@ -1556,7 +1928,7 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 _tick("get_attr")
                 continue
-            if node.target is operator.getitem or name == "getitem":
+            if (node.target is operator.getitem or name == "getitem") and node not in refused:
                 try:
                     env[node] = args[0][_coerce_index(args[1])]
                     stats["glue"].append("getitem")
@@ -1585,6 +1957,8 @@ def make_executor(gm):
                                or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
                                or name in _PRODUCERS
                                or name in _ALWAYS_LOWER)
+                if node in refused:
+                    lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
                         val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
@@ -1604,13 +1978,16 @@ def make_executor(gm):
                     _tick(name)
                     continue
             elif node.op == "call_method":
-                try:
-                    val, on_mlx = _run_method(args[0], str(node.target), args[1:], kwargs)
-                except NotImplementedError:
+                if node in refused:
                     val, on_mlx = None, False
-                except Exception as e:
-                    log.info("LOWER-FAIL\t%s\t%s", node.target, e)
-                    val, on_mlx = None, False
+                else:
+                    try:
+                        val, on_mlx = _run_method(args[0], str(node.target), args[1:], kwargs)
+                    except NotImplementedError:
+                        val, on_mlx = None, False
+                    except Exception as e:
+                        log.info("LOWER-FAIL\t%s\t%s", node.target, e)
+                        val, on_mlx = None, False
 
             if not on_mlx:
                 if has_mx(args) or has_mx(kwargs.values()):
@@ -1631,7 +2008,7 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
-            if (name == "mul_" and node.op in ("call_function", "call_method")
+            if (name in ("mul_", "bitwise_and_") and node.op in ("call_function", "call_method")
                     and isinstance(node.args[0], torch.fx.Node)):
                 env[node.args[0]] = val
             if _DBG_ENV is not None:
@@ -2004,9 +2381,28 @@ def _fuse_rope(nodes):
     return skip, final
 
 
+def _inplace_writeback(dst, upd):
+    # torch in-place contract: the result must fit the destination shape and
+    # cast back to the destination dtype (float-family -> integral is
+    # rejected, and nothing casts into bool; int64 -> int8 wraps fine).
+    if upd.shape != dst.shape:
+        raise RuntimeError(
+            "output with shape %s doesn't match the broadcast shape %s"
+            % (list(dst.shape), list(upd.shape)))
+    if upd.dtype != dst.dtype:
+        if (dst.dtype == mx.bool_ or
+                (_is_floatish_dtype(upd.dtype) and _is_integral_dtype(dst.dtype))):
+            raise RuntimeError(
+                "result type %s can't be cast to the desired output type %s"
+                % (upd.dtype, dst.dtype))
+        upd = upd.astype(dst.dtype)
+    return upd
+
+
 def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
+    strided = _strided_nodes(nodes)
     skip, fused = _fuse_rmsnorm(nodes)
     rskip, rfused = _fuse_rope(nodes)
     pos_ph = next((n for n in phs if "position_ids" in str(n.target)), None)
@@ -2065,7 +2461,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # cache placeholders only count as mutated state when the graph actually
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
-    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_")
+    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_")
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
             and getattr(n.args[0], "op", None)
@@ -2203,15 +2599,47 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = upd
                 continue
             if name == "add_":
-                upd = env[n.args[0]] + args[1]
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                upd = _inplace_writeback(env[n.args[0]],
+                                         env[n.args[0]] + args[1] * alpha)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
                     env[_ph] = upd        # same-storage alias of a state ph
                 env[n] = upd
                 continue
+            if name in ("sub_", "sub_.Tensor"):
+                dst = env[n.args[0]]
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                if (dst.dtype == mx.bool_
+                        or _dtype_of(args[1]) == mx.bool_):
+                    raise RuntimeError(
+                        "Subtraction, the `-` operator, with a bool tensor is "
+                        "not supported. If you are trying to invert a mask, "
+                        "use the `~` or `logical_not()` operator instead.")
+                upd = _inplace_writeback(dst, dst - args[1] * alpha)
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in ("rsub", "rsub.Scalar") and n.op == "call_function":
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                env[n] = _rsub(args[0], args[1], alpha)
+                continue
             if name == "mul_":
-                upd = env[n.args[0]] * args[1]
+                upd = _inplace_writeback(env[n.args[0]], env[n.args[0]] * args[1])
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name == "bitwise_and_":
+                upd = _inplace_result(
+                    _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and),
+                    env[n.args[0]])
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
@@ -2231,7 +2659,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 d0, d1 = int(args[1]), int(args[2])
                 env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
                 continue
-            if name in ("view", "_unsafe_view") and n.op == "call_function":
+            if name in _VIEW_OPS and n.op == "call_function":
+                if _view_refused(name, n, strided):
+                    raise RuntimeError(
+                        f"{name} on a possibly non-contiguous input: "
+                        "refused to the per-node path for torch stride "
+                        "semantics")
                 shape = args[1]
                 if isinstance(shape, torch.fx.Node):
                     shape = env[shape]
@@ -2282,6 +2715,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = y.astype(mx.float32)
                 continue
             if n.op == "call_method":
+                if _view_refused(name, n, strided):
+                    raise RuntimeError(
+                        f"{name} on a possibly non-contiguous input: "
+                        "refused to the per-node path for torch stride "
+                        "semantics")
                 val, on_mx = _run_method(args[0], name, args[1:], kwargs)
                 if on_mx:
                     env[n] = val

@@ -1790,14 +1790,14 @@ TEST_CASE("external-axis reductions stage metadata per workgroup") {
   // Rank-6 (2,2,3,2,3,4) holding a permutation of 1..288 so every arg
   // result is unique. Reducing the non-adjacent axes {0,2,4} leaves kept
   // dims {1,3,5}: six collapsed axes, past the four inline slots, so
-  // matrix_k != 0 and the kernel reads the axis-metadata buffer.
-  std::vector<float> raw(288);
+  // matrix_k = 6 and the kernel stages 12 external metadata words.
+  std::vector<float> raw(2 * 2 * 3 * 2 * 3 * 4);
   for (size_t i = 0; i < raw.size(); ++i) {
-    raw[i] = static_cast<float>((i * 53u) % 288u) + 1.0f;
+    raw[i] = static_cast<float>((i * 53u) % raw.size()) + 1.0f;
   }
   array grid(raw.begin(), Shape{2, 2, 3, 2, 3, 4}, float32);
   auto at = [&raw](int i0, int i1, int i2, int i3, int i4, int i5) {
-    return raw[(((((i0 * 2 + i1) * 3 + i2) * 2 + i3) * 3 + i4) * 4 + i5)];
+    return raw.at(((((i0 * 2 + i1) * 3 + i2) * 2 + i3) * 3 + i4) * 4 + i5);
   };
 
   std::vector<float> expected_sum;

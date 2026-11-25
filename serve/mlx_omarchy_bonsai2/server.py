@@ -383,11 +383,12 @@ class _RequestError(ValueError):
 
 
 def _finite_number(value):
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-    )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an int too large for a float, e.g. 10**400
+        return False
 
 
 def validate_chat_request(req):
@@ -420,7 +421,8 @@ def validate_chat_request(req):
     stream = req.get("stream", False)
     if not isinstance(stream, bool):
         raise _RequestError("'stream' must be a boolean")
-    return messages, max_tokens, temperature, top_p, stream
+    # The sampler takes floats; an int temperature >= 2**63 fails in mlx.
+    return messages, max_tokens, float(temperature), top_p, stream
 
 
 def _make_handler(state: Bonsai2State):
@@ -495,7 +497,7 @@ def _make_handler(state: Bonsai2State):
             raw = self.rfile.read(length)
             try:
                 req = json.loads(raw)
-            except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            except (ValueError, RecursionError) as exc:
                 self._send_json(400, {"error": "invalid JSON body: %s" % exc})
                 return
             try:
