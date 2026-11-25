@@ -10154,6 +10154,14 @@ bool dispatch_quantized_gemv_group(
   if (rope_epi_done) {
     *rope_epi_done = false;
   }
+  if (rope_epi != nullptr &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+    static int tre = 0;
+    if (tre++ < 4) {
+      std::fprintf(
+          stderr, "[epi-ctr] enter: members=%zu\n", members.size());
+    }
+  }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
