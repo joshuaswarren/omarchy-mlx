@@ -737,6 +737,16 @@ struct RopePair {
       State::pending};
 };
 
+// A planned residual Add -> RMSNorm fold (M2D-2): the add produces the
+// bf16 residual and the norm reads exactly it, same stream and shape.
+// Pending until one FastAddRmsNormAppleBF16 dispatch at the add's tape
+// position writes both outputs, then done; failed un-plans and both
+// nodes take their ordinary paths.
+struct AddNormPair {
+  std::array<array, 2> nodes;
+  enum class State : uint8_t { pending, done, failed } state{State::pending};
+};
+
 // A planned RMSNorm -> RoPE fold: the norm's only consumer is a plain
 // two-input RoPE, reached directly or through one view op. Pending
 // until the rope evaluates, then done (one FastRopeNorm dispatch read
@@ -909,6 +919,8 @@ struct EagerFusionState {
   TapeIndex<size_t> reshape_redirect_roles;
   TapeIndex<size_t> rope_pair_roles;
   std::vector<RopePair> rope_pairs;
+  TapeIndex<size_t> add_norm_roles;
+  std::vector<AddNormPair> add_norm_pairs;
   TapeIndex<size_t> rope_norm_skip_roles;
   TapeIndex<size_t> rope_norm_roles;
   std::vector<RopeNormFold> rope_norms;
@@ -924,6 +936,7 @@ struct EagerFusionState {
     rope_redirect_roles.prepare(tape_size);
     reshape_redirect_roles.prepare(tape_size);
     rope_pair_roles.prepare(tape_size);
+    add_norm_roles.prepare(tape_size);
     rope_norm_skip_roles.prepare(tape_size);
     rope_norm_roles.prepare(tape_size);
     prologue_skip_roles.prepare(tape_size);
@@ -940,6 +953,7 @@ struct EagerFusionState {
     dense_gemv_groups.clear();
     slice_update_pairs.clear();
     rope_pairs.clear();
+    add_norm_pairs.clear();
     rope_norms.clear();
     prologue_folds.clear();
     sdpa_transpose_folds.clear();
@@ -2619,6 +2633,59 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       claimed.put_if_absent(node.id(), 1);
     }
   }
+
+  // Fused residual Add -> RMSNorm pairs (M2D-2): a bf16 same-shape
+  // BinaryVecBF16(Add) whose reader is an unclaimed fast::RMSNorm on
+  // the same stream folds into ONE FastAddRmsNormAppleBF16 dispatch at
+  // the add's tape position. The add's rounded residual stays
+  // multi-reader safe: the fused kernel writes the residual buffer the
+  // composed add would have written. The device gate is the same
+  // apple_norm_enabled the standalone norm uses, so a refused device
+  // plans nothing and every node keeps today's route.
+  {
+    std::unordered_map<std::uintptr_t, const array*> norm_by_in;
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RMSNorm)) || node.dtype() != bfloat16 ||
+          node.inputs().size() != 2 || claimed.count(node.id())) {
+        continue;
+      }
+      const array& in = node.inputs()[0];
+      if (in.dtype() != bfloat16 || in.shape() != node.shape() ||
+          !is_op(&in, typeid(Add)) || in.inputs().size() != 2 ||
+          in.inputs()[0].dtype() != bfloat16 ||
+          in.inputs()[1].dtype() != bfloat16 ||
+          in.inputs()[0].shape() != in.shape() ||
+          in.inputs()[1].shape() != in.shape() ||
+          claimed.count(in.id())) {
+        continue;
+      }
+      norm_by_in.emplace(in.id(), &node);
+    }
+    for (const auto& node : tape) {
+      auto it = norm_by_in.find(node.id());
+      if (it == norm_by_in.end() || claimed.count(node.id())) {
+        continue;
+      }
+      const array* norm = it->second;
+      size_t row_length = norm->shape(-1);
+      size_t rows = norm->size() / row_length;
+      const array& w = norm->inputs()[1];
+      if (rows == 0 || row_length == 0 || w.dtype() != bfloat16 ||
+          (w.size() != 1 && w.size() != row_length) ||
+          norm->inputs()[0].primitive().stream() != node.primitive().stream()) {
+        continue;
+      }
+      // The apple_norm_enabled device gate lives at fire time (it is
+      // TU-local to primitives.cpp); a refused device un-plans on the
+      // first fire and both nodes take today's route.
+      const size_t index = state->add_norm_pairs.size();
+      state->add_norm_roles.put_if_absent(node.id(), index);
+      state->add_norm_roles.put_if_absent(norm->id(), index);
+      state->add_norm_pairs.push_back(AddNormPair{{node, *norm}});
+      claimed.put_if_absent(norm->id(), 1);
+    }
+  }
+
   // RMSNorm -> RoPE fold: a plain two-input fast::RoPE whose input is a
   // single-use fast::RMSNorm output gets the norm computed inside the
   // rope dispatch (the FastRopeNorm build; bf16 only). The claimed norm
@@ -4223,6 +4290,55 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       return false;
     }
     return true;
+  }
+  if (auto add_norm = eager_state->add_norm_roles.find(node.id());
+      add_norm != nullptr) {
+    auto& pair = eager_state->add_norm_pairs[*add_norm];
+    if (pair.state == AddNormPair::State::done) {
+      return true;
+    }
+    if (pair.state == AddNormPair::State::failed) {
+      return false;
+    }
+    if (pair.nodes[0].status() == array::Status::evaluated &&
+        pair.nodes[1].status() == array::Status::evaluated) {
+      // A settle pass already evaluated both members; one dispatch
+      // wrote both outputs, re-firing would only rewrite them.
+      pair.state = AddNormPair::State::done;
+      return true;
+    }
+    bool fired = dispatch_add_norm_pair(pair.nodes, stream);
+    pair.state = fired ? AddNormPair::State::done : AddNormPair::State::failed;
+    return pair.state == AddNormPair::State::done;
+  }
+  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
+      rope_pair != nullptr) {
+    auto& pair = eager_state->rope_pairs[*rope_pair];
+    if (pair.state == RopePair::State::done) {
+      return true;
+    }
+    if (pair.state == RopePair::State::failed) {
+      return false;
+    }
+    if (pair.nodes[0].status() == array::Status::evaluated &&
+        pair.nodes[1].status() == array::Status::evaluated) {
+      // A settle pass already evaluated both members: the pair can pop
+      // inside a nested settle scope before the outer tape reaches it,
+      // and each scope plans the same pairs. One dispatch wrote both
+      // outputs; re-firing would only rewrite them.
+      pair.state = RopePair::State::done;
+      return true;
+    }
+    bool fired = dispatch_rope_pair(pair.nodes, stream);
+    pair.state = fired ? RopePair::State::done : RopePair::State::failed;
+    static int trio_run_trace = 0;
+    if (!fired && omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+        trio_run_trace < 3) {
+      ++trio_run_trace;
+      std::fprintf(
+          stderr, "[trio-run] pair un-planned: runtime contract refused\n");
+    }
+    return pair.state == RopePair::State::done;
   }
   if (auto update = eager_state->slice_update_roles.find(node.id());
       update != nullptr) {

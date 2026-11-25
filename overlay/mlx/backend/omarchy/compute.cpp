@@ -682,6 +682,7 @@
 #include "fast_rms_norm_f16.h"
 #include "fast_rms_norm_bf16.h"
 #include "fast_rms_norm_apple_bf16.h"
+#include "fast_add_norm_apple_bf16.h"
 #include "fast_layer_norm_f32.h"
 #include "fast_layer_norm_f16.h"
 #include "fast_layer_norm_bf16.h"
@@ -2472,6 +2473,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p2_hd256_bk32, sdpa_decode_split_p2_hd256_bk32_size};
     case ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd256:
       return {sdpa_decode_split_p2_hd256_bk64, sdpa_decode_split_p2_hd256_bk64_size};
+    case ComputeKernel::FastAddRmsNormAppleBF16:
+      return {fast_add_norm_apple_bf16, fast_add_norm_apple_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

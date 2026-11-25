@@ -460,4 +460,14 @@ bool dispatch_rope_pair(
     std::array<array, 2>& nodes,
     const std::array<const RopePairNorm*, 2>& norms,
     const Stream& stream);
+bool dispatch_rope_pair(std::array<array, 2>& nodes, const Stream& stream);
+
+// Fused residual Add + RMSNorm pair (M2D-2): one FastAddRmsNormAppleBF16
+// dispatch replaces BinaryVecBF16(Add) -> FastRmsNormAppleBF16 for a
+// same-shape bf16 edge, writing the rounded residual (nodes[0]) and the
+// normed output (nodes[1]) in the composed path's bit-exact order.
+// Returns false having allocated nothing when anything refuses; both
+// nodes then take their ordinary paths unchanged. Defined in
+// primitives.cpp beside dispatch_rope_pair.
+bool dispatch_add_norm_pair(std::array<array, 2>& nodes, const Stream& stream);
 } // namespace mlx::core::omarchy
