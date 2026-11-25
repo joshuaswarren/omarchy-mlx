@@ -2055,7 +2055,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       for (size_t mi = 0; mi < group.members.size(); ++mi) {
-        member_of.try_emplace(group.members[mi].node.id(), {gi, mi});
+        member_of.try_emplace(
+            group.members[mi].node.id(), std::make_pair(gi, mi));
       }
     }
     // group index -> rope candidates; each entry carries the node and
