@@ -763,17 +763,20 @@ def resize_reservation(name: str, byte_count: int, *, owner: str,
 
 
 def read_claim_fd(fd: int) -> dict:
-    """Read one JSON claim payload from the inherited private pipe. The
-    parent closes its end right after writing, so EOF terminates the read.
-    Any malformed fd or payload is a BudgetError, never a raw exception or a
-    coerced value: the claim must match the record exactly as written."""
+    """Read one JSON claim payload from the read end of an open pipe above
+    fd 2 (parent closes its write end so EOF ends the read). Any other fd is
+    refused before reading without closing it, and any malformed payload is a
+    BudgetError, never a raw exception or a coerced value."""
     if isinstance(fd, bool) or not isinstance(fd, int):
         raise BudgetError(f"claim fd must be an int, got {type(fd).__name__}")
+    if not _pipe_read_end(fd):
+        raise BudgetError(
+            "claim pipe unreadable: not the read end of an open pipe above fd 2")
     chunks = []
     while True:
         try:
             chunk = os.read(fd, 65536)
-        except (OSError, OverflowError) as exc:
+        except OSError as exc:
             raise BudgetError(f"claim pipe unreadable: {exc}") from exc
         if not chunk:
             break
@@ -805,13 +808,14 @@ def claim_from_env(home: Path | None = None) -> dict | None:
     """Child-side managed start: when CLAIM_FD_ENV is set, read the claim
     payload from the private pipe and claim the record before anything is
     loaded. Returns None when no claim fd is present (standalone launch)."""
-    raw = os.environ.get(CLAIM_FD_ENV, "")
-    if not raw:
+    raw = os.environ.get(CLAIM_FD_ENV)
+    if raw is None:
         return None
-    try:
-        fd = int(raw)
-    except ValueError as exc:
-        raise BudgetError(f"{CLAIM_FD_ENV} must be an fd number, got {raw!r}") from exc
+    fd = _env_fd(raw)
+    if fd is None:
+        raise BudgetError(
+            f"claim pipe unreadable: {CLAIM_FD_ENV} must be an fd number, "
+            f"got {raw[:40]!r}")
     payload = read_claim_fd(fd)
     return claim_reservation(
         payload["name"], payload["claim_token"],
@@ -824,17 +828,26 @@ def claim_from_env(home: Path | None = None) -> dict | None:
 _MAX_FD = 2**31 - 1
 
 
-def _lifetime_pipe(fd) -> bool:
-    """True only for the read end of a pipe above stdio. Stdio (0-2, and
-    True, which is fd 1) is refused because the watchdog closes the fd it
-    watches; a non-pipe (socket, tty, regular file), a pipe's write end, or
-    a FIFO opened read/write is refused because it may never reach EOF (a
-    read/write FIFO holds its own writer)."""
+def _env_fd(raw: str) -> int | None:
+    # ASCII digits only (str.isdigit and int() accept other Unicode digits),
+    # and at most 10 of them, so int() never meets the str-digits limit.
+    return int(raw) if len(raw) <= 10 and raw.isascii() and raw.isdigit() else None
+
+
+def _pipe_read_end(fd) -> bool:
+    """True only for the read end of an open pipe above stdio. Stdio (0-2,
+    and True, which is fd 1) is never the manager's pipe, and the lifetime
+    watchdog closes the fd it watches; a non-pipe (socket, tty, regular file,
+    directory), a pipe's write end, an O_PATH fd, or a FIFO opened read/write
+    is refused because it may never reach EOF (a read/write FIFO holds its
+    own writer, and O_PATH is unreadable)."""
     if isinstance(fd, bool) or not isinstance(fd, int) or not (2 < fd <= _MAX_FD):
         return False
     try:
-        return (stat.S_ISFIFO(os.fstat(fd).st_mode)
-                and (fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE) == os.O_RDONLY)
+        if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            return False
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        return (flags & (os.O_ACCMODE | getattr(os, "O_PATH", 0))) == os.O_RDONLY
     except OSError:
         return False
 
@@ -846,7 +859,7 @@ def watch_parent_fd(fd: int, on_eof) -> None:
     pid so existing shutdown paths release the reservation. An fd that is not
     an open pipe above stdio counts as a closed pipe: on_eof runs and nothing
     is opened or closed."""
-    if _lifetime_pipe(fd):
+    if _pipe_read_end(fd):
         try:
             with os.fdopen(fd, "rb", closefd=True) as fh:
                 while fh.read(65536):
@@ -866,10 +879,8 @@ def watch_parent_from_env() -> bool:
     raw = os.environ.get(LIFETIME_FD_ENV, "")
     if not raw:
         return False
-    # ASCII digits only (str.isdigit and int() accept other Unicode digits),
-    # and at most 10 of them, so int() never meets the str-digits limit.
-    fd = int(raw) if len(raw) <= 10 and raw.isascii() and raw.isdigit() else None
-    if not _lifetime_pipe(fd):
+    fd = _env_fd(raw)
+    if not _pipe_read_end(fd):
         raise BudgetError(
             f"{LIFETIME_FD_ENV} must name the read end of an open pipe above fd 2, "
             f"got {raw[:40]!r}")
