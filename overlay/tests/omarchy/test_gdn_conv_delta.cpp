@@ -338,3 +338,19 @@ TEST_CASE("the fused conv + delta + gated norm is one dispatch at unequal head c
   }
   CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the sequence into one dispatch");
 }
+
+TEST_CASE("the fused GDN op rejects invalid head ratios before dispatch") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  for (int hv : {8, 24}) {
+    INFO("key heads 16, value heads " << hv);
+    Inputs in = make_inputs(10, 0.05f, s, 16, hv);
+    // Do not evaluate the returned graph: a regression must not run the shader.
+    CHECK_THROWS_WITH_AS(
+        fast::gdn_conv_delta_update(
+            in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias,
+            in.delta_state, KEY_DIM, INV * INV, INV, EPS, in.gate, in.norm_w, EPS, s),
+        "[gdn_conv_delta_update] value heads must be a positive multiple of key heads",
+        std::invalid_argument);
+  }
+}

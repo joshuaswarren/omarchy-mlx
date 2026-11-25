@@ -37,7 +37,7 @@
  // logits = quantized_matmul(x, w, scales, biases, transpose=true).
 --- a/mlx/fast.cpp	2026-11-03 12:54:14.300018528 -0600
 +++ b/mlx/fast.cpp	2026-11-03 12:54:14.301018519 -0600
-@@ -2368,6 +2368,76 @@
+@@ -2368,6 +2368,83 @@
        /* inputs */ std::vector<array>{state, x, weight});
  }
  
@@ -62,6 +62,13 @@
 +  if (norm_gate.has_value() != norm_weight.has_value()) {
 +    throw std::invalid_argument(
 +        "[gdn_conv_delta_update] norm_gate and norm_weight go together");
++  }
++  if (qkv.ndim() == 3 && key_dim > 0 && key_dim % 128 == 0) {
++    const int64_t value_width = static_cast<int64_t>(qkv.shape(2)) - 2LL * key_dim;
++    if (value_width <= 0 || value_width % key_dim != 0) {
++      throw std::invalid_argument(
++          "[gdn_conv_delta_update] value heads must be a positive multiple of key heads");
++    }
 +  }
 +  // The composition the model runs today: the fused conv (SiLU and the q/k
 +  // norm folded), the q|k|v split, the raw-gates gated-delta step and, when
