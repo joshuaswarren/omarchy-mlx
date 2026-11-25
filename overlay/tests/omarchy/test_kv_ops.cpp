@@ -605,6 +605,7 @@ TEST_CASE("SliceUpdate appends in place under the eager donation rule") {
     base_storage = cache.data_shared_ptr();
     return slice_update(cache, upd, Shape{0, 1, 0}, Shape{1, 3, 4}, stream);
   }();
+  updated.eval();
   CHECK_EQ(updated.data_shared_ptr().get(), base_storage.lock().get());
   check_values(updated, expected, stream);
 
@@ -612,6 +613,7 @@ TEST_CASE("SliceUpdate appends in place under the eager donation rule") {
   // the shared cache still reads its old rows.
   array held = fresh_cache();
   array copied = slice_update(held, upd, Shape{0, 1, 0}, Shape{1, 3, 4}, stream);
+  copied.eval();
   CHECK_NE(copied.data_shared_ptr().get(), held.data_shared_ptr().get());
   check_values(copied, expected, stream);
   check_values(
@@ -627,6 +629,7 @@ TEST_CASE("SliceUpdate appends in place under the eager donation rule") {
     forced_base = cache.data_shared_ptr();
     return slice_update(cache, upd, Shape{0, 1, 0}, Shape{1, 3, 4}, stream);
   }();
+  forced.eval();
   unsetenv("MLX_OMARCHY_KV_INPLACE");
   CHECK_NE(forced.data_shared_ptr().get(), forced_base.lock().get());
   check_values(forced, expected, stream);
