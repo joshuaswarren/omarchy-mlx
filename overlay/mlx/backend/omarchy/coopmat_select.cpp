@@ -29,6 +29,10 @@ CoopmatShape qmm_prefill_coopmat_shape() {
   return shape;
 }
 
+CoopmatShape sdpa_causal_flash_coopmat16_bf16_shape() {
+  return qmm_prefill_coopmat16_bf16_shape();
+}
+
 CoopmatShape qmm_prefill_coopmat16_bf16_shape() {
   CoopmatShape shape;
   shape.m = 16u;

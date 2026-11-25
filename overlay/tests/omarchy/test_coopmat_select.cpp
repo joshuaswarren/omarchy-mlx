@@ -210,6 +210,17 @@ TEST_CASE("the 8x8x8 devices do not match the 16x16x16 route") {
       agx3b_shapes(), omarchy::qmm_prefill_coopmat16_bf16_shape()));
 }
 
+TEST_CASE("the sdpa 16x16x16 shape matches the qmm 16x16x16 shape") {
+  CHECK(
+      omarchy::sdpa_causal_flash_coopmat16_bf16_shape() ==
+      omarchy::qmm_prefill_coopmat16_bf16_shape());
+  CHECK(omarchy::cooperative_matrix_advertises(
+      {omarchy::sdpa_causal_flash_coopmat16_bf16_shape()},
+      omarchy::sdpa_causal_flash_coopmat16_bf16_shape()));
+  CHECK_FALSE(omarchy::cooperative_matrix_advertises(
+      agx3b_shapes(), omarchy::sdpa_causal_flash_coopmat16_bf16_shape()));
+}
+
 TEST_CASE("the match is exact in every field") {
   const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape();
 

@@ -1374,6 +1374,12 @@ enum class ComputeKernel : uint16_t {
   // 1024-thread (32 subgroups, 64 cols/WG) Q4 word subgroup decode GEMV for
   // large-vocabulary lm_head (Appended to keep profile kernel ids stable).
   QmmVecQ4WordSubgroupBF16R2S32W2,
+  // bf16-operand 16x16x16 causal flash prefill for parts whose driver
+  // advertises only the WMMA-shaped bf16 x bf16 -> f32 subgroup shape
+  // (RADV RDNA3+; shaders/sdpa_prefill_flash_causal_coopmat16.comp),
+  // one 64-lane subgroup per workgroup. Appended to keep profile kernel
+  // ids stable.
+  SdpaCausalFlashCoopmat16BF16,
   Count,
 };
 
