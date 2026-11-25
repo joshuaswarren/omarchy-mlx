@@ -34,6 +34,9 @@ from . import budget
 from .catalog import CatalogError, bundled_path, validate_file
 
 MEMORY_SIZES_GIB = [8, 16, 24, 32, 36, 48, 64, 96, 128, 192]
+_LINE_BREAK_ESCAPES = str.maketrans(
+    {c: repr(c)[1:-1] for c in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"}
+)
 
 
 def _max_fitting_context(memory: dict, max_tokens: int, available_bytes: int) -> int:
@@ -129,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.flush()
     except (CatalogError, OSError) as exc:
         if sys.stderr is not None:
-            print(f"error: {exc}", file=sys.stderr)
+            print(f"error: {str(exc).translate(_LINE_BREAK_ESCAPES)}", file=sys.stderr)
         return 1
     return 0
 

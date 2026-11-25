@@ -330,3 +330,37 @@ def test_main_module_keeps_healthy_stdout_on_error(tmp_path, monkeypatch, capsys
     assert len(lines) == 1
     assert lines[0].startswith("error: ")
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("case", ["missing_catalog", "unwritable_out"])
+@pytest.mark.parametrize(
+    ("sep", "escaped"),
+    [
+        pytest.param("\n", r"\n", id="lf"),
+        pytest.param("\r", r"\r", id="cr"),
+        pytest.param("\u2028", r"\u2028", id="ls"),
+    ],
+)
+def test_main_escapes_line_breaks_in_error_paths(tmp_path, case, sep, escaped):
+    if case == "missing_catalog":
+        cli_args = ["--catalog", str(tmp_path / f"bad{sep}name.json")]
+    else:
+        target = tmp_path / f"bad{sep}name"
+        target.mkdir()
+        cli_args = ["-o", str(target)]
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "serve"))
+    proc = subprocess.run(
+        [sys.executable, "-m", "mlx_omarchy_serve.export_fit_table", *cli_args],
+        cwd=REPO_ROOT / "serve",
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    lines = proc.stderr.splitlines()
+    assert proc.returncode == 1
+    assert proc.stdout == ""
+    assert len(lines) == 1
+    assert lines[0].startswith("error: ")
+    assert f"bad{escaped}name" in lines[0]
+    assert "Traceback" not in proc.stderr
