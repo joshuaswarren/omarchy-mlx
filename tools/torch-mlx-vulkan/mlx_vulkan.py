@@ -1105,6 +1105,26 @@ def _dtype_of(v):
     return getattr(v, "dtype", mx.float32)
 
 
+def _torch_comp_dtype(dd, dr, md, mr):
+    # torch type promotion (docs "type promotion dtypes"): keep the highest
+    # category (float over int; bool is rejected before this runs), then
+    # promote among the DIMENSIONED participants of that category when any
+    # exist, falling back to the 0-dim ones only when none do. A rank-zero
+    # fp32 rhs therefore does not lift a dimensioned fp16 dest (torch
+    # computes fp16 and can produce -inf), while a shape-[1] fp32 rhs
+    # promotes to fp32.
+    pair = ((dd, dr), (md, mr))
+    if _is_floatish_dtype(dd) or _is_floatish_dtype(md):
+        use = [(t, r) for t, r in pair if _is_floatish_dtype(t)]
+        dim = [(t, r) for t, r in use if r > 0]
+        use = dim or use
+    else:
+        dim = [(t, r) for t, r in pair if r > 0]
+        use = dim or list(pair)
+    dts = [t for t, _ in use]
+    return dts[0] if len(dts) == 1 else mx.result_type(*dts)
+
+
 def _sub_inplace(a, b, alpha=1, **k):
     # aten.sub_.Tensor(self, other, alpha) eager contract: torch promotes,
     # computes, then requires the result to fit the destination shape and
@@ -1136,7 +1156,7 @@ def _sub_inplace(a, b, alpha=1, **k):
     # fp32 computation, int8 100 * 2 stays 200 instead of wrapping. The
     # destination only rules the final writeback: shape check, then the
     # comp->dest cast with float->int rejected (torch's in-place error).
-    comp = mx.result_type(d.dtype, mb.dtype)
+    comp = _torch_comp_dtype(d.dtype, d.ndim, mb.dtype, mb.ndim)
     if (not _is_floatish_dtype(d.dtype) and not _is_floatish_dtype(mb.dtype)
             and isinstance(alpha, float)):
         comp = mx.float32

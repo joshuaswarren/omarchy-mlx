@@ -245,6 +245,40 @@ def test_sub_tensor_w91_round4():
     assert np.array_equal(out.numpy(), np.array([499800.0], dtype=np.float32)), out
     print("test_sub_tensor_w91_round4 PASS")
 
+
+
+def test_sub_tensor_w91_round5():
+    """w91 round 5: rank-zero rhs keeps the dimensioned dest's dtype."""
+    # fp16 dest [1] -= rank-zero fp32 70000 alpha=0.5: torch computes in
+    # fp16 (the 0-dim fp32 does not lift the dimensioned fp16) and writes
+    # back -inf
+    x = torch.tensor([1.0], dtype=torch.float16)
+    y0 = torch.tensor(70000.0, dtype=torch.float32)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 0.5})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x, y0)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert out.dtype == torch.float16, out.dtype
+    assert np.isneginf(out.numpy()).all(), out
+
+    # the same value at shape [1] promotes to fp32 and legitimately
+    # produces -35008 after the fp16 writeback
+    y1 = torch.tensor([70000.0], dtype=torch.float32)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 0.5})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x, y1)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert np.array_equal(out.numpy(), np.array([-35008.0], dtype=np.float16)), out
+    print("test_sub_tensor_w91_round5 PASS")
+
 if __name__ == "__main__":
     test_sub_tensor()
     test_rsub()
@@ -252,4 +286,5 @@ if __name__ == "__main__":
     test_sub_tensor_w91_round2()
     test_sub_tensor_w91_round3()
     test_sub_tensor_w91_round4()
+    test_sub_tensor_w91_round5()
     print("ALL PASS")
