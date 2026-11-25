@@ -206,7 +206,7 @@ const QmmGeometry& qmm_geometry() {
     if (v.empty()) {
       const auto& dev = omarchy::device();
       const auto& caps = dev.capabilities();
-      if (omarchy::select_qmm_g13_2x8w2(caps.device_name)) {
+      if (omarchy::select_qmm_apple_2x8w2(caps.device_name)) {
         return make_2x8w2();
       }
       const omarchy::QmmWideCaps wide_caps{
@@ -238,11 +238,6 @@ const QmmGeometry& qmm_geometry() {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
-      }
-      if (omarchy::select_qmm_g14c_2x4w2(caps.device_name)) {
-        return QmmGeometry{
-            8u, K::QmmVecQ4WordSubgroupBF16,
-            K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
       }
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
