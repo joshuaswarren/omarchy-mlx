@@ -14241,10 +14241,32 @@ void GatedDeltaUpdate::eval_gpu(
           any_strided || !x.flags().row_contiguous || x.offset() != 0;
     }
     if (any_strided) {
+      // q/k/v reach the decode kernel as one flat [heads, head_dim] block
+      // each (q_buf[lhs_offset + h*dk + i] and the k/v twins): an input
+      // whose last dims pack that block - the strided token-window view
+      // mlx-lm's qkv slice produces - already exposes the bytes the kernel
+      // reads at its item offset, so only a genuinely non-packed input
+      // needs the dense copy.
+      auto packed_tail = [](const array& x) -> uint64_t {
+        uint64_t packed = 1;
+        for (int d = x.ndim() - 1; d >= 0; --d) {
+          if (x.strides()[d] != static_cast<int64_t>(packed)) {
+            break;
+          }
+          packed *= static_cast<uint64_t>(x.shape(d));
+        }
+        return packed;
+      };
+      const uint64_t head_block[] = {
+          static_cast<uint64_t>(B) * T * Hk * Dk,
+          static_cast<uint64_t>(B) * T * Hk * Dk,
+          static_cast<uint64_t>(B) * T * Hv * Dv};
       std::vector<array> dense;
       dense.reserve(inputs.size());
-      for (const auto& x : inputs) {
-        if (x.flags().row_contiguous) {
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        const auto& x = inputs[i];
+        if (x.flags().row_contiguous ||
+            (i < 3 && packed_tail(x) >= head_block[i])) {
           dense.push_back(x);
         } else {
           dense.push_back(contiguous_copy_gpu(x, s));
