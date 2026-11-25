@@ -294,6 +294,51 @@ class HoneykrispDt1Tests(unittest.TestCase):
         self.assertIn("kernel_1                   n=1      total=2.020ms", r.stdout)
         # First kernel_0 gets 10us (submit 1) + 20us (submit 2 reset) = 30.0us.
         self.assertIn("kernel_0                   n=2      total=30.0us", r.stdout)
+        # Intra-submit raw interval is labeled as included in dt1 busy, not double-counted as gap.
+        self.assertIn("raw intra-submission timestamp intervals (included in dt1 busy):", r.stdout)
+        self.assertNotIn("gaps intra-submission:", r.stdout)
+
+    def test_dt1_counter_wrap_and_untimed_dispatch_break(self):
+        # 8-bit wrap: (240,245) -> (4,8) at 1 us/tick => 5 us + 19 us = 24 us.
+        wrap_rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
+             "label": "wrap", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 4, "t1": 8, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "end", "t": 2000, "dispatches": 2, "dropped": 0,
+             "submissions": 1, "joins": 0},
+        ]
+        # Untimed dispatch between (100,105) and (125,130) breaks dt1 chain:
+        # kernel_2 gets t1-t0 = 5 us, not 25 us.
+        gap_rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 64, "pool": 65536,
+             "label": "gap", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 100, "t1": 105, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "b": []},
+            {"k": "d", "s": 1, "e": 2, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 125, "t1": 130, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "end", "t": 2000, "dispatches": 3, "dropped": 0,
+             "submissions": 1, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            p1, _ = write_fixture(td, wrap_rec)
+            r1 = run_analyzer(p1)
+            p2, _ = write_fixture(td, gap_rec)
+            r2 = run_analyzer(p2)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertIn("busy 24.0us / span 24.0us", r1.stdout)
+        self.assertIn("kernel_1                   n=1      total=19.0us", r1.stdout)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("kernel_2                   n=1      total=5.0us", r2.stdout)
+        self.assertIn("gaps intra-submission: n=1 total=20.0us", r2.stdout)
 
 
 if __name__ == "__main__":

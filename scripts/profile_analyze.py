@@ -259,27 +259,45 @@ def main():
         say(f"   phases={phases}")
 
     if has_gpu:
-        ordered = sorted(
-            (d for d in dispatches if "t0" in d), key=lambda d: d["t0"])
-        ticks = unwrap([d["t0"] for d in ordered] +
-                       [d["t1"] for d in ordered], valid_bits)
-        # unwrap preserves lengths and total order of the concatenated
-        # (t0..., t1...) list; t1 entries interleave correctly because the
-        # concatenation is re-sorted below via paired indices.
-        n = len(ordered)
-        t0s = ticks[:n]
-        t1s = ticks[n:]
-        span = max(t1s) - min(t0s)
+        # Preserve producer emission order within each submission so counter
+        # wraps stay ordered and untimed dispatches break dt1 chains. Order
+        # distinct submissions by their first timed dispatch's raw t0.
+        sub_groups = {}
+        for d in dispatches:
+            sub_groups.setdefault(d["s"], []).append(d)
+        sub_order = sorted(
+            (sid for sid, ds in sub_groups.items()
+             if any("t0" in d and "t1" in d for d in ds)),
+            key=lambda sid: next(
+                d["t0"] for d in sub_groups[sid] if "t0" in d and "t1" in d),
+        )
+        ordered = []
+        chained_prev = set()
+        raw_series = []
+        for sid in sub_order:
+            prev_timed = False
+            for d in sub_groups[sid]:
+                if "t0" in d and "t1" in d:
+                    if prev_timed:
+                        chained_prev.add(id(d))
+                    ordered.append(d)
+                    raw_series.append(d["t0"])
+                    raw_series.append(d["t1"])
+                    prev_timed = True
+                else:
+                    prev_timed = False
+        unwrapped = unwrap(raw_series, valid_bits)
+        t0s = unwrapped[0::2]
+        t1s = unwrapped[1::2]
+        span = (max(t1s) - min(t0s)) if t0s else 0
         busy = 0.0
         kernels_ns = []
-        prev_s = None
         prev_u1 = None
         for d, u0, u1 in zip(ordered, t0s, t1s):
-            if use_dt1 and prev_s == d["s"] and prev_u1 is not None and u1 >= prev_u1:
+            if use_dt1 and id(d) in chained_prev and prev_u1 is not None:
                 dur = max(0.0, (u1 - prev_u1)) * period
             else:
                 dur = max(0.0, (u1 - u0)) * period
-            prev_s = d["s"]
             prev_u1 = u1
             busy += dur
             kernels_ns.append((dur, d))
@@ -290,11 +308,25 @@ def main():
 
         # gaps between consecutive kernels on the GPU timeline
         gap_pairs = []
+        raw_dt1_intra = []
         ends = {id(d): u1 for d, u1 in zip(ordered, t1s)}
         starts = {id(d): u0 for d, u0 in zip(ordered, t0s)}
         for a, b in zip(ordered, ordered[1:]):
             gap = (starts[id(b)] - ends[id(a)]) * period
-            gap_pairs.append((gap, 1 if a["s"] == b["s"] else 0))
+            same_sub = (a["s"] == b["s"])
+            if use_dt1 and same_sub and id(b) in chained_prev:
+                # Already attributed to dispatch b in dt1 busy time; keep
+                # separate so it is never double-counted as an unaccounted gap.
+                raw_dt1_intra.append(gap)
+            else:
+                gap_pairs.append((gap, 1 if same_sub else 0))
+        if raw_dt1_intra:
+            vals = sorted(raw_dt1_intra)
+            say(f"   raw intra-submission timestamp intervals "
+                f"(included in dt1 busy): n={len(vals)} "
+                f"total={fmt_ns(sum(vals))} "
+                f"p50={fmt_ns(pct(vals, .5))} p90={fmt_ns(pct(vals, .9))} "
+                f"p99={fmt_ns(pct(vals, .99))} max={fmt_ns(vals[-1])}")
         for tag, sel in (("intra-submission",
                           lambda gi: gi[1] == 1),
                          ("inter-submission",

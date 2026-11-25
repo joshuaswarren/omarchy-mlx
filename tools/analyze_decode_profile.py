@@ -52,6 +52,14 @@ def is_honeykrisp_device(device_name):
     return "apple" in name or "honeykrisp" in name
 
 
+def tick_delta(start, end, valid_bits):
+    if valid_bits >= 64 or valid_bits == 0:
+        return end - start
+    m = 1 << valid_bits
+    d = (end - start) % m
+    return d if d <= (m >> 1) else d - m
+
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--profile", required=True)
 ap.add_argument("--windows", required=True)
@@ -130,27 +138,28 @@ unassigned = {"disp": 0, "gpu_ns": 0.0}
 for sid, s in subs.items():
     w = win_of(s["t"])
     prev_t1 = None
-    ordered_d = sorted(
-        s["d"],
-        key=lambda d: (d.get("t0") if d.get("t0") is not None else -1,
-                       d.get("t1") if d.get("t1") is not None else -1),
-    )
-    for d in ordered_d:
+    # Follow producer emission order within each submit so counter wraps
+    # stay ordered and an untimed dispatch breaks the dt1 chain.
+    for d in s["d"]:
         t0, t1 = d.get("t0"), d.get("t1")
+        has_ticks = t0 is not None and t1 is not None
         if w < 0:
             unassigned["disp"] += 1
-            if t1 is not None:
-                prev_t1 = t1
+            prev_t1 = t1 if has_ticks else None
             continue
         r = rows[w]
         r["disp"] += 1
         gpu = 0.0
-        if use_dt1 and prev_t1 is not None and t1 is not None and t1 >= prev_t1:
-            gpu = (t1 - prev_t1) * period_ns
-        elif t0 is not None and t1 is not None and t1 >= t0:
-            gpu = (t1 - t0) * period_ns
-        if t1 is not None:
+        if has_ticks:
+            if use_dt1 and prev_t1 is not None:
+                dt = tick_delta(prev_t1, t1, valid_bits)
+            else:
+                dt = tick_delta(t0, t1, valid_bits)
+            if dt >= 0:
+                gpu = dt * period_ns
             prev_t1 = t1
+        else:
+            prev_t1 = None
         r["gpu_ns"] += gpu
         kn = names[d["e"]] if d["e"] < len(names) else f"e{d['e']}"
         key = f"{kn}|n={d['n']}|op={d['op']}"
