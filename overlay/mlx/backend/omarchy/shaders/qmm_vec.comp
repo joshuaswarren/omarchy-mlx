@@ -297,6 +297,7 @@ shared uint s_rope_is_last;
 // one 2KB scratch serves both (occupancy cost measured on jw16:
 // +4KB static shared slowed the member-dot ~2ms/30-step).
 shared float epi_block[512u];
+#if !defined(QMM_VEC_EPI_NOTAILCODE)
 float epi_member_load(uint member, uint index) {
   if (member == 0u) {
     return LOAD_VALUE(output0.values[index]);
@@ -319,6 +320,7 @@ float epi_rope_round(float value) {
       : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
   return uintBitsToFloat(rounded << 16u);
 }
+#endif  // !QMM_VEC_EPI_NOTAILCODE
 #endif
 #if defined(QMM_VEC_OUTGATE)
 // Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
