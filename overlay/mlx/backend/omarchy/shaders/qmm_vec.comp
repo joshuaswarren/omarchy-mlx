@@ -3129,16 +3129,23 @@ void main() {
     const uint blk = sub_id * 128u;
     const uint in_base = in_off + t * is1 + mat * is0;
     const bool row_ok = t < rope_t;
+    // v_regs keeps each lane's pass-1 loads for the weighted pass:
+    // the two loops walk the same indices, so the second phase reads
+    // registers instead of coherent memory again.
+    float v_regs[4];
+    uint v_idx = 0u;
     for (uint i = sub_lane; i < 128u; i += LANES) {
+      float v = 0.0;
       float sq = 0.0;
       if (row_ok && i < row_length) {
-        float v = epi_member_load(in_base + i);
+        v = epi_member_load(in_base + i);
         sq = v * v;
       }
       if (row_ok && i + 128u < row_length) {
-        float v = epi_member_load(in_base + i + 128u);
-        sq += v * v;
+        float v2 = epi_member_load(in_base + i + 128u);
+        sq += v2 * v2;
       }
+      v_regs[v_idx++] = v;
       epi_block[blk + i] = sq;
     }
     barrier();
@@ -3152,7 +3159,9 @@ void main() {
     barrier();
     precise float norm = inversesqrt(mean_square + eps);
     for (uint vl = sub_lane; vl < row_length; vl += LANES) {
-      float v = row_ok ? epi_member_load(in_base + vl) : 0.0;
+      float v = row_ok ? (vl < 128u ? v_regs[vl / LANES]
+                                  : epi_member_load(in_base + vl))
+                       : 0.0;
       float w = epi_weight_load(vl);
       precise float weight_norm = w * norm;
       epi_block[blk + vl] = epi_rope_round(v * weight_norm);
