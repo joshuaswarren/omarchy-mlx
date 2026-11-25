@@ -2428,11 +2428,11 @@ bool qmm_residual_norm_enabled(
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
-  if (norm_cols == 2560 &&
-      caps.device_name.find("G14C") != std::string::npos) {
-    return true;
-  }
-  return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
+  // Width allowlist, not a part table: the ResNorm kernels take any of these
+  // read counts on every part that passed the subgroup-32 probe above
+  // (2560 first measured on G14C, opened to every part in DEC-18).
+  return norm_cols == 256 || norm_cols == 2048 || norm_cols == 2560 ||
+      norm_cols == 4096;
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {

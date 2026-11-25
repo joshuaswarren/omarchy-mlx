@@ -2092,15 +2092,15 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   caps.max_compute_work_group_size[0] = 512;
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 256, false));
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2048, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 0, false));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4095, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4097, false));
 
-  auto g14c_caps = caps;
-  g14c_caps.device_name = "Apple M2 Max (G14C B1)";
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c_caps, 2560, false));
+  auto dgpu_caps = caps;
+  dgpu_caps.device_name = "NVIDIA GeForce RTX 5060 Ti";
+  CHECK(omarchy::qmm_residual_norm_enabled(dgpu_caps, 2560, false));
 
   auto limited = caps;
   limited.device_name = "Apple M2 Max (G14C B1)";

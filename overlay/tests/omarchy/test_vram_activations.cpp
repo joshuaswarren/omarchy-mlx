@@ -125,27 +125,48 @@ int main() {
   fails += check(
       !select_qmm_wide_2x16("Apple M1 (G13G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
       "G13G Apple default moves from 2x16 to 2x8w2");
+  QmmWideCaps wg256{32u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 256u, 256u};
+  QmmWideCaps sg64{64u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 1024u, 1024u};
+
   fails += check(
-      select_qmm_apple_2x8w2("Apple M1 Max (G13C C0)"),
+      select_qmm_2x8w2("Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G13C selects 2x8w2");
   fails += check(
-      select_qmm_apple_2x8w2("Apple M1 (G13G B1)"),
+      select_qmm_2x8w2("Apple M1 (G13G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G13G selects 2x8w2");
   fails += check(
-      select_qmm_apple_2x8w2("Apple M2 Max (G14C B1)"),
+      select_qmm_2x8w2("Apple M2 Max (G14C B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G14C B1 selects 2x8w2");
   fails += check(
-      select_qmm_apple_2x8w2("Apple M2 Max (G14C C0)"),
+      select_qmm_2x8w2("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G14C C0 selects 2x8w2");
   fails += check(
-      !select_qmm_apple_2x8w2("Apple M2 (G14G B0)"),
+      !select_qmm_2x8w2("Apple M2 (G14G B0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G14G does not select 2x8w2");
   fails += check(
-      !select_qmm_apple_2x8w2("Apple M2 Pro (G14S B1)"),
+      !select_qmm_2x8w2("Apple M2 Pro (G14S B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G14S does not select 2x8w2");
   fails += check(
-      !select_qmm_apple_2x8w2("llvmpipe (LLVM 19.1.7, 256 bits)"),
+      !select_qmm_2x8w2("llvmpipe (LLVM 19.1.7, 256 bits)", VK_PHYSICAL_DEVICE_TYPE_CPU, rtx_caps, false),
       "llvmpipe does not select 2x8w2");
+  fails += check(
+      select_qmm_2x8w2("NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, true),
+      "discrete GPU with VRAM activations and 256/sg32 caps selects 2x8w2");
+  fails += check(
+      select_qmm_2x8w2("AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, wg256, true),
+      "discrete GPU limited to 256-thread workgroups still selects 2x8w2");
+  fails += check(
+      !select_qmm_2x8w2("NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, false),
+      "discrete GPU without VRAM activations does not select 2x8w2");
+  fails += check(
+      !select_qmm_2x8w2("AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64, true),
+      "subgroup-64 device does not select the 32-lane 2x8w2 kernels");
+  fails += check(
+      !select_qmm_2x8w2("NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, no_arith, true),
+      "refuses 2x8w2 without subgroup arithmetic");
+  fails += check(
+      !select_qmm_2x8w2("Intel Arc B60 (BMG)", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, true),
+      "BMG keeps its measured 2x16kcont/kcs16 route");
   fails += check(
       !select_qmm_wide_2x16("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
       "Apple G14C does not select 2x16 even when opt-in env is set");
