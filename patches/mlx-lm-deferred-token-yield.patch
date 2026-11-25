@@ -1,6 +1,6 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -658,41 +658,64 @@
+@@ -658,41 +658,73 @@
          mx.async_eval(y)
      else:
          mx.async_eval(y, logprobs)
@@ -31,8 +31,17 @@
 +        _inq, _outq = _queue.Queue(), _queue.Queue()
 +
 +        def _reader():
-+            while (job := _inq.get()) is not None:
-+                _outq.put((job[0].item(), job[1]))
++            try:
++                while (job := _inq.get()) is not None:
++                    _outq.put((job[0].item(), job[1]))
++            except BaseException as _e:
++                _outq.put(_e)
++
++        def _take():
++            got = _outq.get()
++            if isinstance(got, BaseException):
++                raise got
++            return got
 +
 +        _rd = _threading.Thread(target=_reader, daemon=True)
 +        _rd.start()
@@ -83,7 +92,7 @@
 +                _inq.put((y, logprobs))
 +                backlog += 1
 +                if backlog > defer_tokens:
-+                    yield _outq.get()
++                    yield _take()
 +                    backlog -= 1
 +            if n % 256 == 0:
 +                mx.clear_cache()
@@ -91,7 +100,7 @@
 +            n += 1
 +        if _inq is not None:
 +            while backlog:
-+                yield _outq.get()
++                yield _take()
 +                backlog -= 1
 +    finally:
 +        if _inq is not None:

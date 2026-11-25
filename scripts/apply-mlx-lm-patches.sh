@@ -366,6 +366,18 @@ else
   echo "readback-chunk: 0.31.3 series only; skipped on $SERIES"
 fi
 
+# Deferred token yield (MLX_OMARCHY_DEFER_TOKENS=K, default 8): the per-step
+# y.item() join moves to a daemon reader thread so the eval thread keeps
+# recording; the loop stays K steps ahead and yields tokens as the reader
+# materializes them. RTX 5060 Ti decode-only A/B: ~139 vs ~103 tps stock
+# (+34%); the same-thread readback-chunk it supersedes measured flat there.
+# =0 restores the eager loop. 0.31.3 series only.
+if [[ "$SERIES" == "patches" ]]; then
+  apply mlx-lm-deferred-token-yield.patch
+else
+  echo "deferred-token-yield: 0.31.3 series only; skipped on $SERIES"
+fi
+
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
 # detected and skipped, and a second run is idempotent). The 0.5.6 wheel
