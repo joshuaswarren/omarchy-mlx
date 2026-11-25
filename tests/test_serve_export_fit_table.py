@@ -243,7 +243,7 @@ def test_main_reports_error_on_full_stdout(tmp_path, catalog_kind):
 
 @pytest.mark.skipif(not Path("/bin/sh").exists(), reason="/bin/sh not available")
 @pytest.mark.parametrize("case", ["missing_catalog", "valid_stdout", "valid_out"])
-def test_main_reports_error_when_stdout_closed_at_launch(tmp_path, capsys, case):
+def test_main_handles_stdout_closed_at_launch(tmp_path, capsys, case):
     missing = tmp_path / "missing.json"
     out_path = tmp_path / "out.json"
     if case == "missing_catalog":
@@ -285,6 +285,35 @@ def test_main_reports_error_when_stdout_closed_at_launch(tmp_path, capsys, case)
         assert str(missing) in lines[0]
     else:
         assert "stdout" in lines[0].lower()
+
+
+@pytest.mark.skipif(not Path("/bin/sh").exists(), reason="/bin/sh not available")
+@pytest.mark.parametrize("case", ["missing_catalog", "unwritable_out"])
+def test_main_keeps_stdout_empty_when_stderr_closed_at_launch(tmp_path, case):
+    if case == "missing_catalog":
+        cli_args = ["--catalog", str(tmp_path / "missing.json")]
+    else:
+        unwritable = tmp_path / "adir"
+        unwritable.mkdir()
+        cli_args = ["-o", str(unwritable)]
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "serve"))
+    proc = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            'exec "$0" "$@" 2>&-',
+            sys.executable,
+            "-m",
+            "mlx_omarchy_serve.export_fit_table",
+            *cli_args,
+        ],
+        cwd=REPO_ROOT / "serve",
+        env=env,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert proc.stdout == ""
 
 
 def test_main_module_keeps_healthy_stdout_on_error(tmp_path, monkeypatch, capsys):

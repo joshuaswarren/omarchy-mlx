@@ -128,7 +128,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(text)
             sys.stdout.flush()
     except (CatalogError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        if sys.stderr is not None:
+            print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
 
