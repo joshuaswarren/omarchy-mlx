@@ -1105,6 +1105,73 @@ def _dtype_of(v):
     return getattr(v, "dtype", mx.float32)
 
 
+def _torch_comp_dtype(dd, dr, md, mr):
+    # torch type promotion (docs "type promotion dtypes"): keep the highest
+    # category (float over int; bool is rejected before this runs), then
+    # promote among the DIMENSIONED participants of that category when any
+    # exist, falling back to the 0-dim ones only when none do. A rank-zero
+    # fp32 rhs therefore does not lift a dimensioned fp16 dest (torch
+    # computes fp16 and can produce -inf), while a shape-[1] fp32 rhs
+    # promotes to fp32.
+    pair = ((dd, dr), (md, mr))
+    if _is_floatish_dtype(dd) or _is_floatish_dtype(md):
+        use = [(t, r) for t, r in pair if _is_floatish_dtype(t)]
+        dim = [(t, r) for t, r in use if r > 0]
+        use = dim or use
+    else:
+        dim = [(t, r) for t, r in pair if r > 0]
+        use = dim or list(pair)
+    dts = [t for t, _ in use]
+    return dts[0] if len(dts) == 1 else mx.result_type(*dts)
+
+
+def _sub_inplace(a, b, alpha=1, **k):
+    # aten.sub_.Tensor(self, other, alpha) eager contract: torch promotes,
+    # computes, then requires the result to fit the destination shape and
+    # cast back to the destination dtype (_inplace_writeback raises the
+    # torch-shaped errors for growth / float->int, which surface as a CPU
+    # fallback running torch's own check). Reject bool operands first, as
+    # the compiled path does. Scale in the destination width for integral
+    # operands: (d - k*rhs) mod 2^n equals torch's promote-then-wrap for
+    # integral alpha, so a narrow rhs times a wide alpha cannot wrap early;
+    # a float alpha promotes the computation to float and the writeback
+    # rejects the float->int cast-back, matching torch.
+    if isinstance(alpha, bool):
+        # torch: boolean alpha is only valid for boolean results, and
+        # boolean subtraction is rejected below
+        raise RuntimeError("Boolean alpha only supported for Boolean results.")
+    d = _mx(a)
+    mb = _mx(b)
+    # Checks run on the converted mlx dtypes (torch-side _dtype_of maps to
+    # torch dtypes, so the earlier torch-dtype comparisons never matched):
+    # bool operands are rejected like the compiled path does, and complex
+    # operands stay on the torch path - torch rejects a complex result cast
+    # into a real in-place destination, and the lowering does not implement
+    # torch's real/complex promotion widths; this build has no complex128.
+    if d.dtype == mx.bool_ or mb.dtype == mx.bool_:
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is "
+            "not supported. If you are trying to invert a mask, "
+            "use the `~` or `logical_not()` operator instead.")
+    if d.dtype == mx.complex64 or mb.dtype == mx.complex64:
+        raise RuntimeError("Complex operands are not lowered for in-place subtract.")
+    # Compute in the torch operation dtype: both operands promoted, a
+    # python float alpha lifting an integral pair to the default float
+    # (a python int alpha is weak and changes nothing). Cast both sides
+    # there BEFORE scaling so a narrow operand (int8, float16) cannot
+    # wrap or overflow early - fp16 rhs 70000 * 0.5 stays finite in the
+    # fp32 computation, int8 100 * 2 stays 200 instead of wrapping. The
+    # destination only rules the final writeback: shape check, then the
+    # comp->dest cast with float->int rejected (torch's in-place error).
+    comp = _torch_comp_dtype(d.dtype, d.ndim, mb.dtype, mb.ndim)
+    if (not _is_floatish_dtype(d.dtype) and not _is_floatish_dtype(mb.dtype)
+            and isinstance(alpha, float)):
+        comp = mx.float32
+    dc = d.astype(comp) if comp != d.dtype else d
+    mb = mb.astype(comp) if comp != mb.dtype else mb
+    return _inplace_writeback(d, dc - mb * alpha)
+
+
 def _rsub(a, b, alpha=1, **k):
     # aten.rsub.Scalar(self, other, alpha): other - alpha * self. Torch
     # rejects subtraction on bool operands, and a floating alpha only when
@@ -1769,6 +1836,8 @@ _FUNC_SPECS = {
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "rsub": _rsub,
+    "sub_": _sub_inplace,
+    "sub_.Tensor": _sub_inplace,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
@@ -1859,6 +1928,8 @@ _build_func_table()
 # dotted-name resolve only covers torch attrs; operator.* objects register directly
 FUNC_TABLE[operator.iadd] = _FUNC_SPECS["add"]
 FUNC_TABLE[operator.isub] = _FUNC_SPECS["sub"]
+FUNC_TABLE[torch.ops.aten.sub_.Tensor] = _FUNC_SPECS["sub_.Tensor"]
+FUNC_TABLE[torch.rsub] = _FUNC_SPECS["rsub"]
 
 # name-keyed fallback: dynamo may reference e.g. torch._C._VariableFunctions.matmul
 # which is a different object than torch.matmul
@@ -1891,6 +1962,7 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
+ATEN_TABLE["aten.rsub.Scalar"] = _FUNC_SPECS["rsub"]
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 # aten.embedding is (weight, indices): F.embedding is (input, weight).
 ATEN_TABLE["embedding"] = _embedding_any
@@ -2106,7 +2178,7 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
-            if (name in ("mul_", "bitwise_and_") and node.op in ("call_function", "call_method")
+            if (name in ("mul_", "bitwise_and_", "sub_") and node.op in ("call_function", "call_method")
                     and isinstance(node.args[0], torch.fx.Node)):
                 env[node.args[0]] = val
             if _DBG_ENV is not None:
