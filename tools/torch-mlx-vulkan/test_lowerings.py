@@ -1205,14 +1205,13 @@ def test_addcmul_addcdiv():
     print("test_addcmul_addcdiv PASS")
 
 def test_random_family():
-    # PT-U12: the sampling family — the first unclaimed row-group in the
-    # PAR-41 census order (all 0-receipt fallbacks): uniform, cauchy,
-    # exponential, geometric, log_normal, normal.* . RNG streams differ,
-    # so pin shape/dtype, stats["mlx"] proof, and distribution moments on
-    # large samples instead of values.
+    # PT-U12: the aten sampling family (uniform/cauchy/exponential/
+    # geometric/log_normal/normal.*) was evaluated for lowering and
+    # deliberately deferred: mx.random cannot reproduce torch's
+    # generator-state consumption, exclusive-bound semantics, or weak
+    # promotion. Every op must land in stats["cpu"], freshness and
+    # seed-replay must hold, and torch's param checks must surface.
     def _fx(target, arglist, kw=None):
-        # tensor entries in arglist become graph inputs; the rest are
-        # literals baked into the node
         ins = [a for a in arglist if isinstance(a, torch.Tensor)]
         g = torch.fx.Graph()
         phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
@@ -1228,61 +1227,42 @@ def test_random_family():
         name = str(target).split("aten.")[1].split(".")[0]
         return torch.as_tensor(out), stats, name
 
-    def fx_sample(target, arglist, kw=None):
+    def fx_defer(target, arglist, kw=None):
         out, stats, name = _fx(target, arglist, kw)
-        assert stats["cpu"] == [], (stats, name)
-        assert any(name in s for s in stats["mlx"]), (stats, name)
+        assert name in stats["cpu"], (stats, name)
         return out
 
     big = torch.zeros(20000)
-    # uniform(2,5): support [2,5), mean ~3.5; defaults U[0,1)
-    # ("from" is a Python keyword — must pass positionally through FX)
-    o = fx_sample(torch.ops.aten.uniform.default, [big, 2.0, 5.0])
-    assert o.shape == big.shape and o.dtype == torch.float32
-    assert o.min() >= 2.0 and o.max() < 5.0
-    assert 3.3 < o.mean() < 3.7, o.mean()
-    o = fx_sample(torch.ops.aten.uniform.default, [big])
-    assert o.min() >= 0.0 and o.max() < 1.0
-    # exponential(lambd=0.5): support >= 0, mean ~ 1/lambd = 2
-    o = fx_sample(torch.ops.aten.exponential.default, [big],
-                  {"lambd": 0.5})
-    assert o.min() >= 0 and 1.6 < o.mean() < 2.4, o.mean()
-    # geometric(0.25): support {1,2,..}, mean ~ 1/p = 4
-    o = fx_sample(torch.ops.aten.geometric.default, [big], {"p": 0.25})
-    assert o.min() >= 1 and 3.6 < o.mean() < 4.4, o.mean()
-    # cauchy(2,0.5): median ~ 2 (the distribution has no mean)
-    o = fx_sample(torch.ops.aten.cauchy.default, [big],
-                  {"median": 2.0, "sigma": 0.5})
-    assert 1.9 < o.median() < 2.1, o.median()
-    # log_normal(1,0.5): log(out) ~ N(1, 0.5)
-    o = fx_sample(torch.ops.aten.log_normal.default, [big],
-                  {"mean": 1.0, "std": 0.5})
+    # each member of the family defers to torch and draws correctly
+    o = fx_defer(torch.ops.aten.uniform.default, [big, 2.0, 5.0])
+    assert o.shape == big.shape and o.min() >= 2.0 and o.max() < 5.0
+    o = fx_defer(torch.ops.aten.exponential.default, [big],
+                 {"lambd": 0.5})
+    assert o.min() >= 0 and 1.6 < o.mean() < 2.4
+    o = fx_defer(torch.ops.aten.geometric.default, [big], {"p": 0.25})
+    assert o.min() >= 1 and 3.6 < o.mean() < 4.4
+    o = fx_defer(torch.ops.aten.cauchy.default, [big],
+                 {"median": 2.0, "sigma": 0.5})
+    assert 1.9 < o.median() < 2.1
+    o = fx_defer(torch.ops.aten.log_normal.default, [big],
+                 {"mean": 1.0, "std": 0.5})
     lo = torch.log(o)
-    assert 0.9 < lo.mean() < 1.1 and 0.4 < lo.std() < 0.6,         (lo.mean(), lo.std())
-    # normal: all four overloads; mean/std recovered statistically
+    assert 0.9 < lo.mean() < 1.1 and 0.4 < lo.std() < 0.6
     mt = torch.full((20000,), 2.0)
     st = torch.full((20000,), 0.5)
-    o = fx_sample(torch.ops.aten.normal.Tensor_Tensor, [mt, st])
-    assert o.shape == mt.shape and 1.9 < o.mean() < 2.1
-    o = fx_sample(torch.ops.aten.normal.Tensor_float, [mt, 0.5])
-    assert 1.9 < o.mean() < 2.1
-    o = fx_sample(torch.ops.aten.normal.float_Tensor, [2.0, st])
-    assert 1.9 < o.mean() < 2.1
-    o = fx_sample(torch.ops.aten.normal.float_float,
-                  [2.0, 0.5, (4, 3)])
-    assert tuple(o.shape) == (4, 3)
-    o = fx_sample(torch.ops.aten.normal.float_float,
-                  [0.0, 1.0, (4,)], {"dtype": torch.float16})
-    assert o.dtype == torch.float16
+    for arglist in ([mt, st], [mt, 0.5], [2.0, st], [2.0, 0.5, (4, 3)]):
+        target = (torch.ops.aten.normal.Tensor_Tensor
+                  if len(arglist) == 2
+                  and all(isinstance(a, torch.Tensor) for a in arglist)
+                  else torch.ops.aten.normal.Tensor_float
+                  if isinstance(arglist[0], torch.Tensor)
+                  else torch.ops.aten.normal.float_Tensor
+                  if isinstance(arglist[1], torch.Tensor)
+                  else torch.ops.aten.normal.float_float)
+        fx_defer(target, arglist)
 
-    # uniform's from==to edge is valid: constant output, still lowered
-    o = fx_sample(torch.ops.aten.uniform.default, [big, 2.0, 2.0])
-    assert (o == 2.0).all()
-
-    # the registered backend wraps the graph in mx.compile, which would
-    # freeze mx.random draws — sampling nodes refuse it and run on the
-    # per-node path. Consecutive calls must draw fresh values, and a
-    # torch.manual_seed reset must replay the same sample.
+    # deferred draws stay fresh across calls through the registered
+    # backend, and a torch.manual_seed reset replays the same sample
     def reg_uniform():
         g = torch.fx.Graph()
         ph = g.placeholder("x")
@@ -1305,9 +1285,15 @@ def test_random_family():
     torch.manual_seed(1729)
     s2 = r1()
     assert torch.equal(s1, s2)
+    # and the deferred op consumed torch's generator: the next torch
+    # draw after our call matches eager torch's next draw
+    torch.manual_seed(1729)
+    defer_then_torch = r1(), torch.zeros(4096).uniform_()
+    torch.manual_seed(1729)
+    eager_then_torch = torch.zeros(4096).uniform_(), torch.zeros(4096).uniform_()
+    assert torch.equal(defer_then_torch[1], eager_then_torch[1])
 
-    # invalid parameters must refuse before drawing — the CPU fallback
-    # then surfaces torch's own RuntimeError through the FX executor
+    # torch's parameter checks surface through the fallback
     def fx_raise(target, arglist, kw=None):
         ins = [a for a in arglist if isinstance(a, torch.Tensor)]
         g = torch.fx.Graph()
@@ -1339,25 +1325,8 @@ def test_random_family():
     st_bad = torch.full((20000,), 0.5)
     st_bad[0] = -1.0
     fx_raise(torch.ops.aten.normal.Tensor_Tensor, [big, st_bad])
-
-    # a torch Generator can't be honored by mx.random -> the lowering
-    # raises (LOWER-FAIL -> CPU fallback). FX can't codegen a live
-    # Generator, so call the spec functions directly here.
-    for fn in ("uniform", "normal", "cauchy"):
-        try:
-            mlx_vulkan._FUNC_SPECS[fn](
-                torch.zeros(4), 1.0,
-                generator=torch.Generator().manual_seed(0))
-            raise AssertionError(f"{fn} generator lowered")
-        except NotImplementedError:
-            pass
-    # non-float self defers to torch, which raises NotImplementedError
-    try:
-        fx_sample(torch.ops.aten.uniform.default,
-                  [torch.zeros(4, dtype=torch.int32)])
-        raise AssertionError("int uniform lowered")
-    except (RuntimeError, NotImplementedError):
-        pass
+    fx_raise(torch.ops.aten.uniform.default,
+             [torch.zeros(4, dtype=torch.int32)])
     print("test_random_family PASS")
 
 

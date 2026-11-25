@@ -1607,124 +1607,11 @@ def _acosh(a):
     return mx.where(a == float("inf"), a, mx.acosh(a))
 
 
-def _rng_key():
-    # seed each mx.random draw from a value pulled off torch's default
-    # generator: torch.manual_seed resets replay deterministically, and
-    # consuming one draw advances torch's state so consecutive calls
-    # differ — the same contract torch's sampling kernels honor
-    return mx.random.key(int(torch.randint(0, 1 << 62, ()).item()))
-
-
-def _rng_u(shape):
-    return mx.random.uniform(shape=shape, dtype=mx.float32,
-                             key=_rng_key())
-
-
-def _rng_n(shape):
-    return mx.random.normal(shape, dtype=mx.float32, key=_rng_key())
-
-
-def _sample_self(self, generator, name):
-    # the aten.*.default samplers draw fresh values in self's shape; torch
-    # only samples floating tensors, and an explicit Generator cannot be
-    # honored by mx.random — both defer to the torch fallback
-    if generator is not None:
-        return _raise(f"{name} generator")
-    a = _mx(self)
-    if not mx.issubdtype(a.dtype, mx.floating):
-        return _raise(f"{name} dtype {a.dtype}")
-    return a
-
-
-def _uniform(self, *args, generator=None, **k):
-    # aten.uniform.default(self, from=0, to=1): uniform samples in self's
-    # shape/dtype; self is only a template (out-of-place)
-    a = _sample_self(self, generator, "uniform")
-    lo = float(args[0] if len(args) > 0 else k.get("from", 0.0))
-    hi = float(args[1] if len(args) > 1 else k.get("to", 1.0))
-    if not (lo <= hi):
-        return _raise(f"uniform range {lo} > {hi}")
-    if lo == hi:
-        return mx.full(a.shape, lo).astype(a.dtype)
-    return (_rng_u(a.shape) * (hi - lo) + lo).astype(a.dtype)
-
-
-def _cauchy(self, *args, generator=None, **k):
-    # aten.cauchy.default(self, median=0, sigma=1): inverse-CDF of uniform
-    a = _sample_self(self, generator, "cauchy")
-    median = args[0] if len(args) > 0 else k.get("median", 0.0)
-    sigma = args[1] if len(args) > 1 else k.get("sigma", 1.0)
-    if not (float(sigma) > 0.0):
-        return _raise(f"cauchy sigma {sigma}")
-    u = _rng_u(a.shape)
-    return (median + sigma * mx.tan(math.pi * (u - 0.5))).astype(a.dtype)
-
-
-def _exponential(self, *args, generator=None, **k):
-    # aten.exponential.default(self, lambd=1): -ln(1-u)/lambd, u ~ U[0,1)
-    a = _sample_self(self, generator, "exponential")
-    lambd = args[0] if len(args) > 0 else k.get("lambd", 1.0)
-    if not (float(lambd) > 0.0):
-        return _raise(f"exponential lambd {lambd}")
-    return (-mx.log1p(-_rng_u(a.shape)) / lambd).astype(a.dtype)
-
-
-def _geometric(self, *args, generator=None, **k):
-    # aten.geometric.default(self, p): trials to first success on {1,2,..}
-    a = _sample_self(self, generator, "geometric")
-    p = args[0] if len(args) > 0 else k.get("p")
-    if not (0.0 < float(p) < 1.0):
-        return _raise(f"geometric p {p}")
-    return (mx.floor(mx.log1p(-_rng_u(a.shape)) / math.log(1.0 - p)) + 1) \
-        .astype(a.dtype)
-
-
-def _log_normal(self, *args, generator=None, **k):
-    # aten.log_normal.default(self, mean=1, std=2): exp(mean + std*normal)
-    a = _sample_self(self, generator, "log_normal")
-    mean = args[0] if len(args) > 0 else k.get("mean", 1.0)
-    std = args[1] if len(args) > 1 else k.get("std", 2.0)
-    if not (float(std) > 0.0):
-        return _raise(f"log_normal std {std}")
-    return mx.exp(mean + std * _rng_n(a.shape)).astype(a.dtype)
-
-
-def _normal(*args, generator=None, dtype=None, **k):
-    # aten.normal.*: (Tensor mean, Tensor std) | (Tensor, float) |
-    # (float, Tensor) | (float mean, float std, size[, dtype]).
-    if generator is not None:
-        return _raise("normal generator")
-    mean, std = args[0], args[1]
-    m_t = isinstance(mean, (mx.array, torch.Tensor))
-    s_t = isinstance(std, (mx.array, torch.Tensor))
-    if not (m_t or s_t):
-        # normal.float_float is a factory op: size comes positionally
-        dt = _MX_DT.get(dtype) if dtype is not None else mx.float32
-        if dt is None:
-            return _raise(f"normal dtype {dtype}")
-        if float(std) < 0:
-            return _raise(f"normal std {std}")
-        size = tuple(int(x) for x in args[2])
-        return (float(mean) + float(std) * _rng_n(size)).astype(dt)
-    m = _mx(mean) if m_t else float(mean)
-    s = _mx(std) if s_t else float(std)
-    for t in (m, s):
-        if isinstance(t, mx.array) and not mx.issubdtype(t.dtype,
-                                                       mx.floating):
-            return _raise(f"normal operand dtype {t.dtype}")
-    # torch requires std >= 0, elementwise for a tensor std
-    if isinstance(s, mx.array):
-        if bool(mx.any(s < 0)):
-            return _raise("normal std < 0")
-    elif s < 0:
-        return _raise(f"normal std {std}")
-    if m_t and s_t:
-        shape, dt = mx.broadcast_shapes(m.shape, s.shape), \
-            mx.result_type(m.dtype, s.dtype)
-    else:
-        ref = m if m_t else s
-        shape, dt = ref.shape, ref.dtype
-    return (m + s * _rng_n(shape)).astype(dt)
+# aten sampling family (uniform/cauchy/exponential/geometric/
+# log_normal/normal.*) deliberately stays on torch: mx.random cannot
+# reproduce torch's generator-state consumption, exclusive-bound
+# semantics, or weak promotion — the CPU fallback keeps the RNG
+# contract exact. test_random_family pins the deferral.
 
 
 _FUNC_SPECS = {
@@ -1745,10 +1632,6 @@ _FUNC_SPECS = {
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
     "addcdiv": _addcdiv,
-    # aten sampling family: fresh draws in self's shape (self is a
-    # template); normal.* additionally takes mean/std operands
-    "uniform": _uniform, "cauchy": _cauchy, "exponential": _exponential,
-    "geometric": _geometric, "log_normal": _log_normal, "normal": _normal,
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
@@ -1987,13 +1870,12 @@ for _fn, _low in FUNC_TABLE.items():
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
-              "new_empty", "new_full", "scalar_tensor",
-              "uniform", "normal", "cauchy", "exponential", "geometric",
-              "log_normal"}
+              "new_empty", "new_full", "scalar_tensor"}
 
-# sampling ops: mx.compile would trace the draw once and replay it, so the
-# whole-graph compiled executor refuses them — the per-node eager path
-# keeps torch's RNG contract (fresh draws, seed-reset replay)
+# sampling ops: mx.compile would trace an mx.random draw once and replay
+# it, and mx.random cannot honor torch's RNG contract anyway — the family
+# deliberately falls back to torch (see the note above _FUNC_SPECS); this
+# guard keeps a future re-lowering out of the compiled path
 _SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
              "log_normal"}
 
