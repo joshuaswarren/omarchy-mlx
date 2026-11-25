@@ -147,6 +147,13 @@ int CommandEncoder::dep_dump_n() {
   }();
   return n;
 }
+const char *CommandEncoder::dep_dump_file() {
+  static const char *path = []() {
+    const char *v = getenv("MLX_OMARCHY_DEP_DUMP_FILE");
+    return v && v[0] ? v : "/tmp/omarchy_dep_dump.csv";
+  }();
+  return path;
+}
 bool CommandEncoder::gated_barriers() {
   // MLX_OMARCHY_GATED_BARRIERS (docs/install-omarchy.md): default ON since
   // 2026-09-29 (set 0 to restore the unconditional pre+post barriers).
@@ -1464,6 +1471,38 @@ void CommandEncoder::emit_pending() {
                ++dep_seq_});
           dep_prev_signature_ = usc_signature;
           dep_have_prev_ = 1;
+          if (dep_dump()) {
+            // M2D-6 trace (MLX_OMARCHY_DEP_DUMP=1): one line per buffered
+            // dispatch - seq, wave, barrier flag, kernel id, primitive,
+            // then the exact tracked rd/wr ranges - so the per-edge
+            // overlap classification runs offline against the same
+            // stream the per-dispatch profiler saw.
+            static FILE *out = []() {
+              FILE *f = std::fopen(dep_dump_file(), "w");
+              return f;
+            }();
+            if (out) {
+              std::fprintf(out, "DD %llu %u %u %u %.*s nr=%u",
+                           static_cast<unsigned long long>(dep_seq_), w,
+                           preceded_by_barrier ? 1u : 0u,
+                           static_cast<uint32_t>(node.profile_kernel),
+                           int(node.prim.size()), node.prim.data(), node.nr);
+              for (uint32_t b = 0; b < node.nr; ++b) {
+                std::fprintf(out, " %p:%llu:%llu",
+                             (void *)node.rd[b].buffer,
+                             static_cast<unsigned long long>(node.rd[b].offset),
+                             static_cast<unsigned long long>(node.rd[b].end));
+              }
+              std::fprintf(out, " nw=%u", node.nw);
+              for (uint32_t b = 0; b < node.nw; ++b) {
+                std::fprintf(out, " %p:%llu:%llu",
+                             (void *)node.wr[b].buffer,
+                             static_cast<unsigned long long>(node.wr[b].offset),
+                             static_cast<unsigned long long>(node.wr[b].end));
+              }
+              std::fprintf(out, "\n");
+            }
+          }
         }
       } else if (node.kind == PendingNode::Kind::Copy) {
         VkBufferCopy region{};

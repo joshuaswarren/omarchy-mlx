@@ -626,6 +626,7 @@ class MLX_API CommandEncoder {
   static bool export_dep_masks();
   static bool dep_dump();
   static int dep_dump_n();
+  static const char* dep_dump_file();
   std::vector<DepRecord> dep_records_;
   uint32_t dep_prev_signature_{0};
   uint32_t dep_have_prev_{0};
