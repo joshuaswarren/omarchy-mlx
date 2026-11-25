@@ -1150,9 +1150,11 @@ TEST_CASE("apple norm selection follows the subgroup gate") {
   }
 
   // Gate closed (subgroup-size-64, no-cooperative-matrix) or open
-  // (m1 profiles on backed hardware): width 128 is never Apple-selected
-  // (measured shape predicate), width 2048 rows 9 is selected only when
-  // the gate is open. Either way the kill switch keeps the same bits.
+  // (m1 profiles on backed hardware): width 128 leaves the shared shape
+  // guard (measured shape predicate; the rope-site gate does not reach
+  // this standalone rms_norm dispatch), width 2048 rows 9 is selected
+  // only when the gate is open. Either way the kill switch keeps the
+  // same bits.
   for (int width : {128, 2048}) {
     auto x_data = lattice(9 * width, 73);
     auto w_data = lattice(width, 74);

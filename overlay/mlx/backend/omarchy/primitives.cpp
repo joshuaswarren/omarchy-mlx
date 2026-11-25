@@ -129,7 +129,9 @@ namespace {
 // Width/rows dispatch guard for the Apple row reduction, measured on a 16-inch M1 Max
 // (G13C, paired interleaved same-binary A/B, notebook lane NormApple3):
 // - width 128 loses 13-31% on the gated/scaled kernels and ~9% on the GDN
-//   decode epilogue, so 128 stays on the deployed kernels;
+//   decode epilogue, so 128 stays on the deployed kernels — except at the
+//   fused rope+norm dispatch, which has its own part gate
+//   (apple_norm_128_allowed / norm_apple_128_default_part);
 // - widths 256 and 2048 win at decode row counts (direct rms_norm up to
 //   -43%, fused rope+norm at the model's 8x256 q/k shape -20%);
 // - width 2048 loses from 128 rows up (rms_norm 1.00x at 128, 1.34x at 256,
@@ -146,7 +148,9 @@ namespace {
 // Every norm selection (direct, scaled, gated, fused rope+norm, GDN
 // epilogue) shares this one predicate, so the fused kernel and the
 // composed fallback chain always pick the same row-reduction order and
-// stay bit-identical at every shape.
+// stay bit-identical at every shape — apart from the 128-wide fused
+// rope+norm carve-out above, where the fused subgroup order is measured
+// against the composed tree by the bit checks instead.
 bool apple_norm_shape_selected(size_t row_length, size_t rows) {
   if (row_length != 256u && row_length != 2048u && row_length != 2560u &&
       row_length != 4096u) {
@@ -314,18 +318,12 @@ bool apple_norm_4096_allowed(const omarchy::Device& device) {
   return true;
 }
 
-bool apple_norm_enabled(
-    const omarchy::Device& device,
-    size_t row_length,
-    size_t rows) {
+// The global kill switch plus the 32-lane subgroup arithmetic probe (and
+// the capsim refusal when a profile claims what the hardware cannot
+// back), shared by apple_norm_enabled and the rope-site 128 clause.
+bool apple_norm_subgroup_ready(const omarchy::Device& device) {
   if (omarchy::env_str("MLX_OMARCHY_NORM_APPLE") != nullptr &&
       !omarchy::env_flag("MLX_OMARCHY_NORM_APPLE")) {
-    return false;
-  }
-  if (row_length == 2560u && !apple_norm_2560_allowed(device)) {
-    return false;
-  }
-  if (row_length == 4096u && !apple_norm_4096_allowed(device)) {
     return false;
   }
   const auto& caps = device.capabilities();
@@ -340,7 +338,37 @@ bool apple_norm_enabled(
       (device.hardware_capabilities().subgroup_size == 32u &&
        (device.hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
-  return subgroup_ready && apple_norm_shape_selected(row_length, rows);
+  return subgroup_ready;
+}
+
+// The 128-wide subgroup-tree norm serves only the fused rope+norm
+// dispatch (FastRopeNormAppleBF16), and only on the parts of
+// omarchy::norm_apple_128_default_part: the gated/scaled kernels and the
+// GDN epilogue measured slower at 128 on G13C (NormApple3; the note at
+// apple_norm_shape_selected), so 128 is not admitted to the shared shape
+// guard. MLX_OMARCHY_NORM_APPLE_128=1 forces the part rule on and =0
+// off on any chip; the 64-row bound and the subgroup probe sit at the
+// call site.
+bool apple_norm_128_allowed(const omarchy::Device& device) {
+  if (omarchy::env_str("MLX_OMARCHY_NORM_APPLE_128") != nullptr) {
+    return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_128");
+  }
+  return omarchy::norm_apple_128_default_part(
+      device.capabilities().device_name);
+}
+
+bool apple_norm_enabled(
+    const omarchy::Device& device,
+    size_t row_length,
+    size_t rows) {
+  if (row_length == 2560u && !apple_norm_2560_allowed(device)) {
+    return false;
+  }
+  if (row_length == 4096u && !apple_norm_4096_allowed(device)) {
+    return false;
+  }
+  return apple_norm_subgroup_ready(device) &&
+      apple_norm_shape_selected(row_length, rows);
 }
 
 // Keep in lockstep with the switch in shaders/elementwise.comp.
@@ -18242,10 +18270,20 @@ void RoPE::eval_gpu(
     // row_length rides reduce_size (== D) and the row count is B*N*T; the
     // shared shape guard keeps the fused kernel's row-reduction order
     // identical to the composed rms_norm the fallback would select.
-    kernel = apple_norm_enabled(
-                 encoder.device(),
-                 static_cast<size_t>(params.reduce_size),
-                 static_cast<size_t>(params.count))
+    // D=128 is the one rope shape the shared guard never serves: its
+    // subgroup build is admitted at decode row counts on the parts of
+    // norm_apple_128_default_part instead (the measured gated/scaled
+    // losses stay on the shared-tree family). The subgroup reduction
+    // order differs from the composed chain's tree there; the fused ==
+    // composed bit checks bound any rounding tie it can introduce.
+    kernel = (params.reduce_size == 128u
+                  ? params.count <= 64u &&
+                          apple_norm_128_allowed(encoder.device()) &&
+                          apple_norm_subgroup_ready(encoder.device())
+                  : apple_norm_enabled(
+                        encoder.device(),
+                        static_cast<size_t>(params.reduce_size),
+                        static_cast<size_t>(params.count)))
         ? omarchy::ComputeKernel::FastRopeNormAppleBF16
         : omarchy::ComputeKernel::FastRopeNormBF16;
   } else if (direct_bf16) {

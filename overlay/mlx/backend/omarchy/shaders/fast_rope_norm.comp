@@ -32,7 +32,8 @@
 // The description above governs the default build (FastRopeNormBF16, used
 // with MLX_OMARCHY_NORM_APPLE=0, without 32-lane subgroup arithmetic, or on
 // row shapes the dispatch guard excludes — see apple_norm_shape_selected in
-// primitives.cpp).
+// primitives.cpp; at width 128 the fused dispatch site also admits the
+// subgroup build on the parts of norm_apple_128_default_part).
 // APPLE_REDUCTION (FastRopeNormAppleBF16) instead copies the
 // strided-row reduction of shaders/fast_norm_apple.comp: one element per
 // thread, a 32-lane subgroup sum, eight shared partials, and a second
