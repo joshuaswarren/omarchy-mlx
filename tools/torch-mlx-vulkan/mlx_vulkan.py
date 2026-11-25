@@ -1122,9 +1122,21 @@ def _sub_inplace(a, b, alpha=1, **k):
             "Subtraction, the `-` operator, with a bool tensor is "
             "not supported. If you are trying to invert a mask, "
             "use the `~` or `logical_not()` operator instead.")
+    if isinstance(alpha, bool):
+        # torch: boolean alpha is only valid for boolean results, and
+        # boolean subtraction is rejected above
+        raise RuntimeError("Boolean alpha only supported for Boolean results.")
     d = _mx(a)
     mb = _mx(b)
-    if _is_integral_dtype(d.dtype) and _is_integral_dtype(mb.dtype):
+    # Scale in the destination dtype when dest and rhs share a family:
+    # (d - k*rhs) mod 2^n equals torch's promote-then-wrap for integral
+    # alpha, and the destination is the computation width for float pairs,
+    # so a narrow rhs (int8, float16) cannot overflow before the subtract.
+    # Mixed families keep MLX promotion: float rhs over an integral dest
+    # computes float and the writeback rejects the cast-back, matching
+    # torch.
+    if ((_is_integral_dtype(d.dtype) and _is_integral_dtype(mb.dtype))
+            or (_is_floatish_dtype(d.dtype) and _is_floatish_dtype(mb.dtype))):
         mb = mb.astype(d.dtype)
     return _inplace_writeback(d, d - mb * alpha)
 

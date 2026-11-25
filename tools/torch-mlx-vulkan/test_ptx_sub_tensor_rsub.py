@@ -171,9 +171,48 @@ def test_sub_tensor_w91_round2():
     assert np.array_equal(out.numpy(), np.array([300], dtype=np.int64)), out
     print("test_sub_tensor_w91_round2 PASS")
 
+
+
+def test_sub_tensor_w91_round3():
+    """w91 round 3: mixed-float promotion and the bool-alpha contract."""
+    # float32[500000] -= float16[40000] alpha=2.0: compute in the
+    # destination width so the float16 operand cannot overflow; torch
+    # returns [420000]
+    xf = torch.tensor([500000.0], dtype=torch.float32)
+    yf = torch.tensor([40000.0], dtype=torch.float16)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 2.0})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(xf, yf)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert out.dtype == torch.float32, out.dtype
+    assert np.allclose(out.numpy(), np.array([420000.0], dtype=np.float32)), out
+
+    # alpha=True on float tensors raises "Boolean alpha only supported
+    # for Boolean results." (surfaces via the CPU fallback running torch)
+    x2 = torch.tensor([5.0])
+    y2 = torch.tensor([2.0])
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": True})
+    g.output(px)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, _ = mlx_vulkan.make_executor(gm)
+    try:
+        run(x2, y2)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised, "bool alpha must raise"
+    print("test_sub_tensor_w91_round3 PASS")
+
 if __name__ == "__main__":
     test_sub_tensor()
     test_rsub()
     test_sub_tensor_w91_edges()
     test_sub_tensor_w91_round2()
+    test_sub_tensor_w91_round3()
     print("ALL PASS")
