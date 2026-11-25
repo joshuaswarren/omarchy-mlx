@@ -51,6 +51,18 @@ class AliasReadsHandlerAttribute(unittest.TestCase):
                 self.assertNotIn("self.server.alias", text)
 
 
+class BearerComparisonIsConstantTime(unittest.TestCase):
+    def test_both_series_compare_with_hmac_compare_digest(self):
+        # w7Q review of #932: a plain == on the bearer header leaks the key
+        # length/prefix through early-exit timing. The patches must compare
+        # the full header bytes with hmac.compare_digest.
+        for pf in PATCH_FILES:
+            with self.subTest(patch=str(pf.relative_to(REPO))):
+                text = pf.read_text()
+                self.assertIn("+        return hmac.compare_digest(", text)
+                self.assertNotIn('== f"Bearer {self.api_key}"', text)
+
+
 def _quiet_rmtree(root, ignore):
     import shutil
 

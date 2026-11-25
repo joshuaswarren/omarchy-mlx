@@ -46,7 +46,7 @@
          if self.path.startswith("/v1/models"):
              self.handle_models_request()
          elif self.path == "/health":
-@@ -1760,6 +1776,12 @@
+@@ -1760,6 +1776,17 @@
              self.end_headers()
              self.wfile.write(b"Not Found")
  
@@ -54,12 +54,17 @@
 +        """Every route but /health requires the bearer key when one is set."""
 +        if not self.api_key or self.path == "/health":
 +            return True
-+        return self.headers.get("Authorization", "") == f"Bearer {self.api_key}"
++        import hmac
++
++        return hmac.compare_digest(
++            self.headers.get("Authorization", "").encode(),
++            f"Bearer {self.api_key}".encode(),
++        )
 +
      def handle_health_check(self):
          """
          Handle a GET request for the /health endpoint.
-@@ -1781,6 +1803,12 @@
+@@ -1781,6 +1808,12 @@
          self._set_completion_headers(200)
          self.end_headers()
  
@@ -72,7 +77,7 @@
          files = ["config.json", "model.safetensors.index.json", "tokenizer_config.json"]
  
          parts = self.path.split("/")
-@@ -1839,6 +1867,8 @@
+@@ -1839,6 +1872,8 @@
      response_generator,
      server_class=ThreadingHTTPServer,
      handler_class=APIHandler,
@@ -81,7 +86,7 @@
  ):
      server_address = (host, port)
      infos = socket.getaddrinfo(
-@@ -1850,6 +1880,8 @@
+@@ -1850,6 +1885,8 @@
          lambda *args, **kwargs: handler_class(
              response_generator,
              system_fingerprint=get_system_fingerprint(),
@@ -90,7 +95,7 @@
              *args,
              **kwargs,
          ),
-@@ -1877,7 +1909,13 @@
+@@ -1877,7 +1914,13 @@
      prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
      response_generator = ResponseGenerator(model_provider, prompt_cache)
      if group.rank() == 0:
@@ -105,7 +110,7 @@
      else:
          response_generator.join()
  
-@@ -2039,6 +2077,18 @@
+@@ -2039,6 +2082,18 @@
          action="store_true",
          help="Use pipelining instead of tensor parallelism",
      )
