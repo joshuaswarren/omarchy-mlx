@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 MAX_TEXT = 1024 * 1024
 MAX_HISTORY = 8 * MAX_TEXT
 MAX_PINNED = 64 * 1024
+MAX_DEPTH = 32
 CHECKPOINT_BYTES = 256 * 1024
 CHECKPOINT_SECONDS = 2.0
 ID = re.compile(r"^[0-9a-f]{32}$")
@@ -28,13 +30,65 @@ def _completed_turn_ids(messages):
 
 
 def _valid_context_shape(raw):
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or "selected_turn_ids" not in raw:
         return False
-    ids = raw.get("selected_turn_ids")
+    ids = raw["selected_turn_ids"]
     if ids is not None and (not isinstance(ids, list) or any(not isinstance(turn, str) for turn in ids)):
         return False
     pinned = raw.get("pinned_constraints")
     return isinstance(pinned, str) and len(pinned.encode()) <= MAX_PINNED
+
+
+def _valid_record(record, cid):
+    if not isinstance(record, dict) or record.get("id") != cid:
+        return False
+    if not isinstance(record.get("title"), str):
+        return False
+    created = record.get("created_at")
+    if isinstance(created, bool) or not isinstance(created, (int, float)):
+        return False
+    if "updated_at" in record:
+        updated = record["updated_at"]
+        if isinstance(updated, bool) or not isinstance(updated, (int, float)):
+            return False
+    sequence = record.get("sequence")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+        return False
+    messages = record.get("messages")
+    if not isinstance(messages, list):
+        return False
+    return all(
+        isinstance(message, dict)
+        and all(isinstance(message.get(key), str) for key in ("role", "content", "turn_id", "status"))
+        for message in messages
+    )
+
+
+def _within_max_depth(value, start: int = 1) -> bool:
+    stack = [(value, start)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (dict, list, tuple)):
+            if depth > MAX_DEPTH:
+                return False
+            children = item.values() if isinstance(item, dict) else item
+            next_depth = depth + 1
+            stack.extend((child, next_depth) for child in children
+                         if isinstance(child, (dict, list, tuple)))
+    return True
+
+
+def _read_history_bytes(path: Path) -> bytes | None:
+    with open(
+        path,
+        "rb",
+        opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK | os.O_NOFOLLOW),
+    ) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_HISTORY:
+            return None
+        raw = stream.read(MAX_HISTORY + 1)
+    return None if len(raw) > MAX_HISTORY else raw
 
 
 class BusyError(ValueError):
@@ -56,14 +110,17 @@ class ConversationStore:
         self.pending = {}
         if self.directory.exists():
             for path in self.directory.glob("*.json"):
-                if not ID.fullmatch(path.stem) or path.is_symlink() or path.stat().st_size > MAX_HISTORY:
+                if not ID.fullmatch(path.stem):
                     continue
                 try:
-                    record = json.loads(path.read_text())
-                    if record.get("id") != path.stem or not isinstance(record.get("messages"), list):
+                    raw_bytes = _read_history_bytes(path)
+                    if raw_bytes is None:
+                        continue
+                    record = json.loads(raw_bytes.decode("utf-8"))
+                    if not _valid_record(record, path.stem):
                         continue
                     for message in record["messages"]:
-                        if message.get("status") == "streaming":
+                        if message["status"] == "streaming":
                             message["status"] = "stopped"
                     record["active_turn"] = None
                     record["save"] = True
@@ -87,10 +144,17 @@ class ConversationStore:
                     if error:
                         record["context_error"] = error
                         record["context_raw"] = raw
+                    if not _within_max_depth(record):
+                        continue
+                    # Prove the normalized record fits _save()'s canonical UTF-8 JSON encoding
+                    # (also rejecting non-finite numbers and lone surrogates).
+                    encoded = json.dumps(record, ensure_ascii=False, allow_nan=False).encode()
+                    if len(encoded) > MAX_HISTORY:
+                        continue
                     self.records[path.stem] = record
                     self.streams[path.stem] = deque(maxlen=4096)
                     self.pending[path.stem] = [0, time.monotonic()]
-                except (OSError, ValueError, TypeError, AttributeError):
+                except (OSError, ValueError, TypeError, AttributeError, RecursionError):
                     continue
 
     def _record(self, cid):
@@ -229,9 +293,13 @@ class ConversationStore:
                 message["content"] += text
                 self.pending[cid][0] += len(text.encode())
             elif kind == "decision":
+                if not _within_max_depth(data, 4):
+                    raise ValueError("Decision exceeds the nesting limit")
                 self.pending[cid][0] += len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode())
                 message["decision"] = copy.deepcopy(data)
             elif kind == "component":
+                if not _within_max_depth(data, 5):
+                    raise ValueError("Component exceeds the nesting limit")
                 self.pending[cid][0] += len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode())
                 message["components"].append(copy.deepcopy(data))
             record["updated_at"] = time.time()
