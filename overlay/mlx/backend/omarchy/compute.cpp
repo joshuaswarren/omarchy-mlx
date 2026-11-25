@@ -2314,11 +2314,15 @@ ComputeRuntime::ComputeRuntime(
     VkDevice device,
     uint32_t binding_limit,
     uint32_t required_subgroup_size,
-    bool subgroup_size_16_admitted)
+    bool subgroup_size_16_admitted,
+    uint32_t subgroup_size,
+    bool subgroup_size_32_admitted)
     : device_(device),
       binding_limit_(binding_limit),
       required_subgroup_size_(required_subgroup_size),
-      subgroup_size_16_admitted_(subgroup_size_16_admitted) {
+      subgroup_size_16_admitted_(subgroup_size_16_admitted),
+      subgroup_size_(subgroup_size),
+      subgroup_size_32_admitted_(subgroup_size_32_admitted) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2466,10 +2470,90 @@ VkPipeline ComputeRuntime::pipeline(
   return entry->second;
 }
 
+// Kernels whose shader assumes 32 lanes per subgroup slot (the
+// qmm_vec USE_SUBGROUP=1 builds, the subgroup-only qmm_vec6 stream, and
+// the bonsai 32-lane qmv columns). QmmVecQ4MultiSubgroupBF16R2S16KCONTS16
+// is the 16-lane build and stays out: it pins 16, not 32.
+bool is_subgroup32_kernel(ComputeKernel kernel) {
+  switch (kernel) {
+    case ComputeKernel::QmmVecSubgroupF32:
+    case ComputeKernel::QmmVecSubgroupF16:
+    case ComputeKernel::QmmVecSubgroupBF16:
+    case ComputeKernel::QmmVecSubgroupFpF32:
+    case ComputeKernel::QmmVecSubgroupFpF16:
+    case ComputeKernel::QmmVecSubgroupFpBF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupF32:
+    case ComputeKernel::QmmVecQ4WordSubgroupF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupF32:
+    case ComputeKernel::QmmVecQ4MultiSubgroupF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
+    case ComputeKernel::QmmVecGreedyBF16:
+    case ComputeKernel::QmmVecQ4MultiOutgateBF16:
+    case ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiToken8SubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8BF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16:
+    case ComputeKernel::BonsaiQ1QmvSubgroupF32:
+    case ComputeKernel::BonsaiQ1QmvSubgroupF16:
+    case ComputeKernel::BonsaiQ1QmvSubgroupBF16:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R2:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R3:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R4:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R5:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R2:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R3:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R4:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R5:
+    case ComputeKernel::QmmVecWordSubgroupF16Q4G32:
+    case ComputeKernel::QmmVecWordSubgroupBF16Q4G32:
+    case ComputeKernel::QmmVecWordSubgroupF16Q8G64:
+    case ComputeKernel::QmmVecWordSubgroupBF16Q8G64:
+    case ComputeKernel::QmmVecWordSubgroupF16Q8G32:
+    case ComputeKernel::QmmVecWordSubgroupBF16Q8G32:
+    case ComputeKernel::QmmVec6C4R1F16:
+    case ComputeKernel::QmmVec6C1R8F16:
+    case ComputeKernel::QmmVec6C4R1BF16:
+    case ComputeKernel::QmmVec6C1R8BF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16G128:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONT:
+    case ComputeKernel::QmmVecQ4ResNormBF16:
+    case ComputeKernel::QmmVecQ4OutgateResNormBF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2:
+      return true;
+    default:
+      return false;
+  }
+}
+
 VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
   auto [bytes, size] = shader_bytes(kernel);
   if (size == 0 || size % sizeof(uint32_t) != 0) {
     throw std::runtime_error("[omarchy] embedded SPIR-V has an invalid size.");
+  }
+  // 32-lane subgroup kernels (the USE_SUBGROUP=1 builds and the
+  // subgroup-only qmm_vec6 stream): slot math assumes 32 lanes. On a
+  // device whose native size differs, they run only under a legal
+  // requiredSubgroupSize = 32 pin; without admission they fail closed
+  // instead of corrupting output on an unpinned 64-lane subgroup.
+  if (is_subgroup32_kernel(kernel) && subgroup_size_ != 32u) {
+    if (subgroup_size_32_admitted_) {
+      return create_pipeline(
+          std::span<const uint32_t>{
+              reinterpret_cast<const uint32_t*>(bytes),
+              size / sizeof(uint32_t)},
+          "main",
+          nullptr,
+          32u);
+    }
+    throw std::runtime_error(
+        "[omarchy] a 32-lane subgroup kernel was dispatched on hardware "
+        "that cannot legally pin requiredSubgroupSize = 32.");
   }
   // Kernels built at a non-default slot width pin their own
   // subgroup size (the QMM_LANES=16 build runs 16-lane subgroups).

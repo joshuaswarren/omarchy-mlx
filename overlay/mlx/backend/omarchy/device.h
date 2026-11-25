@@ -249,6 +249,13 @@ struct CapabilityReport {
   // hardware report only; gate on hardware_capabilities(), never the
   // simulated profile.
   bool subgroup_size_16_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 32 for a 512-lane
+  // compute workgroup (the largest USE_SUBGROUP=1 build). Lets a
+  // wave64-native device run the 32-lane qmm_vec/qmm_vec6/bonsai
+  // subgroup kernels under a legal pin. Derived from the hardware
+  // report only; gate on hardware_capabilities(), never the simulated
+  // profile.
+  bool subgroup_size_32_admitted{false};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride

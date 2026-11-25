@@ -8895,20 +8895,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         kFpGemvColumnsPerGroup;
     if (params.matrix_m == 1u) {
       const auto& caps = fp_encoder.device().capabilities();
+      const auto& hw = fp_encoder.device().hardware_capabilities();
       bool subgroup_ready =
-          caps.subgroup_size == 32u &&
+          (caps.subgroup_size == 32u || hw.subgroup_size_32_admitted) &&
           (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
       omarchy::capsim::require_backed(
           fp_encoder.device(),
           caps,
           subgroup_ready,
           "QmmVecSubgroupFp*",
-          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-          (fp_encoder.device().hardware_capabilities().subgroup_size ==
-                  32u &&
-              (fp_encoder.device().hardware_capabilities()
-                       .subgroup_operations &
-                  VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+          "subgroup_size==32|subgroup_size_32_admitted+subgroup_ops_mask[ARITHMETIC]",
+          ((hw.subgroup_size == 32u || hw.subgroup_size_32_admitted) &&
+           (hw.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+               0));
       auto vec_kernel = subgroup_ready
           ? select_float_kernel(
                 out.dtype(),
@@ -9327,17 +9326,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (qmm6_stream && batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
       biases.ndim() == 2 && params.matrix_m <= 32u) {
     const auto& caps6 = encoder.device().capabilities();
-    bool sg32 = caps6.subgroup_size == 32u &&
+    const auto& hw6 = encoder.device().hardware_capabilities();
+    bool sg32 =
+        (caps6.subgroup_size == 32u || hw6.subgroup_size_32_admitted) &&
         (caps6.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps6,
         sg32,
         "QmmVec6*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
-         (encoder.device().hardware_capabilities().subgroup_operations &
-          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+        "subgroup_size==32|subgroup_size_32_admitted+subgroup_ops_mask[ARITHMETIC]",
+        ((hw6.subgroup_size == 32u || hw6.subgroup_size_32_admitted) &&
+         (hw6.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+             0));
     if (sg32) {
       bool one_row = params.matrix_m == 1u;
       bool bf16 = out.dtype() == bfloat16;
@@ -9372,18 +9373,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   if (params.matrix_m == 1u) {
     const auto& caps = encoder.device().capabilities();
+    const auto& hw = encoder.device().hardware_capabilities();
     bool subgroup_ready =
-        caps.subgroup_size == 32u &&
+        (caps.subgroup_size == 32u || hw.subgroup_size_32_admitted) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps,
         subgroup_ready,
         "QmmVec*Subgroup*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
-         (encoder.device().hardware_capabilities().subgroup_operations &
-          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+        "subgroup_size==32|subgroup_size_32_admitted+subgroup_ops_mask[ARITHMETIC]",
+        ((hw.subgroup_size == 32u || hw.subgroup_size_32_admitted) &&
+         (hw.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+             0));
     // 4-bit group-128 decode GEMV: the shipped word-format fast path only
     // covers group 64/32, so group-128 fell to the generic affine vec
     // kernel (runtime shift/mask unpack), ~6x slower (18 vs ~110 GB/s on
@@ -9501,18 +9503,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (!qmm_mma_rows && small_t_candidate && batch == 1u && transpose_ &&
       params.matrix_n <= omarchy::kMaxComputeGroupCountX * kGemvColumnsPerGroup) {
     const auto& caps = encoder.device().capabilities();
+    const auto& hw = encoder.device().hardware_capabilities();
     bool subgroup_ready =
-        caps.subgroup_size == 32u &&
+        (caps.subgroup_size == 32u || hw.subgroup_size_32_admitted) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps,
         subgroup_ready,
         "QmmVec*Subgroup*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
-         (encoder.device().hardware_capabilities().subgroup_operations &
-          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+        "subgroup_size==32|subgroup_size_32_admitted+subgroup_ops_mask[ARITHMETIC]",
+        ((hw.subgroup_size == 32u || hw.subgroup_size_32_admitted) &&
+         (hw.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+             0));
     if (subgroup_ready) {
       // A 5-to-8-row pass fits one 8-row dispatch on a part whose cap is 8,
       // which reads the weight stream once instead of twice (two 4-row
@@ -10268,7 +10271,9 @@ bool dispatch_quantized_gemv_group(
     token_route = true;
     rows = static_cast<uint32_t>(x.shape(-2));
   }
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  const auto& hw_caps = encoder.device().hardware_capabilities();
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || hw_caps.subgroup_size_32_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   if (outgate != nullptr) {
     // The prologue deletes the Multiply that produced x (it was never
@@ -15180,7 +15185,9 @@ void BonsaiQ1AffineQmv::eval_gpu(
     return;
   }
   const auto& caps = encoder.device().capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  const auto& hw_caps = encoder.device().hardware_capabilities();
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || hw_caps.subgroup_size_32_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::ComputeKernel kernel;
   switch (out.dtype()) {
@@ -15290,7 +15297,9 @@ void BonsaiQmvWide::eval_gpu(
     omarchy::unsupported(tag + " M (2..5)", out);
   }
   const auto& caps = encoder.device().capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  const auto& hw_caps = encoder.device().hardware_capabilities();
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || hw_caps.subgroup_size_32_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   if (!subgroup_ready) {
     omarchy::unsupported(tag + " subgroup_size==32", out);
@@ -15678,17 +15687,19 @@ void GreedyQuantizedArgmax::eval_gpu(
   auto s = stream();
   auto& encoder = omarchy::get_command_encoder(s);
   const auto& caps = encoder.device().capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  const auto& hw_caps = encoder.device().hardware_capabilities();
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || hw_caps.subgroup_size_32_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::capsim::require_backed(
       encoder.device(),
       caps,
       subgroup_ready,
       "QmmVec*Subgroup*",
-      "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-      (encoder.device().hardware_capabilities().subgroup_size == 32u &&
-       (encoder.device().hardware_capabilities().subgroup_operations &
-        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+      "subgroup_size==32|subgroup_size_32_admitted+subgroup_ops_mask[ARITHMETIC]",
+      ((hw_caps.subgroup_size == 32u || hw_caps.subgroup_size_32_admitted) &&
+       (hw_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+           0));
   const array& w = inputs.at(1);
   uint32_t n = static_cast<uint32_t>(w.shape(0));
   if (!subgroup_ready || !omarchy::q4_word_enabled() ||
