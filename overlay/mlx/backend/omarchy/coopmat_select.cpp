@@ -33,6 +33,20 @@ CoopmatShape sdpa_causal_flash_coopmat16_bf16_shape() {
   return qmm_prefill_coopmat16_bf16_shape();
 }
 
+bool sdpa_causal_flash_coopmat16_enabled(
+    const char* env,
+    bool shape_advertised,
+    int q_len,
+    bool full_query_tiles) {
+  if (env != nullptr && env[0] == '0') {
+    return false;
+  }
+  if (!shape_advertised || !full_query_tiles) {
+    return false;
+  }
+  return q_len >= 64 || (env != nullptr && env[0] == '1');
+}
+
 CoopmatShape qmm_prefill_coopmat16_bf16_shape() {
   CoopmatShape shape;
   shape.m = 16u;

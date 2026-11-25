@@ -221,6 +221,35 @@ TEST_CASE("the sdpa 16x16x16 shape matches the qmm 16x16x16 shape") {
       agx3b_shapes(), omarchy::sdpa_causal_flash_coopmat16_bf16_shape()));
 }
 
+TEST_CASE("the 16x16x16 causal flash gate keeps capability mandatory under force-on") {
+  // Unset defaults on where the shape is advertised and the q_len floor
+  // and full-tile alignment hold.
+  CHECK(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      nullptr, true, 512, true));
+  // Kill switch wins over everything.
+  CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      "0", true, 512, true));
+  // Force-on cannot conjure the hardware requirement: no advertised
+  // shape, no dispatch, env=1 or not.
+  CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      "1", false, 512, true));
+  CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      nullptr, false, 512, true));
+  // Ragged query tails overlap the last two workgroups' stores; the
+  // route requires full 16-row tiles even when forced.
+  CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      nullptr, true, 512, false));
+  CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      "1", true, 512, false));
+  // Below the q_len floor the route stays off unless explicitly forced.
+  CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      nullptr, true, 32, true));
+  CHECK(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      "1", true, 32, true));
+  CHECK(omarchy::sdpa_causal_flash_coopmat16_enabled(
+      nullptr, true, 64, true));
+}
+
 TEST_CASE("the match is exact in every field") {
   const CoopmatShape want = omarchy::qmm_prefill_coopmat_shape();
 
