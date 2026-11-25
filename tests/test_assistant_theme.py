@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import tomllib
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -45,6 +47,16 @@ def _make_state_home(root: Path, slug: str | None, *, mode: str | None = None,
             if color1: lines.append(f"color1 = \"{color1}\"\n")
             if color2: lines.append(f"color2 = \"{color2}\"\n")
             (theme_dir / "colors.toml").write_text("".join(lines), encoding="utf-8")
+
+
+def _write_raw(home: Path, name: bytes, colors: bytes | None) -> Path:
+    state_dir = home / ".local" / "state" / "omarchy" / "current"
+    theme_dir = state_dir / "theme"
+    theme_dir.mkdir(parents=True)
+    (state_dir / "theme.name").write_bytes(name)
+    if colors is not None:
+        (theme_dir / "colors.toml").write_bytes(colors)
+    return theme_dir
 
 
 @contextlib.contextmanager
@@ -146,13 +158,6 @@ class OmarchyParsingTests(unittest.TestCase):
                 t = theme.read_theme()
         self.assertEqual(t.mode, "light")
 
-    def _write_raw(self, home: Path, name: bytes, colors: bytes | None) -> None:
-        state_dir = home / ".local" / "state" / "omarchy" / "current"
-        (state_dir / "theme").mkdir(parents=True)
-        (state_dir / "theme.name").write_bytes(name)
-        if colors is not None:
-            (state_dir / "theme" / "colors.toml").write_bytes(colors)
-
     def test_color_with_trailing_newline_rejected(self):
         # "$" matches before a trailing newline, so "#abc\n" used to pass the
         # allowlist and crash the contrast math (or reach CSS unchanged).
@@ -160,9 +165,9 @@ class OmarchyParsingTests(unittest.TestCase):
         self.assertIsNone(theme._sanitize("#aabbcc\n"))
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
-            self._write_raw(home, b"evil\n", b'[colors]\nbackground = "#abc\\n"\n'
-                                             b'accent = "#aabbcc\\n"\n'
-                                             b'foreground = "#ffffff"\n')
+            _write_raw(home, b"evil\n", b'[colors]\nbackground = "#abc\\n"\n'
+                                        b'accent = "#aabbcc\\n"\n'
+                                        b'foreground = "#ffffff"\n')
             t = theme.read_theme(home, fc=lambda match: None)
         self.assertEqual(t.css["--mlx-canvas"], theme.FALLBACK_DARK["canvas"])
         self.assertEqual(t.css["--mlx-focus"], theme.FALLBACK_DARK["focus"])
@@ -170,7 +175,7 @@ class OmarchyParsingTests(unittest.TestCase):
     def test_non_utf8_theme_name_falls_back(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
-            self._write_raw(home, b"\xff\xfe\n", None)
+            _write_raw(home, b"\xff\xfe\n", None)
             t = theme.read_theme(home, fc=lambda match: None)
         self.assertEqual(t.source, "fallback")
         self.assertIsNone(t.slug)
@@ -178,11 +183,314 @@ class OmarchyParsingTests(unittest.TestCase):
     def test_non_utf8_colors_toml_falls_back(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
-            self._write_raw(home, b"evil\n",
-                            b'[colors]\nbackground = "#1a1b26"\n# \xff\n')
+            _write_raw(home, b"evil\n",
+                       b'[colors]\nbackground = "#1a1b26"\n# \xff\n')
             t = theme.read_theme(home, fc=lambda match: None)
         self.assertEqual(t.source, "fallback")
         self.assertIn("no readable colors.toml", t.status.lower())
+
+
+def _run_with_pinned_stack(fn):
+    result: dict[str, object] = {}
+
+    def target():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:
+            result["exc"] = exc
+
+    old_size = threading.stack_size(4 * 1024 * 1024)
+    try:
+        thread = threading.Thread(target=target)
+        thread.start()
+    finally:
+        threading.stack_size(old_size)
+    thread.join()
+    if "exc" in result:
+        raise result["exc"]
+    return result.get("value")
+
+
+class DamagedThemeInputTests(unittest.TestCase):
+    _CAP = 4 * 1024
+    _VALID_COLORS = (
+        b'[colors]\n'
+        b'background = "#1a1b26"\n'
+        b'foreground = "#c0caf5"\n'
+        b'accent = "#7aa2f7"\n'
+    )
+
+    def setUp(self):
+        patcher = unittest.mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("OMARCHY_PATH", None)
+
+    @contextlib.contextmanager
+    def _patch_theme_open(self, *, return_none: bool = False):
+        real_open = open
+        read_sizes: list[object] = []
+        fd_offsets: list[int] = []
+
+        class _ControlledStream:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._inner.__exit__(exc_type, exc, tb)
+
+            def fileno(self):
+                return self._inner.fileno()
+
+            def read(self, size=-1):
+                read_sizes.append(size)
+                if return_none:
+                    return None
+                data = self._inner.read(size)
+                fd_offsets.append(
+                    os.lseek(self._inner.fileno(), 0, os.SEEK_CUR)
+                )
+                return data
+
+        def wrapped_open(*args, **kwargs):
+            return _ControlledStream(real_open(*args, **kwargs))
+
+        with unittest.mock.patch.object(
+            theme, "open", create=True, new=wrapped_open
+        ):
+            yield read_sizes, fd_offsets
+
+    def _run_without_blocking_fifo(self, fifo_path: Path, fn):
+        result: dict[str, object] = {}
+
+        def target():
+            try:
+                result["value"] = fn()
+            except BaseException as exc:
+                result["exc"] = exc
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+        if thread.is_alive():
+            try:
+                fd = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError:
+                pass
+            else:
+                os.close(fd)
+            thread.join(timeout=2)
+            self.fail(f"reading FIFO {fifo_path.name} blocked for >10s")
+        if "exc" in result:
+            raise result["exc"]
+        return result.get("value")
+
+    def test_deep_toml_falls_back_on_pinned_stack(self):
+        deep = "x = " + "[" * 1500 + "]" * 1500 + "\n"
+        payload = deep.encode("utf-8") + self._VALID_COLORS
+        self.assertLess(len(payload), self._CAP)
+
+        def check():
+            with self.assertRaises(RecursionError):
+                tomllib.loads(deep)
+            with tempfile.TemporaryDirectory() as td:
+                home = Path(td)
+                _write_raw(home, b"deep\n", payload)
+                t = theme.read_theme(home, fc=lambda match: None)
+            self.assertEqual(t.source, "fallback")
+            self.assertEqual(t.slug, "deep")
+            self.assertIn("no readable colors.toml", t.status.lower())
+
+        _run_with_pinned_stack(check)
+
+    def test_toml_parser_resource_errors_patched_fall_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            _write_raw(home, b"tokyo-night\n", self._VALID_COLORS)
+            for exc in (
+                RecursionError("simulated depth limit"),
+                MemoryError("simulated allocation limit"),
+            ):
+                with self.subTest(exc=type(exc).__name__):
+                    with unittest.mock.patch.object(
+                        theme.tomllib, "loads", side_effect=exc,
+                    ) as mock_loads:
+                        t = theme.read_theme(home, fc=lambda match: None)
+                    self.assertEqual(t.source, "fallback")
+                    self.assertEqual(t.slug, "tokyo-night")
+                    self.assertIn("no readable colors.toml", t.status.lower())
+                    mock_loads.assert_called_once()
+
+    def test_oversized_int_toml_falls_back(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(640)
+        bigint = "n = 1" + "0" * 640 + "\n"
+        payload = bigint.encode("utf-8") + self._VALID_COLORS
+        self.assertLess(len(payload), self._CAP)
+        with self.assertRaises(ValueError):
+            tomllib.loads(bigint)
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            _write_raw(home, b"bigint\n", payload)
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertEqual(t.slug, "bigint")
+        self.assertIn("no readable colors.toml", t.status.lower())
+
+    def test_fifo_theme_name_does_not_block(self):
+        if not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"):
+            self.skipTest("non-blocking FIFO unavailable")
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            state_dir = home / ".local" / "state" / "omarchy" / "current"
+            (state_dir / "theme").mkdir(parents=True)
+            fifo = state_dir / "theme.name"
+            os.mkfifo(fifo)
+            t = self._run_without_blocking_fifo(
+                fifo, lambda: theme.read_theme(home, fc=lambda match: None)
+            )
+        self.assertEqual(t.source, "fallback")
+        self.assertIsNone(t.slug)
+
+    def test_prefilled_fifo_theme_name_is_refused(self):
+        if not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"):
+            self.skipTest("non-blocking FIFO unavailable")
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        home = Path(td.name)
+        state_dir = home / ".local" / "state" / "omarchy" / "current"
+        theme_dir = state_dir / "theme"
+        theme_dir.mkdir(parents=True)
+        (theme_dir / "colors.toml").write_bytes(self._VALID_COLORS)
+        fifo = state_dir / "theme.name"
+        os.mkfifo(fifo)
+        rfd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, rfd)
+        wfd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            self.assertEqual(os.write(wfd, b"tokyo-night\n"), 12)
+        finally:
+            os.close(wfd)
+        t = self._run_without_blocking_fifo(
+            fifo, lambda: theme.read_theme(home, fc=lambda match: None)
+        )
+        self.assertEqual(t.source, "fallback")
+        self.assertIsNone(t.slug)
+
+    def test_fifo_colors_toml_does_not_block(self):
+        if not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"):
+            self.skipTest("non-blocking FIFO unavailable")
+        with tempfile.TemporaryDirectory() as td:
+            fifo = Path(td) / "colors.toml"
+            os.mkfifo(fifo)
+            result = self._run_without_blocking_fifo(
+                fifo, lambda: theme._parse_colors_toml(fifo)
+            )
+        self.assertEqual(result, ({}, None))
+
+    def test_nonblocking_none_read_falls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            _write_raw(home, b"tokyo-night\n", self._VALID_COLORS)
+            with self._patch_theme_open(return_none=True) as (read_sizes, _):
+                t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertIsNone(t.slug)
+        self.assertEqual(len(read_sizes), 1)
+
+    def test_theme_read_is_bounded_to_cap_plus_one(self):
+        with tempfile.TemporaryDirectory() as td:
+            colors_path = Path(td) / "colors.toml"
+            colors_path.write_bytes(self._VALID_COLORS)
+            with self._patch_theme_open() as (read_sizes, _):
+                colors, _ = theme._parse_colors_toml(colors_path)
+            self.assertEqual(read_sizes, [self._CAP + 1])
+            self.assertEqual(colors["background"], "#1a1b26")
+
+            colors_path.write_bytes(
+                self._VALID_COLORS + b"#" + b"a" * (64 * 1024)
+            )
+            with self._patch_theme_open() as (read_sizes, fd_offsets):
+                result = theme._parse_colors_toml(colors_path)
+        self.assertEqual(read_sizes, [self._CAP + 1])
+        self.assertLessEqual(fd_offsets[0], self._CAP + 1)
+        self.assertEqual(result, ({}, None))
+
+    def test_oversized_theme_name_falls_back(self):
+        cap = self._CAP
+        padded_name = b"tokyo-night" + b" " * (cap + 1 - len(b"tokyo-night"))
+        self.assertEqual(len(padded_name), cap + 1)
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            _write_raw(home, padded_name, self._VALID_COLORS)
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertIsNone(t.slug)
+
+    def test_oversized_colors_toml_falls_back(self):
+        cap = self._CAP
+        prefix = self._VALID_COLORS + b"#"
+        padded_colors = prefix + b"a" * (cap + 1 - len(prefix))
+        self.assertEqual(len(padded_colors), cap + 1)
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            _write_raw(home, b"tokyo-night\n", padded_colors)
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertEqual(t.slug, "tokyo-night")
+        self.assertIn("no readable colors.toml", t.status.lower())
+
+    def test_exact_size_cap_theme_files_load(self):
+        cap = self._CAP
+        padded_name = b"tokyo-night" + b" " * (cap - len(b"tokyo-night"))
+        prefix = self._VALID_COLORS + b"#"
+        padded_colors = prefix + b"a" * (cap - len(prefix))
+        self.assertEqual(len(padded_name), cap)
+        self.assertEqual(len(padded_colors), cap)
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            _write_raw(home, padded_name, padded_colors)
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "omarchy")
+        self.assertEqual(t.slug, "tokyo-night")
+        self.assertEqual(t.css["--mlx-canvas"], "#1a1b26")
+
+    def test_untraversable_theme_dir_falls_back(self):
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses directory mode 0600")
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        home = Path(td.name)
+        theme_dir = _write_raw(home, b"tokyo-night\n", self._VALID_COLORS)
+        theme_dir.chmod(0o600)
+        self.addCleanup(theme_dir.chmod, 0o700)
+        t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "fallback")
+        self.assertEqual(t.slug, "tokyo-night")
+        self.assertIn("no readable colors.toml", t.status.lower())
+
+    def test_symlinked_theme_dir_and_colors_load(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            state_dir = home / ".local" / "state" / "omarchy" / "current"
+            state_dir.mkdir(parents=True)
+            (state_dir / "theme.name").write_bytes(b"tokyo-night\n")
+            real_dir = home / ".local" / "share" / "omarchy" / "themes" / "tokyo-night"
+            real_dir.mkdir(parents=True)
+            real_colors = real_dir / "colors.real.toml"
+            real_colors.write_bytes(self._VALID_COLORS)
+            (real_dir / "colors.toml").symlink_to(real_colors)
+            (state_dir / "theme").symlink_to(real_dir)
+            t = theme.read_theme(home, fc=lambda match: None)
+        self.assertEqual(t.source, "omarchy")
+        self.assertEqual(t.slug, "tokyo-night")
+        self.assertEqual(t.css["--mlx-canvas"], "#1a1b26")
+        self.assertEqual(t.css["--mlx-text"], "#c0caf5")
+        self.assertEqual(t.css["--mlx-focus"], "#7aa2f7")
 
 
 class ContrastAdjustmentTests(unittest.TestCase):
