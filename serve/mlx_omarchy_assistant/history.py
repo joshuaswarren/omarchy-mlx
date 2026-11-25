@@ -108,8 +108,12 @@ class ConversationStore:
         self.streams = {}
         self.cancelled = set()
         self.pending = {}
-        if self.directory.exists():
-            for path in self.directory.glob("*.json"):
+        if os.path.isdir(self.directory):
+            try:
+                paths = list(self.directory.glob("*.json"))
+            except OSError:
+                paths = []
+            for path in paths:
                 if not ID.fullmatch(path.stem):
                     continue
                 try:
@@ -151,10 +155,12 @@ class ConversationStore:
                     encoded = json.dumps(record, ensure_ascii=False, allow_nan=False).encode()
                     if len(encoded) > MAX_HISTORY:
                         continue
-                    self.records[path.stem] = record
                     self.streams[path.stem] = deque(maxlen=4096)
                     self.pending[path.stem] = [0, time.monotonic()]
-                except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+                    self.records[path.stem] = record
+                except (OSError, ValueError, TypeError, AttributeError, RecursionError, MemoryError):
+                    self.streams.pop(path.stem, None)
+                    self.pending.pop(path.stem, None)
                     continue
 
     def _record(self, cid):
