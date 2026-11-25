@@ -120,8 +120,23 @@ int main() {
       !select_qmm_wide_2x16("NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, no_arith, true),
       "refuses 2x16 without subgroup arithmetic");
   fails += check(
-      select_qmm_wide_2x16("Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, narrow_wg, false),
-      "G13C Apple default stays 2x16");
+      !select_qmm_wide_2x16("Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, narrow_wg, false),
+      "G13C Apple default moves from 2x16 to 2x8w2");
+  fails += check(
+      !select_qmm_wide_2x16("Apple M1 (G13G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
+      "G13G Apple default moves from 2x16 to 2x8w2");
+  fails += check(
+      select_qmm_g13_2x8w2("Apple M1 Max (G13C C0)"),
+      "Apple G13C selects 2x8w2");
+  fails += check(
+      select_qmm_g13_2x8w2("Apple M1 (G13G B1)"),
+      "Apple G13G selects 2x8w2");
+  fails += check(
+      !select_qmm_g13_2x8w2("Apple M2 Max (G14C B1)"),
+      "Apple G14C does not select G13 2x8w2");
+  fails += check(
+      !select_qmm_g13_2x8w2("llvmpipe (LLVM 19.1.7, 256 bits)"),
+      "llvmpipe does not select G13 2x8w2");
   fails += check(
       !select_qmm_wide_2x16("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
       "Apple G14C does not select 2x16 even when opt-in env is set");

@@ -147,7 +147,7 @@ inline bool select_qmm_wide_2x16(
   // activations. Any other part that meets the probe gets 2x16.
   if (device_name.find("G13G") != std::string_view::npos ||
       device_name.find("G13C") != std::string_view::npos) {
-    return true;
+    return false;
   }
   if (device_name.find("G14C") != std::string_view::npos) {
     return false;
@@ -156,6 +156,15 @@ inline bool select_qmm_wide_2x16(
     return vram_activations_enabled && supports_qmm_2x16(caps);
   }
   return supports_qmm_2x16(caps);
+}
+
+// G13G (13-inch M1) and G13C (16-inch M1 Max) default Qmm decode geometry:
+// 2x8w2 (2 rows/slot x 8 slots = 256 threads/WG, 16 cols/WG, hoisted uvec2
+// loads across Word, Multi, 1-pass interleaved SwiGLU, ResNorm, and
+// OutgateResNorm).
+inline bool select_qmm_g13_2x8w2(std::string_view device_name) {
+  return device_name.find("G13G") != std::string_view::npos ||
+      device_name.find("G13C") != std::string_view::npos;
 }
 
 // G14C (M2 Max) default Qmm decode geometry: 2x4w2 (uvec2 weight loads

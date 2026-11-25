@@ -1230,6 +1230,14 @@ enum class ComputeKernel : uint16_t {
   // dequantized B stored fp16, fp32 accumulator (shaders/qmm_coopmat.comp
   // -DCMAT16). Appended to keep profile kernel ids stable.
   QmmPrefillCoopmat16BF16,
+  // Unified 2x8w2 decode QMV builds (2 rows/slot x 8 slots = 256 threads/WG,
+  // 16 cols/WG, hoisted uvec2 loads, dedicated 1-pass interleaved SwiGLU,
+  // 1-pass ResNorm/OutgateResNorm). Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S8W2,
+  QmmVecQ4MultiSubgroupBF16R2S8W2,
+  QmmVecQ4SwigluBF16R2S8W2,
+  QmmVecQ4ResNormBF16R2S8W2,
+  QmmVecQ4OutgateResNormBF16R2S8W2,
   Count,
 };
 
