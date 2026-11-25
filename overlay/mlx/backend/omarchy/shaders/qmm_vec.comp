@@ -230,10 +230,11 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
 // The fused-norm rope epilogue reads the Q/K members' materialized
 // outputs back inside the same dispatch. The member stores stay
-// writeonly: the memoryBarrierBuffer + coherent ticket protocol
+// unqualified: the memoryBarrierBuffer + coherent ticket protocol
 // orders them before the electing workgroup's reads — coherent on
-// every member store measurably slows the member-dot itself.
-#define QMM_VEC_OUTPUT_ACCESS writeonly
+// every member store measurably slows the member-dot itself, and
+// writeonly forbids the epilogue's reads entirely.
+#define QMM_VEC_OUTPUT_ACCESS
 #else
 #define QMM_VEC_OUTPUT_ACCESS writeonly
 #endif
