@@ -12,12 +12,16 @@ dispatch pairs with disjoint compute bindings - a lower-bound PROXY
 only: transfer/fill/alias dependencies are invisible to it, so it says
 nothing about which barriers are actually removable).
 
-Kernel names come from the declaration order of the ComputeKernel enum in
-overlay/mlx/backend/omarchy/compute.h, the same order the C++ harness
-records. GPU ticks convert with meta.period_ns; unwrapping uses
-meta.valid_bits. Phases come from an optional markers file written by
-scripts/profile_generate.py (CLOCK_MONOTONIC ns, same clock as the harness
-host timestamps).
+Kernel names come from the "kn" record the loaded library stamps at
+record time (enum order in that binary's compute.h). Profiles without
+one are rejected unless --compute-h overrides, since mapping an enum
+index through a different commit's compute.h mislabels kernels.
+meta.wheel/meta.tag identify the recording binary; --expect-wheel /
+--expect-tag refuse profiles captured by a different wheel. GPU ticks
+convert with meta.period_ns; unwrapping uses meta.valid_bits. Phases
+come from an optional markers file written by
+scripts/profile_generate.py (CLOCK_MONOTONIC ns, same clock as the
+harness host timestamps).
 
 Phase attribution contract: dispatch ("k":"d") records are written
 DELAYED - when their ring slot is flushed at a join or slot reuse, long
@@ -100,16 +104,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("profile")
     ap.add_argument("--markers")
-    ap.add_argument("--compute-h", default=None)
+    ap.add_argument("--compute-h", default=None,
+                    help="enum-order fallback for profiles recorded "
+                    "before kernel names were stamped into the stream")
     ap.add_argument("--timing-mode", choices=("auto", "dt1", "t1-t0"),
                     default="auto",
                     help="auto uses dt1=t1[i]-t1[i-1] (same submit) on "
                          "Apple/Honeykrisp and t1-t0 elsewhere")
+    ap.add_argument("--expect-wheel", default=None,
+                    help="refuse the profile unless meta.wheel matches")
+    ap.add_argument("--expect-tag", default=None,
+                    help="refuse the profile unless meta.tag matches")
     args = ap.parse_args()
 
     meta = None
     end_rec = None
     cal = None
+    kn = None
     dispatches = []
     joins = []
     submits = []
@@ -140,12 +151,21 @@ def main():
                 empty_subs.add(rec["s"])
             elif kind == "cal":
                 cal = rec
+            elif kind == "kn":
+                kn = rec
             elif kind == "end":
                 end_rec = rec
 
     if meta is None:
         print("no meta line; not a profile file", file=sys.stderr)
         sys.exit(1)
+    for expect, field in ((args.expect_wheel, "wheel"),
+                          (args.expect_tag, "tag")):
+        if expect is not None and meta.get(field) != expect:
+            print(f"wheel mismatch: profile recorded by {field}="
+                  f"{meta.get(field)!r}, expected {expect!r}",
+                  file=sys.stderr)
+            sys.exit(3)
     for field in ("period_ns", "valid_bits"):
         if not isinstance(meta.get(field), (int, float)):
             print(f"malformed meta: {field} missing or not numeric",
@@ -161,9 +181,23 @@ def main():
             sys.exit(2)
 
     names = {}
-    if args.compute_h:
+    if kn is not None:
+        embedded = kn.get("names")
+        if not isinstance(embedded, list) or not all(
+                isinstance(n, str) for n in embedded):
+            print("malformed kn record: names missing or not a "
+                  "string list", file=sys.stderr)
+            sys.exit(2)
+        for i, n in enumerate(embedded):
+            names[i] = n
+    elif args.compute_h:
         for i, n in enumerate(parse_kernel_names(args.compute_h)):
             names[i] = n
+    else:
+        print("profile carries no kn record and no --compute-h was "
+              "given; kernel ids cannot be named without risking enum "
+              "drift", file=sys.stderr)
+        sys.exit(2)
 
     def kname(e):
         return names.get(e, f"kernel_{e}")
@@ -237,6 +271,9 @@ def main():
     say(f"   device={meta['device']} period={period}ns "
         f"valid_bits={valid_bits}"
         + (" timing=dt1" if use_dt1 else ""))
+    if "wheel" in meta:
+        say(f"   wheel={meta['wheel']}"
+            + (f" tag={meta['tag']}" if meta.get("tag") else ""))
     if cal is not None:
         floor = cal.get("floor_ns")
         samples = cal.get("samples")
