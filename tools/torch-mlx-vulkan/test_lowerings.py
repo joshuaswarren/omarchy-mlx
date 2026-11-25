@@ -1331,6 +1331,50 @@ def test_blas_accum():
     fx_run(torch.addr, (inp_addr, v1, v2), {})
     print("test_blas_accum PASS")
 
+def test_group_norm():
+    # PT-AL: aten.native_group_norm (receipt-zero PAR-41 row; the
+    # diffusion/vision family after PT-AJ's BLAS accumulate set).
+    # aten signature: (input(N,C,HxW), weight?(C), bias?(C), N, C, HxW,
+    # group, eps) -> (out, mean(N,group), rstd(N,group)). Prove the eager
+    # executor lowers it (stats["mlx"]) and matches torch CPU at fp32 and
+    # bf16, with and without the affine weight/bias, and across group
+    # counts. mx.group_norm is absent in the pinned tree, so the lowering
+    # computes mean/rstd manually and reshapes.
+    rng = np.random.RandomState(5)
+    N, C, HxW, group = 2, 8, 16, 4
+    x = torch.tensor(rng.randn(N, C, HxW).astype(np.float32))
+    w = torch.tensor(rng.randn(C).astype(np.float32))
+    b = torch.tensor(rng.randn(C).astype(np.float32))
+
+    def fx_run(ins, atol=2e-2):
+        ref = torch.ops.aten.native_group_norm.default(*ins)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        out_node = g.call_function(torch.ops.aten.native_group_norm.default,
+                                   tuple(phs), {})
+        g.output(out_node)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, ins[1:])
+        assert any("group_norm" in s for s in stats["mlx"]), stats
+        assert len(out) == 3 and len(ref) == 3, (len(out), len(ref))
+        for got_t, ref_t, name in zip(out, ref,
+                                      ("out", "mean", "rstd"), strict=True):
+            got = torch.as_tensor(got_t).float().numpy()
+            refn = ref_t.float().numpy()
+            assert got.shape == refn.shape, (name, got.shape, refn.shape)
+            assert np.allclose(got, refn, atol=atol), \
+                (name, got, refn)
+
+    fx_run((x, None, None, N, C, HxW, group, 1e-5))
+    fx_run((x, w, b, N, C, HxW, group, 1e-5))
+    fx_run((x, w, None, N, C, HxW, group, 1e-5))
+    fx_run((x, None, b, N, C, HxW, 2, 1e-5))
+    xb = x.bfloat16()
+    fx_run((xb, None, None, N, C, HxW, group, 1e-5))
+    print("test_group_norm PASS")
+
 def test_random_family():
     # PT-U12: the aten sampling family (uniform/cauchy/exponential/
     # geometric/log_normal/normal.*) was evaluated for lowering and
@@ -1737,6 +1781,7 @@ if __name__ == "__main__":
     test_bmm_matmul()
     test_blas_accum()
     test_meshgrid()
+    test_group_norm()
     print("ALL PASS")
 
 
