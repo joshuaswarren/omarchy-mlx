@@ -12580,6 +12580,9 @@ bool dispatch_add_norm_pair(
   const auto& norm_prim =
       static_cast<const mlx::core::fast::RMSNorm&>(norm_node.primitive());
   const float eps = norm_prim.state().second;
+  if (norm_node.ndim() == 0 || add_node.ndim() == 0) {
+    return false;
+  }
   size_t row_length = norm_node.shape(-1);
   if (row_length == 0) {
     return false;
@@ -12589,28 +12592,19 @@ bool dispatch_add_norm_pair(
       !apple_norm_enabled(encoder.device(), row_length, rows)) {
     return false;
   }
-  // Dense row-contiguous operands only (w8E review of #944): the raw
-  // std430 bindings read the flat row layout; a transposed or broadcast
-  // addend would corrupt the outputs or read out of bounds. The
-  // composed path handles any layout, so refuse and let it run.
-  if (!add_in[0].flags().row_contiguous || !add_in[1].flags().row_contiguous ||
-      !norm_node.flags().row_contiguous || !add_node.flags().row_contiguous) {
-    return false;
-  }
+  // Dense row-contiguous INPUTS only (#944 review): the raw std430
+  // bindings read the flat row layout; a transposed or broadcast addend
+  // would corrupt the outputs or read out of bounds. Output arrays are
+  // unallocated at this point, so their flags are meaningless here.
+  // The composed path handles any layout, so refuse and let it run.
   const array& w = norm_in[1];
   if (w.dtype() != bfloat16 ||
       (w.size() != 1 && w.size() != row_length) ||
-      !whole_dense(w, w.size())) {
-    return false;
-  }
-  auto settled = [](const array& a) {
-    return a.data_shared_ptr() != nullptr;
-  };
-  if (!settled(add_in[0]) || !settled(add_in[1]) || !settled(w)) {
-    // A producer chain is still unscheduled inside this tape segment;
-    // the ordinary path evaluates it in order. Un-plan rather than
-    // settle here: the composed path is bit-exact either way, and the
-    // O(graph) settle walk is not worth it for a 1-dispatch saving.
+      !whole_dense(w, w.size()) ||
+      !add_in[0].flags().row_contiguous ||
+      !add_in[1].flags().row_contiguous ||
+      !input_ready(add_in[0], stream) || !input_ready(add_in[1], stream) ||
+      !input_ready(w, stream)) {
     return false;
   }
   const std::string tag = "add_rms_norm_pair";

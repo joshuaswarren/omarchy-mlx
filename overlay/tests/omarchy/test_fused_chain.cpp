@@ -3439,3 +3439,44 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   }
   unsetenv("MLX_OMARCHY_ADD_NORM_FUSE");
 }
+
+TEST_CASE("add+norm fold refuses non-contiguous addends, composed matches") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  // A transposed addend (row_contiguous=false) must refuse the fold and
+  // produce the composed chain's bits, not corrupt output (#944 review).
+  array xt = astype(
+      random::normal(Shape{2048, 1}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array x = transpose(xt, {1, 0}, stream);
+  array r = astype(
+      random::normal(Shape{1, 2048}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array w = astype(
+      random::normal(Shape{2048}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  eval({x, r, w});
+  sync_stream(stream);
+  auto forward = [&]() {
+    array h = add(x, r, stream);
+    array out = fast::rms_norm(h, w, 1e-5, stream);
+    return std::vector<array>{h, out};
+  };
+  setenv("MLX_OMARCHY_ADD_NORM_FUSE", "0", 1);
+  auto baseline = forward();
+  eval(baseline);
+  sync_stream(stream);
+  setenv("MLX_OMARCHY_ADD_NORM_FUSE", "1", 1);
+  auto candidate = forward();
+  eval(candidate);
+  sync_stream(stream);
+  for (size_t i = 0; i < baseline.size(); ++i) {
+    INFO("output ", i);
+    expect_bit_exact(baseline[i], candidate[i], stream);
+  }
+  unsetenv("MLX_OMARCHY_ADD_NORM_FUSE");
+}
