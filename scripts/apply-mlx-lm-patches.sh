@@ -413,6 +413,11 @@ if [[ -d "$SITE/mlx_audio/sts/models/mossformer2_se" ]]; then
 else
   echo "mlx-audio patch series: mlx_audio not installed; skipped"
 fi
+# omarchy-local-ai runtime contract (#932): --alias serves the recipe id at
+# /v1/models and --api-key gates every route but /health. Both series carry
+# the patch; it applies cleanly last on both pinned trees (verified 0.31.3
+# wheel and the 94cdcae fork tree).
+apply mlx-lm-server-alias-key.patch
 # Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
 DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
 printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"
