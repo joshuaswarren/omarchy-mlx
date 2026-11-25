@@ -18018,15 +18018,16 @@ void ScaledDotProductAttention::eval_gpu(
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
       // Q_CHUNK=8 twin (eight Q panels live, reused across the four
-      // key-blocks of a tile; same add order, so output is bit-identical)
-      // is the G16S default. MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the
-      // 16-panel kernel; other parts keep it. Measurements:
-      // receipts/2026-11-15-m4-pro-g16s-sdpa-flash-qchunk8
+      // key-blocks of a tile; same add order, so output is bit-identical).
+      // MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the 16-panel kernel.
+      // No-gating default (2026-11-25): bit-identical and measured faster
+      // where it ran (G16S, receipts/2026-11-15-m4-pro-g16s-sdpa-flash-
+      // qchunk8); no part measured a loss, so every part takes the twin.
       omarchy::ComputeKernel cf_kernel =
           omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16;
       const char* qchunk_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
       const bool qchunk_off = qchunk_env != nullptr && qchunk_env[0] == '0';
-      if (cf_is_g16s && !qchunk_off) {
+      if (!qchunk_off) {
         cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8;
       }
       // Env-gated K/V amortization. Not a default.
