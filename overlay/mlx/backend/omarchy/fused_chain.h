@@ -238,6 +238,11 @@ bool dispatch_quantized_gemv_wide(
     std::vector<GemvFusionMember>& members,
     const Stream& stream);
 
+// Drops the concatenated weight buffers cached per sibling set (keyed
+// on member weight ids); mx.clear_cache calls this so an unloaded
+// model's wide-route buffers do not stay resident.
+void qmm_wide_weights_clear();
+
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
     const array& input,

@@ -2401,6 +2401,14 @@ bool mx_omarchy_dualout_dispatch(
       members, nullptr, stream);
 }
 
+// The wide sibling entry point (fused_chain.h); same thin-wrapper
+// convention as the dual-write helper above.
+bool mx_omarchy_wide_dispatch(
+    std::vector<mlx::core::omarchy::GemvFusionMember>& members,
+    const Stream& stream) {
+  return mlx::core::omarchy::dispatch_quantized_gemv_wide(members, stream);
+}
+
 } // namespace
 
 TEST_CASE("dual-write group refuses view members without the flag") {
@@ -2569,6 +2577,102 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
     expect_view(gu_parent, 64u, 64u, 4);
     unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
   }
+}
+
+// The wide sibling route (dispatch_quantized_gemv_wide): one
+// weight-concatenated WordSubgroup pass whose slab views must equal the
+// per-member standalone outputs bit for bit. Members on the paired-word
+// path (k % 512 == 0) need n % 8 each.
+TEST_CASE("wide sibling dispatch matches per-member standalone outputs") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 512;
+  auto q = make_linear(96, k, bfloat16, stream);
+  auto kk = make_linear(64, k, bfloat16, stream);
+  auto v = make_linear(32, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+
+  std::vector<array> baseline;
+  for (const QuantizedLinear* l : {&q, &kk, &v}) {
+    baseline.push_back(project(x, *l, stream));
+  }
+  eval(baseline);
+  sync_stream(stream);
+  std::vector<uint64_t> baseline_digests;
+  for (const auto& out : baseline) {
+    auto raw = dualout_raw16(out);
+    baseline_digests.push_back(dualout_fnv1a64(raw.data(), raw.size() * 2));
+  }
+
+  setenv("MLX_OMARCHY_QMM_WIDE_GEMV", "1", 1);
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, q, stream), std::nullopt, std::nullopt});
+  members.push_back({project(x, kk, stream), std::nullopt, std::nullopt});
+  members.push_back({project(x, v, stream), std::nullopt, std::nullopt});
+  uint64_t before = counters().vk_compute_dispatches.load();
+  if (!mx_omarchy_wide_dispatch(members, stream)) {
+    unsetenv("MLX_OMARCHY_QMM_WIDE_GEMV");
+    MESSAGE("SKIPPING: wide route refused on this device");
+    return;
+  }
+  CHECK_EQ(counters().vk_compute_dispatches.load() - before, 1);
+
+  // Each member output aliases its slab column range; evaluating it
+  // must reproduce the standalone bits exactly.
+  for (size_t i = 0; i < members.size(); ++i) {
+    INFO("member ", i);
+    array out = astype(
+        reshape(
+            members[i].node,
+            {1, 1, static_cast<int>(members[i].node.size())},
+            stream),
+        bfloat16,
+        stream);
+    out.eval();
+    sync_stream(stream);
+    auto raw = dualout_raw16(out);
+    uint64_t got = dualout_fnv1a64(raw.data(), raw.size() * 2);
+    CHECK_EQ(got, baseline_digests[i]);
+  }
+  unsetenv("MLX_OMARCHY_QMM_WIDE_GEMV");
+}
+
+// The aux concat accumulates each member's scales byte span into a
+// VkBufferCopy dst offset; a member whose span is not a multiple of 4
+// would misalign every later copy, so the route must refuse the set.
+TEST_CASE("wide sibling dispatch refuses unaligned aux spans") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  // k=64: scales are [n, 1] bf16 -> 2n bytes; n=3 gives a 6-byte span.
+  const int k = 64;
+  auto a = make_linear(3, k, bfloat16, stream);
+  auto b = make_linear(3, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+
+  setenv("MLX_OMARCHY_QMM_WIDE_GEMV", "1", 1);
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
+  members.push_back({project(x, b, stream), std::nullopt, std::nullopt});
+  uint64_t before = counters().vk_compute_dispatches.load();
+  CHECK_FALSE(mx_omarchy_wide_dispatch(members, stream));
+  CHECK_EQ(counters().vk_compute_dispatches.load(), before);
+  unsetenv("MLX_OMARCHY_QMM_WIDE_GEMV");
 }
 
 // TapeIndex scratch-map contract (EagerFusionScope): growth past the

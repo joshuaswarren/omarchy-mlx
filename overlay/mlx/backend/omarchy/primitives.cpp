@@ -10228,6 +10228,11 @@ constexpr size_t kQmmWideCacheLimit = 256;
 
 } // namespace
 
+void qmm_wide_weights_clear() {
+  std::lock_guard<std::mutex> lock(qmm_wide_mutex);
+  qmm_wide_cache.clear();
+}
+
 const char* qmm_geometry_name() {
   return qmm_geometry().name;
 }
@@ -10846,6 +10851,10 @@ bool dispatch_quantized_gemv_wide(
         scales.shape(1) != k / 64 ||
         node.size() != static_cast<size_t>(n) ||
         (k % 512 == 0 && n % 8 != 0) ||
+        // VkBufferCopy wants 4-byte-aligned offsets; aux_dst accumulates
+        // each member's scales span, so an unaligned member misaligns
+        // every copy after it.
+        scales.nbytes() % 4 != 0 ||
         !whole_dense(w, w.size()) || !whole_dense(scales, scales.size()) ||
         !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
         !input_ready(scales, stream) || !input_ready(biases, stream)) {

@@ -17,6 +17,7 @@
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/device_local_activations.h"
+#include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -1186,6 +1187,7 @@ size_t set_cache_limit(size_t limit) {
 }
 void clear_cache() {
   omarchy::allocator().clear_cache();
+  omarchy::qmm_wide_weights_clear();
 }
 
 // Omarchy is unified memory: there is no GPU-private RAM to wire and
