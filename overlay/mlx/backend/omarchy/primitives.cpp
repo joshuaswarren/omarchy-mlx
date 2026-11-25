@@ -10858,9 +10858,18 @@ bool dispatch_quantized_gemv_group(
     bool member_route = epi_member_route && rows <= 4u &&
         encoder.device().compute().binding_limit() >= 9u &&
         (params.lhs_offset % 8u) == 0u;
-    for (const auto& member : members) {
-      member_route = member_route && !member.epilogue &&
-          !member.addend && !member.sum_window && !member.out_view;
+    for (size_t mi = 0; mi < members.size() && member_route; ++mi) {
+      const auto& member = members[mi];
+      member_route = !member.epilogue && !member.addend &&
+          !member.out_view;
+      // A rope member with its own KV window can't take the member
+      // route: binding 6 is already that rope's epilogue output, so the
+      // member window would have no slot (no such group exists today —
+      // k's window rides the rope contract, v's is a plain member).
+      member_route = member_route &&
+          !(member.sum_window &&
+            (rope_epi->q.member_index == mi ||
+             rope_epi->k.member_index == mi));
     }
     if (member_route) {
       const RopeEpiSide* route_sides[2] = {&rope_epi->q, &rope_epi->k};
@@ -10894,6 +10903,38 @@ bool dispatch_quantized_gemv_group(
             mp.out_strides[3] = 0u;
         mp.shape[0] = mp.shape[1] = mp.shape[2] = mp.shape[3] = 0u;
         if (route_side < 0) {
+          if (member.sum_window) {
+            // Producer-direct KV window member: same kernel with flag
+            // bit 4 — the store loop scatters each rounded output into
+            // the window at offset + rt*head_dim + (c/head_dim)*row_gap
+            // + c%head_dim (out_strides[0]=offset, dims=head_dim,
+            // out_strides[1]=row_gap; flag bit 2 keeps the rope tail
+            // off). The spare bindings carry fillers; epi_out is the
+            // window itself.
+            const auto& wnd = *member.sum_window;
+            mp.flags = 16u | 4u;
+            mp.dims = wnd.head_dim;
+            mp.out_strides[0] = wnd.offset;
+            mp.out_strides[1] = wnd.row_gap;
+            std::array<ComputeBinding, 9> wb{
+                binding(x),
+                binding(mw),
+                binding(mscales),
+                binding(mbiases),
+                binding(member.node),
+                binding(member.node),
+                binding(wnd.node),
+                binding(member.node),
+                encoder.resnorm_ticket_binding()};
+            encoder.dispatch_compute(
+                ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+                wb,
+                mp,
+                m_groups,
+                1u,
+                1u);
+            continue;
+          }
           mp.operation = 4u;
           mp.reduce_size = 64u;
           std::array<ComputeBinding, 5> mb{

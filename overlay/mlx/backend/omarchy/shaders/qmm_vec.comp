@@ -3054,6 +3054,18 @@ void main() {
       if (lane_in_slot == 0u && column + r < n) {
         output_data.values[params.output_offset + rt * params.matrix_n +
             column + r] = STORE_VALUE(total);
+#if defined(QMM_VEC_ROPE_EPI)
+        // Producer-direct KV window on flag bit 4 (window member only):
+        // the same scatter the token kernel runs — window offset +
+        // m*head_dim + (c/head_dim)*row_gap + c%head_dim — but the
+        // storing lane already holds the rounded value, so the window
+        // write is one extra store on epi_out instead of a read-back.
+        if ((params.flags & 16u) != 0u) {
+          epi_out.values[params.out_strides[0] + rt * params.dims +
+              ((column + r) / params.dims) * params.out_strides[1] +
+              ((column + r) % params.dims)] = STORE_VALUE(total);
+        }
+#endif
       }
     }
   }
