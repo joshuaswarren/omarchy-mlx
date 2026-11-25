@@ -223,6 +223,17 @@ bool apple_norm_enabled(
   return subgroup_ready && apple_norm_shape_selected(row_length, rows);
 }
 
+// 128-thread screen variant of the apple norm kernel (4-subgroup tree, not
+// bit-identical to the 256-thread kernel). MLX_OMARCHY_NORM_APPLE_WG=128
+// selects it; default and any other value keep the 256-thread kernel.
+omarchy::ComputeKernel apple_norm_kernel() {
+  const char* wg = std::getenv("MLX_OMARCHY_NORM_APPLE_WG");
+  if (wg != nullptr && std::string(wg) == "128") {
+    return omarchy::ComputeKernel::FastRmsNormAppleBF16W128;
+  }
+  return omarchy::ComputeKernel::FastRmsNormAppleBF16;
+}
+
 // Keep in lockstep with the switch in shaders/elementwise.comp.
 enum ElementwiseOperation : uint32_t {
   AddOperation,
@@ -14976,7 +14987,7 @@ void RMSNorm::eval_gpu(
     if (out.dtype() == bfloat16 &&
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
-      kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+      kernel = apple_norm_kernel();
     }
   }
   encoder.dispatch_compute(

@@ -307,6 +307,10 @@
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r4s8.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s8.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r4s4.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r4s4.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
@@ -626,6 +630,7 @@
 #include "fast_rms_norm_f16.h"
 #include "fast_rms_norm_bf16.h"
 #include "fast_rms_norm_apple_bf16.h"
+#include "fast_rms_norm_apple_bf16_w128.h"
 #include "fast_layer_norm_f32.h"
 #include "fast_layer_norm_f16.h"
 #include "fast_layer_norm_bf16.h"
@@ -1238,6 +1243,9 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rms_norm_bf16, fast_rms_norm_bf16_size};
     case ComputeKernel::FastRmsNormAppleBF16:
       return {fast_rms_norm_apple_bf16, fast_rms_norm_apple_bf16_size};
+    case ComputeKernel::FastRmsNormAppleBF16W128:
+      return {fast_rms_norm_apple_bf16_w128,
+              fast_rms_norm_apple_bf16_w128_size};
     case ComputeKernel::FastLayerNormF32:
       return {fast_layer_norm_f32, fast_layer_norm_f32_size};
     case ComputeKernel::FastLayerNormF16:
@@ -1826,6 +1834,22 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16,
           qmm_vec_q4_multi_subgroup_bf16_r2s16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R4S8:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r4s8,
+          qmm_vec_q4_word_subgroup_bf16_r4s8_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S8:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s8,
+          qmm_vec_q4_multi_subgroup_bf16_r4s8_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R4S4:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r4s4,
+          qmm_vec_q4_word_subgroup_bf16_r4s4_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S4:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r4s4,
+          qmm_vec_q4_multi_subgroup_bf16_r4s4_size};
     case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
       return {
           qmm_vec_q4_multi_subgroup_bf16,

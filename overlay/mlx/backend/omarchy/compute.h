@@ -819,6 +819,11 @@ enum class ComputeKernel : uint16_t {
   // second-level shared + subgroupSum, 3 barriers; reduction ORDER differs
   // from the deployed tree; admissible under the w76 numerics policy).
   FastRmsNormAppleBF16,
+  // 128-thread variant of FastRmsNormAppleBF16 (4-subgroup reduction tree,
+  // so NOT bit-identical to the 256-thread kernel). Selected only via
+  // MLX_OMARCHY_NORM_APPLE_WG=128 for the workgroup-size screen; never
+  // selected by default.
+  FastRmsNormAppleBF16W128,
   // Apple-tree reductions for the fused decode RMSNorm epilogues. Same
   // 32-lane subgroup + shared partial structure as FastRmsNormAppleBF16.
   FastNormGatedAppleBF16,
@@ -1157,6 +1162,13 @@ enum class ComputeKernel : uint16_t {
   MatmulRbF32,
   SdpaDecodeMaskedBF16Hd128,
   MatmulBf16Bm32,
+  // ROWS_PER_SLOT=4 decode column geometries of the bf16 subgroup Q4 word
+  // and multi kernels (MLX_OMARCHY_QMM_GEOM=4x8/4x4): Metal qmv_fast's
+  // four rows per subgroup. Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R4S8,
+  QmmVecQ4MultiSubgroupBF16R4S8,
+  QmmVecQ4WordSubgroupBF16R4S4,
+  QmmVecQ4MultiSubgroupBF16R4S4,
   Count,
 };
 

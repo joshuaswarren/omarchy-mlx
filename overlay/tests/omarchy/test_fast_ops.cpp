@@ -603,6 +603,132 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
       "odd width 127 rope_rms_norm leg must refuse with the named fuse error");
 }
 
+// Vectorized FastRmsNormAppleBF16 (M2D-1): the register path moves packed
+// u16vec2 pairs instead of scalar uint16_t elements, and the row-loop
+// trailing barrier is skipped on each workgroup's last row. Packed and
+// scalar IO must produce identical bits: an input whose storage offset is
+// odd forces the scalar fallback, and it must match the aligned output
+// exactly. The 128-thread variant (MLX_OMARCHY_NORM_APPLE_WG=128) runs a
+// different reduction order, so it is checked against the host-double
+// reference with a bounded tolerance, not bit-equality.
+TEST_CASE("apple rms_norm packed IO and offset parity") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const float eps = 1e-6f;
+  auto bits_equal = [&stream](const array& a, const array& b,
+                              const char* what) {
+    array a32 = astype(a, float32, stream);
+    array b32 = astype(b, float32, stream);
+    eval(a32);
+    eval(b32);
+    REQUIRE(a32.shape() == b32.shape());
+    const float* pa = a32.data<float>();
+    const float* pb = b32.data<float>();
+    for (size_t i = 0; i < a32.size(); ++i) {
+      INFO(what, ": mismatch at ", i, " a=", pa[i], " b=", pb[i]);
+      CHECK_EQ(pa[i], pb[i]);
+    }
+  };
+  auto rms_ref = [](const std::vector<float>& xh,
+                    const std::vector<float>& wh, int rows, int width,
+                    float eps) {
+    std::vector<double> ref((size_t)rows * width);
+    for (int r = 0; r < rows; ++r) {
+      double ms = 0.0;
+      for (int c = 0; c < width; ++c) {
+        ms += std::pow((double)xh[(size_t)r * width + c], 2.0);
+      }
+      double rms = std::sqrt(ms / width + (double)eps);
+      for (int c = 0; c < width; ++c) {
+        ref[(size_t)r * width + c] =
+            (double)xh[(size_t)r * width + c] * (double)wh[c] / rms;
+      }
+    }
+    return ref;
+  };
+  auto within_bf16_tol = [&stream](const array& a,
+                                   const std::vector<double>& ref,
+                                   const char* what) {
+    array a32 = astype(a, float32, stream);
+    eval(a32);
+    const float* pa = a32.data<float>();
+    for (size_t i = 0; i < a32.size(); ++i) {
+      INFO(what, ": out-of-tolerance at ", i, " got=", pa[i],
+           " ref=", ref[i]);
+      CHECK_LE(
+          std::fabs((double)pa[i] - ref[i]),
+          2e-2 * std::max(1.0, std::fabs(ref[i])));
+    }
+  };
+  struct Cell {
+    int width;
+    int rows;
+  };
+  const std::vector<Cell> cells = {
+      {2048, 1}, {2048, 17}, {2560, 3}, {4096, 2}};
+  setenv("MLX_OMARCHY_NORM_APPLE_2560", "1", 1);
+  setenv("MLX_OMARCHY_NORM_APPLE_4096", "1", 1);
+  for (const Cell& cell : cells) {
+    const size_t n = (size_t)cell.rows * cell.width;
+    auto x_data = pattern(n, 900u + uint32_t(cell.width));
+    auto w_data = pattern(cell.width, 950u + uint32_t(cell.width));
+    array w = astype(
+        array(w_data.data(), Shape{cell.width}, float32), bfloat16, stream);
+    array xf = array(x_data.data(), Shape{1, cell.rows, 1, cell.width}, float32);
+    array x = astype(xf, bfloat16, stream);
+
+    array aligned = fast::rms_norm(x, w, eps, stream);
+    eval(aligned);
+
+    // Host-double reference on the bf16-decoded inputs.
+    array x32 = astype(x, float32, stream);
+    array w32 = astype(w, float32, stream);
+    eval(x32);
+    eval(w32);
+    std::vector<double> ref = rms_ref(
+        std::vector<float>(x32.data<float>(), x32.data<float>() + n),
+        std::vector<float>(w32.data<float>(), w32.data<float>() + cell.width),
+        cell.rows,
+        cell.width,
+        eps);
+    INFO("width=", cell.width, " rows=", cell.rows);
+    within_bf16_tol(aligned, ref, "aligned vs ref");
+
+    // Odd storage offset forces the scalar fallback: same bits as aligned.
+    auto pad = pattern(n + 1, 901u + uint32_t(cell.width));
+    std::copy(x_data.begin(), x_data.end(), pad.begin() + 1);
+    array xflat = astype(
+        array(
+            pad.data(),
+            Shape{static_cast<ShapeElem>(n + 1)},
+            float32),
+        bfloat16,
+        stream);
+    array xsliced = reshape(
+        slice(
+            xflat,
+            Shape{1},
+            Shape{static_cast<ShapeElem>(n + 1)},
+            stream),
+        {1, cell.rows, 1, cell.width},
+        stream);
+    array scalar = fast::rms_norm(xsliced, w, eps, stream);
+    eval(scalar);
+    bits_equal(scalar, aligned, "odd-offset scalar vs packed");
+
+    // The 128-thread screen variant: bounded vs ref (different tree).
+    setenv("MLX_OMARCHY_NORM_APPLE_WG", "128", 1);
+    array w128 = fast::rms_norm(x, w, eps, stream);
+    eval(w128);
+    unsetenv("MLX_OMARCHY_NORM_APPLE_WG");
+    within_bf16_tol(w128, ref, "WG128 vs ref");
+  }
+  unsetenv("MLX_OMARCHY_NORM_APPLE_2560");
+  unsetenv("MLX_OMARCHY_NORM_APPLE_4096");
+}
+
 TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
   if (!compute_available()) {
     return;

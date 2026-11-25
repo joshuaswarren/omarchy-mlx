@@ -36,22 +36,36 @@ uint16_t bf16_store(float value) {
 }
 #define STORE_VALUE(f) bf16_store(f)
 
-layout(local_size_x = 256) in;
+// APPLE_NORM_WG: threads per workgroup (default 256; a -DAPPLE_NORM_WG=128
+// variant is compiled for the M2 workgroup-size screen). The subgroup tree is
+// APPLE_NORM_WG/32 wide, so the 128-thread variant halves the second-level
+// partial count — reduction order differs from the 256-thread kernel, so the
+// variant is env-gated behind its own A/B, never silently selected.
+#ifndef APPLE_NORM_WG
+#define APPLE_NORM_WG 256u
+#endif
+layout(local_size_x = APPLE_NORM_WG) in;
 
+// u16vec2 views of the same packed bf16 streams: a pair read/write moves two
+// elements per transaction, and element i is still reachable scalar as
+// values[i >> 1][i & 1] when a stream's offset parity forbids pairing.
 layout(set = 0, binding = 0, std430) readonly buffer Input {
-  STORAGE_TYPE values[];
+  u16vec2 values[];
 } input_data;
 layout(set = 0, binding = 1, std430) readonly buffer Weight {
-  STORAGE_TYPE values[];
+  u16vec2 values[];
 } weight_data;
 #ifdef LAYER_NORM
 layout(set = 0, binding = 2, std430) readonly buffer Bias {
-  STORAGE_TYPE values[];
+  u16vec2 values[];
 } bias_data;
 #endif
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
-  STORAGE_TYPE values[];
+  u16vec2 values[];
 } output_data;
+#define INPUT_AT(i) input_data.values[uint(i) >> 1u][uint(i) & 1u]
+#define WEIGHT_AT(i) weight_data.values[uint(i) >> 1u][uint(i) & 1u]
+#define OUTPUT_AT(i) output_data.values[uint(i) >> 1u][uint(i) & 1u]
 
 layout(push_constant) uniform Params {
   uint count;
@@ -74,12 +88,13 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint MAX_READS = 16u;      // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
-shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
+const uint N_SUB = APPLE_NORM_WG / SIMD;   // 8 at 256 threads, 4 at 128
+const uint MAX_READS = 4096u / APPLE_NORM_WG; // 2048:8, 2560:10, 4096:16 at 256t; 16,20,32 at 128t
+shared float s_partial[N_SUB];   // one partial per subgroup
 
 void main() {
   uint thread = gl_LocalInvocationID.x;
-  uint sub_id = thread / SIMD;     // 0..7
+  uint sub_id = thread / SIMD;     // 0..N_SUB-1
   uint lane = thread % SIMD;       // 0..31
   uint row_length = params.reduce_size;
   float eps = params.alpha;
@@ -87,32 +102,38 @@ void main() {
   for (uint row = gl_WorkGroupID.x; row < params.output_size;
        row += gl_NumWorkGroups.x) {
     uint start = params.lhs_offset + row * row_length;
+    uint out_base = params.output_offset + row * row_length;
 
     float reg_x[MAX_READS];
     precise float reg_sq = 0.0;
-    uint n_reads = row_length / 256u;
+    uint n_reads = row_length / APPLE_NORM_WG;
     bool reg_path = (row_length == 2048u || row_length == 2560u || row_length == 4096u);
-    if (reg_path) {
+    // base is thread*n_reads, always even; pairs pack iff start is even
+    // (lhs_offset parity: row*row_length is always even on reg_path widths).
+    bool packed_io = reg_path && ((start & 1u) == 0u);
+    if (packed_io) {
       uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
+      uint vbase = (start + base) >> 1u;
+      // constant bound + early exit: keeps reg_x in registers after unroll
+      for (uint j = 0u; j < MAX_READS / 2u; ++j) {
+        if (j >= n_reads / 2u) break;
+        u16vec2 p = input_data.values[vbase + j];
+        reg_x[2u * j] = LOAD_VALUE(p.x);
+        reg_x[2u * j + 1u] = LOAD_VALUE(p.y);
+        reg_sq += reg_x[2u * j] * reg_x[2u * j] +
+                  reg_x[2u * j + 1u] * reg_x[2u * j + 1u];
+      }
+    } else if (reg_path) {
+      uint base = thread * n_reads;
+      for (uint i = 0u; i < MAX_READS; ++i) {
+        if (i >= n_reads) break;
+        reg_x[i] = LOAD_VALUE(INPUT_AT(start + base + i));
         reg_sq += reg_x[i] * reg_x[i];
       }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
-        }
-      } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
-        }
-      }
     } else {
-      for (uint index = thread; index < row_length; index += 256u) {
-        reg_sq += LOAD_VALUE(input_data.values[start + index]) *
-                  LOAD_VALUE(input_data.values[start + index]);
+      for (uint index = thread; index < row_length; index += APPLE_NORM_WG) {
+        reg_sq += LOAD_VALUE(INPUT_AT(start + index)) *
+                  LOAD_VALUE(INPUT_AT(start + index));
       }
     }
 
@@ -123,7 +144,7 @@ void main() {
     barrier();
     float total;
     if (sub_id == 0u) {
-      float v = (lane < 8u) ? s_partial[lane] : 0.0;
+      float v = (lane < N_SUB) ? s_partial[lane] : 0.0;
       total = subgroupAdd(v);
       if (lane == 0u) {
         s_partial[0] = total;
@@ -133,57 +154,54 @@ void main() {
     float mean_square = s_partial[0] / float(row_length);
     float norm = inversesqrt(mean_square + eps);
 
-    if (reg_path) {
+    // Output pass: pair stores when out_base and (rhs_offset+index) parities
+    // allow it; weight pairs need rhs_offset even, output pairs out_base even.
+    bool packed_out = packed_io && ((out_base & 1u) == 0u) &&
+                      ((params.rhs_offset & 1u) == 0u);
+    if (packed_out) {
       uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
+      uint vbase = (out_base + base) >> 1u;
+      uint wbase = params.rhs_offset + base;
+      for (uint j = 0u; j < MAX_READS / 2u; ++j) {
+        if (j >= n_reads / 2u) break;
+        u16vec2 w =
+            (params.lhs_size == 1u)
+                ? u16vec2(WEIGHT_AT(params.rhs_offset),
+                          WEIGHT_AT(params.rhs_offset))
+                : weight_data.values[(wbase >> 1u) + j];
+        precise float r0 = reg_x[2u * j] * (norm * LOAD_VALUE(w.x));
+        precise float r1 = reg_x[2u * j + 1u] * (norm * LOAD_VALUE(w.y));
+        output_data.values[vbase + j] = u16vec2(STORE_VALUE(r0), STORE_VALUE(r1));
+      }
+    } else if (reg_path) {
+      uint base = thread * n_reads;
+      for (uint i = 0u; i < MAX_READS; ++i) {
+        if (i >= n_reads) break;
         uint index = base + i;
         float weight =
             (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+                ? LOAD_VALUE(WEIGHT_AT(params.rhs_offset))
+                : LOAD_VALUE(WEIGHT_AT(params.rhs_offset + index));
         precise float norm_weight = norm * weight;
         precise float result = reg_x[i] * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
-      }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
-        }
-      } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
-        }
+        OUTPUT_AT(out_base + index) = STORE_VALUE(result);
       }
     } else {
-      for (uint index = thread; index < row_length; index += 256u) {
-        float value = LOAD_VALUE(input_data.values[start + index]);
+      for (uint index = thread; index < row_length; index += APPLE_NORM_WG) {
+        float value = LOAD_VALUE(INPUT_AT(start + index));
         float weight =
             (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+                ? LOAD_VALUE(WEIGHT_AT(params.rhs_offset))
+                : LOAD_VALUE(WEIGHT_AT(params.rhs_offset + index));
         precise float norm_weight = norm * weight;
         precise float result = value * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
+        OUTPUT_AT(out_base + index) = STORE_VALUE(result);
       }
     }
-    barrier();
+    // Row-local barrier only when this workgroup iterates again; the row
+    // counter is uniform across the workgroup so the predicate is uniform.
+    if (row + gl_NumWorkGroups.x < params.output_size) {
+      barrier();
+    }
   }
 }
