@@ -10750,6 +10750,12 @@ bool dispatch_quantized_gemv_group(
     }
   }
   if (rope_epi != nullptr && !rope_epi_active) {
+    if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+      static int trr = 0;
+      if (trr++ < 4) {
+        std::fprintf(stderr, "[epi-ctr] refuse: contract dead\n");
+      }
+    }
     // An attached plan whose contract failed anywhere refuses the
     // whole group: the ropes and their view chain are skip-role'd, so
     // a plain dispatch here would leave them unmaterialized. The
@@ -10879,6 +10885,16 @@ bool dispatch_quantized_gemv_group(
     epi_bindings[24] = binding(window.node);
     epi_bindings[kQmmVecMultiBindings] =
         encoder.resnorm_ticket_binding();
+    if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+      static int trd = 0;
+      if (trd++ < 4) {
+        std::fprintf(
+            stderr,
+            "[epi-ctr] dispatch: groups=%u bindings=%zu\n",
+            total_groups,
+            epi_bindings.size());
+      }
+    }
     encoder.dispatch_compute(
         ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
         epi_bindings,
