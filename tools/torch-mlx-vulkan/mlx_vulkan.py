@@ -1135,6 +1135,61 @@ def _atan2(y, x):
     return mx.where(x_neg0 & (y == 0), fix, r)
 
 
+def _astype(v, dt):
+    v = _mx(v)
+    return v.astype(dt) if isinstance(v, mx.array) else v
+
+
+def _has_0d_mixed(*vs):
+    # torch promotes 0-dim tensors weakly — they cannot raise the result
+    # above a non-0-dim operand's dtype. Mixed-dtype inputs with a 0-dim
+    # operand follow rules subtle enough to leave to the torch fallback.
+    ts = [v for v in vs if isinstance(v, (mx.array, torch.Tensor))]
+    if not any(v.ndim == 0 for v in ts):
+        return False
+    return len({_dtype_of(v) for v in ts}) > 1
+
+
+def _addcmul(a, t1, t2, value=1, **k):
+    # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. Bool
+    # has no kernel; on integral operands the wrapped value scalar takes
+    # the tensor dtype (fractional value truncates). Operands evaluate at
+    # the common dtype — fp32 opmath for the low-precision floats — so
+    # neither narrow ints nor fp16 intermediates overflow before
+    # promotion; value applies to t1 first like torch.
+    if _has_0d_mixed(a, t1, t2):
+        return _raise("addcmul 0-dim mixed-dtype operand")
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    if dt == mx.bool_:
+        raise NotImplementedError(
+            '"addcmul" not implemented for \'Bool\'')
+    if isinstance(value, float) and _is_integral_dtype(dt):
+        value = int(value)
+    cd = mx.float32 if (dt == mx.float16 or dt == mx.bfloat16) else dt
+    return (_astype(a, cd) + (value * _astype(t1, cd))
+            * _astype(t2, cd)).astype(dt)
+
+
+def _addcdiv(a, t1, t2, value=1, **k):
+    # aten.addcdiv(input, t1, t2, *, value=1): input + value*t1/t2. Torch
+    # rejects integral division operands regardless of self's dtype
+    # (integer division unsupported); same common-dtype eval as addcmul.
+    if _has_0d_mixed(a, t1, t2):
+        return _raise("addcdiv 0-dim mixed-dtype operand")
+    if _is_integral_dtype(
+            mx.result_type(_dtype_of(t1), _dtype_of(t2))):
+        raise RuntimeError(
+            "Integer division with addcdiv is no longer supported, and in "
+            "a future release addcdiv will perform a true division like "
+            "tensor1.true_divide(tensor2)")
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    cd = mx.float32 if (dt == mx.float16 or dt == mx.bfloat16) else dt
+    return (_astype(a, cd) + (value * _astype(t1, cd))
+            / _astype(t2, cd)).astype(dt)
+
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -1539,6 +1594,9 @@ _FUNC_SPECS = {
     "mul_": lambda a, b, *k: _mx(a) * _mx(b),
     "div": lambda a, b, *k: _mx(a) / _mx(b),
     "truediv": lambda a, b, *k: _mx(a) / _mx(b),
+    # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
+    "addcmul": _addcmul,
+    "addcdiv": _addcdiv,
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
