@@ -2327,7 +2327,7 @@ TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env override
   CHECK(omarchy::outgate_fold_enabled());
 }
 
-// FUSE-4 dual-write projection GEMV (MLX_OMARCHY_QMM_DUAL_OUT): member
+// FUSE-4 dual-write projection GEMV (measured M2 default, no env): member
 // outputs as strided views of a caller-provided parent buffer. The
 // dual-write route must be byte-identical to the whole-buffer group
 // route (and through it to the per-node baseline), refuse without the
@@ -2368,36 +2368,6 @@ bool mx_omarchy_dualout_dispatch(
 
 } // namespace
 
-TEST_CASE("dual-write group refuses view members without the flag") {
-  if (!compute_available()) {
-    return;
-  }
-  Stream stream = gpu_stream();
-  set_compile_mode(CompileMode::disabled);
-  const int k = 128;
-  auto a = make_linear(96, k, bfloat16, stream);
-  array x = astype(
-      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
-      bfloat16,
-      stream);
-  x.eval();
-  sync_stream(stream);
-  array parent = zeros({192}, bfloat16, stream);
-  parent.eval();
-  sync_stream(stream);
-
-  std::vector<mlx::core::omarchy::GemvFusionMember> members;
-  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
-  members[0].out_view = {parent, 0u};
-  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
-  uint64_t before = counters().vk_compute_dispatches.load();
-  CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
-  CHECK_EQ(counters().vk_compute_dispatches.load(), before);
-  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "0", 1);
-  CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
-  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
-}
-
 TEST_CASE("dual-write group refuses a KV-window member (wAP review of 798)") {
   if (!compute_available()) {
     return;
@@ -2429,11 +2399,9 @@ TEST_CASE("dual-write group refuses a KV-window member (wAP review of 798)") {
   // kernel's per-member dual_i check would keep the stores apart.
   members[1].sum_window = mlx::core::omarchy::KvDirectWindow{
       window_base, window_base, 0u, {1u, 1u, 1u, 1u}, 1u};
-  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
   uint64_t before = counters().vk_compute_dispatches.load();
   CHECK_FALSE(mx_omarchy_dualout_dispatch(members, stream));
   CHECK_EQ(counters().vk_compute_dispatches.load(), before);
-  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
 }
 
 TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
@@ -2472,7 +2440,6 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
           dualout_fnv1a64(raw.data(), raw.size() * 2));
     }
 
-    setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
     // Triple: parent 192 wide, members at 0 / 96 / 160.
     array qkv_parent = zeros({192}, dtype, stream);
     qkv_parent.eval();
@@ -2532,7 +2499,6 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
     expect_view(qkv_parent, 160u, 32u, 2);
     expect_view(gu_parent, 0u, 64u, 3);
     expect_view(gu_parent, 64u, 64u, 4);
-    unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
   }
 }
 
@@ -2629,7 +2595,6 @@ TEST_CASE("eager dual-write planner adopts a q/k/v concat parent") {
     // Per-node baseline: 3 gemv + the concat (which costs one dispatch
     // per input on the Vulkan path). Only the merge/adoption deltas
     // below are hardware-independent, so the exact total is not pinned.
-    unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
     setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
     auto baseline = forward();
     uint64_t before = counters().vk_compute_dispatches.load();
@@ -2644,31 +2609,10 @@ TEST_CASE("eager dual-write planner adopts a q/k/v concat parent") {
     }
 
     setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
-    // Dual-write off: the whole-buffer group route merges the three
-    // gemv dispatches into one (-2), the concat still materializes.
-    // A "0" value behaves exactly like unset.
-    for (const char* flag : {(const char*)nullptr, "0"}) {
-      if (flag) {
-        setenv("MLX_OMARCHY_QMM_DUAL_OUT", flag, 1);
-      } else {
-        unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
-      }
-      auto grouped = forward();
-      before = counters().vk_compute_dispatches.load();
-      eval({grouped[3]});
-      sync_stream(stream);
-      INFO("dtype ", dtype, " flag ", flag ? flag : "unset");
-      CHECK_EQ(counters().vk_compute_dispatches.load() - before, per_node - 2u);
-      for (size_t i = 0; i < 4; ++i) {
-        expect_bit_exact(baseline[i], grouped[i], stream);
-      }
-    }
-
-    // Flag on: the planner hands strided parent outputs, the concat
+    // Planner adoption is unconditional now (no env gate): the concat
     // dispatch is deleted (1 dispatch), the parent is byte-identical
     // to the baseline per-node outputs, and every member aliases the
     // parent buffer.
-    setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
     auto dual = forward();
     before = counters().vk_compute_dispatches.load();
     eval({dual[3]});
@@ -2683,7 +2627,6 @@ TEST_CASE("eager dual-write planner adopts a q/k/v concat parent") {
     CHECK_EQ(dual[0].data_shared_ptr(), dual[3].data_shared_ptr());
     CHECK_EQ(dual[1].data_shared_ptr(), dual[3].data_shared_ptr());
     CHECK_EQ(dual[2].data_shared_ptr(), dual[3].data_shared_ptr());
-    unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
     unsetenv("MLX_OMARCHY_FUSED_GEMV");
   }
 }
@@ -2718,7 +2661,6 @@ TEST_CASE("eager dual-write planner refuses a concat with a non-member input") {
     array cat = concatenate({a, b, c, pad}, -1, stream);
     return std::vector<array>{a, b, c, cat};
   };
-  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
   auto baseline = forward();
   uint64_t before = counters().vk_compute_dispatches.load();
@@ -2727,7 +2669,6 @@ TEST_CASE("eager dual-write planner refuses a concat with a non-member input") {
   uint64_t per_node = counters().vk_compute_dispatches.load() - before;
 
   setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
-  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
   auto candidate = forward();
   before = counters().vk_compute_dispatches.load();
   eval({candidate[3]});
@@ -2743,6 +2684,5 @@ TEST_CASE("eager dual-write planner refuses a concat with a non-member input") {
   CHECK_FALSE(candidate[0].data_shared_ptr() == candidate[3].data_shared_ptr());
   CHECK_FALSE(candidate[1].data_shared_ptr() == candidate[3].data_shared_ptr());
   CHECK_FALSE(candidate[2].data_shared_ptr() == candidate[3].data_shared_ptr());
-  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }

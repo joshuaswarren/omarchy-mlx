@@ -10301,11 +10301,10 @@ bool dispatch_quantized_gemv_group(
   if (token_route && outgate != nullptr) {
     return false;
   }
-  // Dual-write strided outputs (FUSE-4): any member with a view opts the
-  // whole group into the MLX_OMARCHY_QMM_DUAL_OUT contract — single-row
-  // groups only, never with the out-gate prologue or the swiglu fold.
-  // Unset or "0" refuses and the caller falls back; today's route is
-  // byte-for-byte the default.
+  // Dual-write strided outputs (FUSE-4, measured M2 default): any member
+  // with a view puts the whole group on the dual-write contract —
+  // single-row groups only, never with the out-gate prologue, the swiglu
+  // fold, or a KV-window member.
   bool any_dual_out = false;
   bool any_window = false;
   for (auto& member : members) {
@@ -10317,13 +10316,10 @@ bool dispatch_quantized_gemv_group(
     }
   }
   if (any_dual_out) {
-    const char* dual_env = omarchy::env_str("MLX_OMARCHY_QMM_DUAL_OUT");
-    bool dual_enabled = dual_env != nullptr && dual_env[0] != '\0' &&
-        std::strcmp(dual_env, "0") != 0;
     // dual bits with a KV-window member mix two store contracts in one
     // group; the per-member kernel check catches it, the route refuses it
     // (wAP review of #798)
-    if (!dual_enabled || any_window || token_route || outgate != nullptr ||
+    if (any_window || token_route || outgate != nullptr ||
         swiglu_out != nullptr) {
       return false;
     }

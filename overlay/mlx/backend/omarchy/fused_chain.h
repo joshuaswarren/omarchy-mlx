@@ -155,7 +155,7 @@ struct KvDirectWindow {
 // consumer (a bias or residual add), recorded as ONE QmmVecQ4Multi
 // dispatch when the first member evaluates. Every member output and
 // every Add output is materialized, so retained references stay valid.
-// Dual-write strided member output (MLX_OMARCHY_QMM_DUAL_OUT): the
+// Dual-write strided member output (FUSE-4, measured M2 default): the
 // member's output lives at |offset| inside the whole dense |parent|
 // buffer; the dispatch aliases the member node into the parent (the
 // swiglu-fold copy_shared_buffer precedent) and stores through

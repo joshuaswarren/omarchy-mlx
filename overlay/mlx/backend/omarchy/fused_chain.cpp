@@ -1757,22 +1757,18 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   }
   static thread_local TapeIndex<std::vector<const array*>> dense_by_x;
   dense_by_x.prepare(tape.size());
-  // Dual-write parent adoption (FUSE-4 leg 1). Behind
-  // MLX_OMARCHY_QMM_DUAL_OUT, a group whose members are exactly the
-  // inputs of one unclaimed last-axis Concatenate hands strided parent
-  // outputs to the dispatch: each member stores its flat slot of the
-  // concat output and the standalone Concatenate dispatch (one dispatch
-  // per input on the Vulkan path) is deleted. The dispatch re-checks
-  // every contract line; on refusal the group unwinds and the concat
-  // evaluates ordinarily, so nothing here needs the out-gate fold's
-  // throw-on-refusal (every deleted node is replayable). The flag is
-  // read here and again in the route, and the Q4 word gate is consulted
-  // before adoption for the same reason the out-gate fold consults it:
-  // the route refuses every group while it is off.
-  const char* dual_env = std::getenv("MLX_OMARCHY_QMM_DUAL_OUT");
-  if (dual_env != nullptr && dual_env[0] != '\0' &&
-      std::strcmp(dual_env, "0") != 0 && qmm_vec_q4_word_enabled() &&
-      !state->gemv_groups.empty()) {
+  // Dual-write parent adoption (FUSE-4 leg 1, measured M2 default). A
+  // group whose members are exactly the inputs of one unclaimed
+  // last-axis Concatenate hands strided parent outputs to the dispatch:
+  // each member stores its flat slot of the concat output and the
+  // standalone Concatenate dispatch (one dispatch per input on the
+  // Vulkan path) is deleted. The dispatch re-checks every contract
+  // line; on refusal the group unwinds and the concat evaluates
+  // ordinarily, so nothing here needs the out-gate fold's
+  // throw-on-refusal (every deleted node is replayable). The Q4 word
+  // gate is consulted here for the same reason the out-gate fold
+  // consults it: the route refuses every group it does not serve.
+  if (qmm_vec_q4_word_enabled() && !state->gemv_groups.empty()) {
     std::unordered_map<std::uintptr_t, std::vector<const array*>>
         dual_readers;
     for (const auto& node : tape) {
