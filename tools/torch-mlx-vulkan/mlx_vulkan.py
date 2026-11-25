@@ -521,7 +521,7 @@ def _var_impl(a, axis, keepdims, c):
 def _eff_corr(unbiased, correction):
     return correction if correction is not None else (0 if unbiased is False else 1)
 
-def _var(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
+def _var(a, dim=None, unbiased=None, keepdim=False, correction=None, **k):
     a = _mx(a)
     c = _eff_corr(unbiased, correction)
     if a.ndim == 0:
@@ -529,7 +529,7 @@ def _var(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
         return mx.full((), float("nan"), dtype=a.dtype) if c != 0 else mx.zeros((), dtype=a.dtype)
     return _var_impl(a, _red_axis(a, dim), keepdim, c)
 
-def _std(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
+def _std(a, dim=None, unbiased=None, keepdim=False, correction=None, **k):
     a = _mx(a)
     c = _eff_corr(unbiased, correction)
     if a.ndim == 0:
@@ -539,12 +539,12 @@ def _std(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
         return mx.std(a, axis=axis, keepdims=keepdim, correction=int(c))
     return mx.sqrt(_var_impl(a, axis, keepdim, c))
 
-def _var_mean(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
+def _var_mean(a, dim=None, unbiased=None, keepdim=False, correction=None, **k):
     v = _var(a, dim, unbiased=unbiased, correction=correction, keepdim=keepdim)
     m = _mean(a, dim, keepdim)
     return v, m
 
-def _std_mean(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
+def _std_mean(a, dim=None, unbiased=None, keepdim=False, correction=None, **k):
     s = _std(a, dim, unbiased=unbiased, correction=correction, keepdim=keepdim)
     m = _mean(a, dim, keepdim)
     return s, m

@@ -553,11 +553,11 @@ def test_reductions():
     xb = x32.bfloat16()
     x0 = torch.tensor(5.0)
 
-    def run_one(target, ins, kw):
-        ref = target(*ins, **kw)
+    def run_one(target, ins, kw, pos=()):
+        ref = target(*ins, *pos, **kw)
         g = torch.fx.Graph()
         phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
-        n = g.call_function(target, tuple(phs), kw)
+        n = g.call_function(target, tuple(phs) + tuple(pos), kw)
         g.output(n)
         gm = torch.fx.GraphModule(torch.nn.Module(), g)
         run, stats = mlx_vulkan.make_executor(gm)
@@ -590,6 +590,26 @@ def test_reductions():
         (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1], "unbiased": False, "keepdim": True}),
     ]:
         run_one(target, ins, kw)
+
+    # Positional .dim args bind (dim, unbiased, keepdim); correction is
+    # keyword-only on the .correction overloads. Before #887's reorder, the
+    # 4th positional landed on `correction` and keepdim stayed False.
+    for target in (torch.ops.aten.var.dim, torch.ops.aten.std.dim,
+                   torch.ops.aten.var_mean.dim, torch.ops.aten.std_mean.dim):
+        ref = target(x32, [1], False, True)
+        g = torch.fx.Graph()
+        ph = g.placeholder("p0")
+        n = g.call_function(target, (ph, [1], False, True), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(x32)
+        assert stats["cpu"] == [], (stats, str(target))
+        outs = out if isinstance(out, (tuple, list)) else (out,)
+        refs = ref if isinstance(ref, (tuple, list)) else (ref,)
+        for o, r in zip(outs, refs):
+            assert tuple(o.shape) == tuple(r.shape), (str(target), o.shape, r.shape)
+            assert np.allclose(torch.as_tensor(o).float().numpy(), r.float().numpy(), atol=2e-2),                 (str(target), o, r)
 
     # correction lives on the .correction overloads (unbiased=1 default)
     for target in (torch.ops.aten.var.correction, torch.ops.aten.std.correction):
