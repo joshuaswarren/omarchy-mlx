@@ -332,5 +332,23 @@ bool fused_trio_enabled(const Device& device);
 // nothing when anything refuses; both nodes then take the ordinary
 // RoPE path unchanged. Defined in primitives.cpp beside
 // dispatch_quantized_gemv_group.
-bool dispatch_rope_pair(std::array<array, 2>& nodes, const Stream& stream);
+
+// Norm payload for one side of a norm-carrying rope pair: the pre-norm
+// input and the RMSNorm weight the FastRopeNormPair kernels fold in,
+// plus the norm's eps. A null entry means the plain 2-input pair form.
+// The optional view (Transpose/Reshape between the norm output and the
+// rope) replays over x's contiguous buffer the way
+// dispatch_rope_norm_fold composes it.
+struct RopePairNorm {
+  array x;
+  array w;
+  float eps;
+  std::optional<array> view;
+  std::shared_ptr<Primitive> view_prim;
+};
+
+bool dispatch_rope_pair(
+    std::array<array, 2>& nodes,
+    const std::array<const RopePairNorm*, 2>& norms,
+    const Stream& stream);
 } // namespace mlx::core::omarchy
