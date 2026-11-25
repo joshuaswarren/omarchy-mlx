@@ -1607,6 +1607,93 @@ def _acosh(a):
     return mx.where(a == float("inf"), a, mx.acosh(a))
 
 
+def _sample_self(self, generator, name):
+    # the aten.*.default samplers draw fresh values in self's shape; torch
+    # only samples floating tensors, and an explicit Generator cannot be
+    # honored by mx.random — both defer to the torch fallback
+    if generator is not None:
+        return _raise(f"{name} generator")
+    a = _mx(self)
+    if not mx.issubdtype(a.dtype, mx.floating):
+        return _raise(f"{name} dtype {a.dtype}")
+    return a
+
+
+def _uniform(self, *args, generator=None, **k):
+    # aten.uniform.default(self, from=0, to=1): uniform samples in self's
+    # shape/dtype; self is only a template (out-of-place)
+    a = _sample_self(self, generator, "uniform")
+    lo = args[0] if len(args) > 0 else k.get("from", 0.0)
+    hi = args[1] if len(args) > 1 else k.get("to", 1.0)
+    return mx.random.uniform(low=float(lo), high=float(hi), shape=a.shape,
+                             dtype=mx.float32).astype(a.dtype)
+
+
+def _cauchy(self, *args, generator=None, **k):
+    # aten.cauchy.default(self, median=0, sigma=1): inverse-CDF of uniform
+    a = _sample_self(self, generator, "cauchy")
+    median = args[0] if len(args) > 0 else k.get("median", 0.0)
+    sigma = args[1] if len(args) > 1 else k.get("sigma", 1.0)
+    u = mx.random.uniform(shape=a.shape, dtype=mx.float32)
+    return (median + sigma * mx.tan(math.pi * (u - 0.5))).astype(a.dtype)
+
+
+def _exponential(self, *args, generator=None, **k):
+    # aten.exponential.default(self, lambd=1): -ln(1-u)/lambd, u ~ U[0,1)
+    a = _sample_self(self, generator, "exponential")
+    lambd = args[0] if len(args) > 0 else k.get("lambd", 1.0)
+    u = mx.random.uniform(shape=a.shape, dtype=mx.float32)
+    return (-mx.log1p(-u) / lambd).astype(a.dtype)
+
+
+def _geometric(self, *args, generator=None, **k):
+    # aten.geometric.default(self, p): trials to first success on {1,2,..}
+    a = _sample_self(self, generator, "geometric")
+    p = args[0] if len(args) > 0 else k.get("p")
+    u = mx.random.uniform(shape=a.shape, dtype=mx.float32)
+    return (mx.floor(mx.log1p(-u) / math.log(1.0 - p)) + 1).astype(a.dtype)
+
+
+def _log_normal(self, *args, generator=None, **k):
+    # aten.log_normal.default(self, mean=1, std=2): exp(mean + std*normal)
+    a = _sample_self(self, generator, "log_normal")
+    mean = args[0] if len(args) > 0 else k.get("mean", 1.0)
+    std = args[1] if len(args) > 1 else k.get("std", 2.0)
+    n = mx.random.normal(a.shape, dtype=mx.float32)
+    return mx.exp(mean + std * n).astype(a.dtype)
+
+
+def _normal(*args, generator=None, dtype=None, **k):
+    # aten.normal.*: (Tensor mean, Tensor std) | (Tensor, float) |
+    # (float, Tensor) | (float mean, float std, size[, dtype]).
+    if generator is not None:
+        return _raise("normal generator")
+    mean, std = args[0], args[1]
+    m_t = isinstance(mean, (mx.array, torch.Tensor))
+    s_t = isinstance(std, (mx.array, torch.Tensor))
+    if not (m_t or s_t):
+        # normal.float_float is a factory op: size comes positionally
+        dt = _MX_DT.get(dtype) if dtype is not None else mx.float32
+        if dt is None:
+            return _raise(f"normal dtype {dtype}")
+        size = tuple(int(x) for x in args[2])
+        return (float(mean) + float(std)
+                * mx.random.normal(size, dtype=mx.float32)).astype(dt)
+    m = _mx(mean) if m_t else float(mean)
+    s = _mx(std) if s_t else float(std)
+    for t in (m, s):
+        if isinstance(t, mx.array) and not mx.issubdtype(t.dtype,
+                                                       mx.floating):
+            return _raise(f"normal operand dtype {t.dtype}")
+    if m_t and s_t:
+        shape, dt = mx.broadcast_shapes(m.shape, s.shape), \
+            mx.result_type(m.dtype, s.dtype)
+    else:
+        ref = m if m_t else s
+        shape, dt = ref.shape, ref.dtype
+    return (m + s * mx.random.normal(shape, dtype=mx.float32)).astype(dt)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
@@ -1625,6 +1712,10 @@ _FUNC_SPECS = {
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
     "addcdiv": _addcdiv,
+    # aten sampling family: fresh draws in self's shape (self is a
+    # template); normal.* additionally takes mean/std operands
+    "uniform": _uniform, "cauchy": _cauchy, "exponential": _exponential,
+    "geometric": _geometric, "log_normal": _log_normal, "normal": _normal,
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
@@ -1863,7 +1954,9 @@ for _fn, _low in FUNC_TABLE.items():
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
-              "new_empty", "new_full", "scalar_tensor"}
+              "new_empty", "new_full", "scalar_tensor",
+              "uniform", "normal", "cauchy", "exponential", "geometric",
+              "log_normal"}
 
 # ops that must never CPU-fallback: lower even when upstream nodes produced
 # torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)

@@ -1204,6 +1204,97 @@ def test_addcmul_addcdiv():
               torch.full((3,), 2, dtype=torch.int8)), {"value": 1})
     print("test_addcmul_addcdiv PASS")
 
+def test_random_family():
+    # PT-U12: the sampling family — the first unclaimed row-group in the
+    # PAR-41 census order (all 0-receipt fallbacks): uniform, cauchy,
+    # exponential, geometric, log_normal, normal.* . RNG streams differ,
+    # so pin shape/dtype, stats["mlx"] proof, and distribution moments on
+    # large samples instead of values.
+    def _fx(target, arglist, kw=None):
+        # tensor entries in arglist become graph inputs; the rest are
+        # literals baked into the node
+        ins = [a for a in arglist if isinstance(a, torch.Tensor)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        n = g.call_function(
+            target, tuple(
+                next(it) if isinstance(a, torch.Tensor) else a
+                for a in arglist), kw or {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        name = str(target).split("aten.")[1].split(".")[0]
+        return torch.as_tensor(out), stats, name
+
+    def fx_sample(target, arglist, kw=None):
+        out, stats, name = _fx(target, arglist, kw)
+        assert stats["cpu"] == [], (stats, name)
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        return out
+
+    big = torch.zeros(20000)
+    # uniform(2,5): support [2,5), mean ~3.5; defaults U[0,1)
+    # ("from" is a Python keyword — must pass positionally through FX)
+    o = fx_sample(torch.ops.aten.uniform.default, [big, 2.0, 5.0])
+    assert o.shape == big.shape and o.dtype == torch.float32
+    assert o.min() >= 2.0 and o.max() < 5.0
+    assert 3.3 < o.mean() < 3.7, o.mean()
+    o = fx_sample(torch.ops.aten.uniform.default, [big])
+    assert o.min() >= 0.0 and o.max() < 1.0
+    # exponential(lambd=0.5): support >= 0, mean ~ 1/lambd = 2
+    o = fx_sample(torch.ops.aten.exponential.default, [big],
+                  {"lambd": 0.5})
+    assert o.min() >= 0 and 1.6 < o.mean() < 2.4, o.mean()
+    # geometric(0.25): support {1,2,..}, mean ~ 1/p = 4
+    o = fx_sample(torch.ops.aten.geometric.default, [big], {"p": 0.25})
+    assert o.min() >= 1 and 3.6 < o.mean() < 4.4, o.mean()
+    # cauchy(2,0.5): median ~ 2 (the distribution has no mean)
+    o = fx_sample(torch.ops.aten.cauchy.default, [big],
+                  {"median": 2.0, "sigma": 0.5})
+    assert 1.9 < o.median() < 2.1, o.median()
+    # log_normal(1,0.5): log(out) ~ N(1, 0.5)
+    o = fx_sample(torch.ops.aten.log_normal.default, [big],
+                  {"mean": 1.0, "std": 0.5})
+    lo = torch.log(o)
+    assert 0.9 < lo.mean() < 1.1 and 0.4 < lo.std() < 0.6,         (lo.mean(), lo.std())
+    # normal: all four overloads; mean/std recovered statistically
+    mt = torch.full((20000,), 2.0)
+    st = torch.full((20000,), 0.5)
+    o = fx_sample(torch.ops.aten.normal.Tensor_Tensor, [mt, st])
+    assert o.shape == mt.shape and 1.9 < o.mean() < 2.1
+    o = fx_sample(torch.ops.aten.normal.Tensor_float, [mt, 0.5])
+    assert 1.9 < o.mean() < 2.1
+    o = fx_sample(torch.ops.aten.normal.float_Tensor, [2.0, st])
+    assert 1.9 < o.mean() < 2.1
+    o = fx_sample(torch.ops.aten.normal.float_float,
+                  [2.0, 0.5, (4, 3)])
+    assert tuple(o.shape) == (4, 3)
+    o = fx_sample(torch.ops.aten.normal.float_float,
+                  [0.0, 1.0, (4,)], {"dtype": torch.float16})
+    assert o.dtype == torch.float16
+
+    # a torch Generator can't be honored by mx.random -> the lowering
+    # raises (LOWER-FAIL -> CPU fallback). FX can't codegen a live
+    # Generator, so call the spec functions directly here.
+    for fn in ("uniform", "normal", "cauchy"):
+        try:
+            mlx_vulkan._FUNC_SPECS[fn](
+                torch.zeros(4), 1.0,
+                generator=torch.Generator().manual_seed(0))
+            raise AssertionError(f"{fn} generator lowered")
+        except NotImplementedError:
+            pass
+    # non-float self defers to torch, which raises NotImplementedError
+    try:
+        fx_sample(torch.ops.aten.uniform.default,
+                  [torch.zeros(4, dtype=torch.int32)])
+        raise AssertionError("int uniform lowered")
+    except (RuntimeError, NotImplementedError):
+        pass
+    print("test_random_family PASS")
+
 
 if __name__ == "__main__":
     test_topk()
@@ -1231,4 +1322,5 @@ if __name__ == "__main__":
     test_arc_trig()
     test_addcmul_addcdiv()
     test_hyperbolic()
+    test_random_family()
     print("ALL PASS")
