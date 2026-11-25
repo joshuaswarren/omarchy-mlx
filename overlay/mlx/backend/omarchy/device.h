@@ -1172,36 +1172,14 @@ inline bool fused_gemv_off_default_part(const std::string& device_name) {
       device_name.find("G14C") != std::string::npos;
 }
 
-// Fused Qmm + ResidualAdd + RMSNorm decode epilogue
-// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the parts where the epilogue is
-// on by default because matched ABBA decode measured faster with
-// bit-identical output and token ids:
-//   G13C (16-inch Apple M1 Max): Qwen3.8-2B 4-bit ctx 512 decode
-//     7.689 -> 7.547 ms/tok (-0.142 ms, +1.84%, 3/3 ABBA pairs, chunk=1)
-//     and 7.699 -> 7.564 ms/tok (-0.135 ms, +1.75%, 3/3 ABBA pairs, chunk=16),
-//     -48 dispatches/tok, identical ids_sha 4784df039da0.
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, bit-identical tokens):
-//     ctx128 +1.99% (7.8896 -> 7.7281 ms/tok, 5/5), ctx512 +2.17% (8.0410 -> 7.8628 ms/tok, 5/5), ctx2048 +2.06% (8.1166 -> 7.9517 ms/tok, 5/5).
-// MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0
-// overrides on any part, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
-inline bool qmm_residual_norm_default_part(const std::string& device_name) {
-  (void)device_name;
-  // No-gating default (2026-11-25): the fused epilogue measured
-  // faster with bit-identical tokens on every part it ran on
-  // (G13C +1.8%, G14C +2%); no part measured a loss.
-  return true;
-}
-
 // Single-member residual-Add epilogue GEMV groups
 // (MLX_OMARCHY_QMM_EPILOGUE_GEMV unset): parts where the multi-weight
-// fused GEMV fold defaults off but the residual-norm epilogue defaults on
-// (G14C today). The measured G14C loss on the fused GEMV route is the
+// fused GEMV fold defaults off. The measured G14C loss on the fused GEMV route is the
 // multi-weight x-sharing fold; a single-member group carrying an Add
 // epilogue only ever removes dispatches, so those plan on their own
 // route. MLX_OMARCHY_QMM_EPILOGUE_GEMV=0/1 overrides. Pure.
 inline bool gemv_epilogue_only_part(const std::string& device_name) {
-  return fused_gemv_off_default_part(device_name) &&
-      qmm_residual_norm_default_part(device_name);
+  return fused_gemv_off_default_part(device_name);
 }
 
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):

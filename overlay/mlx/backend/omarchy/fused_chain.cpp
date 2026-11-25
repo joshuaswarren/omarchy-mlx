@@ -1870,7 +1870,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // bf16 fast::RMSNorm runs that norm in the last finishing workgroup without
   // an inter-dispatch barrier. Keeps Sum0 materialized so other consumers of
   // the residual sum (e.g., skip connections) read the identical bits.
-  if (qmm_residual_norm_enabled() && !state->gemv_groups.empty()) {
+  if (!state->gemv_groups.empty()) {
     std::unordered_map<std::uintptr_t, const array*> res_norms_by_in;
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RMSNorm)) || node.inputs().size() != 2 ||
@@ -1900,10 +1900,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         const array& norm = *it->second;
         const array& nw = norm.inputs()[1];
+        const Device* d = stream_device(qmm);
         if (claimed.count(norm.id()) ||
             norm.primitive().stream() != qmm.primitive().stream() ||
             norm.ndim() < 1 || norm.size() != add.size() ||
             norm.shape(-1) != qmm.inputs()[1].shape(0) ||
+            d == nullptr || !qmm_residual_norm_enabled(
+                d->hardware_capabilities(), norm.shape(-1), group.outgate.has_value()) ||
             nw.dtype() != bfloat16 ||
             (nw.size() != 1 &&
              nw.size() != static_cast<size_t>(norm.shape(-1)))) {
@@ -2330,19 +2333,21 @@ bool outgate_fold_enabled() {
   return outgate_fold_default_for_device(device().capabilities().device_name);
 }
 
-bool qmm_residual_norm_enabled(const std::string& device_name) {
-  if (!fused_chain_enabled()) {
+bool qmm_residual_norm_enabled(
+    const CapabilityReport& caps, int norm_cols, bool outgate) {
+  // The plain and out-gate kernels use 16 and 8 32-lane slots respectively.
+  const uint32_t threads = outgate ? 256u : 512u;
+  if (!fused_chain_enabled() || caps.subgroup_size != 32 ||
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
+      caps.max_compute_work_group_invocations < threads ||
+      caps.max_compute_work_group_size[0] < threads) {
     return false;
   }
   const char* env = std::getenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
-  return qmm_residual_norm_default_part(device_name);
-}
-
-bool qmm_residual_norm_enabled() {
-  return qmm_residual_norm_enabled(device().capabilities().device_name);
+  return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
