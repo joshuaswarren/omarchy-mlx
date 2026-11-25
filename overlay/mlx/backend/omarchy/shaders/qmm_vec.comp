@@ -471,7 +471,7 @@ layout(set = 0, binding = 7, std430) readonly buffer OffsetBuf {
 layout(set = 0, binding = 8, std430) coherent buffer Ticket {
   uint values[];
 } ticket;
-shared uint s_rope_is_last;
+shared uint s_epi_prev;
 // epi_rounded is epi_block: the reduce tree's row sum is consumed
 // into |norm| before the rounded pass overwrites the same range, so
 // one 2KB scratch serves both (occupancy cost measured on jw16:
@@ -3074,7 +3074,8 @@ void main() {
   // COLUMNS_PER_GROUP contiguous columns of ONE member's output, all
   // inside a single rope head (whose per-head element span is the mat
   // stride is0), so is0/COLUMNS_PER_GROUP workgroups finish each head.
-  // The last finisher norms and rotates that head's token rows exactly
+  // The last min(rope_t, wgs_per_head) finishers each norm and rotate
+  // one token row of that head, exactly
   // like the standalone FastRopeNormBF16 dispatch pair it replaces —
   // the same math the multi-token epilogue carries, with the member
   // fixed (this dispatch's Output) and side in flag bit 0. Flag bit 2
@@ -3101,15 +3102,21 @@ void main() {
     const uint wgs_per_head = is0 / COLUMNS_PER_GROUP;
     const uint head = gl_WorkGroupID.x / wgs_per_head;
     const uint tix = head;
+    // One elected workgroup per token row: the LAST min(rope_t,
+    // wgs_per_head) finishers of this head each take row
+    // t_rank + j*winners, so the head's rope work is spread across
+    // up to rope_t workgroups (128 lanes each) instead of one.
     if (lane == 0u) {
-      uint prev = atomicAdd(ticket.values[tix], 1u);
-      s_rope_is_last = (prev == wgs_per_head - 1u) ? 1u : 0u;
+      s_epi_prev = atomicAdd(ticket.values[tix], 1u);
     }
     barrier();
-    if (s_rope_is_last == 0u) {
+    const uint prev = s_epi_prev;
+    const uint winners = min(rope_t, wgs_per_head);
+    if (prev < wgs_per_head - winners) {
       return;
     }
-    if (lane == 0u) {
+    const uint t_rank = prev - (wgs_per_head - winners);
+    if (prev == wgs_per_head - 1u && lane == 0u) {
       ticket.values[tix] = 0u;
     }
     memoryBarrierBuffer();
@@ -3117,132 +3124,121 @@ void main() {
     if ((params.flags & 8u) != 0u) {
       return;
     }
-    // Row-per-subgroup: the workgroup's four 32-lane subgroups each
-    // take one token row. The norm keeps the 256-thread tree's exact
-    // pairing — partials v[i]^2 (+v[i+128]^2) then the 64..1 shared
-    // tree — so every reduction order matches the serial path
-    // bit-for-bit; only the row-to-subgroup assignment changed.
-    const uint sub_id = lane / LANES;
-    const uint sub_lane = lane % LANES;
-    const uint t = sub_id;
+    // The norm keeps the 256-thread tree's exact pairing — partials
+    // v[i]^2 (+v[i+128]^2) then the 64..1 shared tree — so every
+    // reduction order matches the serial path bit-for-bit; only the
+    // row-to-workgroup assignment changed.
     const uint mat = head;
-    const uint blk = sub_id * 128u;
-    const uint in_base = in_off + t * is1 + mat * is0;
-    const bool row_ok = t < rope_t;
-    // v_regs keeps each lane's pass-1 loads for the weighted pass:
-    // the two loops walk the same indices, so the second phase reads
-    // registers instead of coherent memory again.
-    float v_regs[4];
-    uint v_idx = 0u;
-    for (uint i = sub_lane; i < 128u; i += LANES) {
-      float v = 0.0;
-      float sq = 0.0;
-      if (row_ok && i < row_length) {
-        v = epi_member_load(in_base + i);
-        sq = v * v;
-      }
-      if (row_ok && i + 128u < row_length) {
-        float v2 = epi_member_load(in_base + i + 128u);
-        sq += v2 * v2;
-      }
-      v_regs[v_idx++] = v;
-      epi_block[blk + i] = sq;
-    }
-    barrier();
-    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
-      for (uint i = sub_lane; i < stride; i += LANES) {
-        epi_block[blk + i] += epi_block[blk + i + stride];
+    for (uint t = t_rank; t < rope_t; t += winners) {
+      const uint in_base = in_off + t * is1 + mat * is0;
+      // v_reg keeps this lane's pass-1 load for the weighted pass:
+      // the two walks hit the same indices below row_length.
+      float v_reg = 0.0;
+      {
+        const uint i = lane;
+        float sq = 0.0;
+        if (i < row_length) {
+          v_reg = epi_member_load(in_base + i);
+          sq = v_reg * v_reg;
+        }
+        if (i + 128u < row_length) {
+          float v2 = epi_member_load(in_base + i + 128u);
+          sq += v2 * v2;
+        }
+        epi_block[i] = sq;
       }
       barrier();
-    }
-    const float mean_square = epi_block[blk] / float(row_length);
-    barrier();
-    precise float norm = inversesqrt(mean_square + eps);
-    for (uint vl = sub_lane; vl < row_length; vl += LANES) {
-      float v = row_ok ? (vl < 128u ? v_regs[vl / LANES]
-                                  : epi_member_load(in_base + vl))
-                       : 0.0;
-      float w = epi_weight_load(vl);
-      precise float weight_norm = w * norm;
-      epi_block[blk + vl] = epi_rope_round(v * weight_norm);
-    }
-    barrier();
-    for (uint k = sub_lane; k < row_length / 2u; k += LANES) {
-      const float position =
-          params.alpha * (float(t) + epi_off);
-          float v0;
-          float v1;
-          if (passthrough) {
-            const uint d0 = 2u * k;
-            const uint d1 = d0 + 1u;
-            if (d0 >= 2u * half_dims) {
-              v0 = epi_block[blk + d0];
-              v1 = epi_block[blk + d1];
-            } else {
-              float vals[2];
-              for (uint s = 0u; s < 2u; ++s) {
-                uint d = d0 + s;
-                uint i = d % half_dims;
-                float inv_freq = exp(-float(i) * params.beta);
-                float theta = position * inv_freq;
-                float cos_t = epi_rope_round(omarchy_trig_cos(theta));
-                float sin_t = epi_rope_round(omarchy_trig_sin(theta));
-                float x1 = epi_block[blk + i];
-                float x2 = epi_block[blk + i + half_dims];
-                float xa = epi_rope_round(x1 * cos_t);
-                float xb = epi_rope_round(x2 * sin_t);
-                float xc = epi_rope_round(x1 * sin_t);
-                float xd = epi_rope_round(x2 * cos_t);
-                vals[s] = (d < half_dims) ? (xa - xb) : (xc + xd);
-              }
-              v0 = vals[0];
-              v1 = vals[1];
-            }
+      for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+          epi_block[lane] += epi_block[lane + stride];
+        }
+        barrier();
+      }
+      const float mean_square = epi_block[0] / float(row_length);
+      barrier();
+      precise float norm = inversesqrt(mean_square + eps);
+      for (uint vl = lane; vl < row_length; vl += 128u) {
+        float v = (vl < 128u) ? v_reg : epi_member_load(in_base + vl);
+        float w = epi_weight_load(vl);
+        precise float weight_norm = w * norm;
+        epi_block[vl] = epi_rope_round(v * weight_norm);
+      }
+      barrier();
+      for (uint k = lane; k < row_length / 2u; k += 128u) {
+        const float position =
+            params.alpha * (float(t) + epi_off);
+        float v0;
+        float v1;
+        if (passthrough) {
+          const uint d0 = 2u * k;
+          const uint d1 = d0 + 1u;
+          if (d0 >= 2u * half_dims) {
+            v0 = epi_block[d0];
+            v1 = epi_block[d1];
           } else {
-            bool r1_side = k < (half_dims >> 1u);
-            uint j0 = r1_side
-                ? (2u * k)
-                : (half_dims + 2u * (k - (half_dims >> 1u)));
-            uint j1 = j0 + 1u;
-            uint i0 = r1_side ? j0 : (j0 - half_dims);
-            uint i1 = i0 + 1u;
-            float inv0 = exp(-float(i0) * params.beta);
-            float inv1 = exp(-float(i1) * params.beta);
-            float cos0 =
-                epi_rope_round(omarchy_trig_cos(position * inv0));
-            float sin0 =
-                epi_rope_round(omarchy_trig_sin(position * inv0));
-            float cos1 =
-                epi_rope_round(omarchy_trig_cos(position * inv1));
-            float sin1 =
-                epi_rope_round(omarchy_trig_sin(position * inv1));
-            float xa = epi_block[blk + i0];
-            float xb = epi_block[blk + i0 + half_dims];
-            float xc = epi_block[blk + i1];
-            float xd = epi_block[blk + i1 + half_dims];
-            if (r1_side) {
-              v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
-              v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
-            } else {
-              v0 = epi_rope_round(xa * sin0) + epi_rope_round(xb * cos0);
-              v1 = epi_rope_round(xc * sin1) + epi_rope_round(xd * cos1);
+            float vals[2];
+            for (uint s = 0u; s < 2u; ++s) {
+              uint d = d0 + s;
+              uint i = d % half_dims;
+              float inv_freq = exp(-float(i) * params.beta);
+              float theta = position * inv_freq;
+              float cos_t = epi_rope_round(omarchy_trig_cos(theta));
+              float sin_t = epi_rope_round(omarchy_trig_sin(theta));
+              float x1 = epi_block[i];
+              float x2 = epi_block[i + half_dims];
+              float xa = epi_rope_round(x1 * cos_t);
+              float xb = epi_rope_round(x2 * sin_t);
+              float xc = epi_rope_round(x1 * sin_t);
+              float xd = epi_rope_round(x2 * cos_t);
+              vals[s] = (d < half_dims) ? (xa - xb) : (xc + xd);
             }
+            v0 = vals[0];
+            v1 = vals[1];
           }
-          if (!row_ok) {
-            continue;
-          }
-          if (side == 0u) {
-            uint ob = params.output_size +
-                (mat * rope_t + t) * row_length + 2u * k;
-            epi_out.values[ob] = STORE_VALUE(v0);
-            epi_out.values[ob + 1u] = STORE_VALUE(v1);
+        } else {
+          bool r1_side = k < (half_dims >> 1u);
+          uint j0 = r1_side
+              ? (2u * k)
+              : (half_dims + 2u * (k - (half_dims >> 1u)));
+          uint j1 = j0 + 1u;
+          uint i0 = r1_side ? j0 : (j0 - half_dims);
+          uint i1 = i0 + 1u;
+          float inv0 = exp(-float(i0) * params.beta);
+          float inv1 = exp(-float(i1) * params.beta);
+          float cos0 =
+              epi_rope_round(omarchy_trig_cos(position * inv0));
+          float sin0 =
+              epi_rope_round(omarchy_trig_sin(position * inv0));
+          float cos1 =
+              epi_rope_round(omarchy_trig_cos(position * inv1));
+          float sin1 =
+              epi_rope_round(omarchy_trig_sin(position * inv1));
+          float xa = epi_block[i0];
+          float xb = epi_block[i0 + half_dims];
+          float xc = epi_block[i1];
+          float xd = epi_block[i1 + half_dims];
+          if (r1_side) {
+            v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
+            v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
           } else {
-            uint ob = params.out_strides[0] +
-                mat * params.out_strides[1] +
-                t * params.out_strides[2] + 2u * k;
-            epi_out.values[ob] = STORE_VALUE(v0);
-            epi_out.values[ob + 1u] = STORE_VALUE(v1);
+            v0 = epi_rope_round(xa * sin0) + epi_rope_round(xb * cos0);
+            v1 = epi_rope_round(xc * sin1) + epi_rope_round(xd * cos1);
           }
+        }
+        if (side == 0u) {
+          uint ob = params.output_size +
+              (mat * rope_t + t) * row_length + 2u * k;
+          epi_out.values[ob] = STORE_VALUE(v0);
+          epi_out.values[ob + 1u] = STORE_VALUE(v1);
+        } else {
+          uint ob = params.out_strides[0] +
+              mat * params.out_strides[1] +
+              t * params.out_strides[2] + 2u * k;
+          epi_out.values[ob] = STORE_VALUE(v0);
+          epi_out.values[ob + 1u] = STORE_VALUE(v1);
+        }
+      }
+      barrier();
     }
   }
 #endif
