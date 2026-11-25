@@ -2163,11 +2163,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         if (epi_trace) {
           std::fprintf(
               stderr,
-              "[rope-epi] group %zu: sides=%zu q=%d k=%d k_use=%zu\n",
+              "[rope-epi] group %zu: sides=%zu q=%d k=%d same_mi=%d same_off=%d k_use=%zu\n",
               gi,
               sides.size(),
               qc != nullptr,
               kc != nullptr,
+              qc != nullptr && kc != nullptr &&
+                  qc->member_index == kc->member_index,
+              qc != nullptr && kc != nullptr &&
+                  qc->node->inputs()[1].id() == kc->node->inputs()[1].id(),
               kc ? use_count(*kc->node) : 0);
         }
         continue;
