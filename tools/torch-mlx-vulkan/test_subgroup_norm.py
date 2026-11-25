@@ -14,9 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-import torch
 import mlx.core as mx
-import mlx_vulkan
 
 
 def _ref_rms(x, w, eps=1e-6):
@@ -38,7 +36,7 @@ class TestSubgroupNormParity:
 
     def test_batch1_widths_match_fast_rms_norm(self):
         for width in self.WIDTHS:
-            ref, xt, wt = _run(width, 1)
+            ref, _xt, _wt = _run(width, 1)
             got = np.array(ref)
             assert got.shape == (1, width)
             assert np.isfinite(got).all(), f"width {width}: non-finite"
@@ -47,12 +45,10 @@ class TestSubgroupNormParity:
         # batch 2 must stay on the deployed kernel: identical output to the
         # same input through the non-subgroup path (both are the deployed
         # kernel here, so this asserts the run completes and is finite).
-        ref, xt, wt = _run(2560, 2)
+        ref, _xt, _wt = _run(2560, 2)
         assert ref.shape == (2, 2560)
 
     def test_eps_and_weight_semantics(self):
-        x = torch.ones(1, 2560)
-        w = torch.full((2560,), 2.0)
         ref, _, _ = _run(2560, 1)
         # rms(ones) = 1; norm = 1/sqrt(1 + eps); out = norm * w
         expected = 1.0 / ((1.0 + 1e-6) ** 0.5) * 2.0
