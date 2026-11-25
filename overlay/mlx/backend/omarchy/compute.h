@@ -1216,6 +1216,14 @@ enum class ComputeKernel : uint16_t {
   BinarySimpleF32,
   BinarySimpleF16,
   BinarySimpleBF16,
+  // Coalesced-W K=64 prefill coopmat builds (64-row SG4 and 128-row SG8,
+  // ragged-M and FULL_M twins, subgroup-private zero-barrier drain,
+  // bit-exact with shipped QmmPrefillCoopmatBF16X32FullNLdsPad). Appended
+  // to keep profile kernel ids stable.
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM,
+  QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64,
+  QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM,
   Count,
 };
 

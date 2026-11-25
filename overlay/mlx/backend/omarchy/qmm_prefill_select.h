@@ -123,6 +123,24 @@ inline uint32_t coopmat_workgroups_per_core() {
 // so nothing is traded for the halved per-step work. Contract prompts
 // are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
 // cost 400-950 us each, 133 of them per first token.
+inline bool qmm_coopmat_rows128_requested(const std::string& device_name) {
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "128sg8" || v == "128") {
+      return true;
+    }
+    if (v == "64" || v == "64sg4" || v == "32" || v == "0" || v == "16") {
+      return false;
+    }
+  }
+  // G13C (M1 Max) and G14C (M2 Max) default to 128-row SG8 coalesced-W K=64
+  // where the grid fills the part, stepping down to 64-row SG4 K=64 for
+  // smaller M/N.
+  return device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos;
+}
+
 inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
   const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
@@ -130,42 +148,57 @@ inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
     if (v == "32" || v == "0" || v == "16") {
       return false;
     }
-    if (v == "64" || v == "64sg4") {
+    if (v == "64" || v == "64sg4" || v == "128sg8" || v == "128") {
       return true;
     }
   }
   // G16S defaults on (64-row G4+LdsPad); G13G defaults on (64-row
-  // SG4+LdsPad+STEPK=32). G14C and initial G17C (Max class) keep the
-  // 32-row default pending calibration.
+  // SG4+LdsPad+STEPK=32); G13C and G14C use 64-row SG4+K=64 as their
+  // step-down from 128-row SG8. G17C keeps 32-row pending calibration.
   return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos;
 }
 
 inline bool qmm_coopmat_sg4_requested(const std::string& device_name) {
   const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
-    if (v == "64sg4") {
+    if (v == "64sg4" || v == "128sg8" || v == "128") {
       return true;
     }
     if (v == "64" || v == "32" || v == "0" || v == "16") {
       return false;
     }
   }
-  return device_name.find("G13G") != std::string::npos;
+  return device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos;
 }
 
 inline uint32_t qmm_coopmat_stepk_requested(
     const std::string& device_name, uint32_t rows, bool sg4) {
+  if (rows == 128u) {
+    return 64u;
+  }
   const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_STEPK");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
+    if (v == "64" && rows == 64u && sg4) {
+      return 64u;
+    }
     if (v == "32") {
       return 32u;
     }
     if (v == "16") {
       return 16u;
     }
+  }
+  if (rows == 64u && sg4 &&
+      (device_name.find("G13C") != std::string::npos ||
+       device_name.find("G14C") != std::string::npos)) {
+    return 64u;
   }
   // Only 64-row SG4 on G13G defaults to STEP_K=32; standalone 32-row
   // STEP_K=32 regressed on G13G, so fallback 32-row grids keep 16.
@@ -184,11 +217,24 @@ inline bool qmm_cheap_deq_env() {
 // Landed G4+LdsPad default, or an env-gated dequant-ratio twin of it.
 // The per-output k chain is unchanged; only staging granularity, the
 // number of rows sharing one W tile, or the nibble->f32 conversion
-// changes.
+// changes. full_m selects the compile-time tail-free build when
+// matrix_m % rows == 0 (keeps GPRs at 103 / 1024 threads per core).
 inline omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
-    uint32_t rows, bool sg4, uint32_t step_k, bool cheap) {
+    uint32_t rows,
+    bool sg4,
+    uint32_t step_k,
+    bool cheap,
+    bool full_m = false) {
   using K = omarchy::ComputeKernel;
+  if (rows == 128u) {
+    return full_m ? K::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM
+                  : K::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64;
+  }
   if (rows == 64u && sg4) {
+    if (step_k == 64u) {
+      return full_m ? K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM
+                    : K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64;
+    }
     if (step_k == 32u) {
       return cheap ? K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap
                    : K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32;
@@ -216,21 +262,41 @@ inline uint32_t coopmat_tile_rows(
     uint32_t matrix_m,
     uint32_t n_groups,
     const std::string& device_name,
-    bool allow_rows64 = false) {
+    bool allow_rows64 = false,
+    bool allow_rows128 = true) {
   if (matrix_m <= 16u) {
     return 16u;
   }
   uint32_t cores = apple_gpu_cores(device_name);
   uint32_t per_core = coopmat_workgroups_per_core();
-  // 64-row experiment: take it only when M is large enough that the
-  // 64-row grid still fills the part (m_groups_64 * n_groups against
-  // the part's core count; G16S carries 20).
+  // 128-row SG8 K=64 (256 threads/WG): take it when M >= 256 and the
+  // 128-row grid provides at least 4 workgroups per core (1024 threads/core).
+  if (allow_rows64 && allow_rows128 &&
+      qmm_coopmat_rows128_requested(device_name) && matrix_m >= 256u) {
+    uint32_t m_groups_128 = (matrix_m + 127u) / 128u;
+    uint32_t sg8_per_core = per_core == 0u ? 0u : std::min(per_core, 4u);
+    if (cores == 0u || sg8_per_core == 0u ||
+        static_cast<uint64_t>(m_groups_128) * n_groups >=
+            static_cast<uint64_t>(cores) * sg8_per_core) {
+      return 128u;
+    }
+  }
+  // 64-row tile: take it only when M is large enough that the 64-row grid
+  // still fills the part (m_groups_64 * n_groups against the part's core
+  // count; G16S carries 20). On G13C/G14C (SG4 128-lane), 4 WG/core (512
+  // threads/core) suffices.
   if (allow_rows64 && qmm_coopmat_rows64_requested(device_name) &&
       matrix_m >= 128u) {
     uint32_t m_groups_64 = (matrix_m + 63u) / 64u;
-    if (cores == 0u || per_core == 0u ||
+    const bool max_class_sg4 =
+        device_name.find("G13C") != std::string::npos ||
+        device_name.find("G14C") != std::string::npos;
+    uint32_t r64_per_core = (per_core != 0u && max_class_sg4)
+        ? std::min(per_core, 4u)
+        : per_core;
+    if (cores == 0u || r64_per_core == 0u ||
         static_cast<uint64_t>(m_groups_64) * n_groups >=
-            static_cast<uint64_t>(cores) * per_core) {
+            static_cast<uint64_t>(cores) * r64_per_core) {
       return 64u;
     }
   }

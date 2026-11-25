@@ -6539,7 +6539,61 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
         ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPad);
 
-  for (const std::string& keep32 : {g14c, g13c, g17c}) {
+  // G13C and G14C default to 128-row SG8 coalesced-W K=64 on large grids
+  // (FULL_M when M % rows == 0, ragged twin otherwise), step down to
+  // 64-row SG4 K=64 on smaller M/N, and honor ROWS=32 kill switch.
+  rows = coopmat_tile_rows(512u, 32u, g13c, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g13c);
+  step_k = qmm_coopmat_stepk_requested(g13c, rows, sg4);
+  CHECK(rows == 128u);
+  CHECK(sg4);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64);
+
+  rows = coopmat_tile_rows(256u, 32u, g13c, allow64);
+  step_k = qmm_coopmat_stepk_requested(g13c, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64);
+
+  // G14C (38 cores): gate/up/down/q/o (n_groups >= 80) at M=512 take 128-row
+  // SG8 K=64; narrow k/v (n_groups = 32 -> 128 < 38*4) step down to 64-row SG4.
+  rows = coopmat_tile_rows(512u, 80u, g14c, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g14c);
+  step_k = qmm_coopmat_stepk_requested(g14c, rows, sg4);
+  CHECK(rows == 128u);
+  CHECK(sg4);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM);
+
+  rows = coopmat_tile_rows(512u, 32u, g14c, allow64);
+  step_k = qmm_coopmat_stepk_requested(g14c, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM);
+
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
+  for (const std::string& maxpart : {g13c, g14c}) {
+    rows = coopmat_tile_rows(512u, 80u, maxpart, allow64);
+    sg4 = qmm_coopmat_sg4_requested(maxpart);
+    step_k = qmm_coopmat_stepk_requested(maxpart, rows, sg4);
+    CHECK(rows == 32u);
+    CHECK_FALSE(sg4);
+    CHECK(step_k == 16u);
+    CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+          ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
+  }
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+
+  for (const std::string& keep32 : {g17c}) {
     rows = coopmat_tile_rows(128u, 64u, keep32, allow64);
     sg4 = qmm_coopmat_sg4_requested(keep32);
     step_k = qmm_coopmat_stepk_requested(keep32, rows, sg4);

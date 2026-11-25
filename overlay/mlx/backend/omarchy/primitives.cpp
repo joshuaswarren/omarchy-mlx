@@ -9745,11 +9745,26 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // table below never sees coopmat_rows == 64 (review of #508).
       const bool full_n = (params.matrix_n % 32u) == 0u &&
           omarchy::env_str("MLX_OMARCHY_QMM_NO_FULLN") == nullptr;
+      const char* qmm_pad_env_pre = omarchy::env_str("MLX_OMARCHY_QMM_LDSPAD");
+      const char* qmm_chunk_env_pre = omarchy::env_str("MLX_OMARCHY_QMM_CHUNK");
+      const bool g4_pad_eligible =
+          omarchy::env_str("MLX_OMARCHY_QMM_NO_RASTER") == nullptr &&
+          omarchy::env_str("MLX_OMARCHY_QMM_RASTER") == nullptr &&
+          omarchy::env_str("MLX_OMARCHY_QMM_TWON") == nullptr &&
+          !(qmm_pad_env_pre != nullptr && qmm_pad_env_pre[0] == '0') &&
+          !(qmm_chunk_env_pre != nullptr && qmm_chunk_env_pre[0] == '1');
+      constexpr uint32_t kSg8K64SharedBytes = (64u * 36u + 64u) * 4u;
+      const bool allow_rows128 = g4_pad_eligible &&
+          coopmat_caps.max_compute_work_group_invocations >= 256u &&
+          coopmat_caps.max_compute_work_group_size[0] >= 256u &&
+          kSg8K64SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
       uint32_t coopmat_rows = omarchy::coopmat_tile_rows(
           params.matrix_m,
           n_groups,
           encoder.device().hardware_capabilities().device_name,
-          omarchy::qmm_prefill_allow_rows64(q4_g64_transpose, full_n));
+          omarchy::qmm_prefill_allow_rows64(q4_g64_transpose, full_n) &&
+              g4_pad_eligible,
+          allow_rows128);
       uint32_t m_groups =
           (params.matrix_m + coopmat_rows - 1u) / coopmat_rows;
       // Direct-global-load A: widen bf16 x to f32 once (the widening is
@@ -9849,10 +9864,14 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       const char* twon_env = omarchy::env_str("MLX_OMARCHY_QMM_TWON");
       const char* raster_env = omarchy::env_str("MLX_OMARCHY_QMM_RASTER");
       const bool default_g4 =
-          (coopmat_rows == 32u || coopmat_rows == 64u) && full_n &&
-          params.matrix_m > coopmat_rows &&
+          (coopmat_rows == 32u || coopmat_rows == 64u ||
+           coopmat_rows == 128u) &&
+          full_n &&
+          (coopmat_rows == 128u ? params.matrix_m >= 128u
+                                : params.matrix_m > coopmat_rows) &&
           omarchy::env_str("MLX_OMARCHY_QMM_NO_RASTER") == nullptr;
-      if ((coopmat_rows == 32u || coopmat_rows == 64u) && full_n) {
+      if ((coopmat_rows == 32u || coopmat_rows == 64u ||
+           coopmat_rows == 128u) && full_n) {
         if (coopmat_rows == 32u && twon_env != nullptr &&
             twon_env[0] == '1' && (cp.matrix_n % 64u) == 0u) {
           qmm_kernel =
@@ -9917,7 +9936,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               omarchy::qmm_coopmat_sg4_requested(qmm_dev_name);
           const uint32_t step_k = omarchy::qmm_coopmat_stepk_requested(
               qmm_dev_name, coopmat_rows, use_sg4);
-          const uint32_t ratio_bytes = step_k * 36u * 4u;
+          const uint32_t ratio_bytes =
+              (step_k * 36u + (step_k == 64u ? 64u : 0u)) * 4u;
           const uint32_t need_ratio =
               need > ratio_bytes ? need : ratio_bytes;
           if (need_ratio <= coopmat_caps.max_compute_shared_memory_size) {
@@ -9934,7 +9954,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                   coopmat_rows,
                   use_sg4,
                   step_k,
-                  omarchy::qmm_cheap_deq_env());
+                  omarchy::qmm_cheap_deq_env(),
+                  (cp.matrix_m % coopmat_rows) == 0u);
             }
             grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
             grid_y = 1u;
