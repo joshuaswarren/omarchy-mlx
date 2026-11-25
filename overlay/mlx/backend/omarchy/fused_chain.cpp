@@ -2197,17 +2197,25 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const auto& st =
           static_cast<const fast::RoPE&>(qc->node->primitive()).state();
       auto& group = state->gemv_groups[gi];
+      const array& q_in_view = qc->node->inputs()[0];
+      const array& k_in_view = kc->node->inputs()[0];
       group.rope_epi = RopeEpiPlan{
           RopeEpiSide{
               *qc->node,
               qc->member_index,
               qc->chain,
+              q_in_view.shape(),
+              q_in_view.strides(),
+              q_in_view.offset(),
               std::nullopt,
               pair_index},
           RopeEpiSide{
               *kc->node,
               kc->member_index,
               kc->chain,
+              k_in_view.shape(),
+              k_in_view.strides(),
+              k_in_view.offset(),
               pair.windows[0],
               pair_index},
           std::get<1>(st),

@@ -227,6 +227,13 @@ struct RopeEpiSide {
   array rope;
   size_t member_index;
   std::vector<array> view_chain;
+  // The rope input view's LOGICAL layout, captured at plan time: the
+  // view node materializes before dispatch and copy_shared_buffer
+  // rewrites its desc strides to the materialized (contiguous) layout,
+  // so dispatch-time strides() no longer describe the member storage.
+  Shape view_shape;
+  Strides view_strides;
+  int64_t view_offset = 0;
   // Keys side only: the pair's planned producer-direct window; the
   // epilogue stores the rotated keys rows through it. The query side
   // leaves |window| empty and writes |rope|'s own buffer.

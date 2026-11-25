@@ -10365,17 +10365,22 @@ bool dispatch_quantized_gemv_group(
     const RopeEpiSide* epi_sides[2] = {&rope_epi->q, &rope_epi->k};
     for (size_t s = 0; s < 2u && rope_epi_active; ++s) {
       const auto& side = *epi_sides[s];
+      // The rope input view's LOGICAL layout rides side.view_*:
+      // dispatch-time node strides are post-materialization and no
+      // longer describe the member storage the epilogue reads.
       const array& view = side.rope.inputs()[0];
       const array& wnorm = side.rope.inputs()[2];
+      const int vndim = static_cast<int>(side.view_shape.size());
+      const int64_t vd = vndim > 0 ? side.view_shape[vndim - 1] : 0;
+      const int64_t vt = vndim > 1 ? side.view_shape[vndim - 2] : 0;
       if (side.member_index >= members.size() ||
           members[side.member_index].out_view ||
-          view.dtype() != bfloat16 || view.ndim() < 3 ||
-          view.shape(-2) != static_cast<int>(rows) ||
-          view.shape(-1) <= 0 || view.shape(-1) > 256 ||
-          (view.shape(-1) % 2) != 0 ||
-          view.strides()[view.ndim() - 1] != 1 ||
+          view.dtype() != bfloat16 || vndim < 3 ||
+          vt != static_cast<int64_t>(rows) ||
+          vd <= 0 || vd > 256 || (vd % 2) != 0 ||
+          side.view_strides[vndim - 1] != 1 ||
           wnorm.dtype() != bfloat16 ||
-          wnorm.size() != static_cast<size_t>(view.shape(-1)) ||
+          wnorm.size() != static_cast<size_t>(vd) ||
           !whole_dense(wnorm, wnorm.size()) ||
           !input_ready(wnorm, stream)) {
         if (epi_ctrace) {
@@ -10384,17 +10389,18 @@ bool dispatch_quantized_gemv_group(
             std::fprintf(
                 stderr,
                 "[epi-ctr] side%zu mi=%zu/%zu out_view=%d dtype=%d ndim=%d "
-                "t=%d/%u d=%d istr=%lld wdtype=%d wsize=%zu dense=%d ready=%d\n",
+                "t=%lld/%u d=%lld istr=%lld wdtype=%d wsize=%zu dense=%d ready=%d\n",
                 s,
                 side.member_index,
                 members.size(),
                 members[side.member_index].out_view.has_value(),
                 view.dtype() == bfloat16,
-                view.ndim(),
-                view.shape(-2),
+                vndim,
+                static_cast<long long>(vt),
                 rows,
-                view.shape(-1),
-                static_cast<long long>(view.strides()[view.ndim() - 1]),
+                static_cast<long long>(vd),
+                static_cast<long long>(
+                    vndim > 0 ? side.view_strides[vndim - 1] : -1),
                 wnorm.dtype() == bfloat16,
                 wnorm.size(),
                 whole_dense(wnorm, wnorm.size()),
@@ -10404,27 +10410,9 @@ bool dispatch_quantized_gemv_group(
         rope_epi_active = false;
         break;
       }
-      if (epi_ctrace) {
-        static int trv = 0;
-        if (trv++ < 8) {
-          std::fprintf(
-              stderr,
-              "[epi-ctr] view: side%zu id=%p ndim=%d s-3=%lld s-2=%lld "
-              "shape=%d,%d,%d,%d\n",
-              s,
-              reinterpret_cast<void*>(view.id()),
-              view.ndim(),
-              static_cast<long long>(view.strides()[view.ndim() - 3]),
-              static_cast<long long>(view.strides()[view.ndim() - 2]),
-              view.shape(0),
-              view.shape(1),
-              view.shape(2),
-              view.shape(3));
-        }
-      }
       if (s == 0) {
-        epi_d = view.shape(-1);
-      } else if (view.shape(-1) != epi_d) {
+        epi_d = vd;
+      } else if (vd != epi_d) {
         rope_epi_active = false;
         break;
       }
@@ -10432,23 +10420,20 @@ bool dispatch_quantized_gemv_group(
       // the two view patterns the shader knows: a transposed [N,T,D]
       // view of the contiguous member rows (head stride D, token
       // stride N*D) or a contiguous [1,N,T,D] view (T*D, D).
-      const int vndim = view.ndim();
-      const int64_t vt = view.shape(-2);
-      const int64_t vd = view.shape(-1);
-      int64_t vn = static_cast<int64_t>(view.shape(0));
+      int64_t vn = static_cast<int64_t>(side.view_shape[0]);
       for (int i = 1; i < vndim - 2; ++i) {
-        vn *= view.shape(i);
+        vn *= side.view_shape[i];
       }
       if (vn <= 0 || vn > 4095) {
         rope_epi_active = false;
         break;
       }
-      if (view.strides()[vndim - 3] == vd &&
-          view.strides()[vndim - 2] == vn * vd) {
+      if (side.view_strides[vndim - 3] == vd &&
+          side.view_strides[vndim - 2] == vn * vd) {
         epi_pattern[s] = 1;
       } else if (
-          view.strides()[vndim - 3] == vt * vd &&
-          view.strides()[vndim - 2] == vd) {
+          side.view_strides[vndim - 3] == vt * vd &&
+          side.view_strides[vndim - 2] == vd) {
         epi_pattern[s] = 0;
       } else {
         if (epi_ctrace) {
@@ -10458,8 +10443,8 @@ bool dispatch_quantized_gemv_group(
                 stderr,
                 "[epi-ctr] side%zu strides: -3=%lld -2=%lld vn=%lld vt=%lld vd=%lld ndim=%d\n",
                 s,
-                static_cast<long long>(view.strides()[vndim - 3]),
-                static_cast<long long>(view.strides()[vndim - 2]),
+                static_cast<long long>(side.view_strides[vndim - 3]),
+                static_cast<long long>(side.view_strides[vndim - 2]),
                 static_cast<long long>(vn),
                 static_cast<long long>(vt),
                 static_cast<long long>(vd),
@@ -10863,9 +10848,9 @@ bool dispatch_quantized_gemv_group(
     params.reduce_size = static_cast<uint32_t>(epi_d);
     params.aux_size = static_cast<uint32_t>(rope_epi->dims / 2);
     params.lhs_size = static_cast<uint32_t>(
-        q_view.offset() / q_view.itemsize());
+        rope_epi->q.view_offset / q_view.itemsize());
     params.rhs_size = static_cast<uint32_t>(
-        k_view.offset() / k_view.itemsize());
+        rope_epi->k.view_offset / k_view.itemsize());
     params.output_size = static_cast<uint32_t>(
         rope_epi->q.rope.offset() / rope_epi->q.rope.itemsize());
     params.output_offset = window.offset;
@@ -11005,6 +10990,16 @@ bool dispatch_quantized_gemv_group(
         for (auto s : ch.strides()) mf << s << ",";
         mf << "\n";
       }
+      mf << "qlogical shape=";
+      for (auto s : rope_epi->q.view_shape) mf << s << ",";
+      mf << " strides=";
+      for (auto s : rope_epi->q.view_strides) mf << s << ",";
+      mf << " off=" << rope_epi->q.view_offset << "\n";
+      mf << "klogical shape=";
+      for (auto s : rope_epi->k.view_shape) mf << s << ",";
+      mf << " strides=";
+      for (auto s : rope_epi->k.view_strides) mf << s << ",";
+      mf << " off=" << rope_epi->k.view_offset << "\n";
       mf << "epi_d=" << epi_d << " dims=" << rope_epi->dims
          << " heads=" << epi_heads[0] << "," << epi_heads[1]
          << " pat=" << epi_pattern[0] << "," << epi_pattern[1]
