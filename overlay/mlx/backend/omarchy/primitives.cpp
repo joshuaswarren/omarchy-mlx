@@ -17511,6 +17511,54 @@ void RoPE::eval_gpu(
       params,
       fuse_norm ? params.count
                 : omarchy::compute_dispatch_group_count(params.count));
+  if (fuse_norm &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI_DUMP") != nullptr) {
+    encoder.synchronize("rope-epi ref dump");
+    static int rmp = 0;
+    const std::string base = "/tmp/roperef_" + std::to_string(rmp++) + "_";
+    auto write_all = [](const std::string& path, const array& a) {
+      std::ofstream f(path, std::ios::binary | std::ios::trunc);
+      f.write(
+          reinterpret_cast<const char*>(a.data<uint8_t>()),
+          static_cast<std::streamsize>(a.nbytes()));
+    };
+    write_all(base + "src.bin", *src);
+    write_all(base + "out.bin", rope_output);
+    write_all(base + "off.bin", offset);
+    write_all(base + "w.bin", norm_weight);
+    std::ofstream mf(base + "meta.txt", std::ios::trunc);
+    mf << "kernel=" << (kernel == omarchy::ComputeKernel::FastRopeNormBF16
+                            ? "std"
+                            : "apple")
+       << " kv_direct=" << kv_direct << "\n";
+    mf << "in shape=";
+    for (auto sv : in.shape()) mf << sv << ",";
+    mf << " strides=";
+    for (auto sv : in.strides()) mf << sv << ",";
+    mf << " off=" << in.offset() << "\n";
+    mf << "src shape=";
+    for (auto sv : src->shape()) mf << sv << ",";
+    mf << " strides=";
+    for (auto sv : src->strides()) mf << sv << ",";
+    mf << " off=" << src->offset() << "\n";
+    mf << "out shape=";
+    for (auto sv : rope_output.shape()) mf << sv << ",";
+    mf << " strides=";
+    for (auto sv : rope_output.strides()) mf << sv << ",";
+    mf << " off=" << rope_output.offset() << "\n";
+    mf << "count=" << params.count << " dims=" << params.dims
+       << " flags=" << params.flags << " alpha=" << params.alpha
+       << " beta=" << params.beta << " lho=" << params.lhs_offset
+       << " rho=" << params.rhs_offset << " oo=" << params.output_offset
+       << " mm=" << params.matrix_m << " rs=" << params.reduce_size
+       << " auxo=" << params.aux_offset << " op=" << params.operation
+       << "\n";
+    mf << "shape=" << params.shape[0] << "," << params.shape[1] << ","
+       << params.shape[2] << " instr=" << params.in_strides[0] << ","
+       << params.in_strides[1] << "," << params.in_strides[2]
+       << " outstr=" << params.out_strides[0] << "," << params.out_strides[1]
+       << "," << params.out_strides[2] << "\n";
+  }
   if (kv_direct) {
     omarchy::commit_rope_kv_redirect(out);
   }
