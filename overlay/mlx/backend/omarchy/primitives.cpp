@@ -10883,6 +10883,11 @@ bool dispatch_quantized_gemv_group(
       if (epi_no_tail) {
         params.flags |= 4u;
       }
+      static const bool epi_no_rows =
+          std::getenv("MLX_OMARCHY_ROPE_EPI_NOROWS") != nullptr;
+      if (epi_no_rows) {
+        params.flags |= 8u;
+      }
     }
     // Standard multi layout; the shader repurposes member 3's declared
     // slots: input_w3 = scalar position offset, scales3/biases3 =

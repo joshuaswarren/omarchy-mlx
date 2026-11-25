@@ -1500,6 +1500,11 @@ void main() {
     }
     memoryBarrierBuffer();
     barrier();
+    // Debug bit 3: stop after the election (isolates wait+elect cost
+    // from the row work in timing runs; results are wrong).
+    if ((params.flags & 8u) != 0u) {
+      return;
+    }
     // Row-per-subgroup: the workgroup's four 32-lane subgroups each
     // take one token row. The norm keeps the 256-thread tree's exact
     // pairing — partials v[i]^2 (+v[i+128]^2) then the 64..1 shared
