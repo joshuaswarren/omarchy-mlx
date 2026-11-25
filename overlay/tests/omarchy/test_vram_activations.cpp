@@ -4,6 +4,7 @@
 #include "device_local_activations.h"
 
 #include <cstdio>
+#include <cstdlib>
 
 using namespace mlx::core::omarchy;
 
@@ -384,6 +385,13 @@ int main() {
   fails += check(
       device_local_activations_default(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, 1),
       "MLX_OMARCHY_VRAM_ACTIVATIONS=1 still enables an integrated GPU");
+
+  const char* flag = "MLX_OMARCHY_VRAM_ACTIVATIONS";
+  setenv(flag, "YeS", 1);
+  fails += check(device_local_activations_env() == 1, "mixed-case true opts in");
+  setenv(flag, "0", 1);
+  fails += check(device_local_activations_env() == 1, "activation flag is read once per process");
+  unsetenv(flag);
 
   // 7. The B60-over-USB4 memory shape that motivated the default: a large
   // pure device-local VRAM heap, a host system-memory heap, and a ~256 MiB

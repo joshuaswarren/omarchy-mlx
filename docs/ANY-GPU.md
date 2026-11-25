@@ -127,6 +127,8 @@ If VRAM allocation fails, the load reports the error without moving weights to h
 Host access to these arrays is unsupported.
 Set `MLX_OMARCHY_VRAM_WEIGHTS_LOG=1` to see allocation heaps, upload sizes, and copy counts on stderr.
 
+Set `MLX_OMARCHY_VRAM_ACTIVATIONS` before starting the process. The runtime keeps the value from its first activation check.
+
 On a discrete GPU, general/activation buffers are also placed in unmapped `DEVICE_LOCAL` VRAM by default, with lazy CPU shadow buffers and chunked 4 MiB host-visible staging transfers on host readback/upload, and the wider `2x16` (`512`-thread) Qmm decode workgroup is selected when the device reports support (`subgroup_size == 32`, subgroup arithmetic, and `>= 512` compute workgroup invocations and X size). This route is required on cards behind a narrow BAR window, where the small device-local+host-visible heap (~256 MiB on the B60 over USB4) otherwise captures every mapped buffer until `vkAllocateMemory` fails far below real VRAM. `MLX_OMARCHY_VRAM_ACTIVATIONS=0` opts a discrete GPU out; `=1` enables the route on other devices. Apple GPUs, software Vulkan, and runs on non-discrete parts keep the default mapped path unchanged.
 
 ## Reading a pass/fail

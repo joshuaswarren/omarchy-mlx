@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <string_view>
+#include <strings.h>
 #include <vulkan/vulkan.h>
 
 #include "mlx/backend/omarchy/inference_weights.h"
@@ -25,6 +27,18 @@ inline bool should_use_device_local_activation(
     bool opt_in_enabled,
     size_t requested_size) {
   return opt_in_enabled && requested_size > kMinDeviceLocalActivationBytes;
+}
+
+inline int device_local_activations_env() {
+  static const int setting = []() -> int {
+    const char* value = std::getenv("MLX_OMARCHY_VRAM_ACTIVATIONS");
+    if (!value) {
+      return -1;
+    }
+    return strcasecmp(value, "1") == 0 || strcasecmp(value, "on") == 0 ||
+        strcasecmp(value, "true") == 0 || strcasecmp(value, "yes") == 0;
+  }();
+  return setting;
 }
 
 // Whether the device-local activation route applies for a device type and

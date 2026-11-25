@@ -580,10 +580,8 @@ bool device_local_activations_enabled() {
     return false;
   }
   auto& dev = device();
-  const int env_setting = std::getenv("MLX_OMARCHY_VRAM_ACTIVATIONS") == nullptr
-      ? -1
-      : (env_flag("MLX_OMARCHY_VRAM_ACTIVATIONS") ? 1 : 0);
-  if (!device_local_activations_default(dev.physical_type(), env_setting)) {
+  if (!device_local_activations_default(
+          dev.physical_type(), device_local_activations_env())) {
     return false;
   }
   return vram_activation_memory_type(
