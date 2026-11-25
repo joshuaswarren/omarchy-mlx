@@ -13,7 +13,7 @@ Each test pins one of those against the real files.
 import pathlib
 import unittest
 
-from test_apply_mlx_lm_patches import make_fakebin, run_script
+from tests.test_apply_mlx_lm_patches import make_fakebin, run_script
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
