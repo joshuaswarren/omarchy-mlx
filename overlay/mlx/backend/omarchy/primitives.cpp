@@ -10380,7 +10380,7 @@ bool dispatch_quantized_gemv_group(
                 s,
                 side.member_index,
                 members.size(),
-                members[side.member_index].out_view != nullptr,
+                members[side.member_index].out_view.has_value(),
                 static_cast<int>(view.dtype()),
                 view.ndim(),
                 view.shape(-2),
