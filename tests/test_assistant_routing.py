@@ -313,6 +313,11 @@ class EvaluateRouteTests(unittest.TestCase):
                   ("busy_int", dict(answer(), busy=1)),
                   ("timed_out_str", dict(answer(), timed_out="false")),
                   ("timed_out_null", dict(answer(), timed_out=None))]
+        cases += [("error_none", {"error": None}),
+                  ("error_bool", {"error": False}),
+                  ("error_int", {"error": 1}),
+                  ("error_list", {"error": ["boom"]}),
+                  ("error_with_busy_str", {"error": "x", "busy": "false"})]
         for name, reply in cases:
             with self.subTest(case=name):
                 worker = FakeWorker()
@@ -322,6 +327,22 @@ class EvaluateRouteTests(unittest.TestCase):
                 self.assertEqual(out.reason, "invalid_output")
                 self.assertIs(out.timed_out, False)
                 self.assertIsInstance(out.latency_ms, float)
+
+    def test_worker_error_reply_returns_worker_error(self):
+        for name, reply in (("message", {"error": "boom"}),
+                            ("empty_message", {"error": ""})):
+            with self.subTest(case=name):
+                out = evaluate_route(self.DECISION_TEXT, worker=FakeWorker(reply))
+                self.assertIsNone(out.route)
+                self.assertEqual(out.reason, "worker_error")
+                self.assertIs(out.timed_out, False)
+                self.assertIsInstance(out.latency_ms, float)
+        # Only the bare error reply is a worker error; an answer beside an
+        # "error" key is still read as an answer.
+        reply = dict(_good_response("structured_decision", prob=0.7, margin=0.4, act=0.9),
+                     error="boom")
+        out = evaluate_route(self.DECISION_TEXT, worker=FakeWorker(reply))
+        self.assertEqual(out.reason, "extractor_and_head")
 
     def test_sum_off_is_invalid_distribution(self):
         worker = FakeWorker(_bad_response("sum_off"))
@@ -396,11 +417,21 @@ class RoutingWorkerTests(unittest.TestCase):
         self.assertEqual(out.reason, "previous_call_pending")
 
     def test_worker_error_is_reported_not_raised(self):
-        def fail():
-            raise ConnectionRefusedError("no decision worker")
-        out = evaluate_route(EvaluateRouteTests.DECISION_TEXT, worker=self._worker(fail).bind({}))
-        self.assertIsNone(out.route)
-        self.assertEqual(out.reason, "invalid_output")
+        cases = (
+            ("connection_refused", ConnectionRefusedError("no decision worker")),
+            ("http_refusal", RuntimeError("Decision worker refused the request (HTTP 500): internal error")),
+            ("empty_message", RuntimeError()),
+        )
+        for name, error in cases:
+            with self.subTest(case=name):
+                def fail(exc=error):
+                    raise exc
+                out = evaluate_route(EvaluateRouteTests.DECISION_TEXT,
+                                     worker=self._worker(fail).bind({}))
+                self.assertIsNone(out.route)
+                self.assertEqual(out.reason, "worker_error")
+                self.assertIs(out.timed_out, False)
+                self.assertIsInstance(out.latency_ms, float)
 
 
 # ---------------------------------------------------------------- coordinator gate
