@@ -1057,6 +1057,14 @@ def test_addcmul_addcdiv():
         # bool+int mix promotes to int — legal
         (torch.ops.aten.addcmul.default,
          (b3, torch.tensor([2, 2, 2]), torch.tensor([3, 3, 3])), {}),
+        # value applies to t1 first: 0*(t1*t2) with an inf fp32 product
+        # would be NaN; (0*t1)*t2 is 0 like torch
+        (torch.ops.aten.addcmul.default,
+         (a, torch.full((2, 3), 1e20), torch.full((2, 3), 1e20)),
+         {"value": 0}),
+        (torch.ops.aten.addcdiv.default,
+         (a, torch.full((2, 3), 1e20), torch.full((2, 3), 1e-20)),
+         {"value": 0}),
     ]
     for target, ins, kw in cases:
         fx_run(target, ins, kw)

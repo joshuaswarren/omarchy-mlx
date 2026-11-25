@@ -1153,8 +1153,10 @@ def _addcmul(a, t1, t2, value=1, **k):
     if isinstance(value, float) and _is_integral_dtype(dt):
         value = int(value)
     if dt == mx.float16 or dt == mx.bfloat16 or dt == mx.float32:
-        return (_as_f32(a) + value * (_as_f32(t1) * _as_f32(t2))).astype(dt)
-    return _mx(a) + value * (_mx(t1) * _mx(t2))
+        # torch applies value to t1 first: (value*t1)*t2 stays finite in
+        # fp32 where 0*(t1*t2) would be 0*inf = NaN
+        return (_as_f32(a) + (value * _as_f32(t1)) * _as_f32(t2)).astype(dt)
+    return _mx(a) + (value * _mx(t1)) * _mx(t2)
 
 
 def _addcdiv(a, t1, t2, value=1, **k):
@@ -1171,8 +1173,8 @@ def _addcdiv(a, t1, t2, value=1, **k):
     dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
                         _dtype_of(t2))
     if dt == mx.float16 or dt == mx.bfloat16 or dt == mx.float32:
-        return (_as_f32(a) + value * (_as_f32(t1) / _as_f32(t2))).astype(dt)
-    return _mx(a) + value * (_mx(t1) / _mx(t2))
+        return (_as_f32(a) + (value * _as_f32(t1)) / _as_f32(t2)).astype(dt)
+    return _mx(a) + (value * _mx(t1)) / _mx(t2)
 
 
 def _arange(*a, **k):
