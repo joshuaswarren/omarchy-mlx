@@ -870,14 +870,14 @@ def watch_parent_fd(fd: int, on_eof) -> None:
 
 
 def watch_parent_from_env() -> bool:
-    """Start the lifetime watchdog when the manager passed a lifetime fd.
+    """Start the lifetime watchdog when LIFETIME_FD_ENV is set.
     When the pipe closes the worker SIGTERMs itself, so the manager's death
-    never leaves an orphan that still holds weights. Returns False for a
-    standalone launch (no fd), where nothing is watched. A set value that is
-    not an open pipe fd above stdio raises BudgetError before any thread
-    starts: the manager meant to supervise this child."""
-    raw = os.environ.get(LIFETIME_FD_ENV, "")
-    if not raw:
+    never leaves an orphan that still holds weights. Returns False when
+    LIFETIME_FD_ENV is unset (standalone launch). Any set value, including '',
+    that is not an open pipe fd above stdio raises BudgetError before any
+    thread starts: the manager meant to supervise this child."""
+    raw = os.environ.get(LIFETIME_FD_ENV)
+    if raw is None:
         return False
     fd = _env_fd(raw)
     if not _pipe_read_end(fd):

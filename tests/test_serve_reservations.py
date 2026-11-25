@@ -567,7 +567,7 @@ class ParentLifetimeWatchTests(unittest.TestCase):
         self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
         sys.set_int_max_str_digits(4300)
         thread = unittest.mock.Mock(side_effect=AssertionError("thread started"))
-        values = ("\u00b2", "\u0665", "1" * 5000, "999999999999999999999",
+        values = ("", "\u00b2", "\u0665", "1" * 5000, "999999999999999999999",
                   str(2**31), "-1", "+5", " 5", "5 ", "1_0", "abc", "3.0",
                   "0", "1", "2", str(2**31 - 1),
                   *(str(fd) for fd in _non_read_fds(self)))
@@ -579,9 +579,6 @@ class ParentLifetimeWatchTests(unittest.TestCase):
                         with self.assertRaises(budget.BudgetError) as cm:
                             budget.watch_parent_from_env()
                     self.assertIn(budget.LIFETIME_FD_ENV, str(cm.exception))
-            with unittest.mock.patch.object(
-                    budget.os, "environ", {budget.LIFETIME_FD_ENV: ""}):
-                self.assertFalse(budget.watch_parent_from_env())
             with unittest.mock.patch.object(budget.os, "environ", {}):
                 self.assertFalse(budget.watch_parent_from_env())
         thread.assert_not_called()
@@ -637,7 +634,7 @@ class ParentLifetimeWatchTests(unittest.TestCase):
         claim = unittest.mock.Mock(side_effect=AssertionError("claim attempted"))
         thread = unittest.mock.Mock(side_effect=AssertionError("thread started"))
         kill = unittest.mock.Mock(side_effect=AssertionError("kill sent"))
-        for raw in ("\u00b2", "1", str(2**70)):
+        for raw in ("", "\u00b2", "1", str(2**70)):
             with self.subTest(raw=raw[:24]):
                 err = io.StringIO()
                 with unittest.mock.patch.object(
@@ -649,7 +646,9 @@ class ParentLifetimeWatchTests(unittest.TestCase):
                     with self.assertRaises(SystemExit) as cm:
                         _mlxlm_server.start_managed()
                 self.assertEqual(cm.exception.code, 3)
-                self.assertTrue(err.getvalue().startswith(
+                lines = err.getvalue().splitlines()
+                self.assertEqual(len(lines), 1, err.getvalue())
+                self.assertTrue(lines[0].startswith(
                     f"error: {budget.LIFETIME_FD_ENV}"), err.getvalue())
         for mock in (claim, thread, kill):
             mock.assert_not_called()
@@ -663,7 +662,7 @@ class ParentLifetimeWatchTests(unittest.TestCase):
                        PYTHONPATH=str(REPO_ROOT / "serve"),
                        PYTHONIOENCODING="utf-8")
             env.pop(budget.CLAIM_FD_ENV, None)
-            for raw in ("abc", "1", str(2**70)):
+            for raw in ("", "abc", "1", str(2**70)):
                 with self.subTest(raw=raw[:24]):
                     env[budget.LIFETIME_FD_ENV] = raw
                     proc = subprocess.run(
