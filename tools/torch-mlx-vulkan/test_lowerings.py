@@ -860,6 +860,58 @@ def test_bitwise_and_():
     print("test_bitwise_and_ PASS")
 
 
+def test_arc_trig():
+    # PT-AH: the circular arc-trig set, the highest-ranked unclaimed aten
+    # family in w7R's PAR-41 fallback census: acos rank 53, asin 77,
+    # atan 79, atan2 78 (hyperbolic sibling trio owned by wB1). Prove the
+    # eager executor lowers each aten op (stats["mlx"]) and matches torch
+    # CPU at fp32 and bf16; atan2 additionally covers broadcasting.
+    u = torch.tensor([[0.5, -0.75], [0.125, 0.999]])
+    w = torch.tensor([[0.2, -0.3], [-0.6, 0.45]])
+    ub, wb = u.bfloat16(), w.bfloat16()
+    cases = [
+        (torch.ops.aten.acos.default, (u,), torch.acos(u), "acos"),
+        (torch.ops.aten.acos.default, (ub,), torch.acos(ub), "acos"),
+        (torch.ops.aten.asin.default, (u,), torch.asin(u), "asin"),
+        (torch.ops.aten.asin.default, (ub,), torch.asin(ub), "asin"),
+        (torch.ops.aten.atan.default, (u,), torch.atan(u), "atan"),
+        (torch.ops.aten.atan.default, (ub,), torch.atan(ub), "atan"),
+        (torch.ops.aten.atan2.default, (u, w), torch.atan2(u, w), "atan2"),
+        (torch.ops.aten.atan2.default, (ub, wb), torch.atan2(ub, wb), "atan2"),
+        (torch.ops.aten.atan2.default, (u, w[0]), torch.atan2(u, w[0]), "atan2"),
+    ]
+    for target, ins, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, name)
+        assert any(name in s for s in stats["mlx"]), (stats, name)
+        assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                           atol=2e-2), (name, out.float().numpy())
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (name, out.dtype, ref.dtype)
+    # domain guard: acos/asin inputs outside [-1, 1] must produce NaN like
+    # torch, not a wrong number or an exception
+    oob = torch.tensor([1.5, -1.5])
+    for target in (torch.ops.aten.acos.default, torch.ops.aten.asin.default):
+        g = torch.fx.Graph()
+        p = g.placeholder("p0")
+        n = g.call_function(target, (p,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(oob)
+        assert stats["cpu"] == [], stats
+        assert bool(torch.isnan(out).all()) == bool(
+            torch.isnan(target(oob)).all()), target
+    print("test_arc_trig PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -883,4 +935,5 @@ if __name__ == "__main__":
     test_sum()
     test_reductions()
     test_bitwise_and_()
+    test_arc_trig()
     print("ALL PASS")
