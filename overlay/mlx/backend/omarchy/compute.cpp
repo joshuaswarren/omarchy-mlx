@@ -660,6 +660,7 @@
 #include "fast_rms_norm_bf16.h"
 #include "fast_rms_norm_apple_bf16.h"
 #include "fast_add_norm_apple_bf16.h"
+#include "fast_add_norm_vec_bf16.h"
 #include "fast_layer_norm_f32.h"
 #include "fast_layer_norm_f16.h"
 #include "fast_layer_norm_bf16.h"
@@ -2351,6 +2352,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           qmm_vec_q4_outgate_resnorm_bf16_r2s8w2_size};
     case ComputeKernel::FastAddRmsNormAppleBF16:
       return {fast_add_norm_apple_bf16, fast_add_norm_apple_bf16_size};
+    case ComputeKernel::FastAddRmsNormVecBF16:
+      return {fast_add_norm_vec_bf16, fast_add_norm_vec_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

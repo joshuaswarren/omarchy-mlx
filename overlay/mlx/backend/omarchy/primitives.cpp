@@ -11482,14 +11482,27 @@ bool dispatch_add_norm_pair(
       binding(add_in[1]),
       binding(add_node),
       binding(norm_node)};
+  // Vectorized-IO variant (w70, MLX_OMARCHY_ADD_NORM_VEC=1): u32-typed
+  // buffers, two bf16 per transaction. Confined to the widths where the
+  // scalar kernel itself takes the contiguous register path (identical
+  // per-thread ownership keeps the reduction bit-identical) and to even
+  // element offsets so u32 pairs stay aligned; a vector weight needs an
+  // even rhs_offset, a scalar weight reads one half-word in place.
+  const bool vec_ok =
+      omarchy::env_flag("MLX_OMARCHY_ADD_NORM_VEC") &&
+      (row_length == 2048 || row_length == 2560 || row_length == 4096) &&
+      (params.lhs_offset % 2u == 0u) && (params.aux_offset % 2u == 0u) &&
+      (params.matrix_m % 2u == 0u) && (params.output_offset % 2u == 0u) &&
+      (w.size() == 1u || params.rhs_offset % 2u == 0u);
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::FastAddRmsNormAppleBF16,
+      vec_ok ? omarchy::ComputeKernel::FastAddRmsNormVecBF16
+             : omarchy::ComputeKernel::FastAddRmsNormAppleBF16,
       bindings,
       params,
       std::min(params.output_size, omarchy::kMaxComputeGroupCountX));
   if (omarchy::env_str("MLX_OMARCHY_ADD_NORM_TRACE") != nullptr) {
     std::fprintf(
-        stderr, "[addnorm-fire] fired rows=%u k=%u\n", params.output_size, params.reduce_size);
+        stderr, "[addnorm-fire] fired rows=%u k=%u vec=%d\n", params.output_size, params.reduce_size, int(vec_ok));
   }
   return true;
 #undef ADD_NORM_REFUSE

@@ -1,0 +1,160 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Vectorized-IO fused residual Add + RMSNorm (bf16 packed in u32),
+// Apple-tree reduction. Same math and reduction order as
+// fast_add_norm_apple.comp — bit-exact by construction — but every
+// buffer is declared uint[] so each load/store transaction moves two
+// bf16 elements. Register path only: dispatch confines it to
+// row_length % 512 == 0 (8/10/16 elements per thread => 4/5/8 u32
+// words) with every element offset even.
+//
+//   h          = bf16_store(f32(x) + f32(r))     (exactly binary_vec.comp)
+//   res_out    = h
+//   norm_out   = bf16(widen(h) * rsqrt(mean(widen(h)^2) + eps) * w)
+//
+// Packing: element index e lives in u32 word e/2; even e is the low
+// half, odd e the high half. A widened odd element is `w & 0xffff0000`
+// verbatim; an even element is `w << 16`.
+//
+// Bindings identical to fast_add_norm_apple.comp: 0 = x, 1 = w, 2 = r,
+// 3 = res_out, 4 = norm_out. Offsets: lhs_offset = x, rhs_offset = w,
+// output_offset = norm_out, aux_offset = r, matrix_m = res_out, eps in
+// params.alpha, row count in params.output_size.
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+uint bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return (bits >> 16) | 0x40u;
+  }
+  return (bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16;
+}
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  uint values[];
+} input_data;
+layout(set = 0, binding = 1, std430) readonly buffer Weight {
+  uint values[];
+} weight_data;
+layout(set = 0, binding = 2, std430) readonly buffer Residual {
+  uint values[];
+} residual_data;
+layout(set = 0, binding = 3, std430) writeonly buffer ResOut {
+  uint values[];
+} res_out_data;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  uint values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+} params;
+
+const uint SIMD = 32u;
+const uint MAX_WORDS = 8u;      // 16 elements per thread max -> 8 u32 words
+shared float s_partial[8u];      // 8 subgroups -> 8 partial sums
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint sub_id = thread / SIMD;     // 0..7
+  uint lane = thread % SIMD;       // 0..31
+  uint row_length = params.reduce_size;
+  float eps = params.alpha;
+  // u32 word stride of one row; every element offset is even by the
+  // dispatch contract, so row starts stay word-aligned.
+  uint row_words = row_length / 2u;
+
+  for (uint row = gl_WorkGroupID.x; row < params.output_size;
+       row += gl_NumWorkGroups.x) {
+    uint x_word = (params.lhs_offset / 2u) + row * row_words;
+    uint r_word = (params.aux_offset / 2u) + row * row_words;
+    uint res_word = (params.matrix_m / 2u) + row * row_words;
+    uint out_word = (params.output_offset / 2u) + row * row_words;
+
+    float reg_h[MAX_WORDS * 2u];
+    uint reg_res[MAX_WORDS];
+    precise float reg_sq = 0.0;
+    uint n_reads = row_length / 256u;   // elements per thread: 8/10/16
+    uint n_words = n_reads / 2u;        // u32 words per thread: 4/5/8
+    uint wbase = thread * n_words;
+
+    for (uint j = 0u; j < n_words; ++j) {
+      uint xp = input_data.values[x_word + wbase + j];
+      uint rp = residual_data.values[r_word + wbase + j];
+      precise float sum0 =
+          uintBitsToFloat(xp << 16) + uintBitsToFloat(rp << 16);
+      precise float sum1 = uintBitsToFloat(xp & 0xffff0000u) +
+                           uintBitsToFloat(rp & 0xffff0000u);
+      uint lo = bf16_store(sum0);
+      uint hi = bf16_store(sum1);
+      reg_res[j] = lo | (hi << 16);
+      float h0 = uintBitsToFloat(lo << 16);
+      float h1 = uintBitsToFloat(hi << 16);
+      reg_h[2u * j] = h0;
+      reg_h[2u * j + 1u] = h1;
+      // Element-sequential accumulation: identical association to the
+      // scalar kernel's per-element reg_sq +=.
+      reg_sq += h0 * h0;
+      reg_sq += h1 * h1;
+      res_out_data.values[res_word + wbase + j] = reg_res[j];
+    }
+
+    float sub_partial = subgroupAdd(reg_sq);
+    if (lane == 0u) {
+      s_partial[sub_id] = sub_partial;
+    }
+    barrier();
+    float total;
+    if (sub_id == 0u) {
+      float v = (lane < 8u) ? s_partial[lane] : 0.0;
+      total = subgroupAdd(v);
+      if (lane == 0u) {
+        s_partial[0] = total;
+      }
+    }
+    barrier();
+    float mean_square = s_partial[0] / float(row_length);
+    float norm = inversesqrt(mean_square + eps);
+
+    uint w_word = params.rhs_offset / 2u;
+    uint w_shift = (params.rhs_offset & 1u) << 4;
+    for (uint j = 0u; j < n_words; ++j) {
+      uint wp =
+          (params.lhs_size == 1u)
+              ? ((weight_data.values[w_word] >> w_shift) & 0xffffu) *
+                    0x00010001u
+              : weight_data.values[w_word + wbase + j];
+      precise float norm_weight0 =
+          norm * uintBitsToFloat((wp & 0xffffu) << 16);
+      precise float norm_weight1 = norm * uintBitsToFloat(wp & 0xffff0000u);
+      precise float result0 = reg_h[2u * j] * norm_weight0;
+      precise float result1 = reg_h[2u * j + 1u] * norm_weight1;
+      output_data.values[out_word + wbase + j] =
+          bf16_store(result0) | (bf16_store(result1) << 16);
+    }
+    barrier();
+  }
+}

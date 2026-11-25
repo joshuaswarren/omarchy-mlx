@@ -1244,6 +1244,11 @@ enum class ComputeKernel : uint16_t {
   // rounds h with the shared RNE helper and the reduction consumes the
   // rounded values). Appended to keep profile kernel ids stable.
   FastAddRmsNormAppleBF16,
+  // Vectorized-IO variant (w70): u32-typed buffers, two bf16 per
+  // transaction. Same math and reduction order as FastAddRmsNormAppleBF16;
+  // dispatch confines it to row_length in {2048, 2560, 4096} with even
+  // element offsets so u32 pairs stay aligned.
+  FastAddRmsNormVecBF16,
   Count,
 };
 
