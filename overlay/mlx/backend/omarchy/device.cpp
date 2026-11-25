@@ -1987,14 +1987,16 @@ void Device::submit_worker_main() {
     {
       std::unique_lock<std::mutex> lk(submit_queue_mutex_);
       submit_queue_cv_.wait(lk, [this] {
-        return !submit_queue_.empty() || submit_worker_stop_;
+        return !recovery_jobs_.empty() || !submit_queue_.empty() ||
+            submit_worker_stop_;
       });
-      if (submit_queue_.empty()) {
+      if (recovery_jobs_.empty() && submit_queue_.empty()) {
         // Stop was requested and the queue drained.
         return;
       }
-      job = std::move(submit_queue_.front());
-      submit_queue_.pop_front();
+      auto& lane = recovery_jobs_.empty() ? submit_queue_ : recovery_jobs_;
+      job = std::move(lane.front());
+      lane.pop_front();
     }
     submit_space_cv_.notify_one();
     try {
@@ -2041,9 +2043,52 @@ void Device::push_recovery_job(std::function<void()> job) {
     job();
     return;
   }
-  submit_queue_.push_back(std::move(job));
+  recovery_jobs_.push_back(std::move(job));
   lk.unlock();
   submit_queue_cv_.notify_one();
+}
+
+void Device::run_queued_recovery_jobs() {
+  std::deque<std::function<void()>> jobs;
+  {
+    std::lock_guard<std::mutex> lk(submit_queue_mutex_);
+    jobs.swap(recovery_jobs_);
+  }
+  for (auto& job : jobs) {
+    job();
+  }
+}
+
+bool Device::worker_wait_timeline(
+    const std::vector<VkSemaphore>& sems,
+    const std::vector<uint64_t>& values) {
+  // The job still carries the wait list in its VkSubmitInfo (already-
+  // signaled waits pass straight through the driver), so resolving here
+  // keeps the identical ordering contract while queue_mutex_ is held
+  // only for the submit ioctl itself.
+  VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+  info.semaphoreCount = static_cast<uint32_t>(sems.size());
+  info.pSemaphores = sems.data();
+  info.pValues = values.data();
+  for (;;) {
+    VkResult res = vk::device_table().WaitSemaphores(
+        device_, &info, kHangWatchPollNs);
+    if (res == VK_SUCCESS) {
+      return true;
+    }
+    if (res != VK_TIMEOUT) {
+      throw std::runtime_error(
+          std::string("[omarchy] submit worker timeline wait failed (") +
+          vk::result_string(res) +
+          "). The device may be lost; no CPU fallback is available.");
+    }
+    if (submit_worker_stop_) {
+      return false;
+    }
+    // A resubmit queued by the watchdog may be what publishes the signal
+    // this job waits on - run it rather than blocking it behind us.
+    run_queued_recovery_jobs();
+  }
 }
 
 void Device::shutdown_submit_worker() {
@@ -2064,8 +2109,14 @@ void Device::shutdown_submit_worker() {
 uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
   timeline::ScopedEvent tl_sig(
       timeline::Kind::QueueSubmit, timeline::SubKind::HostSignalTimeline);
-  std::lock_guard<std::mutex> lk(queue_mutex_);
-  uint64_t completion_value = completions().reserve();
+  uint64_t completion_value;
+  {
+    // Reserve with a placeholder under the order mutex so the FIFO's
+    // reservation order and the dispatcher's pending order agree.
+    std::lock_guard<std::mutex> olk(submit_order_mutex_);
+    completion_value = completions().reserve();
+    completions().enqueue_pending(completion_value);
+  }
   tl_sig.set_detail(completion_value);
   // Host-signal both timelines. This used to be an empty signal-only
   // QueueSubmit (no command buffer, no waits); Honeykrisp swallows that
@@ -2084,10 +2135,37 @@ uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
   ev.semaphore = semaphore;
   ev.value = value;
   VKX_CHECK(signal_fn(handle(), &ev));
-  VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-  cc.semaphore = completions().semaphore();
-  cc.value = completion_value;
-  VKX_CHECK(signal_fn(handle(), &cc));
+  // The completions publish must stay ordered with the queue work it can
+  // overtake: the counter may only advance to completion_value once
+  // every earlier reservation has retired - otherwise waiters and the
+  // drain would treat unsubmitted or in-flight completions as done.
+  // This is the same wait join paths use, so a lost signal upstream is
+  // recovered (or reported) by the watchdog rather than hanging here.
+  try {
+    if (completion_value > 1) {
+      const uint64_t prior = completion_value - 1;
+      wait_for_timeline_progress(
+          device_,
+          completions().semaphore(),
+          prior,
+          &completions(),
+          [prior] { return prior; },
+          this);
+    }
+    {
+      std::lock_guard<std::mutex> lk(queue_mutex_);
+      VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+      cc.semaphore = completions().semaphore();
+      cc.value = completion_value;
+      VKX_CHECK(signal_fn(handle(), &cc));
+    }
+  } catch (...) {
+    // A reserved value must always publish its entry: leave the
+    // placeholder drainable so waiters surface the error instead of
+    // blocking on an un-issued slot.
+    completions().enqueue(completion_value, {}, {});
+    throw;
+  }
   completions().enqueue(completion_value, {}, {});
   return completion_value;
 }
@@ -2120,74 +2198,77 @@ Device::RecoveryResult Device::recover_stalled_submissions(
             executing ? 1 : 0);
   }
 
-  // Execution evidence: the batch's started event (CmdSetEvent at
-  // TOP_OF_PIPE) fired, so the kernels ran and only the completion
-  // signal was lost. Mesa will not publish ANY queue-based signal once
-  // it has wedged a submission's timeline points (measured: fresh-value
-  // resubmission executed, timeline stayed at 0) - but vkSignalSemaphore
-  // from the host cannot be dropped (the in-tree empty-shape fix relies
-  // on exactly that). The wait has seen a full no-progress interval by
-  // definition of this call, so short kernels have long finished;
-  // host-publish the completion at a freshly reserved value.
-  if (executing) {
-    // The retained batches' user (event) semaphores are equally
-    // stranded: their ride-along signals were swallowed with the
-    // submission. Host-signal each at a bumped fresh value (timeline
-    // waits are >=), then publish the completion timeline.
-    auto stranded = completions.take_resubmit_batches(reserved_through);
-    for (auto& batch : stranded) {
-      for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
-        uint64_t current = 0;
-        if (vk::device_table().GetSemaphoreCounterValue(
-                device_, batch.signal_sems[i], &current) != VK_SUCCESS) {
-          current = 0;
-        }
-        batch.signal_values[i] =
-            std::max(batch.signal_values[i], current) + 1;
-      }
+  // Split the stranded batches by execution evidence, in ascending value
+  // order (take_resubmit_batches is a map walk, so replays publish
+  // increasing values):
+  //
+  // - started event SET: the batch's kernels ran and only the completion
+  //   signal was lost. Mesa will not publish ANY queue-based signal once
+  //   it has wedged a submission's timeline points (measured: fresh-value
+  //   resubmission executed, timeline stayed at 0) - but vkSignalSemaphore
+  //   from the host cannot be dropped (the in-tree empty-shape fix relies
+  //   on exactly that). The wait has seen a full no-progress interval by
+  //   definition of this call, so short kernels have long finished.
+  //   Replay the batch's ORIGINAL completion value: every lower
+  //   reservation was submitted before this batch could run, so the
+  //   replayed signal can never land ahead of a queued or in-flight
+  //   submission the way a freshly reserved value would.
+  //
+  // - started event UNSET (or absent): the batch never began. Resubmit
+  //   it below with fresh signal values - the dropped submission still
+  //   holds its original timeline points inside Mesa, and re-signaling
+  //   the same value creates a duplicate point Mesa does not publish.
+  //   Timeline waits are >=, so strictly higher values satisfy every
+  //   existing waiter.
+  auto stranded = completions.take_resubmit_batches(reserved_through);
+  std::vector<CompletionDispatcher::ResubmitBatch> batches;
+  static PFN_vkSignalSemaphore signal_fn = nullptr;
+  if (!signal_fn) {
+    signal_fn = reinterpret_cast<PFN_vkSignalSemaphore>(
+        vk::device_table().GetDeviceProcAddr(
+            handle(), "vkSignalSemaphore"));
+  }
+  bool replayed = false;
+  for (auto& batch : stranded) {
+    const bool ran = batch.started != VK_NULL_HANDLE &&
+        vk::device_table().GetEventStatus(device_, batch.started) ==
+            VK_EVENT_SET;
+    if (!ran) {
+      batches.push_back(std::move(batch));
+      continue;
     }
-    uint64_t fresh = completions.reserve();
-    static PFN_vkSignalSemaphore signal_fn = nullptr;
-    if (!signal_fn) {
-      signal_fn = reinterpret_cast<PFN_vkSignalSemaphore>(
-          vk::device_table().GetDeviceProcAddr(
-              handle(), "vkSignalSemaphore"));
-    }
+    replayed = true;
+    // The batch's user (event) semaphores are equally stranded: their
+    // ride-along signals were swallowed with the submission. Host-signal
+    // each at a bumped fresh value (timeline waits are >=), and replay
+    // the original completion value.
     VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
     cc.semaphore = completions.semaphore();
-    cc.value = fresh;
+    cc.value = batch.value;
     VKX_CHECK(signal_fn(handle(), &cc));
-    for (auto& batch : stranded) {
-      for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
-        VkSemaphoreSignalInfo us{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-        us.semaphore = batch.signal_sems[i];
-        us.value = batch.signal_values[i];
-        VKX_CHECK(signal_fn(handle(), &us));
+    for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
+      uint64_t current = 0;
+      if (vk::device_table().GetSemaphoreCounterValue(
+              device_, batch.signal_sems[i], &current) != VK_SUCCESS) {
+        current = 0;
       }
+      VkSemaphoreSignalInfo us{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+      us.semaphore = batch.signal_sems[i];
+      us.value = std::max(batch.signal_values[i], current) + 1;
+      VKX_CHECK(signal_fn(handle(), &us));
     }
     fprintf(
         stderr,
-        "[rtmod] SUBMIT-RECOVER tid=%lu host-signaled completion cv=%llu after "
-        "executed-but-unsignaled batch (round %u)\n",
+        "[rtmod] SUBMIT-RECOVER tid=%lu host-signaled completion cv=%llu "
+        "replaying executed-but-unsignaled batch (round %u)\n",
         (unsigned long)syscall(SYS_gettid),
-        (unsigned long long)fresh,
+        (unsigned long long)batch.value,
         round + 1);
-    // Every reserved value needs a pending completion entry: join paths
-    // wait drained_value_ >= counter, and the fresh value's drain is what
-    // lets drained_value_ catch up past the original completion.
-    completions.enqueue(fresh, {}, {});
-    return RecoveryResult::kRecovered;
   }
-
-  // No execution evidence: the batch never began. Resubmit it with
-  // fresh signal values - the dropped submission still holds its
-  // original timeline points inside Mesa, and re-signaling the same
-  // value creates a duplicate point Mesa does not publish. Timeline
-  // waits are >=, so strictly higher values satisfy every existing
-  // waiter.
-  std::vector<CompletionDispatcher::ResubmitBatch> batches =
-      completions.take_resubmit_batches(reserved_through);
   if (batches.empty()) {
+    if (replayed) {
+      return RecoveryResult::kRecovered;
+    }
     if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
       fprintf(stderr, "[rtmod] RECOVER-FALSE tid=%lu empty-batches\n", (unsigned long)syscall(SYS_gettid));
     }
@@ -2227,10 +2308,16 @@ Device::RecoveryResult Device::recover_stalled_submissions(
     // every queue-signaled value in increasing order.
     std::lock_guard<std::mutex> olk(submit_order_mutex_);
     uint64_t fresh_completion = completions.reserve();
+    completions.enqueue_pending(fresh_completion);
     batch.value = fresh_completion;
     batch.signal_values.back() = fresh_completion;
     push_recovery_job([this, batch = std::move(batch)]() mutable {
       const uint64_t value = batch.value;
+      if (!batch.wait_sems.empty() &&
+          !worker_wait_timeline(batch.wait_sems, batch.wait_values)) {
+        this->completions().enqueue(value, {}, {});
+        return;
+      }
       VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
       VkTimelineSemaphoreSubmitInfo timeline{
           VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
@@ -2695,11 +2782,34 @@ void CompletionDispatcher::enqueue(
   while (it != pending_.begin() && (it - 1)->value > value) {
     --it;
   }
+  if (it != pending_.begin() && (it - 1)->value == value) {
+    // The reserve-time placeholder: fill it and mark the signal issued.
+    auto& pending = *(it - 1);
+    pending.temporaries = std::move(temporaries);
+    pending.handlers = std::move(handlers);
+    pending.started = started;
+    pending.issued = true;
+  } else {
+    pending_.insert(
+        it,
+        Completion{value,
+                   std::move(temporaries),
+                   std::move(handlers),
+                   started,
+                   /*issued=*/true});
+  }
+  cv_.notify_all();
+}
+
+void CompletionDispatcher::enqueue_pending(uint64_t value) {
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto it = pending_.end();
+  while (it != pending_.begin() && (it - 1)->value > value) {
+    --it;
+  }
   pending_.insert(
       it,
-      Completion{
-          value, std::move(temporaries), std::move(handlers), started});
-  cv_.notify_all();
+      Completion{value, {}, {}, VK_NULL_HANDLE, /*issued=*/false});
 }
 
 void CompletionDispatcher::reset_progress_event(VkEvent event) {
@@ -2756,15 +2866,23 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
   std::vector<Completion> ready;
   {
     std::lock_guard<std::mutex> lk(mutex_);
-    // reserve() and enqueue() preserve increasing value order.
-    while (!pending_.empty() && pending_.front().value <= max_value) {
+    // reserve() and enqueue() preserve increasing value order. An
+    // entry whose queue signal was never issued (reserved but not yet
+    // submitted) blocks the drain even when a later signal jumped the
+    // counter past it - drained_value_ must never mark unsubmitted work
+    // complete.
+    while (!pending_.empty() && pending_.front().value <= max_value &&
+           pending_.front().issued) {
       ready.push_back(std::move(pending_.front()));
       pending_.pop_front();
     }
     // Their retained submit records completed - recovery must never
-    // resubmit them again.
+    // resubmit them again. Bound the erase by what actually drained: a
+    // counter that jumped past an un-issued reservation must not strip
+    // its resubmit record.
     resubmitable_.erase(
-        resubmitable_.begin(), resubmitable_.upper_bound(max_value));
+        resubmitable_.begin(),
+        resubmitable_.upper_bound(ready.empty() ? 0 : ready.back().value));
   }
   if (ready.empty()) {
     tl_drain.cancel();

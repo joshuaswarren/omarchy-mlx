@@ -349,12 +349,23 @@ class CompletionDispatcher {
     std::vector<std::shared_ptr<void>> temporaries;
     std::vector<std::function<void()>> handlers;
     VkEvent started;
+    // True only once the queue signal for this value has been issued to
+    // the driver (or the host published the value). Reserved values carry
+    // a placeholder entry with issued=false from reserve() time so a
+    // host-side signal that jumps the counter past a not-yet-submitted
+    // job can never drain past it: drain_through() stops at un-issued
+    // entries, keeping drained_value_ truthful.
+    bool issued{false};
   };
 
   uint64_t reserve();
   // Newest value handed out by reserve() (0 when none): everything
   // reserved up to here is already submitted or submitting.
   uint64_t last_reserved();
+  // Insert the placeholder entry for a reserved value. Call under
+  // submit_order_mutex_ immediately after reserve() so the placeholder
+  // exists before any later signal can advance the counter past it.
+  void enqueue_pending(uint64_t value);
   void enqueue(
       uint64_t value,
       std::vector<std::shared_ptr<void>> temporaries,
@@ -378,6 +389,10 @@ class CompletionDispatcher {
     std::vector<uint64_t> wait_values;
     std::vector<VkSemaphore> signal_sems;
     std::vector<uint64_t> signal_values;
+    // The batch's started event: recovery uses it to tell the
+    // executed-but-unsignaled class (host-replay the original value)
+    // from the never-submitted class (resubmit at a fresh value).
+    VkEvent started{VK_NULL_HANDLE};
   };
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
@@ -519,6 +534,24 @@ class Device {
   // still hold submit_order_mutex(), keeping their fresh values in
   // queue order.
   void push_recovery_job(std::function<void()> job);
+  // True once shutdown_submit_worker() requested the stop. The worker's
+  // dependency wait ticks check it so the join can never park behind a
+  // lost signal.
+  bool submit_worker_stopping() const {
+    return submit_worker_stop_;
+  }
+  // Run every queued recovery job now, inline on the caller. Called by
+  // the submit worker between dependency-wait ticks: a job waiting on a
+  // dropped signal must not block the resubmission that can publish it.
+  void run_queued_recovery_jobs();
+  // Resolve a job's timeline waits on the caller's thread, outside
+  // queue_mutex_. Returns false when the worker is stopping; throws on
+  // driver error. Honeykrisp resolves in-order waits host-side inside
+  // vkQueueSubmit, so doing it here keeps queue_mutex_ - which the
+  // watchdog needs to recover a lost signal - held only for the ioctl.
+  bool worker_wait_timeline(
+      const std::vector<VkSemaphore>& sems,
+      const std::vector<uint64_t>& values);
   // Stop the worker after draining the FIFO and join it. Idempotent;
   // teardown_vulkan() calls it before the device idle wait so queued
   // submissions reach the driver while the device is still alive.
@@ -615,6 +648,11 @@ class Device {
   std::condition_variable submit_queue_cv_;
   std::condition_variable submit_space_cv_;
   std::deque<std::function<void()>> submit_queue_;
+  // Recovery resubmits jump the normal FIFO: a job parked in a
+  // dependency wait on a dropped signal must not hold back the
+  // resubmission that publishes it. The worker drains this lane first,
+  // including between dependency-wait ticks.
+  std::deque<std::function<void()>> recovery_jobs_;
   std::thread submit_worker_;
   bool submit_worker_started_{false};
   bool submit_worker_stop_{false};

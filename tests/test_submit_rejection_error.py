@@ -1,94 +1,164 @@
-"""A rejected submission must surface as an invalid submission, not device-lost.
+"""Submit-path failure injection: rejection, drops, and host-signal order.
 
-Issue omarchy-mlx#526: on the Apple M6 (G18G B1) the kernel's submit
-admission rejects a malformed command buffer with -EINVAL, and Borealis
-maps that ioctl failure to vk_device_set_lost -> VK_ERROR_DEVICE_LOST.
-The backend currently throws "dt.QueueSubmit(...) failed with
-VK_ERROR_DEVICE_LOST", which reads as a GPU hang and names none of the
-parameters the kernel rejected. A synchronous QueueSubmit failure is a
-rejection of THIS submission -- a genuinely lost device is discovered
-asynchronously at a wait or poll, not inside the submit call.
+Three observable contracts of the submit worker and the recovery ladder,
+each exercised by driving real submissions with the deterministic
+fault-injection env hooks in CommandEncoder::submit():
 
-The contract tested here: the encoder's submit path checks the
-vkQueueSubmit result itself and, on failure, throws an error that calls
-the failure an invalid submission and names the failing parameters --
-the submission ordinal, completion value, encoder id, node count, work
-estimate, command-buffer presence, and the wait/signal semaphore values
-carried by the VkSubmitInfo.
+- MLX_OMARCHY_TEST_REJECT_SUBMIT=<ordinals>: the Nth QueueSubmit returns
+  VK_ERROR_DEVICE_LOST, the way the kernel's -EINVAL admission rejection
+  maps through vk_device_set_lost (issue omarchy-mlx#526). The caller
+  must receive an invalid-submission error naming the rejected
+  parameters, and a job already queued behind the rejection must observe
+  the poisoned encoder before it enters the driver.
+
+- MLX_OMARCHY_TEST_DROP_SUBMIT=<ordinals>: the Nth QueueSubmit never
+  reaches the driver. The dependent submission's in-order wait must
+  resolve through the watchdog's resubmission, which cannot progress if
+  the worker holds queue_mutex_ inside a blocked submit: this test
+  hangs on a worker that waits inside the driver call.
+
+- MLX_OMARCHY_TEST_DROP_SIGNAL=<ordinals>: the Nth batch executes but
+  its signals are stripped. Recovery must replay the batch's ORIGINAL
+  completion value - host-signaling a freshly reserved value would
+  advance the shared counter past submissions still queued in the FIFO
+  and mark them complete before they run.
+
+Each case runs in a subprocess so the process-global ordinal counter and
+the fault env are deterministic. A subprocess that exits non-zero, hangs
+past the timeout, or returns wrong output fails.
 """
 
-import re
+import os
+import subprocess
+import sys
 import unittest
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ENCODER = REPO_ROOT / "overlay" / "mlx" / "backend" / "omarchy" / "encoder.cpp"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Short watchdog interval so the recovery ladder fires quickly; the
+# resubmit round-trip itself is sub-second.
+FAST_WATCHDOG = str(3 * 1000 * 1000 * 1000)
+
+WORKLOAD = r"""
+import mlx.core as mx
+
+a = mx.arange(64, dtype=mx.float32).reshape(8, 8)
+b = a + 1
+for _ in range(4):
+    b = (b @ a) + 1
+mx.eval(b)
+expected = None
+a2 = mx.arange(64, dtype=mx.float32).reshape(8, 8)
+b2 = a2 + 1
+for _ in range(4):
+    b2 = (b2 @ a2) + 1
+mx.eval(b2)
+import numpy as np
+ref = np.arange(64, dtype=np.float32).reshape(8, 8) + 1
+for _ in range(4):
+    ref = ref @ (np.arange(64, dtype=np.float32).reshape(8, 8)) + 1
+print("RESULT", float(mx.sum(b).item()))
+print("REF", float(ref.sum()))
+"""
 
 
-def _submit_body(src: str) -> str:
-    """Return the body of CommandEncoder::submit()."""
-    m = re.search(r"void\s+CommandEncoder::submit\s*\(", src)
-    assert m, "CommandEncoder::submit not found in encoder.cpp"
-    start = src.index("{", m.start())
-    depth, i = 0, start
-    while True:
-        if src[i] == "{":
-            depth += 1
-        elif src[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return src[start:i]
-        i += 1
+def _run(prog, env_extra, timeout=60):
+    env = dict(os.environ)
+    env["MLX_OMARCHY_HANG_NO_PROGRESS_NS"] = FAST_WATCHDOG
+    env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, "-c", prog],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=REPO_ROOT,
+    )
 
 
-class TestSubmitRejectionError(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.src = ENCODER.read_text()
-        cls.body = _submit_body(cls.src)
+class TestSubmitFaultInjection(unittest.TestCase):
+    def test_rejected_submit_surfaces_invalid_submission(self):
+        """The Nth QueueSubmit's synchronous failure reaches the caller
+        as an invalid submission naming the parameters the kernel
+        rejected (ordinal, completion value, encoder, node count, work
+        estimate, command-buffer presence, wait/signal values), and the
+        next queued job observes the poisoned encoder before it enters
+        the driver."""
+        prog = r"""
+import mlx.core as mx
 
-    def test_submit_result_is_checked(self):
-        self.assertIn(
-            "QueueSubmit",
-            self.body,
-            "submit() must call vkQueueSubmit",
-        )
-        self.assertRegex(
-            self.body,
-            r"VkResult\s+\w+\s*=\s*dt\.QueueSubmit|"
-            r"=\s*dt\.QueueSubmit[^;]*;[\s\S]{0,200}!=\s*VK_SUCCESS",
-            "the QueueSubmit result must be captured and checked, not "
-            "buried inside VKX_CHECK which can only name the call",
-        )
-
-    def test_failure_named_invalid_submission(self):
-        self.assertIn(
-            "invalid submission",
-            self.body,
-            "a synchronous QueueSubmit failure is a rejected submission "
-            "(kernel -EINVAL -> vk_device_set_lost), not a GPU hang; the "
-            "error must say so instead of bare VK_ERROR_DEVICE_LOST",
-        )
-
-    def test_failing_parameters_named(self):
-        idx = self.body.find("invalid submission")
-        if idx == -1:
-            self.fail("no invalid-submission error in submit()")
-        # The error construction around the phrase must embed the
-        # submission's identifying parameters, not just the VkResult.
-        window = self.body[max(0, idx - 3000) : idx + 3000]
+a = mx.arange(64, dtype=mx.float32).reshape(8, 8)
+b = a + 1
+mx.eval(b)  # submit 1: rejected on the worker; drains empty
+try:
+    c = (b @ a) + 1
+    mx.eval(c)  # submit 2: submit() rethrows the recorded rejection
+except RuntimeError as e:
+    print("ERROR", str(e))
+"""
+        res = _run(prog, {"MLX_OMARCHY_TEST_REJECT_SUBMIT": "1"})
+        self.assertEqual(
+            res.returncode, 0, f"stderr: {res.stderr[-2000:]}")
+        self.assertIn("ERROR", res.stdout, res.stdout + res.stderr[-2000:])
+        line = res.stdout.split("ERROR", 1)[1]
+        self.assertIn("invalid submission", line)
         for param in (
-            "completion_value",
-            "encoder_id_",
-            "node_count_",
-            "wait_values",
-            "signal_values",
+            "ordinal=",
+            "encoder=",
+            "cv=",
+            "nodes=",
+            "work=",
+            "command_buffer=",
+            "wait_values=",
+            "signal_values=",
         ):
-            self.assertIn(
-                param,
-                window,
-                f"rejection error must name the failing parameter {param}",
-            )
+            self.assertIn(param, line, f"missing {param} in: {line}")
+
+    def test_dropped_submit_does_not_block_recovery(self):
+        """A dropped submission must not park the recovery ladder or the
+        worker behind a dependent wait: the watchdog resubmits through
+        the recovery lane while the dependent job waits outside
+        queue_mutex_. On a worker that waits inside vkQueueSubmit this
+        test hangs until the timeout."""
+        res = _run(
+            WORKLOAD,
+            {"MLX_OMARCHY_TEST_DROP_SUBMIT": "1"},
+            timeout=90,
+        )
+        self.assertEqual(
+            res.returncode,
+            0,
+            f"exit={res.returncode} stderr: {res.stderr[-3000:]}")
+        self.assertIn("RESULT", res.stdout, res.stdout + res.stderr[-1000:])
+        self.assertIn("REF", res.stdout)
+        result = float(res.stdout.split("RESULT", 1)[1].split()[0])
+        ref = float(res.stdout.split("REF", 1)[1].split()[0])
+        self.assertAlmostEqual(result, ref, places=2)
+
+    def test_stripped_signal_replays_original_value(self):
+        """An executed-but-unsignaled batch is recovered by replaying its
+        original completion value, not by jumping the counter to a fresh
+        value that would mark still-queued submissions complete."""
+        res = _run(
+            WORKLOAD,
+            {"MLX_OMARCHY_TEST_DROP_SIGNAL": "1"},
+            timeout=90,
+        )
+        self.assertEqual(
+            res.returncode,
+            0,
+            f"exit={res.returncode} stderr: {res.stderr[-3000:]}")
+        self.assertIn("RESULT", res.stdout)
+        self.assertIn("REF", res.stdout)
+        result = float(res.stdout.split("RESULT", 1)[1].split()[0])
+        ref = float(res.stdout.split("REF", 1)[1].split()[0])
+        self.assertAlmostEqual(result, ref, places=2)
+        self.assertIn(
+            "replaying executed-but-unsignaled",
+            res.stderr,
+            "recovery must replay the batch's original completion value; "
+            f"stderr: {res.stderr[-2000:]}",
+        )
 
 
 if __name__ == "__main__":

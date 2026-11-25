@@ -1629,6 +1629,10 @@ void CommandEncoder::submit() {
       omarchy::allocator().flush_noncoherent(device_.handle());
     }
     const uint64_t completion_value = device_.completions().reserve();
+    // The placeholder entry lands with the reservation so no later signal
+    // - queue or host - can advance the counter past this value while its
+    // job still sits unsubmitted in the FIFO.
+    device_.completions().enqueue_pending(completion_value);
     // GPU work is now in flight: keep the CPU complex out of the deep idle
     // state while it runs (T8103 GPU performance state; cpu_pd_hold.h).
     cpu_pd_hold_note_submit(device_, completion_value);
@@ -1662,6 +1666,21 @@ void CommandEncoder::submit() {
     }
     const int submitted_slot = was_recording ? current_slot_ : -1;
     Device* device = &device_;
+    // If the job never reaches the FIFO, its placeholder must still
+    // publish - an un-issued entry blocks every later drain.
+    struct PublishOnThrow {
+      Device* d;
+      uint64_t v;
+      bool live{true};
+      ~PublishOnThrow() {
+        if (live) {
+          try {
+            d->completions().enqueue(v, {}, {});
+          } catch (...) {
+          }
+        }
+      }
+    } publish_guard{device, completion_value};
     device_.push_submit_job(
         [device,
          error_state,
@@ -1725,7 +1744,29 @@ void CommandEncoder::submit() {
               error_state->message = message;
             }
           };
+          // A poisoned encoder drops its queued submissions before they
+          // enter the driver: the rejection that poisoned it already
+          // published its own entry, so this value drains empty and the
+          // caller surfaces the recorded error at the next submit().
+          {
+            std::lock_guard<std::mutex> error_lk(error_state->mutex);
+            if (!error_state->message.empty()) {
+              device->completions().enqueue(completion_value, {}, {});
+              return;
+            }
+          }
           try {
+            // Resolve the batch's timeline waits here, outside
+            // queue_mutex_: Honeykrisp resolves the in-order wait
+            // host-side inside vkQueueSubmit, so blocking there held the
+            // mutex the watchdog needs for recovery and parked the
+            // shutdown join behind a lost signal. The wait list stays in
+            // the VkSubmitInfo, so driver-side ordering is unchanged.
+            if (!wait_sems.empty() &&
+                !device->worker_wait_timeline(wait_sems, wait_values)) {
+              device->completions().enqueue(completion_value, {}, {});
+              return;
+            }
             // Deterministic swallow simulation for the recovery ladder, in the
             // two field-observed classes:
             //
@@ -1765,10 +1806,17 @@ void CommandEncoder::submit() {
               }
               return false;
             };
+            // MLX_OMARCHY_TEST_REJECT_SUBMIT makes the Nth QueueSubmit
+            // return VK_ERROR_DEVICE_LOST, the way the kernel's -EINVAL
+            // admission rejection maps through vk_device_set_lost (issue
+            // #526): the synchronous failure must surface to the caller
+            // as an invalid submission naming the rejected parameters.
             bool simulate_drop =
                 env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SUBMIT");
             bool simulate_strip = !simulate_drop &&
                 env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SIGNAL");
+            bool simulate_reject = !simulate_drop && !simulate_strip &&
+                env_hits_ordinal("MLX_OMARCHY_TEST_REJECT_SUBMIT");
             if (simulate_strip) {
               si.signalSemaphoreCount = 0;
               si.pSignalSemaphores = nullptr;
@@ -1792,8 +1840,11 @@ void CommandEncoder::submit() {
               // timeline's one-generation rule (observing a later drain proves
               // the driver's submit-final cleanup), so a submit carries no
               // fence and the host issues no per-submit syncobj poll.
-              const VkResult submit_result = vk::device_table().QueueSubmit(
-                  device->queue(), 1, &si, VK_NULL_HANDLE);
+              const VkResult submit_result =
+                  simulate_reject
+                  ? VK_ERROR_DEVICE_LOST
+                  : vk::device_table().QueueSubmit(
+                        device->queue(), 1, &si, VK_NULL_HANDLE);
               if (submit_result != VK_SUCCESS) {
                 // A synchronous QueueSubmit failure is a rejection of this
                 // submission, not a GPU hang: on Borealis the kernel's -EINVAL
@@ -1846,6 +1897,7 @@ void CommandEncoder::submit() {
               CompletionDispatcher::ResubmitBatch batch;
               batch.value = completion_value;
               batch.cmd = cmd;
+              batch.started = started;
               batch.wait_sems = wait_sems;
               batch.wait_values = wait_values;
               batch.signal_sems = signal_sems;
@@ -1873,6 +1925,7 @@ void CommandEncoder::submit() {
               submit_t0 != 0 ? prof::host_ns() - submit_t0 : 0,
               submitted_slot);
         });
+    publish_guard.live = false;
   }
 
   recording_ = false;
