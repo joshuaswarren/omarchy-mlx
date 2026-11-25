@@ -33,11 +33,20 @@ def _disabled():
 
 
 def _wrap(module):
-    orig = module.gated_delta_update
-    if getattr(orig, "_omarchy_route", None) is not None:
+    orig = getattr(module, "gated_delta_update", None)
+    if orig is None or getattr(orig, "_omarchy_route", None) is not None:
+        return
+    if not hasattr(module, "compute_g"):
         return
     # The 0.32 API line calls mx.fast.gated_delta_update natively.
-    if "mx.fast.gated_delta_update" in inspect.getsource(module):
+    # getsource raises OSError/TypeError when the loader cannot provide
+    # source (namespace package, .pyc-only install); the module is then
+    # left untouched rather than turning a successful import into an
+    # exception.
+    try:
+        if "mx.fast.gated_delta_update" in inspect.getsource(module):
+            return
+    except (OSError, TypeError):
         return
     import mlx.core as mx
 
@@ -55,9 +64,18 @@ def _wrap(module):
                 q, k, v, a, b, A_log, dt_bias,
                 state=state, mask=mask, use_kernel=use_kernel,
                 *rest, **kw)
-        # Same routing as the vendored patch trio: prefill at Hk != Hv
-        # repeats q/k in Python (the fused kernel needs Hk == Hv);
-        # decode uses the raw route, which expands inside the backend.
+        # Same routing as the vendored patch trio, in the same order:
+        # beta/g and the float32 state come first so a state=None call
+        # (one-token prompt) still enters the raw route with an f32
+        # state like the patched file does; prefill at Hk != Hv repeats
+        # q/k in Python (the fused kernel needs Hk == Hv); decode uses
+        # the raw route, which expands inside the backend.
+        beta = mx.sigmoid(b)
+        g = module.compute_g(A_log, a, dt_bias)
+        if state is None:
+            state = mx.zeros(
+                (q.shape[0], v.shape[-2], v.shape[-1], q.shape[-1]),
+                dtype=mx.float32)
         Hk, Hv = q.shape[-2], v.shape[-2]
         if Hv != Hk and q.shape[1] > 1:
             q = mx.repeat(q, Hv // Hk, -2)
@@ -65,12 +83,6 @@ def _wrap(module):
         if q.shape[1] == 1 and hasattr(mx.fast, "gated_delta_update_raw"):
             return mx.fast.gated_delta_update_raw(
                 q, k, v, a, b, A_log, dt_bias, state, mask)
-        beta = mx.sigmoid(b)
-        g = module.compute_g(A_log, a, dt_bias)
-        if state is None:
-            state = mx.zeros(
-                (q.shape[0], v.shape[-2], v.shape[-1], q.shape[-1]),
-                dtype=mx.float32)
         return mx.fast.gated_delta_update(q, k, v, g, beta, state, mask)
 
     routed._omarchy_route = orig

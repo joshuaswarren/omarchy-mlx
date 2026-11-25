@@ -202,6 +202,33 @@ class GdnRouteShimTest(unittest.TestCase):
         self.assertIsNotNone(
             getattr(gd.gated_delta_update, "_omarchy_route", None))
 
+    def test_raw_route_gets_f32_state_when_state_none(self):
+        gd = self._import()
+        q = _T([1, 1, 16, 128])
+        v = _T([1, 1, 16, 128])
+        gd.gated_delta_update(q, q, v, "a", "b", "Al", "dtb")
+        import mlx.core as mx
+        call = mx.calls[-1]
+        self.assertEqual(call[0], "raw")
+        self.assertEqual(call[8], ("zeros", (1, 16, 128, 128), "f32"))
+
+    def test_sourceless_module_left_alone(self):
+        import py_compile
+        gd_dir = self._root / "mlx_lm" / "models"
+        py = gd_dir / "gated_delta.py"
+        py_compile.compile(str(py), str(gd_dir / "gated_delta.pyc"))
+        py.unlink()
+        gd = self._import()
+        self.assertTrue(gd.__file__.endswith(".pyc"))
+        self.assertIsNone(
+            getattr(gd.gated_delta_update, "_omarchy_route", None))
+
+    def test_module_without_exports_left_alone(self):
+        gd_dir = self._root / "mlx_lm" / "models"
+        (gd_dir / "gated_delta.py").write_text("X = 1\n")
+        gd = self._import()
+        self.assertFalse(hasattr(gd, "gated_delta_update"))
+
 
 if __name__ == "__main__":
     unittest.main()
