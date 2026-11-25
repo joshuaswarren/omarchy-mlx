@@ -2027,5 +2027,118 @@ class UndecodablePairFileTests(BasePairTest):
                 self.assertEqual(_on_pinned_stack(lambda: pairs._read_manifest(model_dir)), {})
 
 
+class DamagedDecisionArtifactTests(BasePairTest):
+    """A converted decision artifact whose manifest or encoder config is
+    damaged is a PairError from decision_requirement_bytes, never a raw
+    traceback or a silently wrong byte count."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        self.conv = self.make_converted_laya()
+        self.manifest = json.loads((self.conv / "manifest.json").read_text())
+
+    def _requirement(self):
+        return _on_pinned_stack(lambda: pairs.decision_requirement_bytes(self.conv, 4))
+
+    def _refused(self, pattern):
+        with self.assertRaisesRegex(pairs.PairError, pattern):
+            self._requirement()
+
+    def test_non_object_manifest_is_no_manifest(self):
+        for data in ("[1]", '"bad"', "123", "null"):
+            with self.subTest(data):
+                (self.conv / "manifest.json").write_text(data)
+                self.assertEqual(pairs._read_manifest(self.conv), {})
+                self._refused("manifest.json is missing, unreadable, empty or not a JSON object")
+
+    def test_manifest_fields_size_like_the_worker_or_refuse(self):
+        from mlx_omarchy_laya.server import total_estimate_bytes
+
+        cfg = types.SimpleNamespace(hidden_size=64, num_attention_heads=2,
+                                    intermediate_size=128)
+        header = self.manifest["weights_header"]
+        valid = {
+            "as-converted": {},
+            "weight-bytes-fallback": {"weights_header": {"weight_bytes": 16}},
+            "default-context": {"context_max_tokens": None},
+        }
+        for name, change in valid.items():
+            with self.subTest(name):
+                manifest = dict(self.manifest, **change)
+                (self.conv / "manifest.json").write_text(json.dumps(manifest))
+                self.assertEqual(self._requirement(),
+                                 total_estimate_bytes(manifest, cfg, "float16", 4))
+        elements = r"weights_header\.param_elements must be an int >= 1"
+        weight_bytes = r"weights_header\.weight_bytes must be an int >= 2"
+        context = "context_max_tokens must be an int >= 1"
+        cases = {
+            "no-header": ("weights_header", None, "weights_header must be an object"),
+            "list-header": ("weights_header", [1], "weights_header must be an object"),
+            "string-elements": ("weights_header", {"param_elements": "8"}, elements),
+            "bool-elements": ("weights_header", dict(header, param_elements=True), elements),
+            "zero-elements": ("weights_header", dict(header, param_elements=0), elements),
+            "no-element-count": ("weights_header", {"tensor_count": 2}, weight_bytes),
+            "float-bytes": ("weights_header", {"weight_bytes": 16.5}, weight_bytes),
+            "one-weight-byte": ("weights_header", {"weight_bytes": 1}, weight_bytes),
+            "string-context": ("context_max_tokens", "512", context),
+            "bool-context": ("context_max_tokens", True, context),
+            "negative-context": ("context_max_tokens", -1, context),
+            "list-context": ("context_max_tokens", [512], context),
+        }
+        for name, (key, value, pattern) in cases.items():
+            with self.subTest(name):
+                manifest = dict(self.manifest)
+                if value is None:
+                    del manifest[key]
+                else:
+                    manifest[key] = value
+                (self.conv / "manifest.json").write_text(json.dumps(manifest))
+                self._refused(pattern)
+
+    def test_refusal_names_a_container_by_type(self):
+        # a decoded container can be deeper than repr can recurse on 3.14
+        deep = [1]
+        for _ in range(1_000_000):
+            deep = [deep]
+        with self.assertRaisesRegex(pairs.PairError, "field must be an int >= 1, got list"):
+            pairs._artifact_int(deep, "field")
+
+    def test_estimate_overflow_is_pair_error(self):
+        for name, (key, value) in {
+                "float-workspace": ("context_max_tokens", 10 ** 160),
+                "int-parameters": ("weights_header", {"param_elements": 10 ** 4299}),
+        }.items():
+            with self.subTest(name):
+                manifest = dict(self.manifest, **{key: value})
+                (self.conv / "manifest.json").write_text(json.dumps(manifest))
+                self._refused("overflow the memory estimate")
+
+    def test_damaged_encoder_config(self):
+        path = self.conv / "encoder" / "config.json"
+        good = json.loads(path.read_text())
+        payloads = dict(UndecodablePairFileTests.PAYLOADS, **{
+            "not-json": b"{",
+            "non-object": b"[64, 2, 128]",
+        })
+        for name, data in payloads.items():
+            with self.subTest(name):
+                path.write_bytes(data)
+                self._refused("encoder config .* is (unreadable|not a JSON object)")
+        for name, value in {"missing": None, "bool": True, "zero": 0, "negative": -64,
+                            "float": 64.0, "string": "64"}.items():
+            with self.subTest(name):
+                cfg = dict(good)
+                if value is None:
+                    del cfg["hidden_size"]
+                else:
+                    cfg["hidden_size"] = value
+                path.write_text(json.dumps(cfg))
+                self._refused("config.json hidden_size must be an int >= 1")
+        path.unlink()
+        self._refused("encoder config .* is unreadable")
+
+
 if __name__ == "__main__":
     unittest.main()

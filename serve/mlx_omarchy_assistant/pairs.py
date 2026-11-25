@@ -530,11 +530,25 @@ def _decision_worker_argv(spec: managed.WorkerSpec) -> list[str]:
                                  max_questions=spec.max_questions)
 
 
+def _artifact_int(value, where: str, minimum: int = 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        # a container's repr can overflow the C stack its decode fit in (3.14)
+        shown = repr(value) if isinstance(value, (int, float)) else type(value).__name__
+        raise PairError(f"{where} must be an int >= {minimum}, got {shown}")
+    return value
+
+
 def _encoder_cfg(encoder_dir: Path):
     """The three fields the Laya workspace math needs, read with stdlib only
     (mlx_omarchy_laya.model pulls mlx.core)."""
-    cfg = json.loads((Path(encoder_dir) / "config.json").read_text(encoding="utf-8"))
-    return type("EncoderCfg", (), {k: int(cfg[k]) for k in
+    path = Path(encoder_dir) / "config.json"
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError) as exc:
+        raise PairError(f"encoder config {path} is unreadable: {exc}") from exc
+    if not isinstance(cfg, dict):
+        raise PairError(f"encoder config {path} is not a JSON object")
+    return type("EncoderCfg", (), {k: _artifact_int(cfg.get(k), f"{path} {k}") for k in
                                    ("hidden_size", "num_attention_heads",
                                     "intermediate_size")})()
 
@@ -542,9 +556,10 @@ def _encoder_cfg(encoder_dir: Path):
 def _read_manifest(model_dir: Path) -> dict:
     path = Path(model_dir) / "manifest.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def decision_requirement_bytes(model_dir: Path, max_questions: int) -> int:
@@ -555,9 +570,28 @@ def decision_requirement_bytes(model_dir: Path, max_questions: int) -> int:
 
     manifest = _read_manifest(model_dir)
     if not manifest:
-        raise PairError(f"{model_dir}: converted decision artifact has no manifest")
-    return int(total_estimate_bytes(manifest, _encoder_cfg(Path(model_dir) / "encoder"),
-                                    "float16", max_questions))
+        raise PairError(f"{Path(model_dir) / 'manifest.json'} is missing, unreadable, "
+                        "empty or not a JSON object")
+    # the fields total_estimate_bytes reads, checked so a damaged manifest is
+    # a named refusal, not a traceback or a silent zero-byte parameter floor
+    where = f"{model_dir}: manifest"
+    header = manifest.get("weights_header")
+    if not isinstance(header, dict):
+        raise PairError(f"{where} weights_header must be an object")
+    # weight_bytes is halved into fp16 elements, so 1 would still floor to zero
+    field, minimum = (("weight_bytes", 2) if header.get("param_elements") is None
+                      else ("param_elements", 1))
+    _artifact_int(header.get(field), f"{where} weights_header.{field}", minimum)
+    if manifest.get("context_max_tokens") is not None:
+        _artifact_int(manifest["context_max_tokens"], f"{where} context_max_tokens")
+    enc_cfg = _encoder_cfg(Path(model_dir) / "encoder")
+    try:
+        total = int(total_estimate_bytes(manifest, enc_cfg, "float16", max_questions))
+        float(total)  # the workspace bound is float math; the sum must fit a float too
+        return total
+    except OverflowError as exc:
+        raise PairError(f"{model_dir}: decision artifact sizes overflow the "
+                        f"memory estimate: {exc}") from exc
 
 
 DOWNLOAD_TIMEOUT_SECONDS = 3600.0
