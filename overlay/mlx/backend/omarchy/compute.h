@@ -1374,6 +1374,8 @@ class ComputeRuntime {
   std::mutex mutex_;
   // PT-T decode norm: one subgroup per row, single pass (w7H)
   FastRmsNormSubgroupBF16,
+  // gated decode norm: same zero-barrier single-subgroup design (w7H draft)
+  FastNormGatedSubgroupBF16,
 };
 
 } // namespace mlx::core::omarchy
