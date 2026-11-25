@@ -15,6 +15,15 @@
      try:
          yield
      finally:
+@@ -3,6 +3,7 @@
+ from dataclasses import dataclass, field
+ from typing import Any, Dict, List, Optional, Union
+ 
++import os
+ import mlx.core as mx
+ import mlx.nn as nn
+ from mlx.nn.layers.distributed import shard_inplace, shard_linear, sum_gradients
+
 --- a/mlx_lm/models/qwen3_5.py
 +++ b/mlx_lm/models/qwen3_5.py
 @@ -165,6 +165,17 @@
