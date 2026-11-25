@@ -20480,7 +20480,7 @@ void ScaledDotProductAttention::eval_gpu(
   // exact shape is advertised; the same
   // MLX_OMARCHY_SDPA_CAUSAL_FLASH env kills (=0) or forces (=1) it.
   {
-    const char* cf16_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+    const char* cf16_env = omarchy::env_str("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
     const auto& cf16_caps = encoder.device().capabilities();
     const bool cf16_shape = omarchy::cooperative_matrix_advertises(
         cf16_caps.cooperative_matrix_shapes,
