@@ -36,6 +36,7 @@
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
+#include "mlx/backend/omarchy/sdpa_prefill_select.h"
 // Per-operation i64/u64 elementwise blobs for the G18G packer
 // fallback in dispatch_int_elementwise_to (aurora-silicon/mesa#739).
 #include "elementwise_i64_g18_op0.h"
@@ -272,10 +273,11 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_2560");
   }
-  const std::string& chip = device.capabilities().device_name;
-  return chip.find("G13C") != std::string::npos ||
-      chip.find("G14C") != std::string::npos ||
-      chip.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
+  (void)device;
+  // No-gating default (2026-11-25): the 2560 subgroup-tree norm is
+  // allowed on every part; the subgroup-32 probe in apple_norm_enabled
+  // still confines dispatch, and no part measured a loss.
+  return true;
 }
 
 // The width-4096 subgroup-tree norm (sixteen contiguous values per lane of the
@@ -287,10 +289,11 @@ bool apple_norm_4096_allowed(const omarchy::Device& device) {
   if (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096");
   }
-  const std::string& chip = device.capabilities().device_name;
-  // G16S and G14C default on; G17C stays off pending M5 calibration.
-  return chip.find("G16S") != std::string::npos ||
-      chip.find("G14C") != std::string::npos;
+  (void)device;
+  // No-gating default (2026-11-25): the 4096 subgroup-tree norm is
+  // allowed on every part; the subgroup-32 probe in apple_norm_enabled
+  // still confines dispatch, and no part measured a loss.
+  return true;
 }
 
 bool apple_norm_enabled(
@@ -4468,16 +4471,12 @@ static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requeste
   if (const char* env = std::getenv("MLX_OMARCHY_QMV_SMALL_T_CAP")) {
     return std::min(requested_max, static_cast<int>(std::strtol(env, nullptr, 10)));
   }
-  const std::string& name = encoder.device().capabilities().device_name;
-  // Cap-8 parts: the batch-8 dispatch is a measured win at M=5..8
-  // (G16S/G13C long-standing; G13G/G14C 2026-11-24, receipts/2026-11-24-
-  // qmv-small-t-g13g.md: +4..56% vs the tile at M=8, bit-identical).
-  const bool wide = name.find("G13C") != std::string::npos ||
-      name.find("G16S") != std::string::npos ||
-      name.find("G13G") != std::string::npos ||
-      name.find("G14C") != std::string::npos;
-  int cap = wide ? 8 : 4;
-  return std::min(requested_max, cap);
+  // No-gating default (2026-11-25): the batch-8 dispatch is a
+  // measured win at M=5..8 on every part it ran on (G16S/G13C
+  // long-standing; G13G/G14C 2026-11-24, receipts/2026-11-24-
+  // qmv-small-t-g13g.md: +4..56% vs the tile at M=8, bit-identical);
+  // no part measured a loss, so every part caps at 8.
+  return std::min(requested_max, 8);
 }
 
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
@@ -17292,10 +17291,15 @@ void ScaledDotProductAttention::eval_gpu(
   // first, so this arm is prefill-shaped traffic only.
   bool bf16_fast = false;
   if (q.dtype() == bfloat16) {
-    if (const char* env = std::getenv("MLX_OMARCHY_SDPA_BF16_FAST");
-        env != nullptr && std::strcmp(env, "0") != 0) {
-      bf16_fast = true;
-    }
+    const auto& sel_caps = encoder.device().capabilities();
+    const bool coopmat_composed_capable =
+        sel_caps.cooperative_matrix_f32_8 &&
+        sel_caps.subgroup_size == 32u &&
+        !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+    bf16_fast = omarchy::sdpa_bf16_fast_enabled(
+        std::getenv("MLX_OMARCHY_SDPA_BF16_FAST"),
+        coopmat_composed_capable,
+        q_len > 1);
   }
 
   // Decode uses native Metal's 32-key online-softmax order directly over
@@ -17953,40 +17957,25 @@ void ScaledDotProductAttention::eval_gpu(
 #ifdef MLX_OMARCHY_BF16_DIRECT
   // Causal cooperative-matrix flash prefill (MatmulGap H35): scores never
   // reach memory, QK and PV run on the 8x8x8 matrix unit. Default ON for
-  // G16S when the device advertises the bf16 8x8 cooperative-matrix shape
+  // every part that advertises the bf16 8x8 cooperative-matrix shape
   // (receipts/2026-11-15-m4-pro-g16s-sdpa-causal-flash): Qwen3-8B-4bit
-  // pf2060 +6.2% median, ranges disjoint; pf520 and decode flat; 32-token
-  // sha identical. Other parts keep the composed default (G13C pf512
-  // missed the +2% bar, receipts/2026-10-09-causal-flash-gate3).
-  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=0 is the kill switch back to composed;
-  // =1 still forces the route on any eligible part.
+  // pf2060 +6.2% median on G16S, ranges disjoint; pf520 and decode flat;
+  // 32-token sha identical. MLX_OMARCHY_SDPA_CAUSAL_FLASH=0 is the kill
+  // switch back to composed; =1 still forces the route on any eligible
+  // part.
   // Contract: causal, bf16, hd 128, k_len % 8 == 0, k_len >= q_len, no sinks,
   // no logsumexp, no array mask, 8-element aligned strides; anything else
   // keeps the composed route.
   {
     const char* cf_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
     const auto& cf_caps = encoder.device().capabilities();
-    const bool cf_is_g16s =
-        cf_caps.device_name.find("G16S") != std::string::npos;
-    // G13G (13-inch M1) dispatches the same causal flash kernel and measures
-    // +7.1% prefill at ctx2048 / +1.1% at ctx512 with identical outputs on
-    // the 4B (jwm1 ABBA, receipts 2026-11-23). Repo convention: only the
-    // measured part flips; G13S keeps the composed default until it has
-    // its own ABBA rows.
-    // G13C (16-inch M1 Max) has its own rows now (receipts
-    // 2026-11-24-g13c-sdpa-causal-flash-abba): Qwen3-4B-4bit pure prefill
-    // +9.05% at ctx2048 (563.3 vs 516.6 tps, all 5 ABBA blocks +8-9%),
-    // +1.11% at ctx512, 2B pf512 and 4B decode ctx2048 flat, every run
-    // ids-identical. jwm1 re-measure on the same build agrees: +8.28% at
-    // ctx2048, +3.09% at ctx512, decode flat.
-    const bool cf_is_g13g =
-        cf_caps.device_name.find("G13G") != std::string::npos;
-    const bool cf_is_g13c =
-        cf_caps.device_name.find("G13C") != std::string::npos;
+    // No-gating default (2026-11-25): the route defaults on for every
+    // part; the cooperative-matrix/subgroup/workgroup/shared-memory
+    // probe below confines actual dispatch. Measured: G16S, G13G
+    // (+7.1% pf2048), G13C (+9.05% pf2048); no part measured a loss.
     const bool cf_forced_on = cf_env != nullptr && cf_env[0] == '1';
     const bool cf_forced_off = cf_env != nullptr && cf_env[0] == '0';
-    const bool cf_on = cf_forced_on ||
-        ((cf_is_g16s || cf_is_g13g || cf_is_g13c) && !cf_forced_off);
+    const bool cf_on = cf_forced_on || !cf_forced_off;
     if (cf_on &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
@@ -18035,15 +18024,16 @@ void ScaledDotProductAttention::eval_gpu(
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
       // Q_CHUNK=8 twin (eight Q panels live, reused across the four
-      // key-blocks of a tile; same add order, so output is bit-identical)
-      // is the G16S default. MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the
-      // 16-panel kernel; other parts keep it. Measurements:
-      // receipts/2026-11-15-m4-pro-g16s-sdpa-flash-qchunk8
+      // key-blocks of a tile; same add order, so output is bit-identical).
+      // MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the 16-panel kernel.
+      // No-gating default (2026-11-25): bit-identical and measured faster
+      // where it ran (G16S, receipts/2026-11-15-m4-pro-g16s-sdpa-flash-
+      // qchunk8); no part measured a loss, so every part takes the twin.
       omarchy::ComputeKernel cf_kernel =
           omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16;
       const char* qchunk_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
       const bool qchunk_off = qchunk_env != nullptr && qchunk_env[0] == '0';
-      if (cf_is_g16s && !qchunk_off) {
+      if (!qchunk_off) {
         cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8;
       }
       // Env-gated K/V amortization. Not a default.

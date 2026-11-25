@@ -8025,19 +8025,21 @@ TEST_CASE("short-pass GEMV: per-part default row cap") {
   CHECK(omarchy::qmv_small_t_default_part("Apple M3 (G13C B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M1 (G13G B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M2 Max (G14C B1)") == 8);
-  CHECK(omarchy::qmv_small_t_default_part("Apple M5 Max (G17C B1)") == 0);
-  CHECK(omarchy::qmv_small_t_default_part("Apple M4 (G16G B1)") == 0);
-  CHECK(omarchy::qmv_small_t_default_part("") == 0);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M5 Max (G17C B1)") == 8);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M4 (G16G B1)") == 8);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M6 (G18G B1)") == 8);
+  CHECK(omarchy::qmv_small_t_default_part("") == 8);
 }
 
 TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
   for (int round = 0; round < 2; ++round) {
     CHECK(omarchy::qmm_bf16w_default_part("Apple M4 Pro (G16S B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M5 Max (G17C B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part(""));
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M5 Max (G17C B1)"));
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
+    CHECK(omarchy::qmm_bf16w_default_part("Apple M6 (G18G B1)"));
+    CHECK(omarchy::qmm_bf16w_default_part(""));
   }
   CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(511, 4096, 4096));
   CHECK(omarchy::qmm_bf16w_rows_ok(512, 4096, 4096));
@@ -8066,14 +8068,15 @@ TEST_CASE("intel QMM prefill: the part and env rules") {
       "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));
   CHECK(omarchy::qmm_intel_default_part(
       "Intel(R) Arc(tm) A770 Graphics (DG2)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M5 Max (G17C B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part(
+  CHECK(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M5 Max (G17C B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::qmm_intel_default_part(
       "NVIDIA GeForce RTX 5060 Ti"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("NVIDIA GeForce RTX 4090"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part(""));
+  CHECK(omarchy::qmm_intel_default_part("NVIDIA GeForce RTX 4090"));
+  CHECK(omarchy::qmm_intel_default_part(""));
   setenv(flag, "0", 1);
   CHECK_FALSE(omarchy::qmm_intel_default_part(
       "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));

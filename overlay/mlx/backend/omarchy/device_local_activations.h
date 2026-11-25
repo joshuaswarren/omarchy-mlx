@@ -140,16 +140,22 @@ inline bool select_qmm_wide_2x16(
     VkPhysicalDeviceType physical_type,
     const QmmWideCaps& caps,
     bool vram_activations_enabled) {
+  // No-gating default (2026-11-25): the 2x16 geometry selects by the
+  // 512-thread 32-wide-subgroup probe on every part. G13G/G13C keep
+  // their measured rows (the probe covers them anyway); G14C keeps
+  // its measured 2x4w2 route; a discrete part still needs VRAM
+  // activations. Any other part that meets the probe gets 2x16.
   if (device_name.find("G13G") != std::string_view::npos ||
       device_name.find("G13C") != std::string_view::npos) {
     return true;
   }
-  if (vram_activations_enabled &&
-      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
-      supports_qmm_2x16(caps)) {
-    return true;
+  if (device_name.find("G14C") != std::string_view::npos) {
+    return false;
   }
-  return false;
+  if (physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+    return vram_activations_enabled && supports_qmm_2x16(caps);
+  }
+  return supports_qmm_2x16(caps);
 }
 
 // G14C (M2 Max) default Qmm decode geometry: 2x4w2 (uvec2 weight loads

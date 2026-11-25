@@ -4273,13 +4273,14 @@ TEST_CASE("rope half-split builds: the part rule") {
   // an earlier answer.
   for (int round = 0; round < 2; ++round) {
     CHECK(omarchy::rope_half_split_default_part("Apple M4 (G16G B1)"));
-    CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
+    CHECK(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
   }
-  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
   CHECK(omarchy::rope_half_split_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::rope_half_split_default_part(""));
+  CHECK(omarchy::rope_half_split_default_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::rope_half_split_default_part(""));
 }
 
 TEST_CASE("rope half-split builds: MLX_OMARCHY_NO_ROPE_HALF_SPLIT values") {

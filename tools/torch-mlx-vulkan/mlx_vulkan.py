@@ -183,6 +183,160 @@ def _reshape(a, *s):
         s = tuple(s[0])
     return mx.reshape(a, tuple(s))
 
+# view/reshape: mx arrays carry no strides, so layout is tracked
+# structurally. aten.view must alias its input storage; mx.reshape silently
+# copies a strided input instead, so a view whose input may be
+# non-contiguous is refused to the CPU path where torch computes the real
+# strides (or the real error). reshape never refuses: torch's own
+# copy-if-needed semantics already match mx.reshape.
+_VIEW_OPS = {"view", "_unsafe_view", "unsafe_view"}
+
+# ops whose output may be non-contiguous regardless of input layout
+_STRIDED_OPS = {
+    "t", "mT", "transpose", "permute", "movedim", "moveaxis", "swapaxes",
+    "swapdims", "expand", "expand_as", "broadcast_to", "unbind", "split",
+    "split_with_sizes", "unsafe_split", "chunk", "tensor_split", "hsplit",
+    "vsplit", "dsplit", "diagonal", "unfold", "as_strided",
+}
+
+# layout-transparent ops: the result shares storage with the input, so the
+# stridedness flag passes through
+_LAYOUT_PASS = {
+    "detach", "detach_", "clone", "alias", "lift_fresh", "lift_fresh_copy",
+    "to", "_to_copy", "type", "cpu", "cuda", "requires_grad",
+    "requires_grad_", "float", "half", "bfloat16", "double", "int", "long",
+    "bool", "short", "byte", "char", "type_as",
+}
+
+
+def _narg(n, i, key, default=None):
+    if key in n.kwargs:
+        return n.kwargs[key]
+    return n.args[i] if len(n.args) > i else default
+
+
+def _aint(v, default=None):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dim0_index(idx):
+    """True when a getitem index provably keeps contiguity: a prefix of
+    integer indices (each removing its dim), then at most one unit-step
+    partial slice on the next dim, then only non-restricting decorations
+    (None, full slices, one Ellipsis). An int or partial slice after a dim
+    survives, a step!=1 slice, or any restriction after an Ellipsis (it may
+    touch a trailing dim while earlier dims survive) can all produce a
+    non-contiguous result."""
+    if isinstance(idx, torch.fx.Node):
+        return False
+    if not isinstance(idx, (tuple, list)):
+        idx = (idx,)
+    pre, post, ell = [], [], False
+    for i in idx:
+        if i is Ellipsis:
+            ell = True
+            continue
+        (post if ell else pre).append(i)
+    for i in post:
+        if i is None:
+            continue
+        if (isinstance(i, slice) and i.start is None and i.stop is None
+                and _aint(i.step) in (None, 1)):
+            continue
+        return False
+    restricted = False
+    for i in pre:
+        if i is None:
+            continue
+        if isinstance(i, torch.fx.Node):
+            return False
+        if isinstance(i, (int, torch.SymInt)):
+            if restricted:
+                return False
+            continue
+        if isinstance(i, slice):
+            if _aint(i.step) not in (None, 1):
+                return False
+            if i.start is not None or i.stop is not None:
+                if restricted:
+                    return False
+            restricted = True
+            continue
+        return False
+    return True
+
+
+def _strided_nodes(nodes):
+    """Graph pass: nodes whose output may be non-contiguous under torch
+    stride semantics. A view on a member is refused rather than silently
+    copied by mx.reshape."""
+    strided = set()
+    for n in nodes:
+        name = _opname(n)
+        a0 = n.args[0] if (n.args and isinstance(n.args[0], torch.fx.Node)) else None
+        if name in _STRIDED_OPS:
+            strided.add(n)
+        elif name in ("select", "narrow"):
+            if a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0:
+                strided.add(n)
+        elif name == "slice":
+            if (a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0
+                    or _aint(_narg(n, 4, "step"), 1) != 1):
+                strided.add(n)
+        elif n.target is operator.getitem or name == "getitem":
+            if a0 in strided or not _dim0_index(n.args[1] if len(n.args) > 1 else None):
+                strided.add(n)
+        elif name in _LAYOUT_PASS:
+            if a0 in strided:
+                strided.add(n)
+    return strided
+
+
+def _view_refused(name, n, strided):
+    return (name in _VIEW_OPS and n.args
+            and isinstance(n.args[0], torch.fx.Node)
+            and n.args[0] in strided)
+
+
+def _node_args(a):
+    if isinstance(a, torch.fx.Node):
+        yield a
+    elif isinstance(a, (tuple, list)):
+        for x in a:
+            yield from _node_args(x)
+    elif isinstance(a, dict):
+        for x in a.values():
+            yield from _node_args(x)
+
+
+def _refused_nodes(nodes, strided):
+    """Nodes refused to the CPU path for view/stride semantics: every view
+    on a flagged input, plus the flagged producers behind it. Refusing the
+    view alone is not enough -- an mx-lowered producer hands the torch
+    fallback a materialized contiguous tensor, so the view then returns
+    strides (or succeeds) where eager would raise. Refusing the strided
+    cone keeps every producer under torch, where real strides are kept."""
+    refused = set()
+    stack = []
+    for n in nodes:
+        if _view_refused(_opname(n), n, strided):
+            refused.add(n)
+            stack.append(n)
+    while stack:
+        n = stack.pop()
+        for a in _node_args(n.args):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+        for a in _node_args(n.kwargs):
+            if a in strided and a not in refused:
+                refused.add(a)
+                stack.append(a)
+    return refused
+
 def _slice(a, dim, start, end, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
@@ -927,6 +1081,115 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
 
+def _is_integral_dtype(dt):
+    return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
+
+
+def _is_floatish_dtype(dt):
+    return (mx.issubdtype(dt, mx.floating)
+            or mx.issubdtype(dt, mx.complexfloating))
+
+
+def _dtype_of(v):
+    # dtype of a resolved operand: mx arrays carry theirs; torch Scalar
+    # arguments arrive as python numbers and promote like wrapped scalars
+    # (float scalar -> default float, int scalar stays integral).
+    if isinstance(v, mx.array):
+        return v.dtype
+    if isinstance(v, bool):
+        return mx.bool_
+    if isinstance(v, int):
+        return mx.int64
+    if isinstance(v, float):
+        return mx.float32
+    return getattr(v, "dtype", mx.float32)
+
+
+def _rsub(a, b, alpha=1, **k):
+    # aten.rsub.Scalar(self, other, alpha): other - alpha * self. Torch
+    # rejects subtraction on bool operands, and a floating alpha only when
+    # the promoted operand type is integral (int64 self + float other is
+    # legal and returns float).
+    da, db = _dtype_of(a), _dtype_of(b)
+    if da == mx.bool_ or db == mx.bool_:
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is not "
+            "supported. If you are trying to invert a mask, use the `~` or "
+            "`logical_not()` operator instead.")
+    if isinstance(alpha, float) and _is_integral_dtype(mx.result_type(da, db)):
+        raise RuntimeError(
+            "For integral input tensors, the argument alpha must not be a "
+            "floating point number")
+    return _mx(b) - _mx(a) * alpha
+
+
+def _atan2(y, x):
+    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
+    # The Vulkan atan2 kernel drops the sign of a zero x; 1/+-0 = +-inf
+    # recovers it (no mx.signbit in the wheel). Only the (+/-0, -0) pairs
+    # are wrong: nonzero and NaN y stay on mx.atan2.
+    y, x = _mx(y), _mx(x)
+    r = mx.atan2(y, x)
+    x_neg0 = (x == 0) & (1.0 / x < 0)
+    fix = mx.where(1.0 / y < 0, -math.pi, math.pi).astype(r.dtype)
+    return mx.where(x_neg0 & (y == 0), fix, r)
+
+
+def _astype(v, dt):
+    v = _mx(v)
+    return v.astype(dt) if isinstance(v, mx.array) else v
+
+
+def _has_0d_mixed(*vs):
+    # torch promotes 0-dim tensors weakly — they cannot raise the result
+    # above a non-0-dim operand's dtype. Mixed-dtype inputs with a 0-dim
+    # operand follow rules subtle enough to leave to the torch fallback.
+    ts = [v for v in vs if isinstance(v, (mx.array, torch.Tensor))]
+    if not any(v.ndim == 0 for v in ts):
+        return False
+    return len({_dtype_of(v) for v in ts}) > 1
+
+
+def _addcmul(a, t1, t2, value=1, **k):
+    # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. Bool
+    # has no kernel; on integral operands the wrapped value scalar takes
+    # the tensor dtype (fractional value truncates). Operands evaluate at
+    # the common dtype — fp32 opmath for the low-precision floats — so
+    # neither narrow ints nor fp16 intermediates overflow before
+    # promotion; value applies to t1 first like torch.
+    if _has_0d_mixed(a, t1, t2):
+        return _raise("addcmul 0-dim mixed-dtype operand")
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    if dt == mx.bool_:
+        raise NotImplementedError(
+            '"addcmul" not implemented for \'Bool\'')
+    if isinstance(value, float) and _is_integral_dtype(dt):
+        value = int(value)
+    cd = mx.float32 if (dt == mx.float16 or dt == mx.bfloat16) else dt
+    return (_astype(a, cd) + (value * _astype(t1, cd))
+            * _astype(t2, cd)).astype(dt)
+
+
+def _addcdiv(a, t1, t2, value=1, **k):
+    # aten.addcdiv(input, t1, t2, *, value=1): input + value*t1/t2. Torch
+    # rejects integral division operands regardless of self's dtype
+    # (integer division unsupported); same common-dtype eval as addcmul.
+    if _has_0d_mixed(a, t1, t2):
+        return _raise("addcdiv 0-dim mixed-dtype operand")
+    if _is_integral_dtype(
+            mx.result_type(_dtype_of(t1), _dtype_of(t2))):
+        raise RuntimeError(
+            "Integer division with addcdiv is no longer supported, and in "
+            "a future release addcdiv will perform a true division like "
+            "tensor1.true_divide(tensor2)")
+    dt = mx.result_type(mx.result_type(_dtype_of(a), _dtype_of(t1)),
+                        _dtype_of(t2))
+    cd = mx.float32 if (dt == mx.float16 or dt == mx.bfloat16) else dt
+    return (_astype(a, cd) + (value * _astype(t1, cd))
+            / _astype(t2, cd)).astype(dt)
+
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -962,6 +1225,34 @@ def _bitwise_or_logical(a, b, bitop, logop):
         _b = getattr(mx, "bool_", None) or mx.uint8
         return logop(a.astype(_b), b.astype(_b))
     return bitop(a, b)
+
+
+_KIND_GROUPS = None
+def _dtype_kind(dt):
+    global _KIND_GROUPS
+    if _KIND_GROUPS is None:
+        g = {"bool": ("bool_",),
+             "int": tuple(p + str(w) for p in ("int", "uint") for w in (8, 16, 32, 64)),
+             "float": ("float16", "bfloat16", "float32", "float64"),
+             "complex": ("complex64", "complex128")}
+        _KIND_GROUPS = {k: frozenset(getattr(mx, n) for n in names if hasattr(mx, n))
+                        for k, names in g.items()}
+    return next((k for k, dts in _KIND_GROUPS.items() if dt in dts), str(dt))
+
+
+def _inplace_result(upd, dst):
+    # Torch in-place contract: the broadcast result may not grow the
+    # destination shape, and its dtype must cast back to the destination's
+    # kind (int64->int8 stays, int64->bool raises). Refusals leave the op to
+    # the torch fallback, which raises the same error.
+    dst = _mx(dst)
+    if tuple(upd.shape) != tuple(dst.shape):
+        _raise(f"in-place result shape {tuple(upd.shape)} vs dest {tuple(dst.shape)}")
+    if upd.dtype != dst.dtype:
+        if _dtype_kind(upd.dtype) != _dtype_kind(dst.dtype):
+            _raise(f"in-place result {upd.dtype} cannot cast to dest {dst.dtype}")
+        upd = upd.astype(dst.dtype)
+    return upd
 
 
 # ---------------- pooling (PT-P) ----------------
@@ -1331,6 +1622,9 @@ _FUNC_SPECS = {
     "mul_": lambda a, b, *k: _mx(a) * _mx(b),
     "div": lambda a, b, *k: _mx(a) / _mx(b),
     "truediv": lambda a, b, *k: _mx(a) / _mx(b),
+    # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
+    "addcmul": _addcmul,
+    "addcdiv": _addcdiv,
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
@@ -1424,6 +1718,7 @@ _FUNC_SPECS = {
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
+    "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
@@ -1458,6 +1753,7 @@ _FUNC_SPECS = {
     "bitwise_or": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "bitwise_xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "and_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and),
+    "bitwise_and_": lambda a, b: _inplace_result(_bitwise_or_logical(a, b, mx.bitwise_and, mx.logical_and), a),
     "or_": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or),
     "xor": lambda a, b: _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor),
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
@@ -1465,7 +1761,7 @@ _FUNC_SPECS = {
     "invert": lambda a: mx.logical_not(a),
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "rsub": lambda a, b: _mx(b) - _mx(a),
+    "rsub": _rsub,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
@@ -1555,6 +1851,7 @@ def _build_func_table():
 _build_func_table()
 # dotted-name resolve only covers torch attrs; operator.* objects register directly
 FUNC_TABLE[operator.iadd] = _FUNC_SPECS["add"]
+FUNC_TABLE[operator.isub] = _FUNC_SPECS["sub"]
 
 # name-keyed fallback: dynamo may reference e.g. torch._C._VariableFunctions.matmul
 # which is a different object than torch.matmul
@@ -1661,6 +1958,8 @@ def _run_method(obj, name, args, kwargs):
 
 def make_executor(gm):
     stats = {"mlx": [], "cpu": [], "glue": [], "crossings": 0}
+    strided = _strided_nodes(gm.graph.nodes)
+    refused = _refused_nodes(gm.graph.nodes, strided)
     _nprof = os.environ.get("MV_NODE_PROF")
     if _nprof:
         stats["node_ms"] = {}
@@ -1713,7 +2012,7 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 _tick("get_attr")
                 continue
-            if node.target is operator.getitem or name == "getitem":
+            if (node.target is operator.getitem or name == "getitem") and node not in refused:
                 try:
                     env[node] = args[0][_coerce_index(args[1])]
                     stats["glue"].append("getitem")
@@ -1742,6 +2041,8 @@ def make_executor(gm):
                                or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
                                or name in _PRODUCERS
                                or name in _ALWAYS_LOWER)
+                if node in refused:
+                    lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
                         val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
@@ -1761,13 +2062,16 @@ def make_executor(gm):
                     _tick(name)
                     continue
             elif node.op == "call_method":
-                try:
-                    val, on_mlx = _run_method(args[0], str(node.target), args[1:], kwargs)
-                except NotImplementedError:
+                if node in refused:
                     val, on_mlx = None, False
-                except Exception as e:
-                    log.info("LOWER-FAIL\t%s\t%s", node.target, e)
-                    val, on_mlx = None, False
+                else:
+                    try:
+                        val, on_mlx = _run_method(args[0], str(node.target), args[1:], kwargs)
+                    except NotImplementedError:
+                        val, on_mlx = None, False
+                    except Exception as e:
+                        log.info("LOWER-FAIL\t%s\t%s", node.target, e)
+                        val, on_mlx = None, False
 
             if not on_mlx:
                 if has_mx(args) or has_mx(kwargs.values()):
@@ -1788,7 +2092,7 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
-            if (name == "mul_" and node.op in ("call_function", "call_method")
+            if (name in ("mul_", "bitwise_and_") and node.op in ("call_function", "call_method")
                     and isinstance(node.args[0], torch.fx.Node)):
                 env[node.args[0]] = val
             if _DBG_ENV is not None:
@@ -2161,9 +2465,28 @@ def _fuse_rope(nodes):
     return skip, final
 
 
+def _inplace_writeback(dst, upd):
+    # torch in-place contract: the result must fit the destination shape and
+    # cast back to the destination dtype (float-family -> integral is
+    # rejected, and nothing casts into bool; int64 -> int8 wraps fine).
+    if upd.shape != dst.shape:
+        raise RuntimeError(
+            "output with shape %s doesn't match the broadcast shape %s"
+            % (list(dst.shape), list(upd.shape)))
+    if upd.dtype != dst.dtype:
+        if (dst.dtype == mx.bool_ or
+                (_is_floatish_dtype(upd.dtype) and _is_integral_dtype(dst.dtype))):
+            raise RuntimeError(
+                "result type %s can't be cast to the desired output type %s"
+                % (upd.dtype, dst.dtype))
+        upd = upd.astype(dst.dtype)
+    return upd
+
+
 def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
+    strided = _strided_nodes(nodes)
     skip, fused = _fuse_rmsnorm(nodes)
     rskip, rfused = _fuse_rope(nodes)
     pos_ph = next((n for n in phs if "position_ids" in str(n.target)), None)
@@ -2222,7 +2545,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # cache placeholders only count as mutated state when the graph actually
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
-    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_")
+    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_")
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
             and getattr(n.args[0], "op", None)
@@ -2360,15 +2683,47 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = upd
                 continue
             if name == "add_":
-                upd = env[n.args[0]] + args[1]
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                upd = _inplace_writeback(env[n.args[0]],
+                                         env[n.args[0]] + args[1] * alpha)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
                     env[_ph] = upd        # same-storage alias of a state ph
                 env[n] = upd
                 continue
+            if name in ("sub_", "sub_.Tensor"):
+                dst = env[n.args[0]]
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                if (dst.dtype == mx.bool_
+                        or _dtype_of(args[1]) == mx.bool_):
+                    raise RuntimeError(
+                        "Subtraction, the `-` operator, with a bool tensor is "
+                        "not supported. If you are trying to invert a mask, "
+                        "use the `~` or `logical_not()` operator instead.")
+                upd = _inplace_writeback(dst, dst - args[1] * alpha)
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in ("rsub", "rsub.Scalar") and n.op == "call_function":
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                env[n] = _rsub(args[0], args[1], alpha)
+                continue
             if name == "mul_":
-                upd = env[n.args[0]] * args[1]
+                upd = _inplace_writeback(env[n.args[0]], env[n.args[0]] * args[1])
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name == "bitwise_and_":
+                upd = _inplace_result(
+                    _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and),
+                    env[n.args[0]])
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
@@ -2388,7 +2743,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 d0, d1 = int(args[1]), int(args[2])
                 env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
                 continue
-            if name in ("view", "_unsafe_view") and n.op == "call_function":
+            if name in _VIEW_OPS and n.op == "call_function":
+                if _view_refused(name, n, strided):
+                    raise RuntimeError(
+                        f"{name} on a possibly non-contiguous input: "
+                        "refused to the per-node path for torch stride "
+                        "semantics")
                 shape = args[1]
                 if isinstance(shape, torch.fx.Node):
                     shape = env[shape]
@@ -2439,6 +2799,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = y.astype(mx.float32)
                 continue
             if n.op == "call_method":
+                if _view_refused(name, n, strided):
+                    raise RuntimeError(
+                        f"{name} on a possibly non-contiguous input: "
+                        "refused to the per-node path for torch stride "
+                        "semantics")
                 val, on_mx = _run_method(args[0], name, args[1:], kwargs)
                 if on_mx:
                     env[n] = val
