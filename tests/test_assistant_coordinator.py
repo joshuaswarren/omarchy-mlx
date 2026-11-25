@@ -1,12 +1,15 @@
+import json
 import sys
 import threading
 import tempfile
 import unittest
+import unittest.mock
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
-from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, validate_decision, explanation_disagrees, format_decision_event
+from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, validate_decision, explanation_disagrees, format_decision_event
 
 
 class ConversationTests(unittest.TestCase):
@@ -118,6 +121,162 @@ class WorkerLifetimeTests(unittest.TestCase):
                 app.submit(cid, {'text': 'must not overlap'})
             app.closed.set()
             app.watch.join(3)
+
+
+class WorkerReplyTests(unittest.TestCase):
+    """LocalModels refuses a malformed worker reply with a RuntimeError that
+    names it, never a raw decoder, AttributeError or TypeError."""
+
+    def serve(self, *bodies):
+        """One loopback worker; request N gets status 200 and bodies[N]."""
+        pending = iter(bodies)
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                body = next(pending)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except OSError:  # the client stopped reading at a refused event
+                    pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return "http://127.0.0.1:%d" % server.server_port
+
+    def stream(self, *events):
+        """An SSE body: one data line per event, then [DONE]."""
+        return b"".join(b"data: " + event + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+
+    def chat(self, url):
+        return list(LocalModels(None).chat({"chat_url": url, "chat_model": "m"}, [], 8, threading.Event()))
+
+    def decision(self, url):
+        return LocalModels(None).decision({"decision_url": url}, {})
+
+    def test_role_only_usage_and_finish_chunks_carry_no_text(self):
+        url = self.serve(self.stream(b'{"choices": [{"delta": {"role": "assistant", "content": ""}}]}',
+                                     b'{"choices": [{"delta": {"content": null}}]}',
+                                     b'{"choices": [{"delta": null}]}',
+                                     b'{"choices": [{}]}',
+                                     b'{"choices": [{"delta": {}, "finish_reason": null}]}',
+                                     b'{"choices": [{"delta": {"content": "hi"}}]}',
+                                     b'{"choices": [{"delta": {}, "finish_reason": "stop"}]}',
+                                     b'{"choices": []}', b'{"choices": null}', b'{"usage": {}}'))
+        self.assertEqual(self.chat(url), [("delta", "hi"), ("finish", "stop")])
+
+    def test_a_malformed_chat_event_fails_clearly(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        cases = (
+            ("not JSON", b"{"), ("not JSON", b"nope"), ("not JSON", b"\xff"),
+            ("not JSON", b'{"n": ' + b"1" * 5000 + b"}"),  # int digit cap
+            ("not JSON", b'{"choices": "\r\x1b[2Kx"}'),
+            ("malformed", b"null"), ("malformed", b"[]"), ("malformed", b"123"),
+            ("malformed", b'"x"'), ("malformed", b"true"),
+            ("malformed", b'{"choices": 1}'), ("malformed", b'{"choices": 0}'),
+            ("malformed", b'{"choices": false}'), ("malformed", b'{"choices": ""}'),
+            ("malformed", b'{"choices": {}}'), ("malformed", b'{"choices": "x"}'),
+            ("malformed", b'{"choices": [null]}'), ("malformed", b'{"choices": [1]}'),
+            ("malformed", b'{"choices": [[]]}'), ("malformed", b'{"choices": ["x"]}'),
+            ("malformed", b'{"choices": [{"delta": 1}]}'), ("malformed", b'{"choices": [{"delta": "x"}]}'),
+            ("malformed", b'{"choices": [{"delta": []}]}'), ("malformed", b'{"choices": [{"delta": false}]}'),
+            ("malformed", b'{"choices": [{"delta": {"content": 123}}]}'),
+            ("malformed", b'{"choices": [{"delta": {"content": ["a"]}}]}'),
+            ("malformed", b'{"choices": [{"delta": {"content": {}}}]}'),
+            ("malformed", b'{"choices": [{"delta": {"content": false}}]}'),
+            ("malformed", b'{"choices": [{"delta": {"content": 0}}]}'),
+            ("malformed", b'{"choices": [{"delta": {}, "finish_reason": 1}]}'),
+            ("malformed", b'{"choices": [{"delta": {}, "finish_reason": ["stop"]}]}'),
+            ("malformed", b'{"choices": [{"delta": {}, "finish_reason": true}]}'),
+            ("malformed", b'{"choices": [{"delta": {}, "finish_reason": 0}]}'))
+        url = self.serve(*(self.stream(b'{"choices": [{"delta": {"content": "ok"}}]}', event)
+                           for _, event in cases))
+        for index, (expected, event) in enumerate(cases):
+            with self.subTest(i=index, event=event[:80]):
+                got = []
+                with self.assertRaisesRegex(RuntimeError, expected) as caught:
+                    for item in LocalModels(None).chat({"chat_url": url, "chat_model": "m"}, [], 8,
+                                                       threading.Event()):
+                        got.append(item)
+                message = str(caught.exception)
+                self.assertNotIn("\r", message)
+                self.assertNotIn("\x1b", message)
+                self.assertTrue(message.endswith(": %r" % event[:200].decode("utf-8", "replace")),
+                                message[:300])
+                self.assertEqual(got, [("delta", "ok")])
+
+    def test_a_malformed_decision_reply_fails_clearly(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        cases = (
+            ("not JSON", b"{"), ("not JSON", b""), ("not JSON", b"nope"), ("not JSON", b"\xff"),
+            ("not JSON", b'{"answers": {"n": ' + b"1" * 5000 + b"}}"),  # int digit cap
+            ("not JSON", b"\r\x1b[2K"),
+            ("without an answers object", b"null"), ("without an answers object", b"[]"),
+            ("without an answers object", b"1"), ("without an answers object", b'"x"'),
+            ("without an answers object", b"true"), ("without an answers object", b"{}"),
+            ("without an answers object", b'{"answers": null}'),
+            ("without an answers object", b'{"answers": []}'),
+            ("without an answers object", b'{"answers": "x"}'))
+        url = self.serve(b'{"answers": {"route": 1}}', *(event for _, event in cases))
+        self.assertEqual(self.decision(url), {"answers": {"route": 1}})
+        for expected, event in cases:
+            with self.subTest(event=event[:40]):
+                with self.assertRaisesRegex(RuntimeError, expected) as caught:
+                    self.decision(url)
+                message = str(caught.exception)
+                self.assertNotIn("\r", message)
+                self.assertNotIn("\x1b", message)
+                self.assertTrue(message.endswith(": %r" % event[:200].decode("utf-8", "replace")),
+                                message[:300])
+
+    def test_a_deeply_nested_reply_fails_clearly(self):
+        """The 4 MiB request keeps the thread's stack small, and the
+        200,000-deep reply overflows any thread stack below about 28 MiB,
+        including a reused default-size one; it must fail as a clear
+        RuntimeError."""
+        deep = b'{"choices": ' + b"[" * 200_000 + b"]" * 200_000 + b"}"
+        url = self.serve(self.stream(deep), deep)
+        errors = []
+
+        def run():
+            try:
+                with self.assertRaises(RecursionError):
+                    json.loads(deep)
+                for call in (self.chat, self.decision):
+                    with self.assertRaisesRegex(RuntimeError, "not JSON") as caught:
+                        call(url)
+                    self.assertIsInstance(caught.exception.__cause__, RecursionError)
+            except BaseException as exc:
+                errors.append(exc)
+
+        old = threading.stack_size(4 * 1024 * 1024)
+        try:
+            thread = threading.Thread(target=run)
+            thread.start()
+        finally:
+            threading.stack_size(old)
+        thread.join()
+        if errors:
+            raise errors[0]
+
+    def test_a_decoder_recursion_error_fails_clearly(self):
+        """Stack-independent twin of the deep-reply test."""
+        url = self.serve(self.stream(b'{"choices": [{"delta": {"content": "hi"}}]}'), b'{"answers": {}}')
+        with unittest.mock.patch.object(json, "loads", side_effect=RecursionError("too deep")):
+            for call in (self.chat, self.decision):
+                with self.assertRaisesRegex(RuntimeError, "not JSON") as caught:
+                    call(url)
+                self.assertIsInstance(caught.exception.__cause__, RecursionError)
 
 if __name__ == '__main__':
     unittest.main()
