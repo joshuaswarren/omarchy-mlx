@@ -6553,14 +6553,21 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
         ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64);
 
-  // G13G 8 cores: narrow n_groups that cannot fill the 128-row grid step
-  // down to the 64-row SG4 STEP_K=32 default.
-  rows = coopmat_tile_rows(512u, 4u, g13g, allow64);
+  // Six N groups fill the 64-row grid (8*6 >= 48), but not the
+  // 128-row grid (4*6 < 32).
+  rows = coopmat_tile_rows(512u, 6u, g13g, allow64);
   step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
   CHECK(rows == 64u);
   CHECK(step_k == 32u);
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
         ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32);
+
+  rows = coopmat_tile_rows(512u, 4u, g13g, allow64);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 32u);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
 
   rows = coopmat_tile_rows(512u, 32u, g13c, allow64);
   sg4 = qmm_coopmat_sg4_requested(g13c);
