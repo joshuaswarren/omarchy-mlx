@@ -1288,6 +1288,34 @@ def _float_scalar(t, *a, **k):
         return mx.array(float(t))
     return _mx(t).astype(mx.float32)
 
+
+def _odd_passthrough(f, a):
+    # odd unary f on a backend that drops edge cases: pass the input through
+    # at zeros (keeps -0's sign) and infinities (keeps the signed inf).
+    a = _mx(a)
+    return mx.where((a == 0) | mx.isinf(a), a, f(a))
+
+
+def _sinh(a):
+    return _odd_passthrough(mx.sinh, a)
+
+
+def _asinh(a):
+    return _odd_passthrough(mx.asinh, a)
+
+
+def _cosh(a):
+    # even function: cosh(+/-inf) = +inf; zeros need no sign guard.
+    a = _mx(a)
+    return mx.where(mx.isinf(a), mx.abs(a), mx.cosh(a))
+
+
+def _acosh(a):
+    # acosh(+inf) = +inf; x < 1 stays NaN like torch.
+    a = _mx(a)
+    return mx.where(a == float("inf"), a, mx.acosh(a))
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
@@ -1394,8 +1422,8 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
-    "sinh": mx.sinh, "cosh": mx.cosh,
-    "asinh": mx.asinh, "acosh": mx.acosh, "atanh": mx.atanh,
+    "sinh": _sinh, "cosh": _cosh,
+    "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),

@@ -6,6 +6,7 @@ Requires torch + mlx on the path; run from this directory or set
 PYTHONPATH to it.
 """
 import os, sys
+import math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
@@ -836,6 +837,32 @@ def test_hyperbolic():
         assert stats["cpu"] == [], stats
         assert bool(torch.isnan(out).all()) == bool(
             torch.isnan(target(oob)).all()), target
+    # IEEE edges the Vulkan kernels drop: sinh(-0) keeps the sign bit,
+    # asinh(+/-inf) returns the signed infinities, cosh(+/-inf) = +inf,
+    # acosh(+inf) = +inf. Pin value AND sign bit against torch.
+    for target, xv in (
+            (torch.ops.aten.sinh.default, -0.0),
+            (torch.ops.aten.sinh.default, float("inf")),
+            (torch.ops.aten.sinh.default, float("-inf")),
+            (torch.ops.aten.asinh.default, float("inf")),
+            (torch.ops.aten.asinh.default, float("-inf")),
+            (torch.ops.aten.asinh.default, -0.0),
+            (torch.ops.aten.cosh.default, float("inf")),
+            (torch.ops.aten.cosh.default, float("-inf")),
+            (torch.ops.aten.acosh.default, float("inf"))):
+        xt = torch.tensor([xv])
+        g = torch.fx.Graph()
+        p = g.placeholder("p0")
+        n = g.call_function(target, (p,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(xt)
+        ref = target(xt)
+        assert stats["cpu"] == [], (target, stats)
+        assert out.item() == ref.item(), (target, xv, out.item(), ref.item())
+        assert math.copysign(1.0, out.item()) == \
+            math.copysign(1.0, ref.item()), (target, xv, out.item())
     print("test_hyperbolic PASS")
 
 
