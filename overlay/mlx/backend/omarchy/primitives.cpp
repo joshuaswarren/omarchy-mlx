@@ -12583,7 +12583,7 @@ bool dispatch_add_norm_pair(
   size_t row_length = norm_node.shape(-1);
   size_t rows = norm_node.size() / row_length;
   if (rows == 0 || row_length == 0 ||
-      !omarchy::apple_norm_enabled(encoder.device(), row_length, rows)) {
+      !apple_norm_enabled(encoder.device(), row_length, rows)) {
     return false;
   }
   const array& w = norm_in[1];
@@ -12605,7 +12605,13 @@ bool dispatch_add_norm_pair(
   const std::string tag = "add_rms_norm_pair";
   add_node.set_data(allocate_omarchy(add_node.nbytes()));
   norm_node.set_data(allocate_omarchy(norm_node.nbytes()));
-  auto params = norm_params(add_node, row_length, eps, tag, norm_node);
+  omarchy::ComputeParams params;
+  params.count = checked_u32(add_node.size(), tag, norm_node);
+  params.reduce_size = checked_u32(row_length, tag, norm_node);
+  params.output_size = checked_u32(rows, tag, norm_node);
+  params.lhs_offset =
+      checked_item_offset(add_in[0], add_in[0].size(), tag, norm_node);
+  params.alpha = eps;
   params.rhs_offset = checked_item_offset(w, w.size(), tag, norm_node);
   params.output_offset =
       checked_item_offset(norm_node, norm_node.size(), tag, norm_node);
