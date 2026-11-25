@@ -140,6 +140,8 @@ uint16_t bf16_store(float value) {
 // instead of reading the product; every other variant reads input_x.
 #if defined(QMM_VEC_OUTGATE)
 #define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#elif defined(QMM_VEC_XLDS)
+#define OUTGATE_XWORDS(x_base) s_x[((x_base) - x_row) / 8u]
 #else
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
@@ -382,6 +384,36 @@ layout(push_constant) uniform Params {
 
 #ifndef USE_SUBGROUP
 shared float reduce_scratch[256];
+#endif
+
+#if defined(QMM_VEC_XLDS) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_TOKENS) || \
+     defined(QMM_VEC_GREEDY) || defined(QMM_VEC_OUTGATE) || \
+     defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
+     defined(QMM_VEC_RESNORM))
+#error "QMM_VEC_XLDS builds on the bf16 subgroup Q4 word decode kernels"
+#endif
+#ifdef QMM_VEC_XLDS
+// Staged packed-x window: every slot of the workgroup reads the same
+// words_per_row uvec4s, so staging them once replaces SLOTS_PER_GROUP
+// redundant global reads per word with shared-memory reads. The
+// words_per_row <= X_LDS_WORDS bound is a dispatch contract; larger K
+// falls back to the unstaged kernel ids.
+#ifndef X_LDS_WORDS
+#define X_LDS_WORDS 2048u
+#endif
+shared uvec4 s_x[X_LDS_WORDS];
+#define X_LDS_STAGE(x_elems_) { \
+  uint x_words_ = params.matrix_k / 8u; \
+  for (uint i_ = lane; i_ < x_words_; \
+       i_ += uint(SLOTS_PER_GROUP) * LANES) { \
+    s_x[i_] = input_x.values[((x_elems_) >> 3u) + i_]; \
+  } \
+  barrier(); \
+}
+#else
+#define X_LDS_STAGE(x_elems_)
 #endif
 
 #if defined(QMM_VEC_OUTGATE)
@@ -1160,6 +1192,7 @@ void main() {
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint workgroup = gl_WorkGroupID.x;
+  X_LDS_STAGE(params.lhs_offset)
   uint which;
   uint n;
   if ((params.flags & 65536u) != 0u) {
@@ -2524,6 +2557,7 @@ void main() {
   uint row_words = params.matrix_k / 4u;
 #endif
   for (uint b = 0u; b < batch; ++b) {
+    X_LDS_STAGE(params.lhs_offset + b * params.matrix_k)
     precise float acc[ROWS_PER_SLOT];
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
       acc[r] = 0.0;

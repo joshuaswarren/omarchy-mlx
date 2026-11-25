@@ -167,7 +167,8 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // G14C (uvec2 weight loads in the 2x4 multi kernel: 2B ctx=512 +1.35% 5/5,
 // 2B short +1.69% 3/3, 9B ctx=512 +1.18% 3/3 atop OUTGATE_FOLD=0, tokens
 // identical), and 2x4 on every other chip until its paired A/B lands.
-// The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
+// The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, 2x16kcont,
+// 2x16kcs16 and 2x16lds.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -238,6 +239,15 @@ const QmmGeometry& qmm_geometry() {
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
     }
+    if (v == "2x16lds") {
+      // Experimental: same 2x16 geometry with the packed-x window staged
+      // in workgroup-shared memory (one stage per workgroup replaces 16
+      // redundant global reads per x word). words_per_row > 2048 falls
+      // back to the unstaged ids at dispatch.
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R2S16XLDS,
+          K::QmmVecQ4MultiSubgroupBF16R2S16XLDS, "2x16lds"};
+    }
     if (v == "2x16kcs16") {
       // 16-lane subgroups (16 slots of 16, still 32 columns). Only on
       // hardware that can legally pin requiredSubgroupSize = 16 for a
@@ -264,9 +274,32 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont 2x16kcs16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont 2x16kcs16 2x16lds");
   }();
   return geometry;
+}
+
+// words_per_row cap for the staged-x decode kernels (s_x[2048] uvec4s =
+// 32 KB of the 49 KB shared limit on G13C); larger K keeps the unstaged
+// ids so the shared array stays inside the driver limit.
+constexpr uint32_t kQmmXldsMaxWords = 2048u;
+omarchy::ComputeKernel qmm_word_kernel(uint32_t matrix_k) {
+  const auto& geometry = qmm_geometry();
+  if (geometry.word ==
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16XLDS &&
+      matrix_k / 8u > kQmmXldsMaxWords) {
+    return omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16;
+  }
+  return geometry.word;
+}
+omarchy::ComputeKernel qmm_multi_kernel(uint32_t matrix_k) {
+  const auto& geometry = qmm_geometry();
+  if (geometry.multi ==
+          omarchy::ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16XLDS &&
+      matrix_k / 8u > kQmmXldsMaxWords) {
+    return omarchy::ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16;
+  }
+  return geometry.multi;
 }
 
 bool apple_norm_2560_allowed(const omarchy::Device& device) {
@@ -9475,7 +9508,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     uint32_t qmm_groups = n_groups_qmm_vec;
     if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16) {
       const auto& geometry = qmm_geometry();
-      vec_kernel = geometry.word;
+      vec_kernel = qmm_word_kernel(params.matrix_k);
       qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
     }
     encoder.dispatch_compute(
@@ -10249,6 +10282,7 @@ const char* qmm_geometry_name() {
   return qmm_geometry().name;
 }
 
+
 bool qmm_vec_q4_word_enabled() {
   return q4_word_enabled();
 }
@@ -10762,7 +10796,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            qmm_multi_kernel(params.matrix_k))
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
