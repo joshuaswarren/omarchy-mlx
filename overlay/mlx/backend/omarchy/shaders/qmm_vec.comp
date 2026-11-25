@@ -229,12 +229,11 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #endif
 #if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
 // The fused-norm rope epilogue reads the Q/K members' materialized
-// outputs back inside the same dispatch. The member stores stay
-// unqualified: the memoryBarrierBuffer + coherent ticket protocol
-// orders them before the electing workgroup's reads — coherent on
-// every member store measurably slows the member-dot itself, and
-// writeonly forbids the epilogue's reads entirely.
-#define QMM_VEC_OUTPUT_ACCESS
+// outputs back inside the same dispatch, so their stores upgrade to
+// coherent like the resnorm variant's Sum slot. Measured on jw16:
+// an unqualified decl produces stale reads (wrong ids) — coherent is
+// load-bearing for cross-workgroup visibility on this stack.
+#define QMM_VEC_OUTPUT_ACCESS coherent
 #else
 #define QMM_VEC_OUTPUT_ACCESS writeonly
 #endif
@@ -1443,8 +1442,9 @@ void main() {
   // 0.0), and the rotate/store phase carries one output word pair
   // per thread. Both ropes are forward, non-traditional,
   // scalar-offset by the host contract, so the rotation takes the
-  // forward branches only.
-  {
+  // forward branches only. Flag bit 2 is a debug skip (results are
+  // wrong when set; it isolates the tail's cost in timing runs).
+  if ((params.flags & 4u) == 0u) {
     const uint row_length = params.reduce_size;
     const uint half_dims = params.aux_size;
     const float eps = uintBitsToFloat(params.operation);

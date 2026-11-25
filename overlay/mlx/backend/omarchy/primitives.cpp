@@ -10877,6 +10877,13 @@ bool dispatch_quantized_gemv_group(
         (static_cast<uint32_t>(epi_heads[1]) << 16u);
     params.flags |= (epi_pattern[0] != 0 ? 1u : 0u) |
         (epi_pattern[1] != 0 ? 2u : 0u);
+    {
+      static const bool epi_no_tail =
+          std::getenv("MLX_OMARCHY_ROPE_EPI_NOTAIL") != nullptr;
+      if (epi_no_tail) {
+        params.flags |= 4u;
+      }
+    }
     // Standard multi layout; the shader repurposes member 3's declared
     // slots: input_w3 = scalar position offset, scales3/biases3 =
     // per-side norm weights, output3 = query rope output, addend3
