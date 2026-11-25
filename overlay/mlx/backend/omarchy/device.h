@@ -615,8 +615,25 @@ MLX_API const CapabilityReport& hardware_capability_report(uint32_t index);
 
 // True when the named MLX_OMARCHY_* boolean environment variable is set
 // to 1/on/true/yes (case-insensitive). False when unset or any other
-// value. Read on every call: nothing here caches environment state.
+// value. Values are cached for the duration of one graph eval
+// (env_note_eval() boundary below) — a setenv between evals applies at
+// the next eval; nothing inside a single eval can change an env flag's
+// value for that eval, which no caller could observe anyway.
 bool env_flag(const char* name);
+
+// True when the named variable is set to anything, including the empty
+// string — the existence check std::getenv(name) != nullptr performs,
+// with the same per-eval caching as env_flag.
+bool env_set(const char* name);
+
+// The cached value, or nullptr when unset — the string lives until the
+// next env_note_eval(), so callers must not hold it across an eval.
+const char* env_str(const char* name);
+
+// Marks one graph-eval boundary: cached env reads refresh lazily on the
+// next call. Runs once per eval_impl from EagerFusionScope's ctor. Calls
+// on threads that have never passed a boundary always read fresh.
+void env_note_eval();
 
 // Scoped diagnostic switches for the compiled-tape defect hunt
 // (docs/install-omarchy.md, "Compiled-tape debug switches"). Between

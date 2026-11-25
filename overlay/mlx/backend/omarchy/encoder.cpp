@@ -289,7 +289,7 @@ CommandEncoder::~CommandEncoder() {
 // ordered), so they can legally be begun again, and host reads see the
 // submissions' final bytes.
 void CommandEncoder::join_last_completion(const char* reason) {
-  if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+  if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr, "[rtmod] JOIN tid=%lu reason=%s last=%lu\n", (unsigned long)syscall(SYS_gettid), reason,
             (unsigned long)last_completion_);
   }
@@ -796,7 +796,7 @@ void CommandEncoder::dispatch_compute_pipeline(
   // store per dispatch, unconditional so a hang report needs no env.
   trace::counters().last_dispatched_kernel.store(
       static_cast<int64_t>(profile_kernel), std::memory_order_relaxed);
-  if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+  if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr,
             "[rtmod] DISPATCH kernel=%d count=%u gx=%u gy=%u gz=%u\n",
             static_cast<int>(profile_kernel), params.count, group_count_x,
@@ -1459,7 +1459,7 @@ void CommandEncoder::commit() {
   if (!recording_ && pending_.empty() && wait_semaphores_.empty() &&
       signal_semaphores_.empty() && completed_handlers_.empty()) {
     trace::counters().commit_calls_noop++;
-    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
+    if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
       fprintf(stderr, "[rtmod] COMMIT-NOOP\n");
     }
     return;
@@ -1498,7 +1498,7 @@ void CommandEncoder::submit() {
   // The submitting thread may predate Runtime::init (the MLX stream thread).
   raise_cpu_clamp_this_thread();
   auto& dt = vk::device_table();
-  if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
+  if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr, "[rtmod] SUBMIT-ENTER tid=%lu\n", (unsigned long)syscall(SYS_gettid));
   }
   // Wave scheduling: record the buffered nodes into the command buffer
@@ -1675,7 +1675,7 @@ void CommandEncoder::submit() {
       static std::atomic<uint64_t> submit_sequence{0};
       uint64_t ordinal = submit_sequence.fetch_add(1) + 1;
       auto env_hits_ordinal = [ordinal](const char* name) {
-        const char* e = std::getenv(name);
+        const char* e = env_str(name);
         if (!e) {
           return false;
         }
@@ -1810,7 +1810,7 @@ void CommandEncoder::submit() {
       slots_[current_slot_].in_flight = completion_value;
     }
     trace::counters().vk_submissions++;
-    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
+    if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
       fprintf(stderr,
               "[rtmod] SUBMIT tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u\n",
               (unsigned long)syscall(SYS_gettid),
