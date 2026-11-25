@@ -624,6 +624,53 @@ def test_transpose_expand():
     except ValueError:
         pass
     print("test_transpose_expand PASS")
+def test_sum():
+    # PT-U1: aten.sum.dim_IntList is the PAR-41 census top remaining fallback
+    # (6,025 uses). The spec existed, but three forms fell back or mismatched:
+    # dim 0/-1 on a 0-d tensor (mx.sum rejects axis >= ndim), an empty dim
+    # list (aten reduces all dims), and the dtype= kwarg (was swallowed).
+    # Prove the eager executor lowers every form (stats["mlx"], no stats["cpu"])
+    # and matches torch CPU at fp32 and bf16.
+    x32 = torch.tensor([[1.5, -2.0, 0.25], [3.0, -1.0, 2.0]])
+    xb = x32.bfloat16()
+    x0 = torch.tensor(5.0)
+    cases = [
+        (x32, {"dim": [1]}, torch.sum(x32, dim=[1])),
+        (x32, {"dim": [1], "keepdim": True}, torch.sum(x32, dim=[1], keepdim=True)),
+        (x32, {"dim": (0, 1)}, torch.sum(x32, dim=(0, 1))),
+        (x32, {"dim": [-1]}, torch.sum(x32, dim=[-1])),
+        (x32, {"dim": []}, torch.sum(x32)),
+        (x32, {"dim": [], "keepdim": True}, torch.sum(x32, dim=[0, 1], keepdim=True)),
+        (xb, {"dim": [1], "dtype": torch.float32}, torch.sum(xb, dim=[1], dtype=torch.float32)),
+        (x0, {"dim": [0]}, torch.ops.aten.sum.dim_IntList(x0, [0])),
+        (x0, {"dim": [-1], "keepdim": True}, torch.ops.aten.sum.dim_IntList(x0, [-1], True)),
+    ]
+    for ins, kw, ref in cases:
+        g = torch.fx.Graph()
+        ph = g.placeholder("p0")
+        n = g.call_function(torch.ops.aten.sum.dim_IntList, (ph,), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(ins)
+        assert stats["cpu"] == [], (stats, kw)
+        assert any("sum" in s for s in stats["mlx"]), (stats, kw)
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=2e-2), (kw, got, ref.float().numpy())
+        assert out.dtype == ref.dtype, (kw, out.dtype, ref.dtype)
+    for kw, ref in (({"dim": [1]}, torch.sum(xb, dim=[1])),
+                    ({"dim": [1], "keepdim": True}, torch.sum(xb, dim=[1], keepdim=True))):
+        g = torch.fx.Graph()
+        ph = g.placeholder("p0")
+        n = g.call_function(torch.ops.aten.sum.dim_IntList, (ph,), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(xb)
+        assert stats["cpu"] == [], (stats, kw)
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=3e-2), (kw, got, ref.float().numpy())
+    print("test_sum PASS")
 
 
 if __name__ == "__main__":
@@ -646,4 +693,5 @@ if __name__ == "__main__":
     test_slice()
     test_transpose_expand()
     test_cat_clone()
+    test_sum()
     print("ALL PASS")
