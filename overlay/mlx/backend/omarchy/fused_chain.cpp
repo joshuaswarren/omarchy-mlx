@@ -2067,6 +2067,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       size_t member_index;
     };
     std::unordered_map<size_t, std::vector<RopeCand>> cands;
+    const bool epi_trace =
+        std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr;
+    int tr_rope = 0, tr_shape = 0, tr_member = 0;
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RoPE)) || claimed.count(node.id()) ||
           node.dtype() != bfloat16) {
@@ -2081,6 +2084,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           !std::get<5>(st) || std::get<2>(st) ||
           node.inputs()[1].size() != 1 ||
           node.inputs()[2].dtype() != bfloat16) {
+        if (epi_trace) {
+          ++tr_rope;
+        }
         continue;
       }
       std::vector<array> chain;
@@ -2097,10 +2103,16 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         cur = &cur->inputs()[0];
       }
       if (!ok || cur->dtype() != bfloat16) {
+        if (epi_trace) {
+          ++tr_shape;
+        }
         continue;
       }
       auto mit = member_of.find(cur->id());
       if (mit == member_of.end()) {
+        if (epi_trace) {
+          ++tr_member;
+        }
         continue;
       }
       if (cur->primitive().stream() != node.primitive().stream()) {
@@ -2108,6 +2120,18 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       cands[mit->second.first].push_back(
           RopeCand{&node, std::move(chain), mit->second.second});
+    }
+    if (epi_trace) {
+      std::fprintf(
+          stderr,
+          "[rope-epi] scan: ropes=%d shape_rej=%d member_rej=%d cand_groups=%zu\n",
+          tr_rope,
+          tr_shape,
+          tr_member,
+          cands.size());
+      for (auto& e : cands) {
+        std::fprintf(stderr, "[rope-epi]   group %zu sides=%zu\n", e.first, e.second.size());
+      }
     }
     for (auto& entry : cands) {
       const size_t gi = entry.first;
@@ -2136,6 +2160,16 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           // The keys rope's only consumer is the deleted slice update;
           // a second consumer would read an unmaterialized buffer.
           use_count(*kc->node) != 1) {
+        if (epi_trace) {
+          std::fprintf(
+              stderr,
+              "[rope-epi] group %zu: sides=%zu q=%d k=%d k_use=%zu\n",
+              gi,
+              sides.size(),
+              qc != nullptr,
+              kc != nullptr,
+              kc ? use_count(*kc->node) : 0);
+        }
         continue;
       }
       // The keys window must already be planned producer-direct on
@@ -2144,6 +2178,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           state->rope_redirect_roles.at(kc->node->id());
       const auto& pair = state->slice_update_pairs[pair_index];
       if (!pair.direct || !pair.windows[0]) {
+        if (epi_trace) {
+          std::fprintf(
+              stderr,
+              "[rope-epi] group %zu: pair %zu direct=%d window=%d\n",
+              gi,
+              pair_index,
+              pair.direct,
+              pair.windows[0].has_value());
+        }
         continue;
       }
       // Both ropes share state: same dims/base/scale/traditional by
@@ -2689,7 +2732,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         stderr,
         "[fold-time] plan tape=%zu us=%.0f gemv=%zu dense=%zu swiglu-roles=%zu "
         "rope-pairs=%zu rope-norms=%zu prologues=%zu slice-pairs=%zu "
-        "sdpa-folds=%zu\n",
+        "sdpa-folds=%zu rope-epis=%zu\n",
         tape.size(),
         plan_us,
         state->gemv_groups.size(),
@@ -2699,7 +2742,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         state->rope_norms.size(),
         state->prologue_folds.size(),
         state->slice_update_pairs.size(),
-        state->sdpa_transpose_folds.size());
+        state->sdpa_transpose_folds.size(),
+        std::count_if(
+            state->gemv_groups.begin(),
+            state->gemv_groups.end(),
+            [](const auto& g) { return g.rope_epi.has_value(); }));
   }
 }
 
