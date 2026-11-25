@@ -1190,6 +1190,41 @@ def _rsub(a, b, alpha=1, **k):
     return _mx(b) - _mx(a) * alpha
 
 
+def _alpha_arith(a, b, alpha, sign):
+    # aten.add/sub (self, other, *, alpha=1): self +/- alpha*other. Torch
+    # rejects sub on bool operands and a floating alpha when the promoted
+    # operand type is integral (int64 self + float other is legal and
+    # returns float).
+    da, db = _dtype_of(a), _dtype_of(b)
+    if sign < 0 and (da == mx.bool_ or db == mx.bool_):
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is not "
+            "supported. If you are trying to invert a mask, use the `~` or "
+            "`logical_not()` operator instead.")
+    rt = mx.result_type(da, db)
+    if isinstance(alpha, float) and _is_integral_dtype(rt):
+        raise RuntimeError(
+            "For integral input tensors, the argument alpha must not be a "
+            "floating point number")
+    # Compute in the promoted dtype: alpha*other in other's own dtype can
+    # overflow before promotion (f16 40000 * 2 = inf vs f32 80000).
+    ma, mb = _mx(a), _mx(b)
+    ma = ma.astype(rt) if isinstance(ma, mx.array) else mx.array(ma, dtype=rt)
+    mb = mb.astype(rt) if isinstance(mb, mx.array) else mx.array(mb, dtype=rt)
+    return _ar(ma + sign * (alpha * mb))
+
+
+def _ar(v):
+    # Scalar-only calls (aten.mul.default(2, 3)) reach the specs with no mx
+    # operand; a bare Python number would leave the graph output unboxed.
+    # Box with torch's scalar dtypes (int64 for ints) — assert_close checks.
+    if isinstance(v, mx.array):
+        return v
+    if isinstance(v, int) and not isinstance(v, bool):
+        return mx.array(v, dtype=mx.int64)
+    return mx.array(v)
+
+
 def _atan2(y, x):
     # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
     # The Vulkan atan2 kernel drops the sign of a zero x; 1/+-0 = +-inf
@@ -1690,12 +1725,13 @@ _FUNC_SPECS = {
     "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
     "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
     "unsafe_view": _reshape,
-    "add": lambda a, b, *k: _mx(a) + _mx(b),
-    "sub": lambda a, b, *k: _mx(a) - _mx(b),
-    "mul": lambda a, b, *k: _mx(a) * _mx(b),
-    "mul_": lambda a, b, *k: _mx(a) * _mx(b),
-    "div": lambda a, b, *k: _mx(a) / _mx(b),
-    "truediv": lambda a, b, *k: _mx(a) / _mx(b),
+    "add": lambda a, b, alpha=1, *k: _alpha_arith(a, b, alpha, +1),
+    "sub": lambda a, b, alpha=1, *k: _alpha_arith(a, b, alpha, -1),
+    "mul": lambda a, b, *k: _ar(_mx(a) * _mx(b)),
+    "mul_": lambda a, b, *k: _ar(_mx(a) * _mx(b)),
+    "div": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    "truediv": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    "true_divide": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
     "addcdiv": _addcdiv,
@@ -1951,14 +1987,17 @@ _SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
              "log_normal"}
 
 # ops that must never CPU-fallback: lower even when upstream nodes produced
-# torch tensors (e.g. pool bwd behind an unlowered conv/bn backward)
+# torch tensors (e.g. pool bwd behind an unlowered conv/bn backward), and
+# cheap elementwise binops whose sampled forms can arrive with scalar-only
+# args (aten.mul.default(2, 3) style — no mx input to trip has_mx)
 _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "max_pool2d_with_indices_backward", "avg_pool2d",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
                  "_adaptive_avg_pool2d_backward", "convolution_backward",
                  "threshold_backward", "native_batch_norm_backward",
-                 "Float"}
+                 "Float",
+                 "add", "sub", "mul", "div", "truediv", "true_divide"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
