@@ -114,7 +114,7 @@ inline size_t default_batch_limit(size_t memory_limit, size_t heap_bytes) {
 // (device-local or inference-weight placement): NumPy/CPU exports must copy
 // instead of aliasing it, and buffer-protocol views must be read-only.
 // Exposed for the python bindings' export paths (convert.cpp, buffer.h).
-inline bool buffer_is_shadow(mx::allocator::Buffer b) {
+inline bool buffer_is_shadow(Buffer b) {
   if (b.ptr() == nullptr) {
     return false;
   }

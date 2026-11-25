@@ -197,7 +197,7 @@ diff --git a/mlx/array.h b/mlx/array.h
  
    /** The array's siblings. */
 --- a/python/src/convert.cpp	2026-09-30 08:29:59.000000000 -0500
-+++ b/python/src/convert.cpp	2026-11-25 10:47:56.400121810 -0600
++++ b/python/src/convert.cpp	2026-11-25 12:09:03.896072759 -0600
 @@ -18,6 +18,9 @@
  #include "mlx/dtype_utils.h"
  #include "mlx/ops.h"
@@ -231,12 +231,21 @@ diff --git a/mlx/array.h b/mlx/array.h
    data = device_type == nb::device::cpu::value ? arr.buffer().raw_ptr()
                                                 : arr.buffer().ptr();
    byte_offset = arr.offset();
-@@ -384,6 +403,12 @@
+@@ -384,6 +403,21 @@
      const mx::array& a,
      bool force_copy,
      std::optional<std::tuple<int, int>> dl_device) {
++  bool shadow = false;
 +#ifdef MLX_OMARCHY_BACKEND
-+  if (!force_copy && mx::omarchy::buffer_is_shadow(a.buffer())) {
++  {
++    // Classify after evaluation: Buffer::buffer() dereferences the array
++    // descriptor's data pointer, which is unset for a lazy array.
++    auto arr = a;
++    nb::gil_scoped_release nogil;
++    arr.eval();
++    shadow = mx::omarchy::buffer_is_shadow(arr.buffer());
++  }
++  if (!force_copy && shadow) {
 +    throw nb::buffer_error(
 +        "no-copy DLPack export of shadow-backed buffers is unsupported");
 +  }
