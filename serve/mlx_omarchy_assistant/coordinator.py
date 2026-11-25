@@ -93,9 +93,10 @@ def validate_decision(answer, options):
     if not isinstance(probabilities, dict) or list(probabilities) != keys:
         raise DecisionInputError("Decision worker changed the option identifiers or order")
     values = list(probabilities.values())
-    act = answer.get("rl_agent", {}).get("act_probability")
+    rl_agent = answer.get("rl_agent")
+    act = rl_agent.get("act_probability") if isinstance(rl_agent, dict) else None
     confidence = answer.get("confidence")
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 1
            for v in values + [act, confidence]):
         raise DecisionInputError("Decision worker returned invalid probabilities")
     if not math.isclose(sum(values), 1, abs_tol=0.001):
@@ -307,7 +308,7 @@ def validate_score_answer(answer, levels):
     if not isinstance(answer, dict) or answer.get("type") != "score":
         raise DecisionInputError("Decision worker returned an invalid score")
     score = answer.get("score")
-    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= len(levels) - 1:
         raise DecisionInputError("Decision worker returned an invalid score")
     keys = [str(index) for index in range(len(levels))]
     legend = answer.get("legend")
@@ -317,9 +318,10 @@ def validate_score_answer(answer, levels):
     if not isinstance(probabilities, dict) or list(probabilities) != keys:
         raise DecisionInputError("Decision worker changed the score distribution")
     values = list(probabilities.values())
-    act = answer.get("rl_agent", {}).get("act_probability")
+    rl_agent = answer.get("rl_agent")
+    act = rl_agent.get("act_probability") if isinstance(rl_agent, dict) else None
     confidence = answer.get("confidence")
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 1
            for v in values + [act, confidence]):
         raise DecisionInputError("Decision worker returned invalid probabilities")
     if not math.isclose(sum(values), 1, abs_tol=0.001):

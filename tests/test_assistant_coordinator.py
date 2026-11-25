@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
-from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, validate_decision, explanation_disagrees, format_decision_event
+from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, validate_decision, validate_score_answer, explanation_disagrees, format_decision_event
 
 
 class ConversationTests(unittest.TestCase):
@@ -83,6 +83,9 @@ class ConversationTests(unittest.TestCase):
 
 
 class DecisionTests(unittest.TestCase):
+    INVALID_PROBABILITIES = '^Decision worker returned invalid probabilities$'
+    INVALID_SCORE = '^Decision worker returned an invalid score$'
+
     def test_preserves_options_and_rejects_invalid_distribution(self):
         options = [{'id': 'a', 'label': 'Keep data'}, {'id': 'b', 'label': 'Delete data'}]
         result = {'type': 'choice', 'choice': 'a', 'probabilities': {'a': 0.7, 'b': 0.3},
@@ -97,6 +100,65 @@ class DecisionTests(unittest.TestCase):
         result = {'type': 'choice', 'choice': 'a', 'probabilities': {'a': 1.0, 'b': 0.0},
                   'confidence': 1.0, 'rl_agent': {'act_probability': 0.01}}
         self.assertTrue(validate_decision(result, options)['abstained'])
+
+    def test_rejects_malformed_rl_agent_and_huge_ints(self):
+        options = [{'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'}]
+        choice = {'type': 'choice', 'choice': 'a', 'probabilities': {'a': 0.7, 'b': 0.3},
+                  'confidence': 0.5, 'rl_agent': {'act_probability': 0.9}}
+        levels = ['low', 'high']
+        score = {'type': 'score', 'score': 0.3, 'legend': {'0': 'low', '1': 'high'},
+                 'probabilities': {'0': 0.7, '1': 0.3}, 'confidence': 0.5,
+                 'rl_agent': {'act_probability': 0.9}}
+        for fn, good, args in ((validate_decision, choice, options),
+                               (validate_score_answer, score, levels)):
+            for rl_agent in (None, [], 'bad', 1, True):
+                with self.subTest(validator=fn.__name__, rl_agent=rl_agent):
+                    with self.assertRaisesRegex(DecisionInputError, self.INVALID_PROBABILITIES):
+                        fn(dict(good, rl_agent=rl_agent), args)
+            first_key, second_key = list(good['probabilities'])
+            for sign, huge in (('pos', 10 ** 400), ('neg', -(10 ** 400))):
+                for field, malformed in (
+                    ('probability', dict(good, probabilities={first_key: huge, second_key: 0.3})),
+                    ('act_probability', dict(good, rl_agent={'act_probability': huge})),
+                    ('confidence', dict(good, confidence=huge)),
+                ):
+                    with self.subTest(validator=fn.__name__, huge_int=field, sign=sign):
+                        with self.assertRaisesRegex(DecisionInputError, self.INVALID_PROBABILITIES):
+                            fn(malformed, args)
+            for field, malformed in (
+                ('act_probability', dict(good, rl_agent={'act_probability': float('nan')})),
+                ('confidence', dict(good, confidence=float('nan'))),
+            ):
+                with self.subTest(validator=fn.__name__, nan=field):
+                    with self.assertRaisesRegex(DecisionInputError, self.INVALID_PROBABILITIES):
+                        fn(malformed, args)
+
+    def test_score_range_accepts_bounds_and_rejects_malformed_values(self):
+        scales = (
+            (['low', 'high'],
+             {'0': 'low', '1': 'high'},
+             {'0': 0.5, '1': 0.5},
+             (0, 1, 0.5),
+             (-0.01, 1.01, 10 ** 400, -(10 ** 400), float('nan'), float('inf'), True)),
+            (['low', 'mid', 'high'],
+             {'0': 'low', '1': 'mid', '2': 'high'},
+             {'0': 0.25, '1': 0.5, '2': 0.25},
+             (2, 1.5),
+             (2.01,)),
+        )
+        for levels, legend, probabilities, valid_scores, invalid_scores in scales:
+            base = {'type': 'score', 'score': 0.5, 'legend': legend,
+                    'probabilities': probabilities, 'confidence': 0.5,
+                    'rl_agent': {'act_probability': 0.9}}
+            for valid in valid_scores:
+                with self.subTest(validator='validate_score_answer', levels=len(levels), valid_score=valid):
+                    validated = validate_score_answer(dict(base, score=valid), levels)
+                    self.assertEqual(validated['score'], valid)
+                    self.assertIs(type(validated['score']), type(valid))
+            for invalid in invalid_scores:
+                with self.subTest(validator='validate_score_answer', levels=len(levels), invalid_score=invalid):
+                    with self.assertRaisesRegex(DecisionInputError, self.INVALID_SCORE):
+                        validate_score_answer(dict(base, score=invalid), levels)
 
 
 class WorkerLifetimeTests(unittest.TestCase):
