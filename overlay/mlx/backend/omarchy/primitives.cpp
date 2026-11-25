@@ -10763,8 +10763,8 @@ bool dispatch_quantized_gemv_group(
     array& q_member = members[rope_epi->q.member_index].node;
     array& k_member = members[rope_epi->k.member_index].node;
     auto& window = *rope_epi->k.window;
-    if (q_view.data_shared_ptr() != q_member.data_shared_ptr() ||
-        k_view.data_shared_ptr() != k_member.data_shared_ptr() ||
+    if (q_view.buffer().ptr() != q_member.buffer().ptr() ||
+        k_view.buffer().ptr() != k_member.buffer().ptr() ||
         window.node.data_shared_ptr() != nullptr ||
         window.base.data_shared_ptr() == nullptr ||
         window.base.dtype() != bfloat16 ||
