@@ -1728,13 +1728,26 @@ def _acosh(a):
 # contract exact. test_random_family pins the deferral.
 
 
+def _blas_beta(b, beta):
+    # aten beta=0 ignores `input` entirely, NaN/inf included; a bare
+    # `beta * input` would propagate that payload into the result.
+    b = _mx(b)
+    if beta == 0:
+        return mx.zeros(b.shape, b.dtype)
+    return beta * b
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
-    "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
-    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
+    "addmm": lambda b, m1, m2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m1, m2),
+    "baddbmm": lambda b, m1, m2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m1, m2),
     "mv": lambda a, v: mx.matmul(a, v),
     "dot": lambda a, b: mx.sum(_mx(a) * _mx(b)),
+    "addmv": lambda b, m, v, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.matmul(m, v),
+    "addbmm": lambda b, b1, b2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.sum(mx.matmul(b1, b2), axis=0),
+    "addr": lambda b, v1, v2, beta=1, alpha=1: _blas_beta(b, beta) + alpha * mx.outer(_mx(v1), _mx(v2)),
+    "vdot": lambda a, b: mx.sum(mx.conjugate(_mx(a)) * _mx(b)),
     "reshape": _reshape, "view": _reshape, "_unsafe_view": _reshape,
     "unsafe_view": _reshape,
     "add": lambda a, b, alpha=1, *k: _alpha_arith(a, b, alpha, +1),
