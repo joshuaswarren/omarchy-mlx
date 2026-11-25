@@ -7,9 +7,10 @@
 //
 // Block stride is D+4 floats: the D weighted-value floats sit at offset 0 so each block's value row is 16-byte aligned, then (block max, block exp
 // sum, two pad floats). The workgroup splits into BLOCK_LANES lane groups of D/4 threads; a thread owns one uvec4 of four output dimensions and
-// walks every BLOCK_LANES-th block, so pass 2 reads each value row with 16-byte loads. The global max and the exp-sum denominator are scalar per
-// head: every thread strides the blocks once for a partial, the subgroup folds it (NaN maps to +inf, which poisons the output the same way the old
-// serial walk did), and a shared broadcast hands every thread the pair.
+// walks every BLOCK_LANES-th block, so pass 2 reads each value row with 16-byte loads and each lane group's partial lands in shared memory for
+// the first LANES threads to fold. The global max and the exp-sum denominator are scalar per head: every thread strides the blocks once for a
+// partial, the subgroup folds it (NaN maps to +inf, which poisons the output the same way the old serial walk did), and a shared broadcast hands
+// every thread the pair.
 
 #version 460
 
@@ -65,6 +66,7 @@ const uint BLOCK_LANES = 128u / LANES;  // lane groups, each walking a strided b
 
 shared float s_part[8u];
 shared float s_head[2u];
+shared vec4 s_acc[128u];
 
 uint16_t bf16_store(float value) {
   uint bits = floatBitsToUint(value);
@@ -113,7 +115,8 @@ void main() {
   }
   barrier();
   float denominator = s_head[1];
-  // Merge: this thread's vec4 of output dims, over its strided block subset.
+  // Merge: this thread's vec4 of output dims, over its strided block subset. Each (b_lane, dim4) thread's acc covers only
+  // its own block subset, so the partials gather in shared memory and the first LANES threads fold them before storing.
   uint b_lane = t / LANES;
   uint dim4 = t % LANES;
   vec4 acc = vec4(0.0);
@@ -122,8 +125,17 @@ void main() {
     vec4 hdr = scratch_data.values4[at4 + D / 4u];
     acc += scratch_data.values4[at4 + dim4] * exp(hdr.x - global_max);
   }
-  uint out_base = params.output_offset + head * out_head + dim4 * 4u;
+  s_acc[t] = acc;
+  barrier();
+  if (t >= LANES) {
+    return;
+  }
+  vec4 total = s_acc[t];
+  for (uint l = 1u; l < BLOCK_LANES; ++l) {
+    total += s_acc[l * LANES + t];
+  }
+  uint out_base = params.output_offset + head * out_head + t * 4u;
   for (uint d = 0u; d < 4u; ++d) {
-    output_data.values[out_base + d] = bf16_store(acc[d] / denominator);
+    output_data.values[out_base + d] = bf16_store(total[d] / denominator);
   }
 }
