@@ -1321,6 +1321,24 @@ void dispatch_float_elementwise_to(
         omarchy::compute_dispatch_group_count(count / 4u));
     return;
   }
+  const bool simple_binary_op = operation == AddOperation ||
+      operation == MultiplyOperation || operation == DivideOperation ||
+      operation == SubtractOperation;
+  if (simple_binary_op && !general_broadcast &&
+      (params.lhs_size == count || params.lhs_size == 1u) &&
+      (params.rhs_size == count || params.rhs_size == 1u)) {
+    auto kernel = select_float_kernel(
+        out.dtype(),
+        omarchy::ComputeKernel::BinarySimpleF32,
+        omarchy::ComputeKernel::BinarySimpleF16,
+        omarchy::ComputeKernel::BinarySimpleBF16);
+    encoder.dispatch_compute(
+        kernel,
+        std::span<const omarchy::ComputeBinding>(bindings.data(), 3),
+        params,
+        omarchy::compute_dispatch_group_count(count));
+    return;
+  }
   const bool lite_op = operation <= NegativeOperation;  // ops 0-10 exist in the -DLITE builds
   auto kernel = select_float_kernel(
       out.dtype(),
