@@ -2095,7 +2095,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           strides = std::move(tstrides);
         } else {
           shape = Shape(it->shape());
-          strides.assign(shape.size(), 1);
+          strides = Strides(shape.size(), 1);
           for (int d = static_cast<int>(shape.size()) - 2; d >= 0; --d) {
             strides[d] = strides[d + 1] * shape[d + 1];
           }
