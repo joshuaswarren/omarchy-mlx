@@ -476,6 +476,9 @@
 #include "matmul_bm32_bf16.h"
 #include "binary_vec_f16.h"
 #include "binary_vec_bf16.h"
+#include "binary_simple_f32.h"
+#include "binary_simple_f16.h"
+#include "binary_simple_bf16.h"
 #include "unary_vec_f16.h"
 #include "unary_vec_bf16.h"
 #include "matmul_rb_f16.h"
@@ -1810,6 +1813,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {binary_vec_f16, binary_vec_f16_size};
     case ComputeKernel::BinaryVecBF16:
       return {binary_vec_bf16, binary_vec_bf16_size};
+    case ComputeKernel::BinarySimpleF32:
+      return {binary_simple_f32, binary_simple_f32_size};
+    case ComputeKernel::BinarySimpleF16:
+      return {binary_simple_f16, binary_simple_f16_size};
+    case ComputeKernel::BinarySimpleBF16:
+      return {binary_simple_bf16, binary_simple_bf16_size};
     case ComputeKernel::UnaryVecF16:
       return {unary_vec_f16, unary_vec_f16_size};
     case ComputeKernel::UnaryVecBF16:

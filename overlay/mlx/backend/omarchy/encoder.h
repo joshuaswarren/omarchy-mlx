@@ -682,6 +682,10 @@ class MLX_API CommandEncoder {
   // vectors on every batch.
   std::vector<WaveNode> wave_nodes_;
   std::vector<uint32_t> wave_levels_buf_;
+  std::vector<uint32_t> wave_counts_;
+  std::vector<uint32_t> wave_offsets_;
+  std::vector<uint32_t> wave_order_;
+  std::vector<uint8_t> wave_has_transfer_;
   WaveIndex wave_index_;
   std::vector<VkSemaphore> submit_wait_sems_;
   std::vector<uint64_t> submit_wait_values_;

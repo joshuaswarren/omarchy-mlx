@@ -190,8 +190,8 @@ bool CommandEncoder::compute_barrier() {
   // A dispatch whose hazard is only earlier dispatches gets a compute-to-
   // compute barrier instead of the full one (select_compute_barrier: default
   // on for discrete GPUs, MLX_OMARCHY_COMPUTE_BARRIER=0/1 overrides). The
-  // batch head, a copy, fill or inline update since the last full barrier,
-  // or wave scheduling keeps the full barrier.
+  // batch head or a copy, fill or inline update since the last full barrier
+  // keeps the full barrier.
   static const bool on = []() {
     const int setting = std::getenv("MLX_OMARCHY_COMPUTE_BARRIER") == nullptr
         ? -1
@@ -202,8 +202,7 @@ bool CommandEncoder::compute_barrier() {
 }
 
 void CommandEncoder::record_dispatch_barrier() {
-  if (!compute_barrier() || !head_synced_ || transfer_since_barrier_ ||
-      wave_sched()) {
+  if (!compute_barrier() || !head_synced_ || transfer_since_barrier_) {
     record_dependency_barrier();
     return;
   }
@@ -953,31 +952,38 @@ void CommandEncoder::dispatch_compute_pipeline(
   VkDescriptorSet descriptor_set =
       push_desc ? VK_NULL_HANDLE : acquire_descriptor_set(compute);
 
-  std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info{};
-  std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes{};
-  for (uint32_t index = 0; index < bindings.size(); ++index) {
-    buffer_info[index] = {
-        bindings[index].buffer, bindings[index].offset, bindings[index].range};
-    writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[index].dstSet = descriptor_set;
-    writes[index].dstBinding = index;
-    writes[index].descriptorCount = 1;
-    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[index].pBufferInfo = &buffer_info[index];
-  }
-  if (!push_desc) {
-    timeline::ScopedEvent tl_write(
-        timeline::Kind::DescUpdate,
-        timeline::SubKind::DescWrite,
-        encoder_id_,
-        static_cast<uint64_t>(bindings.size()));
-    dt.UpdateDescriptorSets(
-        device_.handle(),
-        static_cast<uint32_t>(bindings.size()),
-        writes.data(),
-        0,
-        nullptr);
-    trace::counters().vk_descriptor_update_writes += bindings.size();
+  std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info;
+  std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes;
+  if (!push_desc || !wave_sched()) {
+    for (uint32_t index = 0; index < bindings.size(); ++index) {
+      buffer_info[index] = {
+          bindings[index].buffer, bindings[index].offset, bindings[index].range};
+      writes[index] = VkWriteDescriptorSet{
+          VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+          nullptr,
+          descriptor_set,
+          index,
+          0,
+          1,
+          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          nullptr,
+          &buffer_info[index],
+          nullptr};
+    }
+    if (!push_desc) {
+      timeline::ScopedEvent tl_write(
+          timeline::Kind::DescUpdate,
+          timeline::SubKind::DescWrite,
+          encoder_id_,
+          static_cast<uint64_t>(bindings.size()));
+      dt.UpdateDescriptorSets(
+          device_.handle(),
+          static_cast<uint32_t>(bindings.size()),
+          writes.data(),
+          0,
+          nullptr);
+      trace::counters().vk_descriptor_update_writes += bindings.size();
+    }
   }
 
   if (wave_sched()) {
@@ -1306,17 +1312,47 @@ void CommandEncoder::emit_pending() {
         timeline::SubKind::WaveEmit,
         encoder_id_,
         static_cast<uint64_t>(waves + 1));
-    for (uint32_t w = 0; w <= waves; ++w) {
-    bool barrier_owed = (w > 0) || head_needs_barrier;
-    for (size_t i = 0; i < pending_.size(); ++i) {
-      if (levels[i] != w) {
-        continue;
+    const size_t n_nodes = pending_.size();
+    const size_t n_waves = static_cast<size_t>(waves) + 1;
+    wave_counts_.assign(n_waves, 0);
+    wave_has_transfer_.assign(n_waves, 0);
+    for (size_t i = 0; i < n_nodes; ++i) {
+      const uint32_t lv = levels[i];
+      wave_counts_[lv]++;
+      if (pending_[i].kind != PendingNode::Kind::Dispatch) {
+        wave_has_transfer_[lv] = 1;
       }
-      // One full dependency barrier per wave, on the wave head; every
-      // later node of the wave rides it hazard-free.
+    }
+    wave_offsets_.resize(n_waves);
+    uint32_t running = 0;
+    for (size_t w = 0; w < n_waves; ++w) {
+      wave_offsets_[w] = running;
+      running += wave_counts_[w];
+    }
+    wave_order_.resize(n_nodes);
+    for (size_t i = 0; i < n_nodes; ++i) {
+      const uint32_t lv = levels[i];
+      wave_order_[wave_offsets_[lv]++] = static_cast<uint32_t>(i);
+    }
+    std::array<VkDescriptorBufferInfo, kComputeBindingBudget> buffer_info;
+    std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes;
+    size_t cursor = 0;
+    for (uint32_t w = 0; w <= waves; ++w) {
+    const uint32_t cnt = wave_counts_[w];
+    const bool wave_pure_dispatch = (wave_has_transfer_[w] == 0);
+    bool barrier_owed = (w > 0) || head_needs_barrier;
+    for (uint32_t k = 0; k < cnt; ++k) {
+      const size_t i = wave_order_[cursor++];
+      // One dependency barrier per wave, on the wave head; every later node
+      // of the wave rides it hazard-free. Pure compute waves use
+      // record_dispatch_barrier() when compute_barrier() is enabled.
       bool preceded_by_barrier = barrier_owed;
       if (barrier_owed) {
-        record_dependency_barrier();
+        if (wave_pure_dispatch) {
+          record_dispatch_barrier();
+        } else {
+          record_dependency_barrier();
+        }
         trace::counters().barriers_emitted++;
         prof::get().on_barrier(true);
         barrier_owed = false;
@@ -1341,18 +1377,21 @@ void CommandEncoder::emit_pending() {
           bound_pipeline_ = node.pipeline;
         }
         if (compute.push_descriptors()) {
-          std::array<VkDescriptorBufferInfo, kComputeBindingBudget>
-              buffer_info{};
-          std::array<VkWriteDescriptorSet, kComputeBindingBudget> writes{};
           for (uint32_t b = 0; b < node.binding_count; ++b) {
             buffer_info[b] = {node.bindings[b].buffer,
                               node.bindings[b].offset,
                               node.bindings[b].range};
-            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[b].dstBinding = b;
-            writes[b].descriptorCount = 1;
-            writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[b].pBufferInfo = &buffer_info[b];
+            writes[b] = VkWriteDescriptorSet{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                nullptr,
+                VK_NULL_HANDLE,
+                b,
+                0,
+                1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                nullptr,
+                &buffer_info[b],
+                nullptr};
           }
           timeline::ScopedEvent tl_push_write(
               timeline::Kind::DescUpdate,
@@ -1432,9 +1471,11 @@ void CommandEncoder::emit_pending() {
         region.dstOffset = node.dst_offset;
         region.size = node.size;
         dt.CmdCopyBuffer(cmd_, node.src, node.dst, 1, &region);
+        transfer_since_barrier_ = true;
       } else if (node.kind == PendingNode::Kind::Fill) {
         dt.CmdFillBuffer(
             cmd_, node.dst, node.write_offset, node.size, node.value);
+        transfer_since_barrier_ = true;
       } else {
         dt.CmdUpdateBuffer(
             cmd_,
@@ -1442,6 +1483,7 @@ void CommandEncoder::emit_pending() {
             node.write_offset,
             node.update_data.size(),
             node.update_data.data());
+        transfer_since_barrier_ = true;
       }
       for (uint32_t r = 0; r < node.nr; ++r) {
         tracker_.add_read(node.rd[r]);
