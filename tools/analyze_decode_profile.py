@@ -53,6 +53,8 @@ def is_honeykrisp_device(device_name):
 
 
 def tick_delta(start, end, valid_bits):
+    if end >= start:
+        return end - start
     if valid_bits >= 64 or valid_bits == 0:
         return end - start
     m = 1 << valid_bits
@@ -151,12 +153,16 @@ for sid, s in subs.items():
         r["disp"] += 1
         gpu = 0.0
         if has_ticks:
-            if use_dt1 and prev_t1 is not None:
-                dt = tick_delta(prev_t1, t1, valid_bits)
-            else:
-                dt = tick_delta(t0, t1, valid_bits)
-            if dt >= 0:
-                gpu = dt * period_ns
+            if use_dt1:
+                dt = (
+                    tick_delta(prev_t1, t1, valid_bits)
+                    if prev_t1 is not None
+                    else tick_delta(t0, t1, valid_bits)
+                )
+                if dt >= 0:
+                    gpu = dt * period_ns
+            elif t1 >= t0:
+                gpu = (t1 - t0) * period_ns
             prev_t1 = t1
         else:
             prev_t1 = None

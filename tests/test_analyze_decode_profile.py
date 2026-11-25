@@ -137,6 +137,42 @@ class DecodeProfileEnumTests(unittest.TestCase):
         self.assertAlmostEqual(by_key["AfterGap|n=1|op=0"], 0.005, places=6)
         self.assertAlmostEqual(output["steady"]["gpu_ms_total"], 0.034, places=6)
 
+    def test_plain_mode_preserves_monotone_interval_above_half_valid_bits(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            header = root / "compute.h"
+            header.write_text(
+                "enum class ComputeKernel : uint16_t {\n"
+                "  Long,\n"
+                "  Count,\n"
+                "};\n",
+                encoding="utf-8",
+            )
+            windows = root / "windows.jsonl"
+            windows.write_text(
+                '{"prompt":true,"start_monotonic":0}\n'
+                + "".join(f'{{"t1":{i * 10000000}}}\n' for i in range(1, 10)),
+                encoding="utf-8",
+            )
+            # 36-bit NVIDIA counter, non-wrapping interval of 40_000_000_000 ns
+            # (> 2^35 half-range) must stay 40_000 ms in plain t1-t0 mode.
+            profile = root / "profile.jsonl"
+            profile.write_text(
+                '{"k":"meta","device":"NVIDIA GeForce RTX 5060 Ti","period_ns":1.0,"valid_bits":36}\n'
+                '{"k":"s","s":1,"t":45000000}\n'
+                '{"k":"d","s":1,"e":0,"n":1,"op":0,"t0":100,"t1":40000000100}\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "tools/analyze_decode_profile.py"),
+                 "--profile", str(profile), "--windows", str(windows),
+                 "--compute-h", str(header)],
+                check=True, capture_output=True, text=True,
+            )
+        output = json.loads(result.stdout)
+        self.assertEqual(output["timing_mode"], "t1-t0")
+        self.assertAlmostEqual(output["steady"]["gpu_ms_total"], 40000.0, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -340,6 +340,29 @@ class HoneykrispDt1Tests(unittest.TestCase):
         self.assertIn("kernel_2                   n=1      total=5.0us", r2.stdout)
         self.assertIn("gaps intra-submission: n=1 total=20.0us", r2.stdout)
 
+    def test_split_submit_counter_wrap_preserves_inter_submit_gap(self):
+        # 8-bit wrap split across s=1 (240,245) then s=2 (4,8) at 1 us/tick:
+        # s1=5us, s2=4us, inter-submit gap = (260 - 245) = +15.0us (not -24us).
+        rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
+             "label": "split-wrap", "host_t0": 0},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
+            {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 4, "t1": 8, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "s", "s": 2, "dur": 100, "t": 2000},
+            {"k": "end", "t": 3000, "dispatches": 2, "dropped": 0,
+             "submissions": 2, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("busy 9.0us / span 24.0us", r.stdout)
+        self.assertIn("gaps inter-submission: n=1 total=15.0us", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
