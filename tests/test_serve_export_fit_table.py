@@ -342,13 +342,13 @@ def test_main_module_keeps_healthy_stdout_on_error(tmp_path, monkeypatch, capsys
     ],
 )
 def test_main_escapes_line_breaks_in_error_paths(tmp_path, case, sep, escaped):
+    target = os.path.join(os.fsencode(tmp_path), f"bad{sep}name".encode("utf-8"))
     if case == "missing_catalog":
-        cli_args = ["--catalog", str(tmp_path / f"bad{sep}name.json")]
+        cli_args = ["--catalog", target + b".json"]
     else:
-        target = tmp_path / f"bad{sep}name"
-        target.mkdir()
-        cli_args = ["-o", str(target)]
-    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "serve"))
+        os.mkdir(target)
+        cli_args = ["-o", target]
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "serve"), PYTHONUTF8="1")
     proc = subprocess.run(
         [sys.executable, "-m", "mlx_omarchy_serve.export_fit_table", *cli_args],
         cwd=REPO_ROOT / "serve",
