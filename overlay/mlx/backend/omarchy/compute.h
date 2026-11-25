@@ -1372,6 +1372,8 @@ class ComputeRuntime {
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;
   std::unordered_map<VkPipeline, BindingAccess> access_;
   std::mutex mutex_;
+  // PT-T decode norm: one subgroup per row, single pass (w7H)
+  FastRmsNormSubgroupBF16,
 };
 
 } // namespace mlx::core::omarchy

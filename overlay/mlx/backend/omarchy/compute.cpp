@@ -649,6 +649,7 @@
 #include "fast_rms_norm_f16.h"
 #include "fast_rms_norm_bf16.h"
 #include "fast_rms_norm_apple_bf16.h"
+#include "fast_norm_subgroup_bf16.h"
 #include "fast_layer_norm_f32.h"
 #include "fast_layer_norm_f16.h"
 #include "fast_layer_norm_bf16.h"
@@ -1275,6 +1276,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rms_norm_f16, fast_rms_norm_f16_size};
     case ComputeKernel::FastRmsNormBF16:
       return {fast_rms_norm_bf16, fast_rms_norm_bf16_size};
+    case ComputeKernel::FastRmsNormSubgroupBF16:
+      return {fast_norm_subgroup_bf16, fast_norm_subgroup_bf16_size};
     case ComputeKernel::FastRmsNormAppleBF16:
       return {fast_rms_norm_apple_bf16, fast_rms_norm_apple_bf16_size};
     case ComputeKernel::FastLayerNormF32:

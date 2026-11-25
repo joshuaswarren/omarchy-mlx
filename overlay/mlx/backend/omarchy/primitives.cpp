@@ -296,6 +296,22 @@ bool apple_norm_4096_allowed(const omarchy::Device& device) {
   return true;
 }
 
+bool subgroup_norm_enabled(
+    const omarchy::Device& device,
+    size_t row_length,
+    size_t rows) {
+  // PT-T decode norm (w7H): one 32-lane subgroup per row, single pass,
+  // register-resident. Env-gated off by default; the ABBA evidence decides
+  // the default. Batch-1 rows of 2560..5120 (32-lane divisible) only.
+  const char* env = std::getenv("MLX_OMARCHY_NORM_SUBGROUP");
+  if (env == nullptr || env[0] == '0') {
+    return false;
+  }
+  (void)device;
+  return rows == 1u && row_length >= 2560u && row_length <= 5120u &&
+      (row_length % 32u) == 0u;
+}
+
 bool apple_norm_enabled(
     const omarchy::Device& device,
     size_t row_length,
@@ -15980,6 +15996,10 @@ void RMSNorm::eval_gpu(
         omarchy::ComputeKernel::FastRmsNormF16,
         omarchy::ComputeKernel::FastRmsNormBF16);
     if (out.dtype() == bfloat16 &&
+        subgroup_norm_enabled(
+            encoder.device(), row_length, x.size() / row_length)) {
+      kernel = omarchy::ComputeKernel::FastRmsNormSubgroupBF16;
+    } else if (out.dtype() == bfloat16 &&
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
       kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;

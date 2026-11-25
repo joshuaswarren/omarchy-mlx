@@ -1,0 +1,108 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// PT-T/RMSNorm-directive decode kernel: ONE SUBGROUP per row, single pass,
+// no shared-memory round trip, for batch-1 rows of 2560..5120 (the decode
+// hidden sizes of the 4B/9B families). Motivation: the PAR-99 jw16 4B decode
+// table shows FastRmsNormBF16 + FastRmsNormAppleBF16 at 31% of decode kernel
+// time moving under 1% of peak bandwidth - 1160 one-workgroup launches with
+// three barriers each. This kernel runs the whole row in one 32-lane
+// subgroup: contiguous register-resident loads, one subgroupAdd for the sum
+// of squares, and the output pass scales straight from registers. No
+// barriers, no shared memory, no reloads.
+//
+// Reduction order differs from both deployed kernels (documented like
+// fast_norm_apple.comp); `precise` prevents implicit FMA in sum-of-squares.
+// Requires GL_KHR_shader_subgroup_arithmetic (present on G13C/G14C/G14X/
+// G16S/G17C/G18G per the subgroup QMM kernels already shipping).
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+
+layout(local_size_x = 32) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  STORAGE_TYPE values[];
+} input_data;
+layout(set = 0, binding = 1, std430) readonly buffer Weight {
+  STORAGE_TYPE values[];
+} weight_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+} params;
+
+const uint SIMD = 32u;
+const uint MAX_READS = 160u;  // 5120 / 32; decode widths 2560..5120 use 80..160
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;  // 0..31: this workgroup IS one subgroup
+  uint row_length = params.reduce_size;
+  float eps = params.alpha;
+
+  for (uint row = gl_WorkGroupID.x; row < params.output_size;
+       row += gl_NumWorkGroups.x) {
+    uint start = params.lhs_offset + row * row_length;
+    uint n_reads = row_length / SIMD;
+
+    precise float reg_x[MAX_READS];
+    precise float reg_sq = 0.0;
+    uint base = lane * n_reads;
+    for (uint i = 0u; i < n_reads; ++i) {
+      reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
+      reg_sq += reg_x[i] * reg_x[i];
+    }
+
+    // one subgroupAdd replaces the shared-memory two-stage tree; the result
+    // is broadcast to every lane, so `norm` needs no second stage
+    float total = subgroupAdd(reg_sq);
+    float mean_square = total / float(row_length);
+    float norm = inversesqrt(mean_square + eps);
+
+    for (uint i = 0u; i < n_reads; ++i) {
+      uint index = base + i;
+      float weight =
+          (params.lhs_size == 1u)
+              ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+              : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+      precise float norm_weight = norm * weight;
+      precise float result = reg_x[i] * norm_weight;
+      output_data.values[params.output_offset + row * row_length + index] =
+          STORE_VALUE(result);
+    }
+  }
+}
