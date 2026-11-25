@@ -10773,6 +10773,28 @@ bool dispatch_quantized_gemv_group(
         window.base.offset() % window.base.itemsize() != 0 ||
         (window.offset & 1u) != 0u ||
         !input_ready(window.base, stream)) {
+      if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+        static int trv = 0;
+        if (trv++ < 4) {
+          std::fprintf(
+              stderr,
+              "[epi-ctr] view: qv=%p qm=%p kv=%p km=%p wnode=%p "
+              "wbase=%p wd=%d wrc=%d wsz=%zu/%zu woff=%u wmod=%d wready=%d\n",
+              q_view.data_shared_ptr(),
+              q_member.data_shared_ptr(),
+              k_view.data_shared_ptr(),
+              k_member.data_shared_ptr(),
+              window.node.data_shared_ptr(),
+              window.base.data_shared_ptr(),
+              static_cast<int>(window.base.dtype() == bfloat16),
+              window.base.flags().row_contiguous,
+              window.base.size(),
+              window.base.data_size(),
+              window.offset,
+              static_cast<int>(window.base.offset() % window.base.itemsize()),
+              input_ready(window.base, stream));
+        }
+      }
       // The skipped ropes would stay unmaterialized: fall back before
       // anything is committed so the group evaluates ordinarily.
       return false;
