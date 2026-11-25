@@ -290,6 +290,16 @@ ABBA quality: the ids are identical in all four windows, and the
 dispatch histograms differ only in the three expected kernels. The rate
 question needs more windows than a canary-grade run provides.
 
+A second ABBA (r3, later the same hour, the same wheel and command):
+off 17.43 tok/s, on 12.80 tok/s - a -26.5 percent delta, consistent in
+direction with the first ABBA's -3.7 percent. The board's own variance
+is as large as the deltas (an off-arm window read 23.09 tok/s in the
+first gate and 17.43 in the second), so the exact percentage is
+uncertain while the direction is not: **both independent ABBAs read the
+fold as not faster on the Qwen3-4B decode**, and the -26 percent second
+run suggests the fold's shared-memory rotation exchange costs more than
+the removed rope dispatch returns on this board.
+
 Consequences: the flag stays off by default; the width-128 folded
 kernels stay registered but unreachable; and neither the K side nor the
 passthrough branch should start until the rate question is answered with
