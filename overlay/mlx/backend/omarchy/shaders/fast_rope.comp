@@ -342,7 +342,7 @@ void main() {
         float xc = rope_round(x1 * sin_t);
         float xd = rope_round(x2 * cos_t);
         float r1 = forward ? (xa - xb) : (xb + xa);
-        float r2 = forward ? (xc + xd) : (xd - xa);
+        float r2 = forward ? (xc + xd) : (xd - xc);
         output_data.values[word_base + k] =
             bf16_bits(r1) | (bf16_bits(r2) << 16u);
       } else {
@@ -379,7 +379,7 @@ void main() {
             float xc = rope_round(x1 * sin_t);
             float xd = rope_round(x2 * cos_t);
             vals[side] = (d < half_dims) ? (forward ? (xa - xb) : (xb + xa))
-                                         : (forward ? (xc + xd) : (xd - xa));
+                                         : (forward ? (xc + xd) : (xd - xc));
           }
           v0 = vals[0];
           v1 = vals[1];
@@ -461,7 +461,7 @@ void main() {
         float xd = rope_round(x2 * cos_t);
         bool first = traditional ? ((d & 1u) == 0u) : (d < half_dims);
         float r1 = forward ? (xa - xb) : (xb + xa);
-        float r2 = forward ? (xc + xd) : (xd - xa);
+        float r2 = forward ? (xc + xd) : (xd - xc);
         rope_store(params.output_offset + out_index, first ? r1 : r2);
       }
     } else {
@@ -515,7 +515,7 @@ void main() {
       float xc = rope_round(x1 * sin_t);
       float xd = rope_round(x2 * cos_t);
       float r1 = forward ? (xa - xb) : (xb + xa);
-      float r2 = forward ? (xc + xd) : (xd - xa);
+      float r2 = forward ? (xc + xd) : (xd - xc);
       rope_store(params.output_offset + out_index_1, r1);
       rope_store(params.output_offset + out_index_2, r2);
     }
