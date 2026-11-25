@@ -6539,9 +6539,29 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
         ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPad);
 
-  // G13C and G14C default to 128-row SG8 coalesced-W K=64 on large grids
-  // (FULL_M when M % rows == 0, ragged twin otherwise), step down to
-  // 64-row SG4 K=64 on smaller M/N, and honor ROWS=32 kill switch.
+  // G13C, G14C and G13G default to 128-row SG8 coalesced-W K=64 on large
+  // grids (FULL_M when M % rows == 0, ragged twin otherwise), step down
+  // to 64-row SG4 on smaller M/N, and honor ROWS=32 kill switch.
+  rows = coopmat_tile_rows(512u, 32u, g13g, allow64);
+  sg4 = qmm_coopmat_sg4_requested(g13g);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 128u);
+  CHECK(sg4);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64);
+
+  // G13G 8 cores: narrow n_groups that cannot fill the 128-row grid step
+  // down to the 64-row SG4 STEP_K=32 default.
+  rows = coopmat_tile_rows(512u, 4u, g13g, allow64);
+  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(step_k == 32u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32);
+
   rows = coopmat_tile_rows(512u, 32u, g13c, allow64);
   sg4 = qmm_coopmat_sg4_requested(g13c);
   step_k = qmm_coopmat_stepk_requested(g13c, rows, sg4);
@@ -6581,7 +6601,7 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
         ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM);
 
   setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
-  for (const std::string& maxpart : {g13c, g14c}) {
+  for (const std::string& maxpart : {g13c, g14c, g13g}) {
     rows = coopmat_tile_rows(512u, 80u, maxpart, allow64);
     sg4 = qmm_coopmat_sg4_requested(maxpart);
     step_k = qmm_coopmat_stepk_requested(maxpart, rows, sg4);
@@ -8090,7 +8110,7 @@ TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
     CHECK(omarchy::qmm_bf16w_default_part("Apple M4 Pro (G16S B1)"));
     CHECK(omarchy::qmm_bf16w_default_part("Apple M5 Max (G17C B1)"));
     CHECK(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
-    CHECK(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
     CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 Max (G13C C0)"));
     CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
     CHECK(omarchy::qmm_bf16w_default_part("Apple M6 (G18G B1)"));
