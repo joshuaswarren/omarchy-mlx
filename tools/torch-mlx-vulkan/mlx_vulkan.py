@@ -1136,18 +1136,25 @@ def _sub_inplace(a, b, alpha=1, **k):
     # integral alpha, so a narrow rhs times a wide alpha cannot wrap early;
     # a float alpha promotes the computation to float and the writeback
     # rejects the float->int cast-back, matching torch.
-    da, db = _dtype_of(a), _dtype_of(b)
-    if da == mx.bool_ or db == mx.bool_:
+    if isinstance(alpha, bool):
+        # torch: boolean alpha is only valid for boolean results, and
+        # boolean subtraction is rejected below
+        raise RuntimeError("Boolean alpha only supported for Boolean results.")
+    d = _mx(a)
+    mb = _mx(b)
+    # Checks run on the converted mlx dtypes (torch-side _dtype_of maps to
+    # torch dtypes, so the earlier torch-dtype comparisons never matched):
+    # bool operands are rejected like the compiled path does, and complex
+    # operands stay on the torch path - torch rejects a complex result cast
+    # into a real in-place destination, and the lowering does not implement
+    # torch's real/complex promotion widths; this build has no complex128.
+    if d.dtype == mx.bool_ or mb.dtype == mx.bool_:
         raise RuntimeError(
             "Subtraction, the `-` operator, with a bool tensor is "
             "not supported. If you are trying to invert a mask, "
             "use the `~` or `logical_not()` operator instead.")
-    if isinstance(alpha, bool):
-        # torch: boolean alpha is only valid for boolean results, and
-        # boolean subtraction is rejected above
-        raise RuntimeError("Boolean alpha only supported for Boolean results.")
-    d = _mx(a)
-    mb = _mx(b)
+    if d.dtype == mx.complex64 or mb.dtype == mx.complex64:
+        raise RuntimeError("Complex operands are not lowered for in-place subtract.")
     # Compute in the torch operation dtype: both operands promoted, a
     # python float alpha lifting an integral pair to the default float
     # (a python int alpha is weak and changes nothing). Cast both sides

@@ -279,6 +279,27 @@ def test_sub_tensor_w91_round5():
     assert np.array_equal(out.numpy(), np.array([-35008.0], dtype=np.float16)), out
     print("test_sub_tensor_w91_round5 PASS")
 
+
+
+def test_sub_tensor_w91_round6():
+    """w91 round 6: complex rhs stays on the torch path (raises)."""
+    for shape in ((), (1,)):
+        y = torch.tensor(torch.ones(shape, dtype=torch.complex64) * (2 + 3j))
+        x = torch.tensor([5.0], dtype=torch.float32)
+        g = torch.fx.Graph()
+        px, py = g.placeholder("x"), g.placeholder("y")
+        g.call_function(torch.ops.aten.sub_.Tensor, (px, py))
+        g.output(px)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, _ = mlx_vulkan.make_executor(gm)
+        try:
+            run(x, y)
+            raised = False
+        except RuntimeError:
+            raised = True
+        assert raised, f"complex rhs shape {shape} must raise, not drop the imaginary part"
+    print("test_sub_tensor_w91_round6 PASS")
+
 if __name__ == "__main__":
     test_sub_tensor()
     test_rsub()
@@ -287,4 +308,5 @@ if __name__ == "__main__":
     test_sub_tensor_w91_round3()
     test_sub_tensor_w91_round4()
     test_sub_tensor_w91_round5()
+    test_sub_tensor_w91_round6()
     print("ALL PASS")
