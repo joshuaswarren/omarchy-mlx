@@ -80,6 +80,9 @@ uint16_t bf16_store(float value) {
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
 #include "omarchy_half.h"
+#if defined(QMM_VEC_ROPE_EPI)
+#include "omarchy_trig.h"
+#endif
 #if defined(FP_MODE) && defined(QMM_VEC_Q4_WORD)
 #error "QMM_VEC_Q4_WORD applies to affine quantization only"
 #endif
@@ -106,6 +109,13 @@ uint16_t bf16_store(float value) {
      !defined(QMM_VEC_Q4_WORD) || !defined(QMM_VEC_MULTI) || \
      !defined(M_TOKENS))
 #error "QMM_VEC_RESNORM on the token column builds on the bf16 subgroup multi-token variant"
+#endif
+#if defined(QMM_VEC_ROPE_EPI) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     !defined(QMM_VEC_Q4_WORD) || !defined(QMM_VEC_MULTI) || \
+     !defined(QMM_VEC_TOKENS) || !defined(M_TOKENS) || \
+     defined(QMM_VEC_RESNORM))
+#error "QMM_VEC_ROPE_EPI builds on the bf16 subgroup multi-token variant without resnorm"
 #endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
@@ -211,10 +221,19 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // dispatch (the last finishing workgroup norms the materialized sum), so
 // that variant upgrades every Sum slot to coherent; all other multi
 // builds keep the writeonly store contract.
-#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_RESNORM)
+#if defined(QMM_VEC_TOKENS) && \
+    (defined(QMM_VEC_RESNORM) || defined(QMM_VEC_ROPE_EPI))
 #define QMM_VEC_SUM_ACCESS coherent
 #else
 #define QMM_VEC_SUM_ACCESS writeonly
+#endif
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
+// The fused-norm rope epilogue reads the Q/K members' materialized
+// outputs back inside the same dispatch, so their stores upgrade to
+// coherent like the resnorm variant's Sum slot.
+#define QMM_VEC_OUTPUT_ACCESS coherent
+#else
+#define QMM_VEC_OUTPUT_ACCESS writeonly
 #endif
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
@@ -226,7 +245,7 @@ layout(set = 0, binding = B + 1, std430) readonly buffer Scales##I { \
 layout(set = 0, binding = B + 2, std430) readonly buffer Biases##I { \
   STORAGE_TYPE values[]; \
 } biases##I; \
-layout(set = 0, binding = B + 3, std430) writeonly buffer Output##I { \
+layout(set = 0, binding = B + 3, std430) QMM_VEC_OUTPUT_ACCESS buffer Output##I { \
   STORAGE_TYPE values[]; \
 } output##I; \
 layout(set = 0, binding = B + 4, std430) readonly buffer Addend##I { \
@@ -254,6 +273,42 @@ layout(set = 0, binding = 27, std430) coherent buffer Ticket {
 } ticket;
 shared uint s_resnorm_is_last;
 shared float s_resnorm_partial[8u];
+#endif
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
+// Fused RMSNorm+RoPE epilogue on a <=3-member token group: member 3's
+// weight slots are repurposed (the host refuses 4-member rope-epi
+// groups) — input_w3 carries the scalar position offset, scales3 and
+// biases3 the per-side norm weights, output3 the query rope output,
+// and sum3 the producer-direct keys window. The ticket rides binding
+// 25 the same way the resnorm variant's does.
+layout(set = 0, binding = 25, std430) coherent buffer Ticket {
+  uint done;
+} ticket;
+shared uint s_rope_is_last;
+shared float epi_block[128u];
+shared float epi_rounded[256u];
+float epi_member_load(uint member, uint index) {
+  if (member == 0u) {
+    return LOAD_VALUE(output0.values[index]);
+  }
+  if (member == 1u) {
+    return LOAD_VALUE(output1.values[index]);
+  }
+  return LOAD_VALUE(output2.values[index]);
+}
+float epi_weight_load(uint side, uint index) {
+  return side == 0u ? LOAD_VALUE(scales3.values[index])
+                    : LOAD_VALUE(biases3.values[index]);
+}
+// bf16 round-to-nearest-even on the f32 register value, the same
+// constant-shift form fast_rope_norm.comp calls rope_round.
+float epi_rope_round(float value) {
+  uint bits = floatBitsToUint(value);
+  uint rounded = isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+  return uintBitsToFloat(rounded << 16u);
+}
 #endif
 #if defined(QMM_VEC_OUTGATE)
 // Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
@@ -1370,6 +1425,170 @@ void main() {
         }
       }
       barrier();
+    }
+  }
+#endif
+#if defined(QMM_VEC_ROPE_EPI)
+  // Fused RMSNorm+RoPE epilogue: the last finishing workgroup norms
+  // and rotates the Q/K member rows exactly like the standalone
+  // FastRopeNormBF16 dispatch pair it replaces — the 128-thread
+  // workgroup emulates the 256-thread norm tree via virtual lanes l
+  // and l+128 (dead threads contribute the same 0.0), and the
+  // rotate/store phase carries one output word pair per thread.
+  // Both ropes are forward, non-traditional, scalar-offset by the
+  // host contract, so the rotation takes the forward branches only.
+  barrier();
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    uint prev = atomicAdd(ticket.done, 1u);
+    s_rope_is_last = (prev == gl_NumWorkGroups.x - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_rope_is_last == 0u) {
+    return;
+  }
+  if (lane == 0u) {
+    ticket.done = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  {
+    const uint row_length = params.reduce_size;
+    const uint half_dims = params.aux_size;
+    const float eps = uintBitsToFloat(params.operation);
+    const bool passthrough = 2u * half_dims < row_length;
+    const uint rope_t = token_count;
+    const uint epi_sel = params.shape[3];
+    const float epi_off =
+        float(int(input_w3.values[params.rhs_offset]));
+    for (uint side = 0u; side < 2u; ++side) {
+      const uint member =
+          side == 0u ? (epi_sel & 3u) : ((epi_sel >> 2u) & 3u);
+      const uint heads =
+          side == 0u ? ((epi_sel >> 4u) & 0xFFFu)
+                     : ((epi_sel >> 16u) & 0xFFFu);
+      const uint in_off =
+          side == 0u ? params.lhs_size : params.rhs_size;
+      // (mat, t) strides re-derived under the contract pattern flag
+      // bit s: transposed [N,T,D] view (D, N*D) or contiguous
+      // [1,N,T,D] view (T*D, D).
+      const bool epi_transpose = ((params.flags >> side) & 1u) != 0u;
+      const uint is0 =
+          epi_transpose ? row_length : rope_t * row_length;
+      const uint is1 =
+          epi_transpose ? heads * row_length : row_length;
+      const uint nrows = heads * rope_t;
+      for (uint row = 0u; row < nrows; ++row) {
+        const uint mat = row / rope_t;
+        const uint t = row - mat * rope_t;
+        const uint in_base = in_off + t * is1 + mat * is0;
+        // Norm phase: the same pairing the 256-thread stride tree
+        // produces — virtual lanes l and l+128 merge first, then the
+        // 64..1 tree runs on the 128 partials.
+        float sq = 0.0;
+        if (lane < row_length) {
+          float v = epi_member_load(member, in_base + lane);
+          sq = v * v;
+        }
+        if (lane + 128u < row_length) {
+          float v = epi_member_load(member, in_base + lane + 128u);
+          sq += v * v;
+        }
+        epi_block[lane] = sq;
+        barrier();
+        for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+          if (lane < stride) {
+            epi_block[lane] += epi_block[lane + stride];
+          }
+          barrier();
+        }
+        const float mean_square = epi_block[0] / float(row_length);
+        barrier();
+        precise float norm = inversesqrt(mean_square + eps);
+        for (uint vl = lane; vl < row_length; vl += 128u) {
+          float v = epi_member_load(member, in_base + vl);
+          float w = epi_weight_load(side, vl);
+          precise float weight_norm = w * norm;
+          epi_rounded[vl] = epi_rope_round(v * weight_norm);
+        }
+        barrier();
+        if (lane < row_length / 2u) {
+          const uint k = lane;
+          const float position =
+              params.alpha * (float(t) + epi_off);
+          float v0;
+          float v1;
+          if (passthrough) {
+            const uint d0 = 2u * k;
+            const uint d1 = d0 + 1u;
+            if (d0 >= 2u * half_dims) {
+              v0 = epi_rounded[d0];
+              v1 = epi_rounded[d1];
+            } else {
+              float vals[2];
+              for (uint s = 0u; s < 2u; ++s) {
+                uint d = d0 + s;
+                uint i = d % half_dims;
+                float inv_freq = exp(-float(i) * params.beta);
+                float theta = position * inv_freq;
+                float cos_t = epi_rope_round(omarchy_trig_cos(theta));
+                float sin_t = epi_rope_round(omarchy_trig_sin(theta));
+                float x1 = epi_rounded[i];
+                float x2 = epi_rounded[i + half_dims];
+                float xa = epi_rope_round(x1 * cos_t);
+                float xb = epi_rope_round(x2 * sin_t);
+                float xc = epi_rope_round(x1 * sin_t);
+                float xd = epi_rope_round(x2 * cos_t);
+                vals[s] = (d < half_dims) ? (xa - xb) : (xc + xd);
+              }
+              v0 = vals[0];
+              v1 = vals[1];
+            }
+          } else {
+            bool r1_side = k < (half_dims >> 1u);
+            uint j0 = r1_side
+                ? (2u * k)
+                : (half_dims + 2u * (k - (half_dims >> 1u)));
+            uint j1 = j0 + 1u;
+            uint i0 = r1_side ? j0 : (j0 - half_dims);
+            uint i1 = i0 + 1u;
+            float inv0 = exp(-float(i0) * params.beta);
+            float inv1 = exp(-float(i1) * params.beta);
+            float cos0 =
+                epi_rope_round(omarchy_trig_cos(position * inv0));
+            float sin0 =
+                epi_rope_round(omarchy_trig_sin(position * inv0));
+            float cos1 =
+                epi_rope_round(omarchy_trig_cos(position * inv1));
+            float sin1 =
+                epi_rope_round(omarchy_trig_sin(position * inv1));
+            float xa = epi_rounded[i0];
+            float xb = epi_rounded[i0 + half_dims];
+            float xc = epi_rounded[i1];
+            float xd = epi_rounded[i1 + half_dims];
+            if (r1_side) {
+              v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
+              v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
+            } else {
+              v0 = epi_rope_round(xa * sin0) + epi_rope_round(xb * cos0);
+              v1 = epi_rope_round(xc * sin1) + epi_rope_round(xd * cos1);
+            }
+          }
+          if (side == 0u) {
+            uint ob = params.output_size +
+                (mat * rope_t + t) * row_length + 2u * k;
+            output3.values[ob] = STORE_VALUE(v0);
+            output3.values[ob + 1u] = STORE_VALUE(v1);
+          } else {
+            uint ob = params.output_offset +
+                mat * params.out_strides[1] +
+                t * params.out_strides[2] + 2u * k;
+            sum3.values[ob] = STORE_VALUE(v0);
+            sum3.values[ob + 1u] = STORE_VALUE(v1);
+          }
+        }
+        barrier();
+      }
     }
   }
 #endif

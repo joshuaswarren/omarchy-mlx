@@ -1216,6 +1216,11 @@ enum class ComputeKernel : uint16_t {
   // live token row of the materialized sum. Appended to keep profile
   // kernel ids stable.
   QmmVecQ4MultiToken4ResNormSubgroupBF16,
+  // QMM_VEC_TOKENS+ROPE_EPI): the last finishing workgroup norms and
+  // rotates the Q/K member rows for the layer's two fused-norm ropes,
+  // storing queries to a fresh buffer and keys through the slice
+  // pair's KV window. Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
   Count,
 };
 

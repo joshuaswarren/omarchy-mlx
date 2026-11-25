@@ -10158,13 +10158,6 @@ bool dispatch_quantized_gemv_group(
       !q4_word_enabled()) {
     return false;
   }
-  if (rope_epi != nullptr) {
-    // The fused RMSNorm+RoPE epilogue kernel is not landed yet: refuse
-    // the whole group so the ropes and members evaluate ordinarily.
-    // An attached plan that returns true without the epilogue would
-    // leave the skipped ropes unmaterialized.
-    return false;
-  }
   // SwiGLU store epilogue: exactly the gate and up projections, no
   // Add epilogues, f16/bf16 (the shader rounds through the same
   // integer packing swiglu.comp uses; there is no f32 swiglu kernel).
@@ -10337,6 +10330,90 @@ bool dispatch_quantized_gemv_group(
           (nw.size() == 1 || nw.size() == static_cast<size_t>(n_cand)) &&
           whole_dense(nw, nw.size()) && input_ready(nw, stream)) {
         res_norm_active = true;
+      }
+    }
+  }
+  // Fused RMSNorm+RoPE epilogue on a token4 group (planner attach in
+  // fused_chain.cpp): the last workgroup of the dispatch norms and
+  // rotates the two member rows the Q/K fast::RoPE nodes would have
+  // read, storing the query rows into the rope's own buffer and the
+  // keys rows through the slice pair's producer-direct keys window.
+  // The two FastRopeNormBF16 dispatches and their dependent
+  // boundaries are deleted. Everything the shader cannot express
+  // refuses the whole group, which falls back to ordinary evals.
+  bool rope_epi_active = false;
+  int64_t epi_heads[2] = {0, 0};
+  int epi_pattern[2] = {0, 0};
+  int64_t epi_d = 0;
+  if (rope_epi != nullptr && !rope_epi->traditional && token_route &&
+      rows <= 4u && outgate == nullptr && swiglu_out == nullptr &&
+      res_norm == nullptr && dtype == bfloat16 && subgroup_ready &&
+      members.size() <= 3u &&
+      encoder.device().compute().binding_limit() >=
+          kQmmVecMultiBindings + 1u) {
+    rope_epi_active = true;
+    const RopeEpiSide* epi_sides[2] = {&rope_epi->q, &rope_epi->k};
+    for (size_t s = 0; s < 2u && rope_epi_active; ++s) {
+      const auto& side = *epi_sides[s];
+      const array& view = side.rope.inputs()[0];
+      const array& wnorm = side.rope.inputs()[2];
+      if (side.member_index >= members.size() ||
+          members[side.member_index].out_view ||
+          view.dtype() != bfloat16 || view.ndim() < 3 ||
+          view.shape(-2) != static_cast<int>(rows) ||
+          view.shape(-1) <= 0 || view.shape(-1) > 256 ||
+          (view.shape(-1) % 2) != 0 ||
+          view.strides()[view.ndim() - 1] != 1 ||
+          wnorm.dtype() != bfloat16 ||
+          wnorm.size() != static_cast<size_t>(view.shape(-1)) ||
+          !whole_dense(wnorm, wnorm.size()) ||
+          !input_ready(wnorm, stream)) {
+        rope_epi_active = false;
+        break;
+      }
+      if (s == 0) {
+        epi_d = view.shape(-1);
+      } else if (view.shape(-1) != epi_d) {
+        rope_epi_active = false;
+        break;
+      }
+      // The epilogue re-derives the (mat, t) strides from N/T/D under
+      // the two view patterns the shader knows: a transposed [N,T,D]
+      // view of the contiguous member rows (head stride D, token
+      // stride N*D) or a contiguous [1,N,T,D] view (T*D, D).
+      const int vndim = view.ndim();
+      const int64_t vt = view.shape(-2);
+      const int64_t vd = view.shape(-1);
+      int64_t vn = static_cast<int64_t>(view.shape(0));
+      for (int i = 1; i < vndim - 2; ++i) {
+        vn *= view.shape(i);
+      }
+      if (vn <= 0 || vn > 4095) {
+        rope_epi_active = false;
+        break;
+      }
+      if (view.strides()[vndim - 3] == vd &&
+          view.strides()[vndim - 2] == vn * vd) {
+        epi_pattern[s] = 1;
+      } else if (
+          view.strides()[vndim - 3] == vt * vd &&
+          view.strides()[vndim - 2] == vd) {
+        epi_pattern[s] = 0;
+      } else {
+        rope_epi_active = false;
+        break;
+      }
+      epi_heads[s] = vn;
+    }
+    if (rope_epi_active) {
+      const array& offset = rope_epi->q.rope.inputs()[1];
+      const auto& window = *rope_epi->k.window;
+      if (rope_epi->dims <= 0 || rope_epi->dims > epi_d ||
+          (rope_epi->dims % 2) != 0 || ((rope_epi->dims / 2) % 2) != 0 ||
+          offset.size() != 1 || offset.dtype() != int32 ||
+          !input_ready(offset, stream) ||
+          window.strides[2] != 1u) {
+        rope_epi_active = false;
       }
     }
   }
@@ -10590,6 +10667,123 @@ bool dispatch_quantized_gemv_group(
         params.flags |= 262144u;
       }
     }
+  }
+  if (rope_epi != nullptr && !rope_epi_active) {
+    // An attached plan whose contract failed anywhere refuses the
+    // whole group: the ropes and their view chain are skip-role'd, so
+    // a plain dispatch here would leave them unmaterialized. The
+    // failed state replays every node ordinarily.
+    return false;
+  }
+  if (rope_epi_active) {
+    const array& q_view = rope_epi->q.rope.inputs()[0];
+    const array& k_view = rope_epi->k.rope.inputs()[0];
+    const array& offset = rope_epi->q.rope.inputs()[1];
+    array& q_member = members[rope_epi->q.member_index].node;
+    array& k_member = members[rope_epi->k.member_index].node;
+    auto& window = *rope_epi->k.window;
+    if (q_view.data_shared_ptr() != q_member.data_shared_ptr() ||
+        k_view.data_shared_ptr() != k_member.data_shared_ptr() ||
+        window.node.data_shared_ptr() != nullptr ||
+        window.base.data_shared_ptr() == nullptr ||
+        window.base.dtype() != bfloat16 ||
+        !window.base.flags().row_contiguous ||
+        window.base.size() != window.base.data_size() ||
+        window.base.offset() % window.base.itemsize() != 0 ||
+        (window.offset & 1u) != 0u ||
+        !input_ready(window.base, stream)) {
+      // The skipped ropes would stay unmaterialized: fall back before
+      // anything is committed so the group evaluates ordinarily.
+      return false;
+    }
+    bind_kv_window_storage(window, stream);
+    rope_epi->q.rope.set_data(
+        allocator().malloc(rope_epi->q.rope.nbytes()));
+    encoder.add_temporary(rope_epi->q.rope);
+    encoder.add_temporary(rope_epi->q.rope.inputs()[2]);
+    encoder.add_temporary(rope_epi->k.rope.inputs()[2]);
+    encoder.add_temporary(offset);
+    // Params mirror the FastRopeNormBF16 contract on fields the token
+    // member-dot code never reads; q rides the lhs_* names, k rhs_*.
+    // The shader's push-constant struct ends at out_strides, so the
+    // view (mat, t) strides are re-derived in the shader from the head
+    // count and row length under the two contract patterns — flag
+    // bit s picks each side's pattern — and the member indices and
+    // head counts pack into the unused fourth member's shape slot.
+    params.operation = std::bit_cast<uint32_t>(rope_epi->norm_eps);
+    params.alpha = rope_epi->scale;
+    params.beta = static_cast<float>(
+        std::log(static_cast<double>(rope_epi->base)) /
+        (rope_epi->dims / 2));
+    params.reduce_size = static_cast<uint32_t>(epi_d);
+    params.aux_size = static_cast<uint32_t>(rope_epi->dims / 2);
+    params.lhs_size = static_cast<uint32_t>(
+        q_view.offset() / q_view.itemsize());
+    params.rhs_size = static_cast<uint32_t>(
+        k_view.offset() / k_view.itemsize());
+    params.output_size = static_cast<uint32_t>(
+        rope_epi->q.rope.offset() / rope_epi->q.rope.itemsize());
+    params.output_offset = window.offset;
+    params.out_strides[1] = window.strides[0];
+    params.out_strides[2] = window.strides[1];
+    params.out_strides[3] = window.strides[2];
+    params.rhs_offset = static_cast<uint32_t>(
+        offset.offset() / offset.itemsize());
+    params.shape[3] =
+        static_cast<uint32_t>(rope_epi->q.member_index) |
+        (static_cast<uint32_t>(rope_epi->k.member_index) << 2u) |
+        (static_cast<uint32_t>(epi_heads[0]) << 4u) |
+        (static_cast<uint32_t>(epi_heads[1]) << 16u);
+    params.flags |= (epi_pattern[0] != 0 ? 1u : 0u) |
+        (epi_pattern[1] != 0 ? 2u : 0u);
+    // Standard multi layout; the shader repurposes member 3's declared
+    // slots: input_w3 = scalar position offset, scales3/biases3 =
+    // per-side norm weights, output3 = query rope output, addend3
+    // unused, sum3 = keys window. The ticket rides binding 25.
+    std::array<ComputeBinding, kQmmVecMultiBindings + 1> epi_bindings{};
+    epi_bindings[0] = binding(x);
+    const ComputeBinding epi_filler = binding(members[0].node);
+    for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
+      const uint32_t base = 1 + i * kQmmVecMultiBindingsPerWeight;
+      if (i < members.size()) {
+        const auto& member = members[i];
+        epi_bindings[base] = binding(member.node.inputs()[1]);
+        epi_bindings[base + 1] = binding(member.node.inputs()[2]);
+        epi_bindings[base + 2] = binding(member.node.inputs()[3]);
+        epi_bindings[base + 3] = binding(member.node);
+        epi_bindings[base + 4] = member.addend
+            ? binding(*member.addend)
+            : binding(member.node);
+        epi_bindings[base + 5] = member.sum_window
+            ? binding(member.sum_window->node)
+            : (member.epilogue ? binding(*member.epilogue)
+                               : binding(member.node));
+      } else {
+        for (uint32_t j = 0; j < kQmmVecMultiBindingsPerWeight; ++j) {
+          epi_bindings[base + j] = epi_filler;
+        }
+      }
+    }
+    epi_bindings[19] = binding(offset);
+    epi_bindings[20] = binding(rope_epi->q.rope.inputs()[2]);
+    epi_bindings[21] = binding(rope_epi->k.rope.inputs()[2]);
+    epi_bindings[22] = binding(rope_epi->q.rope);
+    epi_bindings[23] = epi_filler;
+    epi_bindings[24] = binding(window.node);
+    epi_bindings[kQmmVecMultiBindings] =
+        encoder.resnorm_ticket_binding();
+    encoder.dispatch_compute(
+        ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
+        epi_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
+    commit_rope_kv_redirect(rope_epi->k.rope);
+    if (rope_epi_done) {
+      *rope_epi_done = true;
+    }
+    return true;
   }
   if (res_norm_active) {
     res_norm->out.set_data(allocator().malloc(res_norm->out.nbytes()));
