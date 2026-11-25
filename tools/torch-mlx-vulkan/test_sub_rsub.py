@@ -63,6 +63,56 @@ def test_sub_inplace_value():
     print("test_sub_inplace_value PASS")
 
 
+def test_sub_inplace_alpha_kwarg():
+    # aten.sub_.Tensor(self, other, *, alpha): self -= alpha * other.
+    # alpha is keyword-only on this overload; the compiled executor must
+    # read it from kwargs, not silently drop it.
+    z = torch.tensor([1.0, 2.0])
+    s = torch.tensor([2.0, 3.0])
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor,
+                               (phs[0], phs[1]), {"alpha": 2})
+
+    out = _compiled_run(nodes, [z, s])
+    o = out[0] if isinstance(out, (tuple, list)) else out
+    want = z - 2 * s
+    assert np.allclose(_np(o), want.numpy(), atol=1e-5), (_np(o), want.numpy())
+    print("test_sub_inplace_alpha_kwarg PASS")
+
+
+def test_sub_inplace_rejects_broadcast_growth():
+    # in-place semantics: the result must fit the destination shape.
+    # (2,) -= (2,2) is a torch error, not a silent writeback of (2,2).
+    z = torch.tensor([1.0, 2.0])
+    s = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.sub_.Tensor, (phs[0], phs[1]), {})
+
+    try:
+        _compiled_run(nodes, [z, s])
+    except RuntimeError:
+        print("test_sub_inplace_rejects_broadcast_growth PASS")
+        return
+    raise AssertionError("sub_ accepted broadcast growth of the destination")
+
+
+def test_rsub_alpha_kwarg():
+    # rsub.Scalar(self, other, *, alpha=1): other - alpha * self, alpha by kwarg.
+    x = torch.tensor([1.0, 2.0, 3.0])
+
+    def nodes(g, phs):
+        return g.call_function(torch.ops.aten.rsub.Scalar,
+                               (phs[0], 10), {"alpha": 2})
+
+    out = _compiled_run(nodes, [x])
+    o = out[0] if isinstance(out, (tuple, list)) else out
+    want = 10 - 2 * x
+    assert np.allclose(_np(o), want.numpy(), atol=1e-5), (_np(o), want.numpy())
+    print("test_rsub_alpha_kwarg PASS")
+
+
 def test_rsub_scalar_reflected():
     # 3 - x lowers through aten.rsub.Scalar(x, 3): the scalar is reflected
     # to the left of the subtraction
@@ -110,6 +160,9 @@ def test_rsub_eager_spec():
 if __name__ == "__main__":
     test_sub_inplace_alias()
     test_sub_inplace_value()
+    test_sub_inplace_alpha_kwarg()
+    test_sub_inplace_rejects_broadcast_growth()
+    test_rsub_alpha_kwarg()
     test_rsub_scalar_reflected()
     test_rsub_alpha()
     test_rsub_eager_spec()

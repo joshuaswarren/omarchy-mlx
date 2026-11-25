@@ -2232,7 +2232,13 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = upd
                 continue
             if name in ("sub_", "sub_.Tensor"):
-                upd = env[n.args[0]] - args[1]
+                dst = env[n.args[0]]
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+                upd = dst - args[1] * alpha
+                if upd.shape != dst.shape:
+                    raise RuntimeError(
+                        "output with shape %s doesn't match the broadcast shape %s"
+                        % (list(dst.shape), list(upd.shape)))
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
@@ -2240,7 +2246,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = upd
                 continue
             if name in ("rsub", "rsub.Scalar") and n.op == "call_function":
-                alpha = args[2] if len(args) > 2 else 1
+                alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
                 env[n] = args[1] - args[0] * alpha
                 continue
             if name == "mul_":
