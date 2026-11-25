@@ -386,6 +386,10 @@ omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_B
 # rows of one [R, K] activation against one 2D weight, weight words read once
 # per block; m in 9..16 runs as two host passes of <= 8.
 omarchy_shader(qmm_vec_q4_word_subgroup_rows8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8)
+# Per-member rope epilogue: the Rows8 single-weight column carrying the
+# same fused RMSNorm+RoPE tail as the multi-token epilogue, one dispatch
+# per group member so the member dot keeps the Rows8 kernel.
+omarchy_shader(qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8 -DQMM_VEC_ROPE_EPI=1)
 # Tensor/MMA row routing (default off, MLX_OMARCHY_QMM_MMA_ROWS=1 arms):
 # a non-batched bf16 q4/g64 transposed call with 4..16 rows and
 # K >= 512 % 128 == 0, N >= 512 % 16 == 0, N*K >= 2^21 skips this row

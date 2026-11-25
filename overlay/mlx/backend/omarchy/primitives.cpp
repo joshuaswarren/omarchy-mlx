@@ -10841,6 +10841,132 @@ bool dispatch_quantized_gemv_group(
     encoder.add_temporary(rope_epi->k.rope.inputs()[2]);
     encoder.add_temporary(offset);
     encoder.add_temporary(rope_epi->k.rope.inputs()[1]);
+    // Per-member route (default on; MLX_OMARCHY_ROPE_EPI_MEMBER=0 keeps
+    // the token4 mega-dispatch for A/B): each member goes through its
+    // own Rows8 dispatch — the kernel the unfused path already picks for
+    // this shape — and the two rope members carry the fused
+    // RMSNorm+RoPE tail on bindings 5-8. Every tail read stays inside
+    // its own dispatch (the rope's rotary is per-tensor, so the sides
+    // never depend on each other's member output), which drops the
+    // 768-workgroup joint dispatch entirely. Members with an Add
+    // epilogue, a sum window, a dual-write view, or an unaligned x base
+    // fall back to the token4 dispatch below.
+    static const bool epi_member_route = []() {
+      const char* e = std::getenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+      return e == nullptr || e[0] == '\0' || std::strcmp(e, "0") != 0;
+    }();
+    bool member_route = epi_member_route && rows <= 4u &&
+        encoder.device().compute().binding_limit() >= 9u &&
+        (params.lhs_offset % 8u) == 0u;
+    for (const auto& member : members) {
+      member_route = member_route && !member.epilogue &&
+          !member.addend && !member.sum_window && !member.out_view;
+    }
+    if (member_route) {
+      const RopeEpiSide* route_sides[2] = {&rope_epi->q, &rope_epi->k};
+      for (size_t mi = 0; mi < members.size(); ++mi) {
+        auto& member = members[mi];
+        const array& mw = member.node.inputs()[1];
+        const array& mscales = member.node.inputs()[2];
+        const array& mbiases = member.node.inputs()[3];
+        const uint32_t m_groups = (params.shape[mi] + 7u) / 8u;
+        int route_side = -1;
+        for (int s = 0; s < 2; ++s) {
+          if (route_sides[s]->member_index == mi) {
+            route_side = s;
+          }
+        }
+        ComputeParams mp = params;
+        mp.rhs_offset =
+            static_cast<uint32_t>(mw.offset() / mw.itemsize());
+        mp.aux_offset =
+            static_cast<uint32_t>(mscales.offset() / mscales.itemsize());
+        mp.aux_size =
+            static_cast<uint32_t>(mbiases.offset() / mbiases.itemsize());
+        mp.matrix_m = rows;
+        mp.matrix_n = params.shape[mi];
+        mp.output_offset = static_cast<uint32_t>(
+            member.node.offset() / member.node.itemsize());
+        mp.flags = 0u;
+        mp.in_strides[0] = mp.in_strides[1] = mp.in_strides[2] =
+            mp.in_strides[3] = 0u;
+        mp.out_strides[0] = mp.out_strides[1] = mp.out_strides[2] =
+            mp.out_strides[3] = 0u;
+        mp.shape[0] = mp.shape[1] = mp.shape[2] = mp.shape[3] = 0u;
+        if (route_side < 0) {
+          mp.operation = 4u;
+          mp.reduce_size = 64u;
+          std::array<ComputeBinding, 5> mb{
+              binding(x),
+              binding(mw),
+              binding(mscales),
+              binding(mbiases),
+              binding(member.node)};
+          encoder.dispatch_compute(
+              ComputeKernel::QmmVecQ4WordSubgroupRows8BF16,
+              mb,
+              mp,
+              m_groups,
+              1u,
+              1u);
+          continue;
+        }
+        const auto& eside = *route_sides[route_side];
+        const array& eside_off = eside.rope.inputs()[1];
+        mp.count = static_cast<uint32_t>(
+            eside_off.offset() / eside_off.itemsize());
+        mp.operation =
+            std::bit_cast<uint32_t>(rope_epi->norm_eps);
+        mp.lhs_size = static_cast<uint32_t>(eside.view_offset);
+        mp.reduce_size = static_cast<uint32_t>(epi_d);
+        mp.dims = static_cast<uint32_t>(rope_epi->dims / 2);
+        mp.alpha = rope_epi->scale;
+        mp.beta = static_cast<float>(
+            std::log(static_cast<double>(rope_epi->base)) /
+            (rope_epi->dims / 2));
+        mp.shape[3] = static_cast<uint32_t>(epi_heads[route_side]);
+        mp.flags = static_cast<uint32_t>(route_side) |
+            (static_cast<uint32_t>(epi_pattern[route_side]) << 1u);
+        {
+          static const bool epi_no_tail =
+              std::getenv("MLX_OMARCHY_ROPE_EPI_NOTAIL") != nullptr;
+          if (epi_no_tail) {
+            mp.flags |= 4u;
+          }
+          static const bool epi_no_rows =
+              std::getenv("MLX_OMARCHY_ROPE_EPI_NOROWS") != nullptr;
+          if (epi_no_rows) {
+            mp.flags |= 8u;
+          }
+        }
+        if (route_side == 0) {
+          mp.output_size = static_cast<uint32_t>(
+              rope_epi->q.rope.offset() /
+              rope_epi->q.rope.itemsize());
+        } else {
+          mp.out_strides[0] = window.offset;
+          mp.out_strides[1] = window.strides[0];
+          mp.out_strides[2] = window.strides[1];
+        }
+        std::array<ComputeBinding, 9> sb{
+            binding(x),
+            binding(mw),
+            binding(mscales),
+            binding(mbiases),
+            binding(member.node),
+            binding(eside.rope.inputs()[2]),
+            binding(route_side == 0 ? rope_epi->q.rope : window.node),
+            binding(eside_off),
+            encoder.resnorm_ticket_binding()};
+        encoder.dispatch_compute(
+            ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+            sb,
+            mp,
+            m_groups,
+            1u,
+            1u);
+      }
+    } else {
     // Params mirror the FastRopeNormBF16 contract on fields the token
     // member-dot code never reads; q rides the lhs_* names, k rhs_*.
     // The shader's push-constant struct ends at out_strides, so the
@@ -10942,6 +11068,7 @@ bool dispatch_quantized_gemv_group(
         total_groups,
         1u,
         1u);
+    }
     if (std::getenv("MLX_OMARCHY_ROPE_EPI_DUMP") != nullptr) {
       encoder.synchronize("rope-epi debug dump");
       static int dmp = 0;

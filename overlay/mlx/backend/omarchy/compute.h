@@ -1221,6 +1221,9 @@ enum class ComputeKernel : uint16_t {
   // storing queries to a fresh buffer and keys through the slice
   // pair's KV window. Appended to keep profile kernel ids stable.
   QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
+  // Per-member twin of the rope epilogue above: the same tail on the
+  // single-weight Rows8 column, one dispatch per group member.
+  QmmVecQ4WordSubgroupRows8RopeEpiBF16,
   Count,
 };
 
