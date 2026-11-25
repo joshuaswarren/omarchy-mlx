@@ -524,8 +524,6 @@ CapabilityReport collect_capabilities(
   const auto& props = props2.properties;
   const auto& limits = props.limits;
   caps.device_name = props.deviceName;
-  caps.submission_timestamps =
-      submission_timestamps_supported(caps.device_name);
   caps.vendor_id = props.vendorID;
   caps.device_id = props.deviceID;
   caps.driver_version = props.driverVersion;
@@ -684,7 +682,6 @@ CapabilityReport collect_capabilities(
   // only when the driver lists the extension.
 #ifdef OMARCHY_BF16_CMAT
   bool bf16_cmat_features = false;
-  bool bf16_cmat_shape = false;
   if (has_bf16_ext && has_coopmat_ext) {
     VkPhysicalDeviceShaderBfloat16FeaturesKHR bf{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
@@ -737,16 +734,6 @@ CapabilityReport collect_capabilities(
               to_coopmat_type(p.BType), to_coopmat_type(p.CType),
               to_coopmat_type(p.ResultType), to_coopmat_scope(p.scope),
               p.saturatingAccumulation != VK_FALSE});
-#if defined(VK_KHR_shader_bfloat16) && defined(OMARCHY_BF16_CMAT)
-          if (p.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
-              p.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
-              p.saturatingAccumulation == VK_FALSE &&
-              p.scope == VK_SCOPE_SUBGROUP_KHR &&
-              p.AType == p.BType &&
-              p.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR) {
-            bf16_cmat_shape = true;
-          }
-#endif
           if (p.MSize != 8 || p.NSize != 8 || p.KSize != 8 ||
               p.CType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
               p.ResultType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
@@ -768,13 +755,9 @@ CapabilityReport collect_capabilities(
     }
   }
   // Device creation chains the bf16 features behind the cooperative-matrix
-  // features, which it enables when the device advertises any usable
-  // cooperative-matrix shape (fp32 8x8x8 or a bf16 subgroup shape).
+  // features, which it enables only with the fp32 shape.
   caps.cooperative_matrix_bf16_8 =
       caps.cooperative_matrix_bf16_8 && caps.cooperative_matrix_f32_8;
-#if defined(VK_KHR_shader_bfloat16) && defined(OMARCHY_BF16_CMAT)
-  caps.cooperative_matrix_bf16 = bf16_cmat_features && bf16_cmat_shape;
-#endif
   return caps;
 }
 
@@ -1046,22 +1029,6 @@ bool Runtime::init_impl() {
         p13.minSubgroupSize,
         p13.maxSubgroupSize,
         info.caps.subgroup_size);
-    info.caps.subgroup_size_min =
-        info.caps.required_subgroup_size != 0 ? p13.minSubgroupSize : 0;
-    // 16-lane admission follows subgroupSizeControl's enable rule: only a
-    // device that will run pinned pipelines (required_subgroup_size != 0)
-    // gets the bit, so a later KCONTS16 pipeline request can throw instead
-    // of creating a pipeline the driver cannot legally build.
-    info.caps.subgroup_size_16_admitted =
-        info.caps.required_subgroup_size != 0 &&
-        subgroup_size_admitted(
-            f13.subgroupSizeControl == VK_TRUE,
-            p13.requiredSubgroupSizeStages,
-            p13.minSubgroupSize,
-            p13.maxSubgroupSize,
-            p13.maxComputeWorkgroupSubgroups,
-            16u,
-            256u);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1403,21 +1370,6 @@ uint32_t required_subgroup_size(
   return subgroup_size;
 }
 
-bool subgroup_size_admitted(
-    bool size_control,
-    VkShaderStageFlags required_stages,
-    uint32_t min_size,
-    uint32_t max_size,
-    uint32_t max_workgroup_subgroups,
-    uint32_t target,
-    uint32_t workgroup_size) {
-  return size_control &&
-      (required_stages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-      min_size <= target && target <= max_size &&
-      static_cast<uint64_t>(target) * max_workgroup_subgroups >=
-          workgroup_size;
-}
-
 std::vector<size_t> device_order(
     const std::vector<VkPhysicalDeviceType>& types) {
   std::vector<size_t> order(types.size());
@@ -1527,9 +1479,7 @@ Device::Device(uint32_t physical_device_index) {
   VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabled_cm{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
   enabled_cm.cooperativeMatrix =
-      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16)
-          ? VK_TRUE
-          : VK_FALSE;
+      hw.cooperative_matrix_f32_8 ? VK_TRUE : VK_FALSE;
   VkPhysicalDevice16BitStorageFeatures enabled16{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
   enabled16.storageBuffer16BitAccess =
@@ -1548,14 +1498,17 @@ Device::Device(uint32_t physical_device_index) {
   enabled2.features.shaderInt64 = hw.shader_int64 ? VK_TRUE : VK_FALSE;
   enabled16.pNext = &enabled12;
   enabled12.pNext = &enabled13;
-  enabled13.pNext = &enabled_fa;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  enabled13.pNext = nullptr;
+  if (hw.shader_atomic_float_add) {
+    enabled13.pNext = &enabled_fa;
+  }
+  if (hw.cooperative_matrix_f32_8) {
     enabled_fa.pNext = &enabled_cm;
   }
 #ifdef OMARCHY_BF16_CMAT
   VkPhysicalDeviceShaderBfloat16FeaturesKHR enabled_bf16{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
-  if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_bf16_8) {
     enabled_bf16.shaderBFloat16Type = VK_TRUE;
     enabled_bf16.shaderBFloat16CooperativeMatrix = VK_TRUE;
     enabled_cm.pNext = &enabled_bf16;
@@ -1570,16 +1523,19 @@ Device::Device(uint32_t physical_device_index) {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
   enabled_pl.pageableDeviceLocalMemory = enabled_mp.memoryPriority;
   enabled2.pNext = &enabled16;
-  // pNext tail walk: the structs above link only when their capability
-  // enabled them (cooperative matrix behind float-atomic, bf16 behind
-  // cooperative matrix). The memory-priority pair chains after whatever
-  // tail exists when both bits are set, matching the extension pair in
-  // device_extension_names.
-  void** tail = &enabled_fa.pNext;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  // pNext tail walk: only link feature structs the device supports.
+  // The NVIDIA driver rejects VkDeviceCreateInfo when the pNext chain
+  // includes a feature struct for a disabled extension.
+  void** tail = &enabled13.pNext;
+  if (hw.shader_atomic_float_add) {
+    tail = &enabled_fa.pNext;
+  }
+  if (hw.cooperative_matrix_f32_8) {
+    *tail = &enabled_cm;
     tail = &enabled_cm.pNext;
 #ifdef OMARCHY_BF16_CMAT
-    if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
+    if (hw.cooperative_matrix_bf16_8) {
+      *tail = &enabled_bf16;
       tail = &enabled_bf16.pNext;
     }
 #endif
@@ -1660,7 +1616,6 @@ Device::Device(uint32_t physical_device_index) {
   ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
 #ifdef OMARCHY_BF16_CMAT
   ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
-  ext_in.cooperative_matrix_bf16 = hw.cooperative_matrix_bf16;
 #endif
   ext_in.memory_priority = hw.memory_priority;
   ext_in.pageable_device_local_memory = hw.pageable_device_local_memory;
@@ -1809,10 +1764,7 @@ Device::Device(uint32_t physical_device_index) {
           caps_.max_per_stage_descriptor_storage_buffers,
           caps_.max_descriptor_set_storage_buffers));
   compute_ = std::make_unique<ComputeRuntime>(
-      device_,
-      binding_limit,
-      hardware_caps_.required_subgroup_size,
-      hardware_caps_.subgroup_size_16_admitted);
+      device_, binding_limit, hardware_caps_.required_subgroup_size);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 
