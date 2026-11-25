@@ -1136,7 +1136,19 @@ void* Buffer::raw_ptr() {
   }
   auto* buffer = static_cast<omarchy::VulkanBuffer*>(ptr_);
   if (buffer->inference_weight) {
-    throw std::runtime_error("[omarchy] device-local inference weights are not host-accessible");
+    // Weight buffers are unmapped by design; serve host readback through a
+    // device-to-host shadow copy. upload_weights() synchronizes before
+    // returning and compute only ever reads weights, so the device copy is
+    // current whenever host code asks for it.
+    if (buffer->host_shadow == nullptr) {
+      buffer->host_shadow = std::calloc(1, buffer->size);
+      if (buffer->host_shadow == nullptr) {
+        throw std::bad_alloc();
+      }
+    }
+    omarchy::device().download_device_to_host(
+        buffer->buffer, buffer->host_shadow, buffer->size);
+    return buffer->host_shadow;
   }
   if (buffer->device_local) {
     if (buffer->sync_state.device_dirty) {
