@@ -90,6 +90,7 @@ SERIES_PATCHES=(
   mlx-lm-kv-host-offset.patch
   mlx-lm-readback-chunk.patch
   mlx-lm-deferred-token-yield.patch
+  mlx-lm-server-alias-key.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
