@@ -81,6 +81,9 @@ shared float norm_block[256];
 
 // Field order must match the fixed omarchy::ComputeParams layout the
 // backend pushes: count, operation, lhs_size, rhs_size, reduce_size, ...
+// in_strides[0] carries the state_out item offset (eval_gpu convention);
+// every bound buffer index below is offset-corrected so view inputs with
+// nonzero storage offsets read through flat bindings correctly.
 layout(push_constant) uniform Params {
   uint count;
   uint operation;
@@ -97,6 +100,11 @@ layout(push_constant) uniform Params {
   uint matrix_n;
   uint matrix_k;
   uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
 } params;
 
 void main() {
@@ -113,11 +121,13 @@ void main() {
     float accumulator = 0.0;
     for (uint tap = 0u; tap < params.operation; ++tap) {
       float value = tap < km1
-          ? LOAD_VALUE(
-                in_state.values[state_base + tap * channels + channel])
-          : LOAD_VALUE(in_x.values[x_base + channel]);
+          ? LOAD_VALUE(in_state.values
+                [params.lhs_offset + state_base + tap * channels + channel])
+          : LOAD_VALUE(
+                in_x.values[params.rhs_offset + x_base + channel]);
       accumulator += value *
-          LOAD_VALUE(weight.values[channel * params.operation + tap]);
+          LOAD_VALUE(weight.values
+              [params.aux_offset + channel * params.operation + tap]);
     }
     // Flag bit 0 (GdnConvUpdate `activate`): fold the model's nn.silu
     // into this dispatch. Bit-exact to the standalone swiglu.comp
@@ -214,12 +224,14 @@ void main() {
       }
 #endif
     }
-    output_data.values[work_index] = activated;
+    output_data.values[params.output_offset + work_index] = activated;
     for (uint row = 0u; row + 1u < km1; ++row) {
-      state_out.values[state_base + row * channels + channel] =
-          in_state.values[state_base + (row + 1u) * channels + channel];
+      state_out.values[params.in_strides[0] + state_base + row * channels +
+                       channel] = in_state.values
+          [params.lhs_offset + state_base + (row + 1u) * channels + channel];
     }
-    state_out.values[state_base + (km1 - 1u) * channels + channel] =
-        in_x.values[x_base + channel];
+    state_out.values[params.in_strides[0] + state_base +
+                     (km1 - 1u) * channels + channel] =
+        in_x.values[params.rhs_offset + x_base + channel];
   }
 }

@@ -16256,12 +16256,12 @@ void GdnConvUpdate::eval_gpu(
   array in_state = inputs.at(0);
   array in_x = inputs.at(1);
   array in_w = inputs.at(2);
-  // Materialize any strided/offset input into a dense temporary (same
-  // trap as the GDN decode kernel: nonzero storage offsets read
-  // garbage through flat bindings).
+  // Materialize any non-row-contiguous input into a dense temporary.
+  // Row-contiguous inputs may carry a nonzero storage offset (sibling
+  // GEMV member views): the decode kernel honors lhs/rhs/aux offsets.
   bool any_strided = false;
   for (const auto& x : inputs) {
-    any_strided = any_strided || !x.flags().row_contiguous || x.offset() != 0;
+    any_strided = any_strided || !x.flags().row_contiguous;
   }
   if (any_strided) {
     std::vector<array> dense;
