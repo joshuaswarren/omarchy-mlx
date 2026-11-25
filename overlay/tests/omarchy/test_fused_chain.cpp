@@ -2593,6 +2593,7 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   CHECK(t.find(42) == nullptr);
   CHECK(t.put_if_absent(42, 8));
   CHECK(*t.find(42) == 8);
+}
 // FUSE-4 leg 1: the group PLANNER adopts the dual-write route. When the
 // graph shows the adoptable shape - every group member the sole input
 // of one unclaimed last-axis Concatenate - the flagged planner hands
