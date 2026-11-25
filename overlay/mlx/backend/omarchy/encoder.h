@@ -466,6 +466,11 @@ class MLX_API CommandEncoder {
   // order host writes to mapped memory, which still need synchronize().
   void wait_outstanding_submissions();
 
+  // Persistent per-stream arrival-counter pool for the fused split-K merge (sdpa_decode_split_p1m.comp). Each dispatch
+  // claims one uint slot per query head and the merging workgroup resets its head's slot to 0, so the pool is
+  // self-cleaning: it needs zeroing only once, at (re)allocation. Sized to the largest head count seen.
+  array& sdpa_merge_counters(uint32_t heads);
+
   // True when every submission queued through this encoder has completed
   // and its handlers have run, and no batch is open with un-submitted
   // work. Host reads of input bytes are then sound.
@@ -671,6 +676,7 @@ class MLX_API CommandEncoder {
   // quarantine; the set only carries the completion stamp at submit
   // time.
   std::unordered_set<VulkanBuffer*> batch_buffers_;
+  array sdpa_counters_{Shape{0}, uint32, nullptr, {}};
   // Descriptor pools retired during recording. They ride the dispatcher
   // payload (one-generation retire) so a set allocated from them cannot
   // outlive its pool.

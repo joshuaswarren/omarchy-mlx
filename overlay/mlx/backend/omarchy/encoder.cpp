@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <map>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string_view>
 #include <unistd.h>
@@ -1534,6 +1535,18 @@ void CommandEncoder::wait_outstanding_submissions() {
     return;
   }
   add_semaphore_wait(device_.completions().semaphore(), value, nullptr);
+}
+
+array& CommandEncoder::sdpa_merge_counters(uint32_t heads) {
+  if (sdpa_counters_.size() < static_cast<int64_t>(heads)) {
+    array counters(Shape{static_cast<int>(std::max<uint32_t>(heads, 64u))}, uint32, nullptr, {});
+    counters.set_data(omarchy::allocator().malloc(counters.nbytes()));
+    // Fresh allocation: no prior device work can reference it, so the plain host memset needs no drain (the same
+    // argument fill_pattern makes for first fills); the next submission's flush publishes it for the device.
+    std::memset(static_cast<uint8_t*>(counters.buffer().raw_ptr()), 0, counters.nbytes());
+    sdpa_counters_ = std::move(counters);
+  }
+  return sdpa_counters_;
 }
 
 void CommandEncoder::submit() {

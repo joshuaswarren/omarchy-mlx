@@ -1136,6 +1136,21 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// Single-dispatch split-K (pass 1 with the merge folded into the last block's workgroup, sdpa_decode_split_p1m.comp): the
+// largest cache length, in keys, up to which the fused route is the default on a part. 0 keeps the two-dispatch pair.
+// Prototype: no part defaults to it until a measured window lands (M1MD-4).
+inline uint32_t sdpa_split_merge_max_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_MERGE_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
+  return 0;
+}
+
+inline bool sdpa_split_merge_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_split_merge_max_keys(device_name);
+  return max_keys != 0 && k_len <= max_keys;
+}
+
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.

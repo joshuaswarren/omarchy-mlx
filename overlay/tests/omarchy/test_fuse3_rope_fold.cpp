@@ -237,18 +237,19 @@ TEST_CASE("folded split p1 scratch equals the unfused rope+split scratch") {
   array k = bf16_array(k_host, Shape{1, KV_HEADS, K_LEN, HD}, s);
   array v = bf16_array(v_host, Shape{1, KV_HEADS, K_LEN, HD}, s);
 
-  // The scratch row the split kernels write: SPLIT_MAX, SPLIT_SUM and the
-  // D weighted-value floats per (kv head, query head); the exact layout
-  // does not matter to this contract because both arms write the same
-  // cells from the same q/k/v.
+  // The scratch row the split kernels write: the D weighted-value floats
+  // then SPLIT_MAX, SPLIT_SUM and two pad floats per (kv head, query
+  // head) block row, stride HD + 4 (M1MD-4's tail-header layout); the
+  // exact layout does not matter to this contract because both arms write
+  // the same cells from the same q/k/v.
   array roped = array(raw.shape(), raw.dtype(), nullptr, {});
   roped.set_data(omarchy::allocator().malloc(roped.nbytes()));
   array scratch_unfused(
-      std::vector<float>(heads * (HD + 2u), 0.0f).data(),
-      Shape{KV_HEADS, SPLIT_R, HD + 2u}, float32);
+      std::vector<float>(heads * (HD + 4u), 0.0f).data(),
+      Shape{KV_HEADS, SPLIT_R, HD + 4u}, float32);
   array scratch_folded(
-      std::vector<float>(heads * (HD + 2u), 0.0f).data(),
-      Shape{KV_HEADS, SPLIT_R, HD + 2u}, float32);
+      std::vector<float>(heads * (HD + 4u), 0.0f).data(),
+      Shape{KV_HEADS, SPLIT_R, HD + 4u}, float32);
   scratch_unfused.set_data(omarchy::allocator().malloc(scratch_unfused.nbytes()));
   scratch_folded.set_data(omarchy::allocator().malloc(scratch_folded.nbytes()));
   sync(s);
@@ -257,7 +258,7 @@ TEST_CASE("folded split p1 scratch equals the unfused rope+split scratch") {
   split_p1(roped, k, v, scratch_unfused, s, false, nullptr, nullptr);
   split_p1(raw, k, v, scratch_folded, s, true, &weight, &offsets);
 
-  const size_t words = heads * (HD + 2u);
+  const size_t words = heads * (HD + 4u);
   const auto* unfused = scratch_unfused.data<float>();
   const auto* folded = scratch_folded.data<float>();
   size_t diffs = 0;
