@@ -227,7 +227,12 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #else
 #define QMM_VEC_SUM_ACCESS writeonly
 #endif
-#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI) && \
+    defined(QMM_VEC_EPI_NOTAILCODE)
+// PROBE: no tail code -> writeonly member stores isolate the
+// coherent-store cost in member-dot timing.
+#define QMM_VEC_OUTPUT_ACCESS writeonly
+#elif defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
 // The fused-norm rope epilogue reads the Q/K members' materialized
 // outputs back inside the same dispatch, so their stores upgrade to
 // coherent like the resnorm variant's Sum slot. Measured on jw16:
