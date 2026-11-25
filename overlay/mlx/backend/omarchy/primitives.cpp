@@ -10431,11 +10431,11 @@ bool dispatch_quantized_gemv_group(
       if (side.view_strides[vndim - 3] == vd &&
           side.view_strides[vndim - 2] == vn * vd) {
         epi_pattern[s] = 1;
-      } else if (
-          side.view_strides[vndim - 3] == vt * vd &&
-          side.view_strides[vndim - 2] == vd) {
-        epi_pattern[s] = 0;
       } else {
+        // The epilogue's per-head ticket election requires the
+        // transposed view (each rope head spans one contiguous
+        // member-column slice covered by a contiguous workgroup
+        // range); any other layout falls back.
         if (epi_ctrace) {
           static int trp = 0;
           if (trp++ < 4) {
@@ -10455,6 +10455,14 @@ bool dispatch_quantized_gemv_group(
         break;
       }
       epi_heads[s] = vn;
+    }
+    if (rope_epi_active &&
+        (epi_heads[0] + epi_heads[1] > 64 ||
+         epi_d % 8 != 0 ||
+         (epi_heads[0] * static_cast<int64_t>(epi_d)) % 8 != 0)) {
+      // Ticket slot carries 64 counters; the election needs each head
+      // to span a whole number of COLUMNS_PER_GROUP (=8) column tiles.
+      rope_epi_active = false;
     }
     if (rope_epi_active) {
       const array& offset = rope_epi->q.rope.inputs()[1];

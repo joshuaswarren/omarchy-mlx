@@ -282,7 +282,7 @@ shared float s_resnorm_partial[8u];
 // and sum3 the producer-direct keys window. The ticket rides binding
 // 25 the same way the resnorm variant's does.
 layout(set = 0, binding = 25, std430) coherent buffer Ticket {
-  uint done;
+  uint values[];
 } ticket;
 shared uint s_rope_is_last;
 shared float epi_block[128u];
@@ -1429,29 +1429,18 @@ void main() {
   }
 #endif
 #if defined(QMM_VEC_ROPE_EPI)
-  // Fused RMSNorm+RoPE epilogue: the last finishing workgroup norms
-  // and rotates the Q/K member rows exactly like the standalone
-  // FastRopeNormBF16 dispatch pair it replaces — the 128-thread
-  // workgroup emulates the 256-thread norm tree via virtual lanes l
-  // and l+128 (dead threads contribute the same 0.0), and the
-  // rotate/store phase carries one output word pair per thread.
-  // Both ropes are forward, non-traditional, scalar-offset by the
-  // host contract, so the rotation takes the forward branches only.
-  barrier();
-  memoryBarrierBuffer();
-  if (lane == 0u) {
-    uint prev = atomicAdd(ticket.done, 1u);
-    s_rope_is_last = (prev == gl_NumWorkGroups.x - 1u) ? 1u : 0u;
-  }
-  barrier();
-  if (s_rope_is_last == 0u) {
-    return;
-  }
-  if (lane == 0u) {
-    ticket.done = 0u;
-  }
-  memoryBarrierBuffer();
-  barrier();
+  // Fused RMSNorm+RoPE epilogue: a member-dot workgroup covers
+  // COLUMNS_PER_GROUP contiguous output columns, all inside a single
+  // rope head (whose per-head element span is the mat stride is0), so
+  // is0/COLUMNS_PER_GROUP workgroups finish each head. The last
+  // finisher norms and rotates that head's token rows exactly like
+  // the standalone FastRopeNormBF16 dispatch pair it replaces — the
+  // 128-thread workgroup emulates the 256-thread norm tree via
+  // virtual lanes l and l+128 (dead threads contribute the same
+  // 0.0), and the rotate/store phase carries one output word pair
+  // per thread. Both ropes are forward, non-traditional,
+  // scalar-offset by the host contract, so the rotation takes the
+  // forward branches only.
   {
     const uint row_length = params.reduce_size;
     const uint half_dims = params.aux_size;
@@ -1459,35 +1448,58 @@ void main() {
     const bool passthrough = 2u * half_dims < row_length;
     const uint rope_t = token_count;
     const uint epi_sel = params.shape[3];
-    for (uint side = 0u; side < 2u; ++side) {
-      // q's offset rides the uint input_w3 slot, k's the u16 addend3
-      // slot reassembled from two u16 lanes at params.count.
-      const float epi_off =
-          side == 0u
-              ? float(int(input_w3.values[params.rhs_offset]))
-              : float(int(
-                    uint(addend3.values[params.count]) |
-                    (uint(addend3.values[params.count + 1u]) << 16u)));
-      const uint member =
-          side == 0u ? (epi_sel & 3u) : ((epi_sel >> 2u) & 3u);
-      const uint heads =
-          side == 0u ? ((epi_sel >> 4u) & 0xFFFu)
-                     : ((epi_sel >> 16u) & 0xFFFu);
-      const uint in_off =
-          side == 0u ? params.lhs_size : params.rhs_size;
-      // (mat, t) strides re-derived under the contract pattern flag
-      // bit s: transposed [N,T,D] view (D, N*D) or contiguous
-      // [1,N,T,D] view (T*D, D).
-      const bool epi_transpose = ((params.flags >> side) & 1u) != 0u;
-      const uint is0 =
-          epi_transpose ? row_length : rope_t * row_length;
-      const uint is1 =
-          epi_transpose ? heads * row_length : row_length;
-      const uint nrows = heads * rope_t;
-      for (uint row = 0u; row < nrows; ++row) {
-        const uint mat = row / rope_t;
-        const uint t = row - mat * rope_t;
-        const uint in_base = in_off + t * is1 + mat * is0;
+    const uint q_heads = (epi_sel >> 4u) & 0xFFFu;
+    uint side;
+    uint heads;
+    if (which == (epi_sel & 3u)) {
+      side = 0u;
+      heads = q_heads;
+    } else if (which == ((epi_sel >> 2u) & 3u)) {
+      side = 1u;
+      heads = (epi_sel >> 16u) & 0xFFFu;
+    } else {
+      return;
+    }
+    const uint in_off =
+        side == 0u ? params.lhs_size : params.rhs_size;
+    // (mat, t) strides re-derived under the contract pattern flag
+    // bit s: transposed [N,T,D] view (D, N*D) or contiguous
+    // [1,N,T,D] view (T*D, D).
+    const bool epi_transpose = ((params.flags >> side) & 1u) != 0u;
+    const uint is0 =
+        epi_transpose ? row_length : rope_t * row_length;
+    const uint is1 =
+        epi_transpose ? heads * row_length : row_length;
+    // q's offset rides the uint input_w3 slot, k's the u16 addend3
+    // slot reassembled from two u16 lanes at params.count.
+    const float epi_off =
+        side == 0u
+            ? float(int(input_w3.values[params.rhs_offset]))
+            : float(int(
+                  uint(addend3.values[params.count]) |
+                  (uint(addend3.values[params.count + 1u]) << 16u)));
+    const uint member = which;
+    barrier();
+    memoryBarrierBuffer();
+    const uint wgs_per_head = is0 / COLUMNS_PER_GROUP;
+    const uint head = workgroup / wgs_per_head;
+    const uint tix = (side == 0u) ? head : (q_heads + head);
+    if (lane == 0u) {
+      uint prev = atomicAdd(ticket.values[tix], 1u);
+      s_rope_is_last = (prev == wgs_per_head - 1u) ? 1u : 0u;
+    }
+    barrier();
+    if (s_rope_is_last == 0u) {
+      return;
+    }
+    if (lane == 0u) {
+      ticket.values[tix] = 0u;
+    }
+    memoryBarrierBuffer();
+    barrier();
+    for (uint t = 0u; t < rope_t; ++t) {
+      const uint mat = head;
+      const uint in_base = in_off + t * is1 + mat * is0;
         // Norm phase: the same pairing the 256-thread stride tree
         // produces — virtual lanes l and l+128 merge first, then the
         // 64..1 tree runs on the 128 partials.
@@ -1595,7 +1607,6 @@ void main() {
         }
         barrier();
       }
-    }
   }
 #endif
 }
