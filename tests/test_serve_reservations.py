@@ -5,9 +5,11 @@ Stdlib unittest only. Tests use a temporary MLX_OMARCHY_HOME so the real
 plausible bug would break.
 """
 
+import io
 import json
 import multiprocessing
 import os
+import socket
 import subprocess
 import tempfile
 import threading
@@ -407,6 +409,199 @@ class ClaimPipeValidationTests(unittest.TestCase):
             with self.assertRaises(budget.BudgetError) as cm:
                 budget.claim_from_env(home=self.home)
         self.assertIn("claim pipe unreadable", str(cm.exception))
+
+
+NON_INT_BYTES = (True, False, 1.5, 1024.0, "1024", None, [1024])
+
+
+class ReservationByteCountTests(unittest.TestCase):
+    """Reservation writers and the claim take an exact positive int: a bool,
+    float or string is a BudgetError, never coerced with int()."""
+
+    def setUp(self):
+        self.home, self.cleanup = _make_home()
+        self.addCleanup(self.cleanup)
+
+    def assertNothingWritten(self):
+        self.assertFalse(budget.reservations_path(self.home).exists())
+
+    def test_set_reservation_rejects_non_int_bytes(self):
+        for value in NON_INT_BYTES:
+            with self.subTest(value=value):
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.set_reservation("svc", value, home=self.home)
+                self.assertIn("positive integer bytes", str(cm.exception))
+                self.assertNothingWritten()
+        budget.set_reservation("svc", 1024, home=self.home)
+        self.assertEqual(budget.load_reservations(self.home)["svc"]["bytes"], 1024)
+
+    def test_admit_and_reserve_rejects_non_int_bytes(self):
+        for value in NON_INT_BYTES:
+            with self.subTest(value=value):
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.admit_and_reserve(
+                        "svc", value, owner="o", home=self.home,
+                        available_bytes=64 * GiB, gpu_client_cap_bytes=64 * GiB)
+                self.assertIn("positive integer bytes", str(cm.exception))
+                self.assertNothingWritten()
+        budget.admit_and_reserve(
+            "adm", 2048, owner="o", home=self.home,
+            available_bytes=64 * GiB, gpu_client_cap_bytes=64 * GiB)
+        self.assertEqual(budget.load_reservations(self.home)["adm"]["bytes"], 2048)
+
+    def test_claim_rejects_bad_expected_bytes_before_the_lock(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        transaction = unittest.mock.Mock(side_effect=AssertionError("lock taken"))
+        cases = [(repr(v), v) for v in NON_INT_BYTES + (0, -1)]
+        cases.append(("huge negative", -(10**5000)))
+        with unittest.mock.patch.object(budget, "_transaction", transaction):
+            for label, value in cases:
+                with self.subTest(value=label):
+                    with self.assertRaises(budget.BudgetError) as cm:
+                        budget.claim_reservation("chat", "tok", expected_bytes=value,
+                                                 home=self.home)
+                    self.assertIn("expected_bytes must be a positive integer",
+                                  str(cm.exception))
+        transaction.assert_not_called()
+
+
+class ParentLifetimeWatchTests(unittest.TestCase):
+    """The lifetime watchdog never closes stdio, never dies on a raw
+    exception, and fails closed: a malformed MLX_OMARCHY_PARENT_LIFETIME_FD
+    is a BudgetError before any thread starts, and an fd that cannot be
+    watched still runs on_eof (the child stops)."""
+
+    def _non_read_fds(self):
+        sock_a, sock_b = socket.socketpair()
+        self.addCleanup(sock_a.close)
+        self.addCleanup(sock_b.close)
+        reg = tempfile.TemporaryFile()
+        self.addCleanup(reg.close)
+        pipe_r, pipe_w = os.pipe()
+        self.addCleanup(os.close, pipe_r)
+        self.addCleanup(os.close, pipe_w)
+        fifo_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(fifo_dir.cleanup)
+        fifo_path = Path(fifo_dir.name) / "rw.fifo"
+        os.mkfifo(fifo_path)
+        fifo_rw = os.open(fifo_path, os.O_RDWR)
+        self.addCleanup(os.close, fifo_rw)
+        return sock_a.fileno(), reg.fileno(), pipe_w, fifo_rw
+
+    def test_from_env_accepts_only_an_open_pipe_above_stdio(self):
+        # int() of 5000 digits raises only under the default limit; pin it.
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        thread = unittest.mock.Mock(side_effect=AssertionError("thread started"))
+        values = ("\u00b2", "\u0665", "1" * 5000, "999999999999999999999",
+                  str(2**31), "-1", "+5", " 5", "5 ", "1_0", "abc", "3.0",
+                  "0", "1", "2", str(2**31 - 1),
+                  *(str(fd) for fd in self._non_read_fds()))
+        with unittest.mock.patch.object(budget.threading, "Thread", thread):
+            for raw in values:
+                with self.subTest(raw=raw[:24]):
+                    with unittest.mock.patch.object(
+                            budget.os, "environ", {budget.LIFETIME_FD_ENV: raw}):
+                        with self.assertRaises(budget.BudgetError) as cm:
+                            budget.watch_parent_from_env()
+                    self.assertIn(budget.LIFETIME_FD_ENV, str(cm.exception))
+            with unittest.mock.patch.object(
+                    budget.os, "environ", {budget.LIFETIME_FD_ENV: ""}):
+                self.assertFalse(budget.watch_parent_from_env())
+            with unittest.mock.patch.object(budget.os, "environ", {}):
+                self.assertFalse(budget.watch_parent_from_env())
+        thread.assert_not_called()
+
+        child = (
+            "import os, signal, sys, time\n"
+            "from mlx_omarchy_serve import budget\n"
+            "def on_term(*_):\n"
+            "    os.write(1, b'fired\\n')\n"
+            "    os._exit(0)\n"
+            "signal.signal(signal.SIGTERM, on_term)\n"
+            "r, w = os.pipe()\n"
+            "os.environ[budget.LIFETIME_FD_ENV] = str(r)\n"
+            "print(f'started={budget.watch_parent_from_env()}', flush=True)\n"
+            "os.close(w)\n"
+            "deadline = time.monotonic() + 30.0\n"
+            "while time.monotonic() < deadline:\n"
+            "    time.sleep(max(0.0, deadline - time.monotonic()))\n"
+            "sys.exit(1)\n"
+        )
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("PYTHON")}
+        env["PYTHONPATH"] = str(REPO_ROOT / "serve")
+        proc = subprocess.run(
+            [sys.executable, "-B", "-c", child],
+            env=env, stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "started=True\nfired\n")
+
+    def test_watch_parent_fd_runs_on_eof_once_for_every_fd(self):
+        # True is fd 1: opening it with closefd=True would close stdout.
+        fdopen = unittest.mock.Mock(side_effect=AssertionError("fd opened"))
+        with unittest.mock.patch.object(budget.os, "fdopen", fdopen):
+            for fd in (True, False, 0, 1, 2, -1, -(2**70), 2**31 - 1, 2**31,
+                       2**70, "5", 5.0, None, *self._non_read_fds()):
+                with self.subTest(fd=fd):
+                    on_eof = unittest.mock.Mock()
+                    budget.watch_parent_fd(fd, on_eof)
+                    on_eof.assert_called_once_with()
+        fdopen.assert_not_called()
+
+        r, w = os.pipe()  # the watchdog closes r
+        os.close(w)
+        on_eof = unittest.mock.Mock()
+        budget.watch_parent_fd(r, on_eof)
+        on_eof.assert_called_once_with()
+
+    def test_mlxlm_worker_exits_3_on_a_malformed_lifetime_fd(self):
+        from mlx_omarchy_serve import _mlxlm_server
+        # Mocked so a regression fails here instead of watching (and
+        # closing) the runner's own stdout and SIGTERMing it.
+        claim = unittest.mock.Mock(side_effect=AssertionError("claim attempted"))
+        thread = unittest.mock.Mock(side_effect=AssertionError("thread started"))
+        kill = unittest.mock.Mock(side_effect=AssertionError("kill sent"))
+        for raw in ("\u00b2", "1", str(2**70)):
+            with self.subTest(raw=raw[:24]):
+                err = io.StringIO()
+                with unittest.mock.patch.object(
+                            budget.os, "environ", {budget.LIFETIME_FD_ENV: raw}), \
+                        unittest.mock.patch.object(sys, "stderr", err), \
+                        unittest.mock.patch.object(budget, "claim_from_env", claim), \
+                        unittest.mock.patch.object(budget.threading, "Thread", thread), \
+                        unittest.mock.patch.object(budget.os, "kill", kill):
+                    with self.assertRaises(SystemExit) as cm:
+                        _mlxlm_server.start_managed()
+                self.assertEqual(cm.exception.code, 3)
+                self.assertTrue(err.getvalue().startswith(
+                    f"error: {budget.LIFETIME_FD_ENV}"), err.getvalue())
+        for mock in (claim, thread, kill):
+            mock.assert_not_called()
+
+    def test_laya_worker_exits_3_on_a_malformed_lifetime_fd(self):
+        # Refused before LayaState: one stderr line, nothing loaded.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith("PYTHON")}
+            env.update(MLX_OMARCHY_HOME=tmp,
+                       PYTHONPATH=str(REPO_ROOT / "serve"),
+                       PYTHONIOENCODING="utf-8")
+            env.pop(budget.CLAIM_FD_ENV, None)
+            for raw in ("abc", "1", str(2**70)):
+                with self.subTest(raw=raw[:24]):
+                    env[budget.LIFETIME_FD_ENV] = raw
+                    proc = subprocess.run(
+                        [sys.executable, "-B", "-m", "mlx_omarchy_laya.server",
+                         "--model", str(Path(tmp) / "absent")],
+                        env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                        timeout=60)
+                    self.assertEqual(proc.returncode, 3, proc.stderr)
+                    self.assertEqual(proc.stderr.count(b"\n"), 1, proc.stderr)
+                    self.assertTrue(proc.stderr.startswith(
+                        b"laya: " + budget.LIFETIME_FD_ENV.encode()), proc.stderr)
 
 
 def _install_patch(home_str):  # pragma: no cover (multiprocessing init)

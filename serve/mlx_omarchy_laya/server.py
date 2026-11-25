@@ -560,7 +560,14 @@ def serve_main(argv):
     # Managed pair child: stop when the parent manager's lifetime pipe closes
     # (manager exited or died), so workers never outlive their owner.
     budget = _budget_or_none()
-    if budget is not None and budget.watch_parent_from_env():
+    watching = False
+    if budget is not None:
+        try:
+            watching = budget.watch_parent_from_env()
+        except budget.BudgetError as exc:
+            print("laya: %s" % exc, file=sys.stderr)
+            sys.exit(3)
+    if watching:
         print("laya: watching parent lifetime fd %s" % os.environ[budget.LIFETIME_FD_ENV],
               file=sys.stderr)
     state = None
