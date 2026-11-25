@@ -1060,24 +1060,35 @@ def _adaptive_avg_pool2d_backward(grad_output, a):
 def _bn3(x, w, b, rm, rv, training, momentum, eps):
     """batch-norm forward, channel dim 1 (N,C,... layout). Training
     normalizes with the biased batch variance (torch semantics); eval
-    reads the running stats. Returns (out, save_mean, save_invstd)."""
+    reads the running stats. Returns (out, save_mean, save_invstd).
+
+    The normalize runs in an (N*H*W, C) layout: the Vulkan broadcast
+    chain over 4-D axes produced wrong values for every sample past the
+    first on Honeykrisp (PAR-41), while the column reductions are exact."""
     x = _mx(x)
-    bc = [1, -1] + [1] * (x.ndim - 2)
+    C = x.shape[1]
+    N = x.shape[0]
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
     if training:
-        axes = tuple(d for d in range(x.ndim) if d != 1)
-        mean = mx.mean(x, axis=axes, keepdims=True)
-        var = mx.var(x, axis=axes, keepdims=True)
+        mean = mx.mean(x2, axis=0)
+        var = mx.var(x2, axis=0)
     else:
-        mean = mx.reshape(_mx(rm), bc)
-        var = mx.reshape(_mx(rv), bc)
+        mean = mx.reshape(_mx(rm), (-1,))
+        var = mx.reshape(_mx(rv), (-1,))
     invstd = mx.rsqrt(var + eps)
-    y = (x - mean) * invstd
-    if w is not None:
-        y = y * mx.reshape(_mx(w), bc)
-    if b is not None:
-        y = y + mx.reshape(_mx(b), bc)
-    squeeze = lambda t: mx.reshape(t, (-1,)) if t.ndim > 1 else t
-    return y, squeeze(mean), squeeze(invstd)
+    import sys as _s
+    print("BN3DBG training=%s x=%s x2=%s N=%s C=%s" % (training, x.shape, x2.shape, N, C), file=_s.stderr)
+    # folded affine (x*iw + cb with iw = invstd*w, cb = b - mean*iw): the
+    # unfolded (x-mean)*invstd*w+b chain hits a Honeykrisp kernel-cache
+    # collision after another BN-family call in the same process (PAR-41)
+    # and returns garbage for every sample past the first.
+    iw = invstd * mx.reshape(_mx(w), (1, C)) if w is not None else invstd
+    cb = mx.reshape(_mx(b), (1, C)) - mean * iw if b is not None else -mean * iw
+    y = x2 * iw + cb
+    y = mx.moveaxis(y.reshape(N, *x.shape[2:], C), -1, 1)
+    # torch's native_batch_norm tuple is (out, save_mean, save_var): the
+    # VARIANCE, not the inverse std (PAR-41: the lowering returned invstd).
+    return y, mean, var
 
 def _bn_legit_functional(x, w, b, rm, rv, training, momentum, eps):
     """aten._native_batch_norm_legit_functional (aot train path): same core as
@@ -1088,14 +1099,25 @@ def _bn_legit_functional(x, w, b, rm, rv, training, momentum, eps):
     out, sm, si = _bn3(x, w, b, rm, rv, training, momentum, eps)
     rmx, rvx = _mx(rm), _mx(rv)
     if training:
-        axes = tuple(d for d in range(x.ndim) if d != 1)
-        n = x.size / x.shape[1]
-        var_b = mx.var(x, axis=axes)
+        C = x.shape[1]
+        x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
+        n = x2.shape[0]
+        var_b = mx.var(x2, axis=0)
         unbias = var_b * (n / (n - 1)) if n > 1 else var_b
         new_rm = (1.0 - momentum) * rmx + momentum * sm
         new_rv = (1.0 - momentum) * rvx + momentum * unbias
+        # structurally distinct forward (fold the affine into a per-channel
+        # bias): identical math, but a different graph from _bn3's, so the
+        # MLX kernel cache cannot hand this call _bn3's pipeline (PAR-41:
+        # the second same-shape BN-family call in one process returned
+        # garbage on Honeykrisp).
+        iw = si * mx.reshape(_mx(w), (1, C)) if w is not None else si
+        cb = mx.reshape(_mx(b), (1, C)) - sm * iw if b is not None else -sm * iw
+        N = x.shape[0]
+        out = mx.moveaxis((x2 * iw + cb).reshape(N, *x.shape[2:], C), -1, 1)
     else:
         new_rm, new_rv = rmx, rvx
+        out, sm, si = _bn3(x, w, b, rm, rv, training, momentum, eps)
     return out, sm, si, new_rm, new_rv
 
 
@@ -1112,26 +1134,31 @@ def _select_backward(g, sizes, dim, index):
 
 
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
-    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask."""
+    """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask.
+    Same (N*H*W, C) layout as the fixed forward (PAR-41)."""
     dy, x = _mx(dy), _mx(x)
-    axes = tuple(d for d in range(x.ndim) if d != 1)
-    bc = [1, -1] + [1] * (x.ndim - 2)
+    C = x.shape[1]
+    N = x.shape[0]
+    dy2 = mx.moveaxis(dy, 1, -1).reshape(-1, C)
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
     if training:
-        mean = mx.reshape(_mx(save_mean), bc)
-        invstd = mx.reshape(_mx(save_invstd), bc)
+        mean = _mx(save_mean)
+        invstd = _mx(save_invstd)
     else:
-        mean = mx.reshape(_mx(rm), bc)
-        invstd = mx.rsqrt(mx.reshape(_mx(rv), bc) + eps)
-    wb = mx.reshape(_mx(w), bc) if w is not None else 1.0
-    xh = (x - mean) * invstd
+        mean = mx.reshape(_mx(rm), (-1,))
+        invstd = mx.rsqrt(mx.reshape(_mx(rv), (-1,)) + eps)
+    wb = mx.reshape(_mx(w), (1, C)) if w is not None else 1.0
+    xh = (x2 - mean) * invstd
     if training:
-        dx = (dy - mx.mean(dy, axis=axes, keepdims=True)
-              - xh * mx.mean(dy * xh, axis=axes, keepdims=True)) * invstd * wb
+        dx2 = (dy2 - mx.mean(dy2, axis=0)
+               - xh * mx.mean(dy2 * xh, axis=0)) * invstd * wb
     else:
-        dx = dy * invstd * wb
-    dw = mx.sum(dy * xh, axis=axes) if (w is not None and out_mask[1]) else None
-    db = mx.sum(dy, axis=axes) if out_mask[2] else None
-    return (dx if out_mask[0] else None), dw, db
+        dx2 = dy2 * invstd * wb
+    dw = mx.sum(dy2 * xh, axis=0) if (w is not None and out_mask[1]) else None
+    db = mx.sum(dy2, axis=0) if out_mask[2] else None
+    dx = (mx.moveaxis(dx2.reshape(N, *x.shape[2:], C), -1, 1)
+          if out_mask[0] else None)
+    return dx, dw, db
 
 # ---------------- lowering tables ----------------
 
@@ -1192,6 +1219,11 @@ def _float_scalar(t, *a, **k):
         return mx.array(float(t))
     return _mx(t).astype(mx.float32)
 
+def _bn_forward(x, w, b, rm, rv, training, momentum, eps, *k):
+    """aten.batch_norm / aten.native_batch_norm shared forward: out only."""
+    return _bn3(x, w, b, rm, rv, training, momentum, eps)[0]
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
@@ -1246,8 +1278,10 @@ _FUNC_SPECS = {
     "native_layer_norm": _ln_native,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     # aten.batch_norm order: (x, weight, bias, running_mean, running_var, training, momentum, eps, cudnn)
-    "batch_norm": lambda x, w, b, rm, rv, training, momentum, eps, *k: _bn3(x, w, b, rm, rv, training, momentum, eps)[0],
-    "native_batch_norm": lambda x, w, b, rm, rv, training, momentum, eps: _bn3(x, w, b, rm, rv, training, momentum, eps),
+    "batch_norm": _bn_forward,
+    "native_batch_norm": _bn_forward,
+    "_native_batch_norm_legit_no_training": lambda x, w, b, rm, rv, eps, *k: _bn_forward(
+        x, w, b, rm, rv, False, momentum=0.0, eps=eps),
     "_native_batch_norm_legit_functional": _bn_legit_functional,
     "native_batch_norm_backward": _bn_backward,
     "conv2d": _conv2d,
