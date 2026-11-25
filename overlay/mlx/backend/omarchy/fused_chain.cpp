@@ -2066,6 +2066,43 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       std::vector<array> chain;
       size_t member_index;
     };
+    // Compose the chain's logical strides over the member storage. A
+    // lazily-created view node's desc holds contiguous strides until
+    // its own eval writes the real view strides via
+    // copy_shared_buffer — and the skip-role'd chain never evals, so
+    // the desc at plan/dispatch time cannot be trusted. Composing
+    // Reshape (contiguous strides for the new shape) and Transpose
+    // (strides permuted by axes) from the member's contiguous rows
+    // yields the view geometry the epilogue must read.
+    const auto compose_view = [](const array& member,
+                                 const std::vector<array>& chain) {
+      Shape shape(member.shape());
+      Strides strides(shape.size(), 1);
+      for (int d = static_cast<int>(shape.size()) - 2; d >= 0; --d) {
+        strides[d] = strides[d + 1] * shape[d + 1];
+      }
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const auto& prim = it->primitive();
+        if (typeid(prim) == typeid(Transpose)) {
+          const auto& axes = static_cast<const Transpose&>(prim).state();
+          Shape tshape(axes.size());
+          Strides tstrides(axes.size());
+          for (size_t i = 0; i < axes.size(); ++i) {
+            tshape[i] = shape[axes[i]];
+            tstrides[i] = strides[axes[i]];
+          }
+          shape = std::move(tshape);
+          strides = std::move(tstrides);
+        } else {
+          shape = Shape(it->shape());
+          strides.assign(shape.size(), 1);
+          for (int d = static_cast<int>(shape.size()) - 2; d >= 0; --d) {
+            strides[d] = strides[d + 1] * shape[d + 1];
+          }
+        }
+      }
+      return std::make_pair(std::move(shape), std::move(strides));
+    };
     std::unordered_map<size_t, std::vector<RopeCand>> cands;
     const bool epi_trace =
         std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr;
@@ -2214,25 +2251,27 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const auto& st =
           static_cast<const fast::RoPE&>(qc->node->primitive()).state();
       auto& group = state->gemv_groups[gi];
-      const array& q_in_view = qc->node->inputs()[0];
-      const array& k_in_view = kc->node->inputs()[0];
+      const auto q_layout = compose_view(
+          group.members[qc->member_index].node, qc->chain);
+      const auto k_layout = compose_view(
+          group.members[kc->member_index].node, kc->chain);
       group.rope_epi = RopeEpiPlan{
           RopeEpiSide{
               *qc->node,
               qc->member_index,
               qc->chain,
-              q_in_view.shape(),
-              q_in_view.strides(),
-              q_in_view.offset(),
+              q_layout.first,
+              q_layout.second,
+              0,
               std::nullopt,
               pair_index},
           RopeEpiSide{
               *kc->node,
               kc->member_index,
               kc->chain,
-              k_in_view.shape(),
-              k_in_view.strides(),
-              k_in_view.offset(),
+              k_layout.first,
+              k_layout.second,
+              0,
               pair.windows[0],
               pair_index},
           std::get<1>(st),

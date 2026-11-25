@@ -227,10 +227,13 @@ struct RopeEpiSide {
   array rope;
   size_t member_index;
   std::vector<array> view_chain;
-  // The rope input view's LOGICAL layout, captured at plan time: the
-  // view node materializes before dispatch and copy_shared_buffer
-  // rewrites its desc strides to the materialized (contiguous) layout,
-  // so dispatch-time strides() no longer describe the member storage.
+  // The rope input view's LOGICAL layout over the member storage,
+  // composed at plan time: a lazy view node's desc holds contiguous
+  // strides until its own eval writes the real ones via
+  // copy_shared_buffer, and the skip-role'd chain never evals, so the
+  // desc never carries the view geometry. |view_offset| is the
+  // element offset into the member storage (0 for the pure
+  // reshape/transpose chains accepted here).
   Shape view_shape;
   Strides view_strides;
   int64_t view_offset = 0;

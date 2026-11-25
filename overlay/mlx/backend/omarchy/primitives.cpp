@@ -10847,10 +10847,8 @@ bool dispatch_quantized_gemv_group(
         (rope_epi->dims / 2));
     params.reduce_size = static_cast<uint32_t>(epi_d);
     params.aux_size = static_cast<uint32_t>(rope_epi->dims / 2);
-    params.lhs_size = static_cast<uint32_t>(
-        rope_epi->q.view_offset / q_view.itemsize());
-    params.rhs_size = static_cast<uint32_t>(
-        rope_epi->k.view_offset / k_view.itemsize());
+    params.lhs_size = static_cast<uint32_t>(rope_epi->q.view_offset);
+    params.rhs_size = static_cast<uint32_t>(rope_epi->k.view_offset);
     params.output_size = static_cast<uint32_t>(
         rope_epi->q.rope.offset() / rope_epi->q.rope.itemsize());
     params.output_offset = window.offset;
