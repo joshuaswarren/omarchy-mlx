@@ -142,6 +142,60 @@ TEST_CASE("batched raw-gate decode matches per-row decode bit for bit") {
              s);
 }
 
+// The fused qkv slice mlx-lm hands the decode shape carries the whole
+// S-row window for v: [1, S, Hv, Dv] with row stride C (S = 11 for the
+// Qwen3.5-9B prompt path). The decode kernel reads only the first
+// [Hv, Dv] block, which the view's packed tail already exposes at its
+// item offset, so binding the view in place must match a dense copy
+// bit for bit and save the CopyGeneral dispatch.
+TEST_CASE("strided v window binds in place, bit-identical") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  const int key_dim = 2048, v_dim = 4096, win = 11;
+  array qkv = bf16({1, win, 2 * key_dim + v_dim}, 31, 1.0f, s);
+  Shape start{0, 0, 0}, stop{1, 1, 2 * key_dim + v_dim};
+  auto parts = split(slice(qkv, start, stop, s), {key_dim, 2 * key_dim}, -1,
+                     s);
+  array q = reshape(parts[0], {1, 1, 16, 128}, s);
+  array k = reshape(parts[1], {1, 1, 16, 128}, s);
+  Shape vs{0, 0, 2 * key_dim}, ve{1, win, 2 * key_dim + v_dim};
+  array v = reshape(slice(qkv, vs, ve, s), {1, win, 32, 128}, s);
+  CHECK(!v.flags().row_contiguous);
+  // Dense materialization of the same values; multiply keeps -0.0 and
+  // NaN payloads where astype may short-circuit to the view.
+  array v_dense = multiply(v, array(1.0f, bfloat16), s);
+  array a_in = bf16({1, 1, 32}, 34, 0.1f, s);
+  array b_in = bf16({1, 1, 32}, 35, 0.25f, s, 0.5f);
+  array a_log = bf16({32}, 36, 1.0f, s, 1.0f);
+  array dt = bf16({32}, 37, 1.0f, s);
+  array h0 = pattern({1, 32, 128, 128}, 38, 0.05f, 0.0f, s);
+  eval({q, k, v, v_dense, a_in, b_in, a_log, dt, h0});
+  auto& enc = omarchy::get_command_encoder(s);
+  enc.synchronize("gdn_strided_inputs");
+  auto call = [&](const array& vv) {
+    return fast::gated_delta_update_raw(q, k, vv, a_in, b_in, a_log, dt, h0);
+  };
+  uint64_t before = counters().vk_compute_dispatches.load();
+  auto r_view = call(v);
+  eval(r_view);
+  enc.synchronize("gdn_strided_view");
+  uint64_t mid = counters().vk_compute_dispatches.load();
+  auto r_dense = call(v_dense);
+  eval(r_dense);
+  enc.synchronize("gdn_strided_dense");
+  uint64_t after = counters().vk_compute_dispatches.load();
+  provenance("gdn_strided_v");
+  CHECK_MESSAGE(array_equal(r_view[0], r_dense[0], s).item<bool>(),
+                "strided v decode output differs from dense");
+  CHECK_MESSAGE(array_equal(r_view[1], r_dense[1], s).item<bool>(),
+                "strided v decode state differs from dense");
+  std::cout << "[gdn_strided_v] view " << mid - before << " dispatches, "
+            << "dense " << after - mid << "\n";
+  CHECK_MESSAGE(mid - before < after - mid,
+                "strided v view still materialized a dense copy (", mid - before,
+                " dispatches vs ", after - mid, ")");
+}
+
 TEST_CASE("batched gated decode matches per-row decode bit for bit") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
