@@ -910,8 +910,12 @@ def test_arc_trig():
         assert bool(torch.isnan(out).all()) == bool(
             torch.isnan(target(oob)).all()), target
     # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
-    # Pin both values and sign bits for all four (+/-0, +/-0) pairs.
-    for yv, xv in ((0.0, 0.0), (0.0, -0.0), (-0.0, 0.0), (-0.0, -0.0)):
+    # Pin values and sign bits for all four (+/-0, +/-0) pairs, plus the
+    # non-zero-y rows of the x = -0 column the fix must not regress.
+    for yv, xv in ((0.0, 0.0), (0.0, -0.0), (-0.0, 0.0), (-0.0, -0.0),
+                   (1.0, -0.0), (-1.0, -0.0),
+                   (float("inf"), -0.0), (float("-inf"), -0.0),
+                   (float("nan"), -0.0)):
         yt = torch.tensor([yv])
         xt = torch.tensor([xv])
         g = torch.fx.Graph()
@@ -923,6 +927,9 @@ def test_arc_trig():
         out = run(yt, xt)
         ref = torch.atan2(yt, xt)
         assert stats["cpu"] == [], stats
+        if math.isnan(ref.item()):
+            assert math.isnan(out.item()), (yv, xv, out.item())
+            continue
         assert out.item() == ref.item(), (yv, xv, out.item(), ref.item())
         assert math.copysign(1.0, out.item()) == math.copysign(1.0, ref.item()), \
             (yv, xv, out.item(), ref.item())

@@ -970,14 +970,14 @@ def _rsub(a, b, alpha=1, **k):
 
 
 def _atan2(y, x):
-    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi,
-    # atan2(y, -0) = +/-pi/2 by sign(y). The Vulkan atan2 kernel drops the
-    # sign of a zero x; 1/+-0 = +-inf recovers it (no mx.signbit in the wheel).
+    # IEEE signed-zero quadrants: atan2(+0, -0) = +pi, atan2(-0, -0) = -pi.
+    # The Vulkan atan2 kernel drops the sign of a zero x; 1/+-0 = +-inf
+    # recovers it (no mx.signbit in the wheel). Only the (+/-0, -0) pairs
+    # are wrong: nonzero and NaN y stay on mx.atan2.
     y, x = _mx(y), _mx(x)
     x_neg0 = (x == 0) & (1.0 / x < 0)
-    fix = (mx.where(y == 0, math.pi, math.pi / 2)
-           * mx.where(1.0 / y < 0, -1.0, 1.0))
-    return mx.where(x_neg0, fix, mx.atan2(y, x))
+    fix = mx.where(1.0 / y < 0, -math.pi, math.pi)   # sign of the y-zero
+    return mx.where(x_neg0 & (y == 0), fix, mx.atan2(y, x))
 
 
 def _arange(*a, **k):
