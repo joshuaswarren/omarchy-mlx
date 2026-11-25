@@ -19,18 +19,20 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
  #include "mlx/io.h"
  #include "mlx/io/load.h"
  #include "mlx/ops.h"
-@@ -110,9 +114,37 @@
+@@ -110,9 +114,47 @@
  }
  
 +#ifdef MLX_OMARCHY_BACKEND
-+// Device-local weight placement defaults on: every safetensors file load is
-+// an inference-weight candidate. The allocator's weight_memory_type_for_size()
-+// and the Load primitive's mapped-path fallback keep the route safe on
-+// devices without mapped device-local memory (#871), and Buffer::raw_ptr()
-+// keeps host readback working (host shadow for pure-VRAM buffers, direct
-+// mapping where the heap is host-visible). MLX_OMARCHY_VRAM_WEIGHTS stays
-+// the override both ways: =0 or any non-absolute value disables the route;
-+// an absolute path flags only loads from that checkpoint directory.
++// Default route stays #871's narrow arm: unset or empty flags a load only
++// when the device cannot map device-local memory, because inference-only
++// weight buffers are unmapped and read-only from the host view - writable
++// host views and re-export round-trips would silently break under a broad
++// default until inference-only buffers gain full host/device coherence.
++// The override both ways is unchanged: an absolute path flags only loads
++// from that checkpoint directory; any other non-empty value forces the
++// route on every load for callers that accept the read-only weights
++// semantics; Buffer::raw_ptr() serves host readback through a
++// device-to-host shadow copy in that case.
 +static bool is_inference_checkpoint(const std::string& file) {
 +  const char* root = std::getenv("MLX_OMARCHY_VRAM_WEIGHTS");
 +  if (root && *root && !std::filesystem::path(root).is_absolute()) {
@@ -45,7 +47,15 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
 +        .lexically_normal()
 +        .parent_path() == directory;
 +  }
-+  return true;
++  static const bool required = []() {
++    try {
++      return !omarchy::mapped_device_local_memory_type(
++          omarchy::device().memory_properties());
++    } catch (...) {
++      return false;
++    }
++  }();
++  return required;
 +}
 +#endif
 +
