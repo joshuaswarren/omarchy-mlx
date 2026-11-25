@@ -10757,6 +10757,15 @@ bool dispatch_quantized_gemv_group(
       }
     }
   }
+  {
+    static const bool epi_dispatch_off = []() {
+      const char* env = std::getenv("MLX_OMARCHY_ROPE_EPI_DISPATCH");
+      return env != nullptr && env[0] == '0';
+    }();
+    if (epi_dispatch_off) {
+      rope_epi_active = false;
+    }
+  }
   if (rope_epi != nullptr && !rope_epi_active) {
     if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
       static int trr = 0;
