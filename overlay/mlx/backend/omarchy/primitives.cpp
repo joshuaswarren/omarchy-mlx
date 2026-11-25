@@ -246,6 +246,27 @@ const QmmGeometry& qmm_geometry() {
     if (v == "2x8w2") {
       return make_2x8w2();
     }
+    if (v == "1x8w2") {
+      // Experimental: half-tile 2x8w2 for small N (o_proj/down_proj at
+      // N <= 2560): 8 columns/WG doubles the workgroup count so the tail
+      // wave fills instead of idling 30 of 38 G14C cores. Same per-column
+      // chain, so bytes are identical. The fused epilogue kernels keep
+      // the 16-column tile (gate/up run at N ~6-9k where the tail
+      // amortizes).
+      return QmmGeometry{
+          8u,
+          K::QmmVecQ4WordSubgroupBF16R1S8W2,
+          K::QmmVecQ4MultiSubgroupBF16R1S8W2,
+          "1x8w2",
+          true,
+          true,
+          16u,
+          K::QmmVecQ4SwigluBF16R2S8W2,
+          16u,
+          K::QmmVecQ4ResNormBF16R2S8W2,
+          16u,
+          K::QmmVecQ4OutgateResNormBF16R2S8W2};
+    }
     if (v == "2x16") {
       return QmmGeometry{
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
@@ -289,7 +310,7 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 1x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
   }();
   return geometry;
 }

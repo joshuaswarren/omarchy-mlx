@@ -1245,6 +1245,12 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  // 1x8w2 decode QMV builds (1 row/slot x 8 slots = 256 threads/WG, 8
+  // cols/WG, hoisted uvec2 loads): halves columns per workgroup against
+  // the 2x8w2 tile so N <= 2560 dispatches fill the tail wave on G14C.
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R1S8W2,
+  QmmVecQ4MultiSubgroupBF16R1S8W2,
   Count,
 };
 
