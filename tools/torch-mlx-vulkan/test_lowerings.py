@@ -446,6 +446,54 @@ def test_slice():
     print("test_slice PASS")
 
 
+def test_transpose_expand():
+    # PT-Z: aten.transpose.int (PAR-41 census rank 4, 59592 receipts) and
+    # aten.expand.default (rank 33, 233 receipts) — broadcast glue around
+    # matmul/SDPA. Shape + digest parity vs eager on 2D/4D, covering
+    # negative dims, the -1 keep-dim sentinel, and leading broadcast dims.
+    def _exec(target, ins):
+        g = torch.fx.Graph()
+        targs = [a for a in ins if torch.is_tensor(a)]
+        phs = [g.placeholder(f"p{i}") for i in range(len(targs))]
+        pit = iter(phs)
+        args = tuple(next(pit) if torch.is_tensor(a) else a for a in ins)
+        n = g.call_function(target, args)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[mx.array(t.numpy()) for t in targs])
+        return torch.as_tensor(_np(out)), stats
+
+    x2, x4 = torch.randn(3, 5), torch.randn(2, 3, 4, 5)
+    for ins in ((x2, 0, 1), (x2, -1, 0), (x4, 1, 3), (x4, -2, -1)):
+        got, stats = _exec(torch.ops.aten.transpose.int, ins)
+        exp = torch.ops.aten.transpose.int(*ins)
+        assert got.shape == exp.shape and torch.equal(got, exp), (ins[1:], got.shape, exp.shape)
+        assert "transpose" in stats["mlx"], stats
+        assert "transpose" not in stats["cpu"], stats
+
+    v1 = torch.randn(5)
+    for ins in ((v1, (3, -1)),                # leading broadcast dim + sentinel
+                (x2, (-1, -1)),               # keep both dims
+                (x2, (2, -1, -1)),            # leading dim + two sentinels
+                (torch.randn(1, 4), (3, -1)),
+                (x4, (-1, -1, -1, -1)),
+                (torch.randn(1, 4), (2, 3, -1, 4))):
+        got, stats = _exec(torch.ops.aten.expand.default, ins)
+        exp = torch.ops.aten.expand.default(*ins)
+        assert got.shape == exp.shape and torch.equal(got, exp), (ins[1], got.shape, exp.shape)
+        assert "expand" in stats["mlx"], stats
+        assert "expand" not in stats["cpu"], stats
+
+    # -1 in a leading non-existent dim is a lowering error (eager errors too)
+    try:
+        mlx_vulkan._expand(mx.array(v1.numpy()), (-1, 2))
+        raise AssertionError("leading -1 must not lower")
+    except ValueError:
+        pass
+    print("test_transpose_expand PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -464,4 +512,5 @@ if __name__ == "__main__":
     test_dispatch_registered()
     test_numel()
     test_slice()
+    test_transpose_expand()
     print("ALL PASS")
