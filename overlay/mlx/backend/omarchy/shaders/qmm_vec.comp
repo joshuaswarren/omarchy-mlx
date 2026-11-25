@@ -287,8 +287,11 @@ layout(set = 0, binding = 25, std430) coherent buffer Ticket {
   uint values[];
 } ticket;
 shared uint s_rope_is_last;
+// epi_rounded is epi_block: the reduce tree's row sum is consumed
+// into |norm| before the rounded pass overwrites the same range, so
+// one 2KB scratch serves both (occupancy cost measured on jw16:
+// +4KB static shared slowed the member-dot ~2ms/30-step).
 shared float epi_block[512u];
-shared float epi_rounded[512u];
 float epi_member_load(uint member, uint index) {
   if (member == 0u) {
     return LOAD_VALUE(output0.values[index]);
@@ -1543,7 +1546,7 @@ void main() {
       float v = row_ok ? epi_member_load(member, in_base + vl) : 0.0;
       float w = epi_weight_load(side, vl);
       precise float weight_norm = w * norm;
-      epi_rounded[blk + vl] = epi_rope_round(v * weight_norm);
+      epi_block[blk + vl] = epi_rope_round(v * weight_norm);
     }
     barrier();
     for (uint k = sub_lane; k < row_length / 2u; k += LANES) {
@@ -1555,8 +1558,8 @@ void main() {
             const uint d0 = 2u * k;
             const uint d1 = d0 + 1u;
             if (d0 >= 2u * half_dims) {
-              v0 = epi_rounded[blk + d0];
-              v1 = epi_rounded[blk + d1];
+              v0 = epi_block[blk + d0];
+              v1 = epi_block[blk + d1];
             } else {
               float vals[2];
               for (uint s = 0u; s < 2u; ++s) {
@@ -1566,8 +1569,8 @@ void main() {
                 float theta = position * inv_freq;
                 float cos_t = epi_rope_round(omarchy_trig_cos(theta));
                 float sin_t = epi_rope_round(omarchy_trig_sin(theta));
-                float x1 = epi_rounded[blk + i];
-                float x2 = epi_rounded[blk + i + half_dims];
+                float x1 = epi_block[blk + i];
+                float x2 = epi_block[blk + i + half_dims];
                 float xa = epi_rope_round(x1 * cos_t);
                 float xb = epi_rope_round(x2 * sin_t);
                 float xc = epi_rope_round(x1 * sin_t);
@@ -1595,10 +1598,10 @@ void main() {
                 epi_rope_round(omarchy_trig_cos(position * inv1));
             float sin1 =
                 epi_rope_round(omarchy_trig_sin(position * inv1));
-            float xa = epi_rounded[blk + i0];
-            float xb = epi_rounded[blk + i0 + half_dims];
-            float xc = epi_rounded[blk + i1];
-            float xd = epi_rounded[blk + i1 + half_dims];
+            float xa = epi_block[blk + i0];
+            float xb = epi_block[blk + i0 + half_dims];
+            float xc = epi_block[blk + i1];
+            float xd = epi_block[blk + i1 + half_dims];
             if (r1_side) {
               v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
               v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
