@@ -1251,6 +1251,10 @@ enum class ComputeKernel : uint16_t {
   // Appended to keep profile kernel ids stable.
   FastRopeNormPairBF16,
   FastRopeNormPairAppleBF16,
+  // The D<=128 narrow-workgroup twin of FastRopeNormPairAppleBF16
+  // (ROPE_NORM_THREADS=128): every thread active on Qwen3-4B's 128-wide
+  // Q/K rows. Appended to keep profile kernel ids stable.
+  FastRopeNormPairAppleN128BF16,
   Count,
 };
 

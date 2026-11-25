@@ -11649,7 +11649,9 @@ bool dispatch_rope_pair(
             encoder.device(),
             static_cast<size_t>(params.reduce_size),
             static_cast<size_t>(params.count))
-            ? ComputeKernel::FastRopeNormPairAppleBF16
+            ? (params.reduce_size <= 128u
+                   ? ComputeKernel::FastRopeNormPairAppleN128BF16
+                   : ComputeKernel::FastRopeNormPairAppleBF16)
             : ComputeKernel::FastRopeNormPairBF16,
         bindings,
         params,

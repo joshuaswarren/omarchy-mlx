@@ -2322,8 +2322,11 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
       omarchy::ComputeKernel::FastRopeNormPairBF16);
   const int64_t norm_pair_b = static_cast<int64_t>(
       omarchy::ComputeKernel::FastRopeNormPairAppleBF16);
+  const int64_t norm_pair_n128 = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairAppleN128BF16);
   auto pair_kernel_seen = [&](int64_t last) {
-    return last == norm_pair_a || last == norm_pair_b;
+    return last == norm_pair_a || last == norm_pair_b ||
+        last == norm_pair_n128;
   };
   // Phase A: only the two rope outputs on the tape. The pair collapses
   // two rope dispatches into one and leaves its kernel id as the most
@@ -2390,6 +2393,70 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   expect_bit_exact(wq_solo, wq_pair, stream);
   expect_bit_exact(keys_solo, keys_pair, stream);
   expect_bit_exact(values_solo, values_pair, stream);
+}
+
+// The D<=128 rows of Qwen3-4B dispatch the narrow 128-thread build
+// (FastRopeNormPairAppleN128BF16) wherever the Apple path runs; the pair
+// output stays bit-exact to the composed rms_norm -> rope chain, whose
+// reduction order the narrow build keeps by appending exact-zero partials
+// in the 256-thread build. Route-only on non-Apple devices (the plain
+// pair build runs there and the bit-exactness check still holds).
+TEST_CASE("rope norm pair picks the narrow build on 128-wide rows") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int D = 128;
+  array xq = astype(
+      random::normal(Shape{1, 8, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xk = astype(
+      random::normal(Shape{1, 2, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wq = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array wk = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array offset = array(17, int32);
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  array qr = fast::rope_rms_norm(
+      xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+  array kr = fast::rope_rms_norm(
+      xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+  uint64_t before = counters().vk_compute_dispatches.load();
+  eval({qr, kr});
+  sync_stream(stream);
+  uint64_t n_pair = counters().vk_compute_dispatches.load() - before;
+  int64_t last = counters().last_dispatched_kernel.load();
+  const int64_t plain_pair = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairBF16);
+  const int64_t apple_pair = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairAppleBF16);
+  const int64_t n128_pair = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairAppleN128BF16);
+  CHECK_EQ(n_pair, 1);
+  bool narrow_seen = last == n128_pair;
+  bool wide_seen = last == apple_pair;
+  bool plain_seen = last == plain_pair;
+  CHECK(narrow_seen || wide_seen || plain_seen);
+  // Bit-exact vs the composed rms_norm -> rope chain, either build.
+  array ref_q = fast::rope(
+      fast::rms_norm(xq, wq, 1e-5f, stream), D, false, 10000.0f, 1.0f,
+      offset);
+  array ref_k = fast::rope(
+      fast::rms_norm(xk, wk, 1e-5f, stream), D, false, 10000.0f, 1.0f,
+      offset);
+  eval({ref_q, ref_k});
+  sync_stream(stream);
+  expect_bit_exact(ref_q, qr, stream);
+  expect_bit_exact(ref_k, kr, stream);
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
 
 // The planner decides per node from the node's own stream: in one eval

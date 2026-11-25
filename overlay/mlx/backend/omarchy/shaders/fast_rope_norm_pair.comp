@@ -60,7 +60,19 @@ layout(set = 0, binding = 6, std430) readonly buffer Offsets {
   int values[];
 } offset_data;
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+// Workgroup width. 256 = the shipped build. ROPE_NORM_THREADS=128 builds
+// the D<=128 variant (Qwen3-4B Q/K rows are 128 wide; the 256-thread
+// workgroup idles half its threads there). N_SUBGROUPS scales the
+// second-level reduction read so the 128 build (4 subgroups) never
+// consumes stale shared slots 4..7. Adding the zero partials of subgroups
+// 4..7 in the 256 build is exact in fp, so both builds are byte-identical
+// for D<=128 rows.
+#ifndef ROPE_NORM_THREADS
+#define ROPE_NORM_THREADS 256u
+#endif
+const uint N_SUBGROUPS = ROPE_NORM_THREADS / 32u;
+
+layout(local_size_x = ROPE_NORM_THREADS, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -86,11 +98,11 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared float block_values[256];
+shared float block_values[ROPE_NORM_THREADS];
 #ifdef APPLE_REDUCTION
-shared float subgroup_values[8];
+shared float subgroup_values[N_SUBGROUPS];
 #endif
-shared float rounded[256];
+shared float rounded[ROPE_NORM_THREADS];
 
 float rope_load(uint abs_index, bool q_side) {
   uint word = q_side ? in_q.values[abs_index >> 1u]
@@ -181,7 +193,7 @@ void main() {
     subgroup_values[gl_SubgroupID] = subgroup_sum;
   }
   barrier();
-  float partial = gl_SubgroupID == 0u && gl_SubgroupInvocationID < 8u
+  float partial = gl_SubgroupID == 0u && gl_SubgroupInvocationID < N_SUBGROUPS
       ? subgroup_values[gl_SubgroupInvocationID]
       : 0.0;
   float row_sum = subgroupAdd(partial);
