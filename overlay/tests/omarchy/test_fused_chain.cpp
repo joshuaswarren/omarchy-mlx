@@ -2594,3 +2594,69 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   CHECK(t.put_if_absent(42, 8));
   CHECK(*t.find(42) == 8);
 }
+
+TEST_CASE("fused add+rmsnorm pair matches composed path bit-exactly") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  // Widths: 2048 exercises the register path (the M2 decode rows),
+  // 512 the strided fallback; rows > 1 exercises the row loop.
+  for (Shape shape : {Shape{1, 2048}, Shape{1, 512}, Shape{2, 2048}}) {
+    auto forward = [&]() {
+      array x = astype(
+          random::normal(shape, float32, std::nullopt, stream), bfloat16,
+          stream);
+      array r = astype(
+          random::normal(shape, float32, std::nullopt, stream), bfloat16,
+          stream);
+      array w = astype(
+          random::normal(Shape{shape.back()}, float32, std::nullopt, stream),
+          bfloat16, stream);
+      array h = add(x, r, stream);
+      array out = fast::rms_norm(h, w, 1e-5, stream);
+      return std::vector<array>{h, out};
+    };
+    auto run = [&]() {
+      auto outs = forward();
+      eval(outs);
+      sync_stream(stream);
+      return outs;
+    };
+
+    setenv("MLX_OMARCHY_ADD_NORM_FUSE", "0", 1);
+    auto baseline = run();
+    uint64_t before = counters().vk_compute_dispatches.load();
+    // Rebuild fresh nodes and eval them: the off arm dispatches the
+    // composed add + norm pair as two kernels.
+    auto off_again = forward();
+    eval(off_again);
+    sync_stream(stream);
+    uint64_t per_node =
+        counters().vk_compute_dispatches.load() - before;
+
+    setenv("MLX_OMARCHY_ADD_NORM_FUSE", "1", 1);
+    auto candidate = run();
+    before = counters().vk_compute_dispatches.load();
+    auto on_again = forward();
+    eval(on_again);
+    sync_stream(stream);
+    uint64_t fused = counters().vk_compute_dispatches.load() - before;
+
+    INFO("shape ", shape, " per_node ", per_node, " fused ", fused);
+    if (fused < per_node) {
+      // The device passed the apple gate and the fold fired: exactly
+      // one dispatch saved per pair. On devices the gate refuses the
+      // counts match and this branch is skipped; bit-exactness below
+      // holds either way.
+      CHECK_EQ(fused, per_node - 1);
+    }
+    for (size_t i = 0; i < baseline.size(); ++i) {
+      INFO("output ", i);
+      expect_bit_exact(baseline[i], candidate[i], stream);
+    }
+  }
+  unsetenv("MLX_OMARCHY_ADD_NORM_FUSE");
+}
