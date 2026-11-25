@@ -1110,9 +1110,23 @@ def _sub_inplace(a, b, alpha=1, **k):
     # computes, then requires the result to fit the destination shape and
     # cast back to the destination dtype (_inplace_writeback raises the
     # torch-shaped errors for growth / float->int, which surface as a CPU
-    # fallback running torch's own check).
+    # fallback running torch's own check). Reject bool operands first, as
+    # the compiled path does. Scale in the destination width for integral
+    # operands: (d - k*rhs) mod 2^n equals torch's promote-then-wrap for
+    # integral alpha, so a narrow rhs times a wide alpha cannot wrap early;
+    # a float alpha promotes the computation to float and the writeback
+    # rejects the float->int cast-back, matching torch.
+    da, db = _dtype_of(a), _dtype_of(b)
+    if da == mx.bool_ or db == mx.bool_:
+        raise RuntimeError(
+            "Subtraction, the `-` operator, with a bool tensor is "
+            "not supported. If you are trying to invert a mask, "
+            "use the `~` or `logical_not()` operator instead.")
     d = _mx(a)
-    return _inplace_writeback(d, d - _mx(b) * alpha)
+    mb = _mx(b)
+    if _is_integral_dtype(d.dtype) and _is_integral_dtype(mb.dtype):
+        mb = mb.astype(d.dtype)
+    return _inplace_writeback(d, d - mb * alpha)
 
 
 def _rsub(a, b, alpha=1, **k):

@@ -138,8 +138,42 @@ def test_sub_tensor_w91_edges():
     assert np.allclose(_np(o_upd), x2.numpy() - y2.numpy(), atol=1e-4)
     print("test_sub_tensor_w91_edges PASS")
 
+
+
+def test_sub_tensor_w91_round2():
+    """w91 round 2: bool operand rejection and narrow-rhs alpha wrap."""
+    x = torch.randn(1, 2)
+    bm = torch.tensor([[True, False]])
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    g.call_function(torch.ops.aten.sub_.Tensor, (px, py))
+    g.output(px)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, _ = mlx_vulkan.make_executor(gm)
+    try:
+        run(x, bm)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised, "float -= bool must raise"
+
+    xi = torch.tensor([500], dtype=torch.int64)
+    yi = torch.tensor([100], dtype=torch.int8)
+    g = torch.fx.Graph()
+    px, py = g.placeholder("x"), g.placeholder("y")
+    n = g.call_function(torch.ops.aten.sub_.Tensor, (px, py), {"alpha": 2})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(xi, yi)
+    assert stats["cpu"] == [] and any("sub_" in s2 for s2 in stats["mlx"]), stats
+    assert out.dtype == torch.int64, out.dtype
+    assert np.array_equal(out.numpy(), np.array([300], dtype=np.int64)), out
+    print("test_sub_tensor_w91_round2 PASS")
+
 if __name__ == "__main__":
     test_sub_tensor()
     test_rsub()
     test_sub_tensor_w91_edges()
+    test_sub_tensor_w91_round2()
     print("ALL PASS")
