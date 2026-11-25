@@ -1156,6 +1156,18 @@ inline bool qmm_residual_norm_default_part(const std::string& device_name) {
       device_name.find("G14C") != std::string::npos;
 }
 
+// Single-member residual-Add epilogue GEMV groups
+// (MLX_OMARCHY_QMM_EPILOGUE_GEMV unset): parts where the multi-weight
+// fused GEMV fold defaults off but the residual-norm epilogue defaults on
+// (G14C today). The measured G14C loss on the fused GEMV route is the
+// multi-weight x-sharing fold; a single-member group carrying an Add
+// epilogue only ever removes dispatches, so those plan on their own
+// route. MLX_OMARCHY_QMM_EPILOGUE_GEMV=0/1 overrides. Pure.
+inline bool gemv_epilogue_only_part(const std::string& device_name) {
+  return fused_gemv_off_default_part(device_name) &&
+      qmm_residual_norm_default_part(device_name);
+}
+
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):
 // the parts where greedy_quantized_argmax (8 sequential stages) defaults off because
 // full projection + argmax (as_linear) was measured faster with bit-identical tokens:

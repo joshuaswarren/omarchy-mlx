@@ -2051,6 +2051,14 @@ TEST_CASE("fused gemv default: the part rule") {
   CHECK_FALSE(omarchy::fused_gemv_off_default_part(""));
 }
 
+TEST_CASE("gemv epilogue-only route: the part rule") {
+  CHECK(omarchy::gemv_epilogue_only_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part(""));
+}
+
 TEST_CASE("qmm residual norm default: the part rule and overrides") {
   CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)"));
   CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
