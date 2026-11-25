@@ -515,30 +515,37 @@ def _var_impl(a, axis, keepdims, c):
         n *= a.shape[d % a.ndim]
     return mx.mean(mx.square(a - m), axis=axis, keepdims=keepdims) * (n / (n - float(c)))
 
-def _var(a, dim=None, correction=None, keepdim=False, **k):
+# aten.*.dim carries the unbiased flag (False -> ddof 0, else ddof 1);
+# the .correction overloads carry a numeric correction which wins when
+# both arrive (#887 review: unbiased= used to land in **k and be dropped).
+def _eff_corr(unbiased, correction):
+    return correction if correction is not None else (0 if unbiased is False else 1)
+
+def _var(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
     a = _mx(a)
+    c = _eff_corr(unbiased, correction)
     if a.ndim == 0:
         # torch: var of a scalar with ddof 1 is nan (0 dof)
-        return mx.full((), float("nan"), dtype=a.dtype) if (correction is None or correction != 0) else mx.zeros((), dtype=a.dtype)
-    return _var_impl(a, _red_axis(a, dim), keepdim, 1 if correction is None else correction)
+        return mx.full((), float("nan"), dtype=a.dtype) if c != 0 else mx.zeros((), dtype=a.dtype)
+    return _var_impl(a, _red_axis(a, dim), keepdim, c)
 
-def _std(a, dim=None, correction=None, keepdim=False, **k):
+def _std(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
     a = _mx(a)
+    c = _eff_corr(unbiased, correction)
     if a.ndim == 0:
-        return mx.full((), float("nan"), dtype=a.dtype) if (correction is None or correction != 0) else mx.zeros((), dtype=a.dtype)
+        return mx.full((), float("nan"), dtype=a.dtype) if c != 0 else mx.zeros((), dtype=a.dtype)
     axis = _red_axis(a, dim)
-    c = 1 if correction is None else correction
     if float(c).is_integer():
         return mx.std(a, axis=axis, keepdims=keepdim, correction=int(c))
     return mx.sqrt(_var_impl(a, axis, keepdim, c))
 
-def _var_mean(a, dim=None, correction=None, keepdim=False, **k):
-    v = _var(a, dim, correction, keepdim)
+def _var_mean(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
+    v = _var(a, dim, unbiased=unbiased, correction=correction, keepdim=keepdim)
     m = _mean(a, dim, keepdim)
     return v, m
 
-def _std_mean(a, dim=None, correction=None, keepdim=False, **k):
-    s = _std(a, dim, correction, keepdim)
+def _std_mean(a, dim=None, unbiased=None, correction=None, keepdim=False, **k):
+    s = _std(a, dim, unbiased=unbiased, correction=correction, keepdim=keepdim)
     m = _mean(a, dim, keepdim)
     return s, m
 

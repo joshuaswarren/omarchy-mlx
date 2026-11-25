@@ -580,9 +580,14 @@ def test_reductions():
         (torch.ops.aten.var.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.var.dim, (x32,), {"dim": [0], "keepdim": True}),
         (torch.ops.aten.var.dim, (x32,), {"dim": []}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [1], "unbiased": False}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [0, 1], "unbiased": False, "keepdim": True}),
+        (torch.ops.aten.var.dim, (x32,), {"dim": [1], "unbiased": True}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [1]}),
         (torch.ops.aten.std.dim, (x32,), {"dim": [0], "keepdim": True}),
         (torch.ops.aten.std.dim, (xb,), {"dim": [1]}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [1], "unbiased": False}),
+        (torch.ops.aten.std.dim, (x32,), {"dim": [0, 1], "unbiased": False, "keepdim": True}),
     ]:
         run_one(target, ins, kw)
 
@@ -592,11 +597,14 @@ def test_reductions():
             run_one(target, (x32,), {"dim": [1], "correction": corr})
 
     # tuple-output ops
-    for target in (torch.ops.aten.var_mean.dim, torch.ops.aten.std_mean.dim):
-        ref = target(x32, [1])
+    for target, kw in ((torch.ops.aten.var_mean.dim, {"dim": [1]}),
+                       (torch.ops.aten.std_mean.dim, {"dim": [1]}),
+                       (torch.ops.aten.var_mean.dim, {"dim": [1], "unbiased": False}),
+                       (torch.ops.aten.std_mean.dim, {"dim": [1], "unbiased": False})):
+        ref = target(x32, **kw)
         g = torch.fx.Graph()
         ph = g.placeholder("p0")
-        n = g.call_function(target, (ph,), {"dim": [1]})
+        n = g.call_function(target, (ph,), kw)
         g.output(n)
         gm = torch.fx.GraphModule(torch.nn.Module(), g)
         run, stats = mlx_vulkan.make_executor(gm)
