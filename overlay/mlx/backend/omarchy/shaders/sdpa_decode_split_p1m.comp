@@ -228,13 +228,18 @@ void main() {
         s_o[(2u * SPLIT_R + r) * D + t] + s_o[(3u * SPLIT_R + r) * D + t];
     scratch_data.values[base + t] = floatBitsToUint(total);
   }
-  // Arrival count, then the last block's workgroup merges the head inline. memoryBarrierBuffer() publishes this workgroup's stores
-  // before the bump and makes every earlier block's stores visible to the finisher.
+  // Arrival count, then the last block's workgroup merges the head inline. Each head owns two pool words: a publish
+  // count (word 1) bumped after the workgroup's scratch stores clear the release barrier, and an arrival count (word 0)
+  // that names the finisher. The finisher spins on the publish count before reading: the arrival atomic only orders
+  // the bump, so without the second handshake the merge can reach scratch before a sibling workgroup's posted stores
+  // land in shared memory — the failure this handshake removes.
   barrier();
   memoryBarrierBuffer();
   for (uint r = 0u; r < SPLIT_R; ++r) {
     if (t == 0u) {
-      s_done[r] = atomicAdd(done_data.values[kv_head * SPLIT_R + r], 1u) + 1u;
+      uint head = kv_head * SPLIT_R + r;
+      atomicAdd(done_data.values[head * 2u + 1u], 1u);
+      s_done[r] = atomicAdd(done_data.values[head * 2u], 1u) + 1u;
     }
   }
   barrier();
@@ -245,11 +250,19 @@ void main() {
     }
     uint head = kv_head * SPLIT_R + r;
     if (t == 0u) {
+      // Bounded spin: every earlier workgroup's publish bump follows its scratch stores' release barrier, so reaching
+      // nblocks publishes their stores to the merge reads below. A missed bound means the device cannot order
+      // intra-dispatch traffic at all; merging anyway is no worse than the pre-handshake form.
+      for (uint spins = 0u;
+           atomicOr(done_data.values[head * 2u + 1u], 0u) < nblocks && spins < 0x400000u;
+           ++spins) {}
       // All nblocks arrivals landed (the atomic read says so) and no other workgroup ever writes this slot again this
-      // dispatch, so the finisher alone puts it back to zero; the next dispatch's pipeline barrier publishes the reset.
-      done_data.values[head] = 0u;
+      // dispatch, so the finisher alone puts both words back to zero; the next dispatch's pipeline barrier publishes it.
+      done_data.values[head * 2u] = 0u;
+      done_data.values[head * 2u + 1u] = 0u;
     }
     memoryBarrierBuffer();
+    barrier();
     uint hbase = head * nblocks * STRIDE;
     float global_max = uintBitsToFloat(0xff800000u);
     for (uint b = 0u; b < nblocks; ++b) {
