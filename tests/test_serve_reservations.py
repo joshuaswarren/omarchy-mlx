@@ -276,6 +276,31 @@ def _claim_literal(literal):
             + literal + b'}')
 
 
+def _non_read_fds(test):
+    """Real open fds that are not a readable pipe end: socket, regular file
+    holding a valid claim, directory, pipe write end, pipe reopened O_RDWR,
+    and pipe reopened O_PATH."""
+    sock_a, sock_b = socket.socketpair()
+    test.addCleanup(sock_a.close)
+    test.addCleanup(sock_b.close)
+    reg = tempfile.TemporaryFile()
+    test.addCleanup(reg.close)
+    reg.write(json.dumps(GOOD_CLAIM).encode())
+    reg.seek(0)
+    tmp_dir = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp_dir.cleanup)
+    dir_fd = os.open(tmp_dir.name, os.O_RDONLY)
+    test.addCleanup(os.close, dir_fd)
+    pipe_r, pipe_w = os.pipe()
+    test.addCleanup(os.close, pipe_r)
+    test.addCleanup(os.close, pipe_w)
+    pipe_rw = os.open(f"/proc/self/fd/{pipe_r}", os.O_RDWR)
+    test.addCleanup(os.close, pipe_rw)
+    pipe_path = os.open(f"/proc/self/fd/{pipe_r}", os.O_PATH)
+    test.addCleanup(os.close, pipe_path)
+    return sock_a.fileno(), reg.fileno(), dir_fd, pipe_w, pipe_rw, pipe_path
+
+
 class ClaimPipeValidationTests(unittest.TestCase):
     """The managed child's claim pipe fails closed: a malformed fd or a
     malformed, deep or mistyped payload is a BudgetError (the worker's
@@ -410,6 +435,71 @@ class ClaimPipeValidationTests(unittest.TestCase):
                 budget.claim_from_env(home=self.home)
         self.assertIn("claim pipe unreadable", str(cm.exception))
 
+    def test_claim_from_env_rejects_malformed_values_before_reading(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        read = unittest.mock.Mock(side_effect=AssertionError("os.read called"))
+        claim = unittest.mock.Mock(side_effect=AssertionError("claim attempted"))
+        values = ("", "\u0665", "\u00b2", " 3 ", "3 ", "+3", "-1",
+                  "1_0", "3.0", "abc", "9" * 5000)
+        with unittest.mock.patch.object(budget.os, "read", read), \
+                unittest.mock.patch.object(budget, "claim_reservation", claim):
+            for raw in values:
+                with self.subTest(raw=raw[:24]):
+                    with unittest.mock.patch.object(
+                            budget.os, "environ", {budget.CLAIM_FD_ENV: raw}):
+                        with self.assertRaises(budget.BudgetError) as cm:
+                            budget.claim_from_env(home=self.home)
+                    msg = str(cm.exception)
+                    self.assertIn(budget.CLAIM_FD_ENV, msg)
+                    self.assertLess(len(msg), 200, msg)
+            with unittest.mock.patch.object(budget.os, "environ", {}):
+                self.assertIsNone(budget.claim_from_env(home=self.home))
+        read.assert_not_called()
+        claim.assert_not_called()
+
+    def test_read_claim_fd_refuses_non_pipe_fds_without_reading_or_closing(self):
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        real_fds = _non_read_fds(self)
+        cases = [(str(fd), fd) for fd in (0, 1, 2, -1, 2**31 - 1, *real_fds)]
+        cases.append(("huge", 10**5000))
+        read = unittest.mock.Mock(side_effect=AssertionError("os.read called"))
+        with unittest.mock.patch.object(budget.os, "read", read):
+            for label, fd in cases:
+                with self.subTest(fd=label):
+                    with self.assertRaises(budget.BudgetError) as cm:
+                        budget.read_claim_fd(fd)
+                    self.assertIn("claim pipe unreadable", str(cm.exception))
+        read.assert_not_called()
+        for fd in real_fds:
+            os.fstat(fd)
+
+    def test_mlxlm_worker_exits_3_on_a_malformed_claim_fd(self):
+        from mlx_omarchy_serve import _mlxlm_server
+        reg = tempfile.TemporaryFile()
+        self.addCleanup(reg.close)
+        reg.write(json.dumps(GOOD_CLAIM).encode())
+        reg.seek(0)
+        claim = unittest.mock.Mock(side_effect=AssertionError("claim attempted"))
+        read = unittest.mock.Mock(side_effect=AssertionError("os.read called"))
+        for raw in ("", str(reg.fileno()), "\u0665"):
+            with self.subTest(raw=raw):
+                err = io.StringIO()
+                with unittest.mock.patch.object(
+                            budget.os, "environ", {budget.CLAIM_FD_ENV: raw}), \
+                        unittest.mock.patch.object(sys, "stderr", err), \
+                        unittest.mock.patch.object(budget, "claim_reservation", claim), \
+                        unittest.mock.patch.object(budget.os, "read", read):
+                    with self.assertRaises(SystemExit) as cm:
+                        _mlxlm_server.start_managed()
+                self.assertEqual(cm.exception.code, 3)
+                lines = err.getvalue().splitlines()
+                self.assertEqual(len(lines), 1, err.getvalue())
+                self.assertTrue(lines[0].startswith("error: "), err.getvalue())
+        claim.assert_not_called()
+        read.assert_not_called()
+
 
 NON_INT_BYTES = (True, False, 1.5, 1024.0, "1024", None, [1024])
 
@@ -472,23 +562,6 @@ class ParentLifetimeWatchTests(unittest.TestCase):
     is a BudgetError before any thread starts, and an fd that cannot be
     watched still runs on_eof (the child stops)."""
 
-    def _non_read_fds(self):
-        sock_a, sock_b = socket.socketpair()
-        self.addCleanup(sock_a.close)
-        self.addCleanup(sock_b.close)
-        reg = tempfile.TemporaryFile()
-        self.addCleanup(reg.close)
-        pipe_r, pipe_w = os.pipe()
-        self.addCleanup(os.close, pipe_r)
-        self.addCleanup(os.close, pipe_w)
-        fifo_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(fifo_dir.cleanup)
-        fifo_path = Path(fifo_dir.name) / "rw.fifo"
-        os.mkfifo(fifo_path)
-        fifo_rw = os.open(fifo_path, os.O_RDWR)
-        self.addCleanup(os.close, fifo_rw)
-        return sock_a.fileno(), reg.fileno(), pipe_w, fifo_rw
-
     def test_from_env_accepts_only_an_open_pipe_above_stdio(self):
         # int() of 5000 digits raises only under the default limit; pin it.
         self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
@@ -497,7 +570,7 @@ class ParentLifetimeWatchTests(unittest.TestCase):
         values = ("\u00b2", "\u0665", "1" * 5000, "999999999999999999999",
                   str(2**31), "-1", "+5", " 5", "5 ", "1_0", "abc", "3.0",
                   "0", "1", "2", str(2**31 - 1),
-                  *(str(fd) for fd in self._non_read_fds()))
+                  *(str(fd) for fd in _non_read_fds(self)))
         with unittest.mock.patch.object(budget.threading, "Thread", thread):
             for raw in values:
                 with self.subTest(raw=raw[:24]):
@@ -544,7 +617,7 @@ class ParentLifetimeWatchTests(unittest.TestCase):
         fdopen = unittest.mock.Mock(side_effect=AssertionError("fd opened"))
         with unittest.mock.patch.object(budget.os, "fdopen", fdopen):
             for fd in (True, False, 0, 1, 2, -1, -(2**70), 2**31 - 1, 2**31,
-                       2**70, "5", 5.0, None, *self._non_read_fds()):
+                       2**70, "5", 5.0, None, *_non_read_fds(self)):
                 with self.subTest(fd=fd):
                     on_eof = unittest.mock.Mock()
                     budget.watch_parent_fd(fd, on_eof)
