@@ -10572,13 +10572,13 @@ bool dispatch_quantized_gemv_group(
         *swiglu_out,
         fold_strides,
         fold_flags,
-        members[0].node.data_size(),
+        members[0].node.size(),
         0);
     members[1].node.copy_shared_buffer(
         *swiglu_out,
         fold_strides,
         fold_flags,
-        members[1].node.data_size(),
+        members[1].node.size(),
         0);
   } else {
     for (auto& member : members) {
@@ -10600,7 +10600,7 @@ bool dispatch_quantized_gemv_group(
             view.parent,
             view_strides,
             view_flags,
-            member.node.data_size(),
+            member.node.size(),
             view.offset);
         continue;
       }
@@ -10943,8 +10943,11 @@ bool dispatch_quantized_gemv_wide(
     flags.contiguous = true;
     flags.row_contiguous = true;
     flags.col_contiguous = false;
+    // member.node.data_size() is still 0 here (fresh output node);
+    // size() is the view span and keeps is_trailing_broadcast true so
+    // consumers stay on the BinaryVec/UnaryVec path.
     member.node.copy_shared_buffer(
-        slab, strides, flags, member.node.data_size(), column);
+        slab, strides, flags, member.node.size(), column);
     column += static_cast<uint32_t>(member.node.inputs()[1].shape(0));
   }
 
