@@ -1459,9 +1459,15 @@ void main() {
     const bool passthrough = 2u * half_dims < row_length;
     const uint rope_t = token_count;
     const uint epi_sel = params.shape[3];
-    const float epi_off =
-        float(int(input_w3.values[params.rhs_offset]));
     for (uint side = 0u; side < 2u; ++side) {
+      // q's offset rides the uint input_w3 slot, k's the u16 addend3
+      // slot reassembled from two u16 lanes at params.count.
+      const float epi_off =
+          side == 0u
+              ? float(int(input_w3.values[params.rhs_offset]))
+              : float(int(
+                    uint(addend3.values[params.count]) |
+                    (uint(addend3.values[params.count + 1u]) << 16u)));
       const uint member =
           side == 0u ? (epi_sel & 3u) : ((epi_sel >> 2u) & 3u);
       const uint heads =

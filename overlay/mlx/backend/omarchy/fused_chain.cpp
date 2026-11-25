@@ -2156,7 +2156,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       if (qc == nullptr || kc == nullptr ||
           qc->member_index == kc->member_index ||
-          qc->node->inputs()[1].id() != kc->node->inputs()[1].id() ||
           // The keys rope's only consumer is the deleted slice update;
           // a second consumer would read an unmaterialized buffer.
           use_count(*kc->node) != 1) {

@@ -10407,11 +10407,14 @@ bool dispatch_quantized_gemv_group(
     }
     if (rope_epi_active) {
       const array& offset = rope_epi->q.rope.inputs()[1];
+      const array& k_offset = rope_epi->k.rope.inputs()[1];
       const auto& window = *rope_epi->k.window;
       if (rope_epi->dims <= 0 || rope_epi->dims > epi_d ||
           (rope_epi->dims % 2) != 0 || ((rope_epi->dims / 2) % 2) != 0 ||
           offset.size() != 1 || offset.dtype() != int32 ||
+          k_offset.size() != 1 || k_offset.dtype() != int32 ||
           !input_ready(offset, stream) ||
+          !input_ready(k_offset, stream) ||
           window.strides[2] != 1u) {
         rope_epi_active = false;
       }
@@ -10703,6 +10706,7 @@ bool dispatch_quantized_gemv_group(
     encoder.add_temporary(rope_epi->q.rope.inputs()[2]);
     encoder.add_temporary(rope_epi->k.rope.inputs()[2]);
     encoder.add_temporary(offset);
+    encoder.add_temporary(rope_epi->k.rope.inputs()[1]);
     // Params mirror the FastRopeNormBF16 contract on fields the token
     // member-dot code never reads; q rides the lhs_* names, k rhs_*.
     // The shader's push-constant struct ends at out_strides, so the
@@ -10729,6 +10733,11 @@ bool dispatch_quantized_gemv_group(
     params.out_strides[3] = window.strides[2];
     params.rhs_offset = static_cast<uint32_t>(
         offset.offset() / offset.itemsize());
+    // The keys offset rides the u16 addend3 slot; its element index is
+    // the byte offset in u16 units (int32 storage is always u16-aligned).
+    // params.count is unread by every qmm_vec leg.
+    params.count = static_cast<uint32_t>(
+        rope_epi->k.rope.inputs()[1].offset() / 2);
     params.shape[3] =
         static_cast<uint32_t>(rope_epi->q.member_index) |
         (static_cast<uint32_t>(rope_epi->k.member_index) << 2u) |
@@ -10768,7 +10777,7 @@ bool dispatch_quantized_gemv_group(
     epi_bindings[20] = binding(rope_epi->q.rope.inputs()[2]);
     epi_bindings[21] = binding(rope_epi->k.rope.inputs()[2]);
     epi_bindings[22] = binding(rope_epi->q.rope);
-    epi_bindings[23] = epi_filler;
+    epi_bindings[23] = binding(rope_epi->k.rope.inputs()[1]);
     epi_bindings[24] = binding(window.node);
     epi_bindings[kQmmVecMultiBindings] =
         encoder.resnorm_ticket_binding();
