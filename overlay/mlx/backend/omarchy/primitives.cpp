@@ -17299,7 +17299,9 @@ void ScaledDotProductAttention::eval_gpu(
         sel_caps.subgroup_size == 32u &&
         !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
     bf16_fast = omarchy::sdpa_bf16_fast_enabled(
-        std::getenv("MLX_OMARCHY_SDPA_BF16_FAST"), coopmat_composed_capable);
+        std::getenv("MLX_OMARCHY_SDPA_BF16_FAST"),
+        coopmat_composed_capable,
+        q_len > 1);
   }
 
   // Decode uses native Metal's 32-key online-softmax order directly over

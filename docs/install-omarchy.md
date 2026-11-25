@@ -69,8 +69,9 @@ Development builds use tiled quantized prefill by default. Set
 decode still uses GEMV. This change is not in the v0.3.5 wheels. The
 experimental `MLX_OMARCHY_ROPE_BF16_DIRECT` flag remains off, and
 `MLX_OMARCHY_SDPA_BF16_FAST` remains off on devices that advertise the
-f32 cooperative-matrix shape (it defaults on elsewhere, where no faster
-composed route exists). Both changed generated token
+f32 cooperative-matrix shape (it defaults on elsewhere for prefill-shaped
+calls, where no faster composed route exists; single-query decode keeps
+its fused route). Both changed generated token
 IDs on M1. The hardware gate receipt for that A/B is not in this checkout.
 
 Compiled-tape elementwise chains and exact eager SwiGLU graphs
