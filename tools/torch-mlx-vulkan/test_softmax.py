@@ -60,12 +60,10 @@ def test_softmax_parity():
                 want = torch.ops.aten._softmax(t, dim, False)
                 got = mlx_vulkan.ATEN_TABLE["_softmax"](m, dim)
                 _close(f"_softmax {tag} {shape} dim={dim}", got, want, tol, **kw)
-            # half=True: fp16/bf16 inputs compute in fp32 (htf). torch CPU
-            # refuses the private-op htf flag, so reference it on the
-            # fp32-upcast input - the exact htf semantics.
+            # Torch CPU refuses half_to_float, so compare with fp32 input.
             t, m = _pair(rng, shape, True)
             want = torch.ops.aten._softmax(t.float(), dim, False)
-            got = mlx_vulkan.ATEN_TABLE["_softmax"](m, dim, half=True)
+            got = mlx_vulkan.ATEN_TABLE["_softmax"](m, dim, half_to_float=True)
             _close(f"_softmax htf {shape} dim={dim}", got, want, 2e-5)
             # public softmax carries the dtype kwarg (input-cast rule)
             want = torch.softmax(t, dim, dtype=torch.float32)
@@ -94,7 +92,59 @@ def test_log_softmax_parity():
     print("PASS log_softmax parity")
 
 
+def _executor(target, **kwargs):
+    graph = torch.fx.Graph()
+    x = graph.placeholder("x")
+    graph.output(graph.call_function(target, (x,), kwargs))
+    return mlx_vulkan.make_executor(torch.fx.GraphModule({}, graph))
+
+
+def test_softmax_executor_dtypes():
+    x = torch.tensor([1.0, 2.0])
+    for op in (torch.softmax, torch.log_softmax):
+        for value, kwargs in ((x, {"dtype": torch.int32}), (x.int(), {})):
+            run, _ = _executor(op, dim=0, **kwargs)
+            try:
+                op(value, dim=0, **kwargs)
+            except RuntimeError as expected:
+                try:
+                    run(value)
+                except RuntimeError as actual:
+                    assert str(actual) == str(expected)
+                else:
+                    raise AssertionError(f"{op.__name__} accepted an integral effective dtype")
+            else:
+                raise AssertionError("reference Torch accepted an integral effective dtype")
+
+
+def test_softmax_executor_keywords_and_empty():
+    x = torch.tensor([[1.0, 2.0]])
+    for name in ("softmax", "log_softmax"):
+        public = getattr(torch.nn.functional, name)
+        private = getattr(torch.ops.aten, f"_{name}").default
+        for op, value, kwargs, expected in (
+            (public, x, {"_stacklevel": 4}, public(x, dim=1)),
+            (public, x[:, :0], {}, public(x[:, :0], dim=1)),
+            (public, x.int(), {"dtype": torch.float32}, public(x, dim=1)),
+            (private, x.half(), {"half_to_float": True}, public(x, dim=1)),
+        ):
+            run, stats = _executor(op, dim=1, **kwargs)
+            actual = run(value)
+            assert stats["mlx"] and not stats["cpu"], (op, kwargs, stats)
+            torch.testing.assert_close(actual, expected)
+
+
+def test_log_softmax_large_offset():
+    x = torch.full((1, 2), 1e8)
+    run, stats = _executor(torch.ops.aten._log_softmax.default, dim=1, half_to_float=False)
+    torch.testing.assert_close(run(x), torch.log_softmax(x, dim=1))
+    assert stats["mlx"] and not stats["cpu"], stats
+
+
 if __name__ == "__main__":
     test_softmax_parity()
     test_log_softmax_parity()
+    test_softmax_executor_dtypes()
+    test_softmax_executor_keywords_and_empty()
+    test_log_softmax_large_offset()
     print("ALL PASS")
