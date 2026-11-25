@@ -9763,20 +9763,41 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           omarchy::cooperative_matrix_advertises(
               c16_hw.cooperative_matrix_shapes,
               omarchy::qmm_prefill_coopmat_shape_f16x16()));
+      // DEC-20 staging variants (env-gated A/B arms of the shipped
+      // 32-row K16 kernel; same per-output ascending-k f32 chain, same
+      // fp16 staged values, so bit-identical by construction):
+      // MLX_OMARCHY_QMM_CMAT16_ROWS=64|128 picks the SG4/SG8 wide tiles,
+      // MLX_OMARCHY_QMM_CMAT16_STEPK=32|64 the deeper K staging. A
+      // request the device cannot back (128/256-lane workgroup, or a
+      // staging tile over the shared-memory cap) keeps the shipped
+      // kernel instead of failing pipeline creation.
+      uint32_t c16_rows = omarchy::qmm_cmat16_rows_requested();
+      uint32_t c16_step_k = omarchy::qmm_cmat16_stepk_requested();
+      const uint32_t c16_lanes = omarchy::qmm_cmat16_lanes(c16_rows);
+      if (c16_lanes > coopmat_caps.max_compute_work_group_invocations ||
+          c16_lanes > coopmat_caps.max_compute_work_group_size[0] ||
+          omarchy::qmm_cmat16_shared_bytes(c16_rows, c16_step_k) >
+              coopmat_caps.max_compute_shared_memory_size) {
+        c16_rows = 32u;
+        c16_step_k = 16u;
+      }
+      const omarchy::ComputeKernel c16_kernel =
+          omarchy::qmm_cmat16_kernel(c16_rows, c16_step_k);
       dispatch_qmm_out_rows(
           encoder,
           out,
           bindings,
           params,
-          [&](std::span<const omarchy::ComputeBinding> cb,
+          [c16_kernel, c16_rows](
+              std::span<const omarchy::ComputeBinding> cb,
               const omarchy::ComputeParams& cp) {
             encoder.dispatch_compute(
-                omarchy::ComputeKernel::QmmPrefillCoopmat16BF16,
+                c16_kernel,
                 cb,
                 cp,
                 std::min((cp.matrix_n + 31u) / 32u,
                          omarchy::kMaxComputeGroupCountX),
-                std::min((cp.matrix_m + 31u) / 32u,
+                std::min((cp.matrix_m + c16_rows - 1u) / c16_rows,
                          omarchy::kMaxComputeGroupCountX),
                 1u);
           });

@@ -445,6 +445,14 @@
 #include "qmm_coopmat_m16_f16.h"
 #include "qmm_coopmat_bf16.h"
 #include "qmm_coopmat_c16_bf16.h"
+#include "qmm_coopmat_c16_bf16_k32.h"
+#include "qmm_coopmat_c16_bf16_k64.h"
+#include "qmm_coopmat_c16_bf16_m64.h"
+#include "qmm_coopmat_c16_bf16_m64_k32.h"
+#include "qmm_coopmat_c16_bf16_m64_k64.h"
+#include "qmm_coopmat_c16_bf16_m128.h"
+#include "qmm_coopmat_c16_bf16_m128_k32.h"
+#include "qmm_coopmat_c16_bf16_m128_k64.h"
 #include "qmm_coopmat_m16_bf16.h"
 #include "qmm_coopmat_x32.h"
 #include "qmm_coopmat_m16_x32.h"
@@ -1648,6 +1656,31 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_bf16, qmm_coopmat_bf16_size};
     case ComputeKernel::QmmPrefillCoopmat16BF16:
       return {qmm_coopmat_c16_bf16, qmm_coopmat_c16_bf16_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16K32:
+      return {qmm_coopmat_c16_bf16_k32, qmm_coopmat_c16_bf16_k32_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16K64:
+      return {qmm_coopmat_c16_bf16_k64, qmm_coopmat_c16_bf16_k64_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16M64:
+      return {qmm_coopmat_c16_bf16_m64, qmm_coopmat_c16_bf16_m64_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16M64K32:
+      return {
+          qmm_coopmat_c16_bf16_m64_k32,
+          qmm_coopmat_c16_bf16_m64_k32_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16M64K64:
+      return {
+          qmm_coopmat_c16_bf16_m64_k64,
+          qmm_coopmat_c16_bf16_m64_k64_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16M128:
+      return {
+          qmm_coopmat_c16_bf16_m128, qmm_coopmat_c16_bf16_m128_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16M128K32:
+      return {
+          qmm_coopmat_c16_bf16_m128_k32,
+          qmm_coopmat_c16_bf16_m128_k32_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16M128K64:
+      return {
+          qmm_coopmat_c16_bf16_m128_k64,
+          qmm_coopmat_c16_bf16_m128_k64_size};
     case ComputeKernel::QmmPrefillCoopmatM16BF16:
       return {qmm_coopmat_m16_bf16, qmm_coopmat_m16_bf16_size};
     case ComputeKernel::QmmPrefillCoopmatBF16X32:

@@ -320,4 +320,75 @@ inline bool qmm_prefill_allow_rows64(bool q4_g64_transpose, bool full_n) {
   return q4_g64_transpose && full_n;
 }
 
+// CMAT16 (16x16x16 fp16-operand) staging variants, DEC-20. Opt-in
+// staging arms of the shipped 32-row K16 kernel on the NVIDIA-class
+// route: MLX_OMARCHY_QMM_CMAT16_ROWS=64|64sg4|128|128sg8 selects the
+// 64-row SG4 (128-lane) or 128-row SG8 (256-lane) tile, and
+// MLX_OMARCHY_QMM_CMAT16_STEPK=32|64 the deeper K dequant staging.
+// Every build keeps the same per-output ascending-k f32 chain and the
+// same fp16 staged values, so the pick never moves output bits; unset
+// or any other value keeps the shipped kernel exactly. Unlike the fp32
+// twins there is no per-part default: stock behavior is the 32-row K16
+// kernel on every device until a variant measures out.
+inline uint32_t qmm_cmat16_rows_requested() {
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_CMAT16_ROWS");
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "64" || v == "64sg4") {
+      return 64u;
+    }
+    if (v == "128" || v == "128sg8") {
+      return 128u;
+    }
+  }
+  return 32u;
+}
+
+inline uint32_t qmm_cmat16_stepk_requested() {
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_CMAT16_STEPK");
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "32") {
+      return 32u;
+    }
+    if (v == "64") {
+      return 64u;
+    }
+  }
+  return 16u;
+}
+
+// Workgroup lanes the CMAT16 row tile needs (SG4 = 128, SG8 = 256).
+inline uint32_t qmm_cmat16_lanes(uint32_t rows) {
+  return rows == 128u ? 256u : rows == 64u ? 128u : 64u;
+}
+
+// Shared-memory bytes a CMAT16 build stages: x_s rows*step_k fp16, w_s
+// step_k*32 fp16, and the 2 x 16 x 16 fp32 drain tile. The shipped
+// 32-row K16 build is 4096 bytes (kQmmCoopmat16SharedBytes).
+inline uint32_t qmm_cmat16_shared_bytes(uint32_t rows, uint32_t step_k) {
+  return (rows * step_k + step_k * 32u) * 2u + 2u * 16u * 16u * 4u;
+}
+
+// The CMAT16 build a (rows, step_k) request maps to; the shader guards
+// 64 rows to SG4 and 128 to SG8, so the lane count is implied.
+inline omarchy::ComputeKernel qmm_cmat16_kernel(
+    uint32_t rows,
+    uint32_t step_k) {
+  using K = omarchy::ComputeKernel;
+  if (rows == 128u) {
+    return step_k == 64u ? K::QmmPrefillCoopmat16BF16M128K64
+        : step_k == 32u  ? K::QmmPrefillCoopmat16BF16M128K32
+                         : K::QmmPrefillCoopmat16BF16M128;
+  }
+  if (rows == 64u) {
+    return step_k == 64u ? K::QmmPrefillCoopmat16BF16M64K64
+        : step_k == 32u  ? K::QmmPrefillCoopmat16BF16M64K32
+                         : K::QmmPrefillCoopmat16BF16M64;
+  }
+  return step_k == 64u ? K::QmmPrefillCoopmat16BF16K64
+      : step_k == 32u  ? K::QmmPrefillCoopmat16BF16K32
+                       : K::QmmPrefillCoopmat16BF16;
+}
+
 } // namespace mlx::core::omarchy

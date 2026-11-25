@@ -4778,6 +4778,189 @@ TEST_CASE("coopmat prefill dispatch pins M16, 32-row and TwoN builds") {
   }
 }
 
+// CMAT16 staging variants (DEC-20): on a device whose coopmat list
+// carries the 16x16x16 fp16-operand shape and not the fp32 8x8x8 one
+// (the NVIDIA-class route), MLX_OMARCHY_QMM_CMAT16_ROWS/_STEPK select
+// the wide-tile and deep-staging builds. Every pin must dispatch its
+// named kernel id AND keep the shipped kernel's bits exactly (same
+// per-output ascending-k f32 chain, same fp16 staged values). Hosts
+// without the route skip: under a simulated nvidia-c16-coopmat profile
+// the case also skips unless the runtime hardware itself advertises
+// the shape (require_backed would refuse the dispatch by name).
+TEST_CASE("cmat16 prefill env variants dispatch the named builds bit-identically") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const auto& hw_caps = omarchy::device(0).hardware_capabilities();
+  const bool c16_route =
+      caps.cooperative_matrix_bf16 && caps.subgroup_size == 32u &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape_f16x16()) &&
+      !omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape()) &&
+      // Widest variant is the 256-lane SG8 build; 22528 shared bytes.
+      caps.max_compute_work_group_invocations >= 256u &&
+      caps.max_compute_work_group_size[0] >= 256u &&
+      omarchy::qmm_cmat16_shared_bytes(128u, 64u) <=
+          caps.max_compute_shared_memory_size &&
+      // Under a capability-simulation profile, dispatch is reachable
+      // only where the runtime hardware also backs the shape.
+      (!caps.simulated ||
+       omarchy::cooperative_matrix_advertises(
+           hw_caps.cooperative_matrix_shapes,
+           omarchy::qmm_prefill_coopmat_shape_f16x16()));
+  if (!c16_route) {
+    skip("no backed CMAT16 prefill route; variant pins need the "
+         "NVIDIA-class coopmat list");
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(77);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+  // m = 200 tails every tile height (32, 64, 128 rows); n = 64 gives two
+  // column tiles; k = 256 is four 64-wide groups.
+  const int m = 200;
+  const int n = 64;
+  const int k = 256;
+  const int group_size = 64;
+  const int bits = 4;
+  const int groups = k / group_size;
+  const int words_per_row = k / 8;
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  std::vector<float> scales_rt = round_trip(stream, host.scales, bfloat16);
+  std::vector<float> biases_rt = round_trip(stream, host.biases, bfloat16);
+  std::vector<float> x_flat(static_cast<size_t>(m) * k);
+  for (auto& v : x_flat) {
+    v = dist(gen);
+  }
+  std::vector<float> x_rt = round_trip(stream, x_flat, bfloat16);
+  array x(x_rt.begin(), Shape{m, k}, bfloat16);
+  array w_words(host.words.begin(), Shape{n, words_per_row}, uint32);
+  array scales(scales_rt.begin(), Shape{n, groups}, bfloat16);
+  array biases(biases_rt.begin(), Shape{n, groups}, bfloat16);
+
+  auto captured = [&](const std::function<void()>& call) {
+    std::fflush(stderr);
+    int saved = ::dup(::fileno(stderr));
+    FILE* cap = std::fopen("/tmp/qmm_cmat16_dispatch_cap.log", "w");
+    REQUIRE(cap != nullptr);
+    ::dup2(::fileno(cap), ::fileno(stderr));
+    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+    call();
+    omarchy::get_command_encoder(stream).synchronize();
+    std::fflush(stderr);
+    ::dup2(saved, ::fileno(stderr));
+    ::close(saved);
+    std::fclose(cap);
+    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+    std::ifstream in("/tmp/qmm_cmat16_dispatch_cap.log");
+    return std::string(
+        (std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+  };
+  auto dispatches = [](const std::string& text, uint32_t kernel_id) {
+    return text.find("[rtmod] DISPATCH kernel=" +
+                     std::to_string(kernel_id) + " ") !=
+        std::string::npos;
+  };
+  auto seen_kernels = [](const std::string& text) {
+    std::string ids;
+    for (size_t pos = text.find("kernel=");
+        pos != std::string::npos;
+        pos = text.find("kernel=", pos + 1)) {
+      size_t begin = pos + 7;
+      size_t end = text.find_first_not_of("0123456789", begin);
+      ids += text.substr(begin, end - begin) + " ";
+    }
+    return ids;
+  };
+
+  struct Pin {
+    const char* rows_env;
+    const char* stepk_env;
+    omarchy::ComputeKernel expected;
+    const char* label;
+  };
+  using K = omarchy::ComputeKernel;
+  const std::vector<Pin> pins{
+      {nullptr, nullptr, K::QmmPrefillCoopmat16BF16, "default"},
+      {nullptr, "32", K::QmmPrefillCoopmat16BF16K32, "K32"},
+      {nullptr, "64", K::QmmPrefillCoopmat16BF16K64, "K64"},
+      {"64", nullptr, K::QmmPrefillCoopmat16BF16M64, "M64"},
+      {"64", "32", K::QmmPrefillCoopmat16BF16M64K32, "M64K32"},
+      {"64", "64", K::QmmPrefillCoopmat16BF16M64K64, "M64K64"},
+      {"128", nullptr, K::QmmPrefillCoopmat16BF16M128, "M128"},
+      {"128", "32", K::QmmPrefillCoopmat16BF16M128K32, "M128K32"},
+      {"128", "64", K::QmmPrefillCoopmat16BF16M128K64, "M128K64"},
+  };
+
+  const char* kRowsEnv = "MLX_OMARCHY_QMM_CMAT16_ROWS";
+  const char* kStepkEnv = "MLX_OMARCHY_QMM_CMAT16_STEPK";
+  const char* old_rows = std::getenv(kRowsEnv);
+  const char* old_stepk = std::getenv(kStepkEnv);
+  const std::string saved_rows = old_rows != nullptr ? old_rows : "";
+  const std::string saved_stepk = old_stepk != nullptr ? old_stepk : "";
+  auto restore_envs = [&] {
+    if (old_rows != nullptr) {
+      setenv(kRowsEnv, saved_rows.c_str(), 1);
+    } else {
+      unsetenv(kRowsEnv);
+    }
+    if (old_stepk != nullptr) {
+      setenv(kStepkEnv, saved_stepk.c_str(), 1);
+    } else {
+      unsetenv(kStepkEnv);
+    }
+  };
+  std::vector<float> reference;
+  for (const auto& pin : pins) {
+    CAPTURE(pin.label);
+    if (pin.rows_env != nullptr) {
+      setenv(kRowsEnv, pin.rows_env, 1);
+    } else {
+      unsetenv(kRowsEnv);
+    }
+    if (pin.stepk_env != nullptr) {
+      setenv(kStepkEnv, pin.stepk_env, 1);
+    } else {
+      unsetenv(kStepkEnv);
+    }
+    std::optional<array> out_holder;
+    std::string trace = captured([&] {
+      out_holder = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      out_holder->eval();
+    });
+    restore_envs();
+    const uint32_t expected_id = static_cast<uint32_t>(pin.expected);
+    INFO("pin=", pin.label, " expected kernel id ", expected_id,
+        " seen ids: ", seen_kernels(trace));
+    CHECK(dispatches(trace, expected_id));
+    REQUIRE(evaluation_error(*out_holder).empty());
+    std::vector<float> got = readback_f32(stream, *out_holder);
+    if (pin.expected == K::QmmPrefillCoopmat16BF16) {
+      reference = std::move(got);
+    } else {
+      // Same per-output ascending-k f32 chain and fp16 staged values as
+      // the shipped kernel: storage-bit equality, not a tolerance.
+      REQUIRE_EQ(got.size(), reference.size());
+      INFO("pin=", pin.label, " output differs from the shipped kernel");
+      CHECK(std::memcmp(got.data(), reference.data(),
+                        got.size() * sizeof(float)) == 0);
+    }
+  }
+}
+
 namespace {
 
 struct QmmVecQ4WordGate {

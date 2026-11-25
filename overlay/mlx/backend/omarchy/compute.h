@@ -1245,6 +1245,21 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  // CMAT16 staging variants (DEC-20) of QmmPrefillCoopmat16BF16:
+  // STEP_K=32/64 dequant staging (K32/K64 on the 32-row tile) and the
+  // 64-row SG4 / 128-row SG8 workgroup tiles (shaders/qmm_coopmat.comp
+  // -DCMAT16 -DSTEP_K_VAL/-DTILE_ROWS -DSG4/-DSG8). Same per-output
+  // ascending-k f32 chain as the shipped kernel; env-gated in
+  // primitives.cpp (MLX_OMARCHY_QMM_CMAT16_ROWS/_STEPK). Appended to
+  // keep profile kernel ids stable.
+  QmmPrefillCoopmat16BF16K32,
+  QmmPrefillCoopmat16BF16K64,
+  QmmPrefillCoopmat16BF16M64,
+  QmmPrefillCoopmat16BF16M64K32,
+  QmmPrefillCoopmat16BF16M64K64,
+  QmmPrefillCoopmat16BF16M128,
+  QmmPrefillCoopmat16BF16M128K32,
+  QmmPrefillCoopmat16BF16M128K64,
   Count,
 };
 
