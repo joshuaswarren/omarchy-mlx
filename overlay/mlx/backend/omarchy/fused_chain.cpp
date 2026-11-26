@@ -2429,10 +2429,11 @@ bool qmm_residual_norm_enabled(
     return std::strcmp(env, "0") != 0;
   }
   if (norm_cols == 2560 &&
-      (caps.device_name.find("G14C") != std::string::npos ||
-       caps.device_name.find("G13G") != std::string::npos)) {
-    // G14C: #936 (Qwen3-4B decode 14.37 -> 13.94 ms/token, 3 paired ABBA
-    // blocks, ids identical). G13G: M1D-1 paired A/B on the 13-inch M1.
+      caps.device_name.find("G14C") != std::string::npos) {
+    // G14C only: #936. The M1D-1 G13G A/B measured the 2560 fold on G13G
+    // at -2.2% with the default 2x8w2 geometry (M1D-1c 2x2: geom-only
+    // +0.5%, fold-only +0.4%, both -2.2% — the combination loses; the
+    // fold returns with a geometry-aware gate if a later card wants it).
     return true;
   }
   return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
