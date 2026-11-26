@@ -15935,12 +15935,20 @@ void GreedyQuantizedArgmax::eval_gpu(
        (encoder.device().hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   const array& w = inputs.at(1);
+  const array& x = inputs.at(0);
   uint32_t n = static_cast<uint32_t>(w.shape(0));
-  if (!omarchy::q4_word_enabled() ||
-      !caps.storage_buffer_16bit_access || !caps.shader_int16 ||
+  uint32_t k_dim = static_cast<uint32_t>(x.shape(-1));
+  // The subgroup stage's lane-per-group mapping is K = 2048-specific;
+  // the non-subgroup word chain is K-generic over 64-wide groups, so
+  // the word route also serves K != 2048 on subgroup-capable devices.
+  bool subgroup_ok = subgroup_ready && k_dim == 2048u;
+  bool word_ok = omarchy::q4_word_enabled() &&
+      caps.storage_buffer_16bit_access && caps.shader_int16 &&
+      k_dim % 64u == 0u &&
       // The single-workgroup merge reads at most 256 logsumexp
       // partials, the same bound the chunked route serves.
-      n > 4096u * 256u) {
+      n <= 4096u * 256u;
+  if (!subgroup_ok && !word_ok) {
     auto result = fallback_(inputs);
     settle(result);
     encoder.synchronize("greedy_argmax_fallback");
@@ -15948,7 +15956,7 @@ void GreedyQuantizedArgmax::eval_gpu(
     outputs.at(1).copy_shared_buffer(result.at(1));
     return;
   }
-  if (!subgroup_ready) {
+  if (!subgroup_ok) {
     // DEC-46: the non-subgroup word column gets the same fused answer in
     // two dispatches (shaders/qmm_vec.comp QMM_VEC_GREEDY_WORD): op 0
     // runs one workgroup per 4096-element vocab chunk — per-row dots by
@@ -15957,7 +15965,6 @@ void GreedyQuantizedArgmax::eval_gpu(
     // partials (logsumexp_combine verbatim) and picks the lowest index
     // normalizing to bf16(max - lse). The 0xFFFFFFFF token sentinel is
     // for candidate-buffer overflow; the python head composes then.
-    const array& x = inputs.at(0);
     std::optional<array> x_temp;
     std::optional<array> w_temp;
     std::optional<array> scales_temp;
@@ -16044,7 +16051,6 @@ void GreedyQuantizedArgmax::eval_gpu(
         : std::strcmp(env, "keep") == 0  ? 2u
                                          : 0u;
   }();
-  const array& x = inputs.at(0);
   std::optional<array> x_temp;
   std::optional<array> w_temp;
   std::optional<array> scales_temp;

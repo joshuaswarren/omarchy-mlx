@@ -559,7 +559,7 @@ struct GreedyInputs {
   array high;
 };
 
-// A synthetic lm_head: `n` rows of packed 4-bit codes over K = 2048,
+// A synthetic lm_head: `n` rows of packed 4-bit codes over `k`,
 // per-64-group bf16 scales/biases, a bf16 activation row, and the
 // (unused by the word route) high-bits plane the API requires.
 // `duplicates` copies one row's words and parameters over later rows.
@@ -571,19 +571,23 @@ GreedyInputs make_greedy_inputs(
     const std::vector<int>& duplicate_sources,
     const std::vector<int>& duplicate_targets,
     bool ones_x,
-    const Stream& stream) {
+    const Stream& stream,
+    int k = kGreedyK) {
+  const int words_per = k / 8;
+  const int groups_per = k / 64;
+  const int plane_per = k * 3 / 32;
   std::mt19937 rng(static_cast<uint32_t>(seed));
-  std::vector<uint32_t> words(n * kGreedyWords);
+  std::vector<uint32_t> words(n * words_per);
   for (auto& v : words) {
     v = rng();
   }
-  std::vector<float> scales_v(n * kGreedyGroups);
-  std::vector<float> biases_v(n * kGreedyGroups);
+  std::vector<float> scales_v(n * groups_per);
+  std::vector<float> biases_v(n * groups_per);
   for (int r = 0; r < n; ++r) {
-    for (int g = 0; g < kGreedyGroups; ++g) {
-      scales_v[r * kGreedyGroups + g] =
+    for (int g = 0; g < groups_per; ++g) {
+      scales_v[r * groups_per + g] =
           scale_pattern[static_cast<size_t>(r + g) % scale_pattern.size()];
-      biases_v[r * kGreedyGroups + g] =
+      biases_v[r * groups_per + g] =
           bias_pattern[static_cast<size_t>(r + g) % bias_pattern.size()];
     }
   }
@@ -591,29 +595,29 @@ GreedyInputs make_greedy_inputs(
     int src = duplicate_sources[d];
     int dst = duplicate_targets[d];
     std::copy(
-        words.begin() + src * kGreedyWords,
-        words.begin() + (src + 1) * kGreedyWords,
-        words.begin() + dst * kGreedyWords);
+        words.begin() + src * words_per,
+        words.begin() + (src + 1) * words_per,
+        words.begin() + dst * words_per);
     std::copy(
-        scales_v.begin() + src * kGreedyGroups,
-        scales_v.begin() + (src + 1) * kGreedyGroups,
-        scales_v.begin() + dst * kGreedyGroups);
+        scales_v.begin() + src * groups_per,
+        scales_v.begin() + (src + 1) * groups_per,
+        scales_v.begin() + dst * groups_per);
     std::copy(
-        biases_v.begin() + src * kGreedyGroups,
-        biases_v.begin() + (src + 1) * kGreedyGroups,
-        biases_v.begin() + dst * kGreedyGroups);
+        biases_v.begin() + src * groups_per,
+        biases_v.begin() + (src + 1) * groups_per,
+        biases_v.begin() + dst * groups_per);
   }
-  std::vector<float> xv(kGreedyK);
+  std::vector<float> xv(k);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   for (auto& v : xv) {
     v = ones_x ? 1.0f : dist(rng);
   }
-  array xf(xv.data(), Shape{1, kGreedyK}, float32);
-  array wf(words.data(), Shape{n, kGreedyWords}, uint32);
-  array sf(scales_v.data(), Shape{n, kGreedyGroups}, float32);
-  array bf(biases_v.data(), Shape{n, kGreedyGroups}, float32);
-  std::vector<uint32_t> zeros(n * kGreedyPlane, 0u);
-  array high(zeros.data(), Shape{n, kGreedyPlane}, uint32);
+  array xf(xv.data(), Shape{1, k}, float32);
+  array wf(words.data(), Shape{n, words_per}, uint32);
+  array sf(scales_v.data(), Shape{n, groups_per}, float32);
+  array bf(biases_v.data(), Shape{n, groups_per}, float32);
+  std::vector<uint32_t> zeros(n * plane_per, 0u);
+  array high(zeros.data(), Shape{n, plane_per}, uint32);
   return {astype(xf, bfloat16, stream),
           wf,
           astype(sf, bfloat16, stream),
@@ -655,17 +659,26 @@ GreedyRun fused_argmax(const GreedyInputs& in, const Stream& stream) {
   return r;
 }
 
+// The word route's device terms (K-independent); the same terms
+// primitives.cpp's eval_gpu checks.
+bool word_caps() {
+  const auto& caps = omarchy::device(0).capabilities();
+  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
+  bool word_enabled = env == nullptr || std::strcmp(env, "1") == 0;
+  return word_enabled && caps.storage_buffer_16bit_access &&
+      caps.shader_int16;
+}
+
 // True when the primitive takes the non-subgroup QMM_VEC_GREEDY_WORD
-// route (the same terms primitives.cpp's eval_gpu checks).
+// route for a K = 2048 head (subgroup devices claim K = 2048 for the
+// staged QMM_VEC_GREEDY route; other K values always take the word
+// route).
 bool word_route_expected() {
   const auto& caps = omarchy::device(0).capabilities();
   bool subgroup_ready = caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
           0u;
-  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
-  bool word_enabled = env == nullptr || std::strcmp(env, "1") == 0;
-  return word_enabled && caps.storage_buffer_16bit_access &&
-      caps.shader_int16 && !subgroup_ready;
+  return word_caps() && !subgroup_ready;
 }
 
 const std::vector<float> kScales{0.5f, 0.75f, 1.0f, 1.25f, 0.875f};
@@ -807,4 +820,28 @@ TEST_CASE("fused greedy word head: two dispatches on the word route") {
             omarchy::ComputeKernel::QmmVecGreedyWordBF16));
   }
   CHECK(run.token == composed_argmax(in, stream));
+}
+
+TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // The word column is K-generic over 64-wide groups; K = 2560 is the
+  // 4B head the DEC-46 card serves, and it also crosses to the word
+  // route on subgroup-capable devices (the staged route is K = 2048).
+  for (int n : {8192, 131072}) {
+    auto in = make_greedy_inputs(
+        n, 0xdec52 + n, kScales, kBiases, {}, {}, false, stream, 2560);
+    auto run = fused_argmax(in, stream);
+    if (word_caps()) {
+      CHECK(run.launched == 2u);
+      CHECK(
+          omarchy::trace::counters().last_dispatched_kernel.load() ==
+          static_cast<int64_t>(
+              omarchy::ComputeKernel::QmmVecGreedyWordBF16));
+    }
+    CHECK(run.token == composed_argmax(in, stream));
+    CHECK(run.token < static_cast<uint32_t>(n));
+  }
 }

@@ -36,7 +36,7 @@
 +        and emb.group_size == 64
 +        and getattr(emb, "mode", "affine") == "affine"
 +        and "biases" in emb
-+        and emb.weight.shape[1] == 256
++        and emb.weight.shape[1] % 8 == 0
 +    ):
 +        return None
 +    high = getattr(emb, "_greedy_high_bits", None)
