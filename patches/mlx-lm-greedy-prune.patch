@@ -76,10 +76,11 @@
 +        )
 +        logits = emb.as_linear(hidden)
 +        logprobs = (logits - mx.logsumexp(logits, keepdims=True)).squeeze(0)
-+        # The fused word-column head emits the 0xFFFFFFFF sentinel when
-+        # its candidate buffer overflows; compose then (the token id is
-+        # read every step anyway, so this costs no extra sync).
-+        if int(token) >= emb.weight.shape[0]:
++        # The staged K=2048 route keeps its 0xFFFFFFFF sentinel net; the
++        # word route sizes its candidate buffer at the row count, so the
++        # sentinel is unreachable there — and a per-token int(token)
++        # sync inside _step breaks the pipeline's one-token lookahead.
++        if hidden.shape[-1] == 2048 and int(token) >= emb.weight.shape[0]:
 +            token = mx.argmax(logprobs)
 +        return token, logprobs
 +

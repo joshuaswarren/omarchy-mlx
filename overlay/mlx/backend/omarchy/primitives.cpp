@@ -15995,7 +15995,11 @@ void GreedyQuantizedArgmax::eval_gpu(
       return a;
     };
     uint32_t chunks = (n + 4095u) / 4096u;
-    uint32_t cand_cap = n < 32768u ? n : 32768u;
+    // Candidate capacity equals the row count: candidates are emitted
+    // per row, so the counter can never reach the cap and the 0xFFFFFFFF
+    // overflow sentinel can never fire — the python head skips its
+    // per-token device sync on that guarantee.
+    uint32_t cand_cap = n;
     array logits = scratch(bfloat16, static_cast<int>(n));
     array partials = scratch(float32, static_cast<int>(chunks) * 2);
     array partial_ext = scratch(uint32, static_cast<int>(chunks) * 2);
