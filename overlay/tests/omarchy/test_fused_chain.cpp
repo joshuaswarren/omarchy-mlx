@@ -2137,6 +2137,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 TEST_CASE("greedy prune default: the part rule and overrides") {
@@ -2186,6 +2187,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
     saved.push_back(v ? std::optional<std::string>(v) : std::nullopt);
     unsetenv(var);
   }
+  omarchy::env_note_eval();
   const std::string m4 = "Apple M4 (G16G B1)";
   const std::string m1 = "Apple M1 (G13G B1)";
   for (const char* var : {"MLX_OMARCHY_FUSED_GEMV", "MLX_OMARCHY_FUSED_TRIO"}) {
@@ -2224,6 +2226,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 // MLX_OMARCHY_FUSED_TRIO=1 reaches the RoPE-pair planner with the GEMV
@@ -2396,6 +2399,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   auto [wq_solo, keys_solo, values_solo, in_place_solo] = run_window("0");
   unsetenv("MLX_OMARCHY_FUSED_TRIO");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  omarchy::env_note_eval();
   CHECK(in_place_pair);
   expect_bit_exact(wq_solo, wq_pair, stream);
   expect_bit_exact(keys_solo, keys_pair, stream);
