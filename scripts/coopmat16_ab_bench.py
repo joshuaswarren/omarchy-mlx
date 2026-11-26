@@ -78,14 +78,17 @@ for r in stream_generate(model, tok, prompt, max_tokens=1):
 prefill_s = (time.monotonic_ns() - t0) / 1e9
 prompt_tokens = getattr(first, "prompt_tokens", None)
 
-# decode: greedy pinned length
+# decode: greedy pinned length; the clock starts on the first yielded
+# token so prefill never counts toward decode tok/s
 ids = []
-t0 = time.monotonic_ns()
+t0 = None
 last = None
 for r in stream_generate(model, tok, prompt, max_tokens=args.decode_tokens):
+    if t0 is None:
+        t0 = time.monotonic_ns()
     ids.append(r.token)
     last = r
-times_done = time.monotonic_ns() - t0
+times_done = time.monotonic_ns() - t0 if t0 is not None else 0
 decode_tps = (len(ids) - 1) / (times_done / 1e9) if len(ids) > 1 else None
 
 # last-token logits over prompt + generated ids

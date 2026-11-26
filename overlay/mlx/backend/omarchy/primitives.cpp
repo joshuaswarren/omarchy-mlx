@@ -20487,9 +20487,17 @@ void ScaledDotProductAttention::eval_gpu(
         omarchy::sdpa_causal_flash_coopmat16_bf16_shape());
     const bool cf16_on = omarchy::sdpa_causal_flash_coopmat16_enabled(
         cf16_env, cf16_shape, q_len, q_len % 16 == 0);
-    if (cf16_on &&
-        cf16_caps.subgroup_size == 64u &&
+    // One 64-lane subgroup per workgroup: admit when wave64 is native and
+    // unpinned-or-64-pinned, or when a requiredSubgroupSize=64 pin is legal.
+    const bool cf16_wave64 =
+        cf16_caps.subgroup_size_64_admitted ||
+        (cf16_caps.subgroup_size == 64u &&
+         (cf16_caps.required_subgroup_size == 0u ||
+          cf16_caps.required_subgroup_size == 64u));
+    if (cf16_on && cf16_wave64 &&
+        q_len >= 16 &&
         cf16_caps.max_compute_work_group_invocations >= 64u &&
+        cf16_caps.max_compute_work_group_size[0] >= 64u &&
         cf16_caps.max_compute_shared_memory_size >= 6144u &&
         inputs.size() == 3 && do_causal_ && !has_sinks_ &&
         !output_logsumexp_ && k_len >= q_len &&
@@ -20511,6 +20519,17 @@ void ScaledDotProductAttention::eval_gpu(
         static_cast<uint64_t>(k.shape(0)) * k.strides()[0] < (1ull << 31) &&
         static_cast<uint64_t>(v.shape(0)) * v.strides()[0] < (1ull << 31) &&
         static_cast<uint64_t>(q.shape(0)) * q.strides()[0] < (1ull << 31)) {
+      const auto& hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          cf16_caps,
+          true,
+          "SdpaCausalFlashCoopmat16BF16",
+          "cooperative_matrix_bf16_16x16x16_wave64",
+          omarchy::cooperative_matrix_advertises(
+              hw.cooperative_matrix_shapes,
+              omarchy::sdpa_causal_flash_coopmat16_bf16_shape()) &&
+              (hw.subgroup_size == 64u || hw.subgroup_size_64_admitted));
       constexpr uint32_t kCausalFlash16WgRows = 16u;
       out.set_data(allocate_omarchy(out.nbytes()));
       omarchy::ComputeParams params;

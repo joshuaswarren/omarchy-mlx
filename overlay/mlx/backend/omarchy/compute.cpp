@@ -2806,7 +2806,8 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         nullptr,
         pin);
   }
-  if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16) {
+  if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16 ||
+      kernel == ComputeKernel::SdpaCausalFlashCoopmat16BF16) {
     // Same fail-closed rule as the 16-lane build, one wave up: the kernel
     // launches one 64-lane subgroup per workgroup. Pin 64 when the device
     // legally accepts it; unpinned is correct only when wave64 is both
@@ -2823,9 +2824,13 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
     if (subgroup_size_ != 64u ||
         (required_subgroup_size_ != 0u && required_subgroup_size_ != 64u)) {
       throw std::runtime_error(
-          "[omarchy] QmmPrefillCoopmatBF16x16 runs one 64-lane subgroup per"
-          " workgroup, and this device can neither run that unpinned nor"
-          " legally pin requiredSubgroupSize = 64.");
+          std::string("[omarchy] ") +
+          (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16
+               ? "QmmPrefillCoopmatBF16x16"
+               : "SdpaCausalFlashCoopmat16BF16") +
+          " runs one 64-lane subgroup per workgroup, and this device can"
+          " neither run that unpinned nor legally pin"
+          " requiredSubgroupSize = 64.");
     }
   }
   return create_pipeline(

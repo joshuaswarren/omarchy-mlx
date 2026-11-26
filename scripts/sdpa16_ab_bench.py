@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Same-wheel ABBA: QmmPrefillCoopmatBF16x16 vs the FMA route (PR #880).
+"""Same-wheel ABBA: SdpaCausalFlashCoopmat16BF16 vs the fallback (PR #883).
 
 Five pairs in A-B-B-A order. Each leg is a fresh subprocess with
 MLX_OMARCHY_SDPA_CAUSAL_FLASH unset (A, the causal flash route engages
@@ -19,10 +19,10 @@ tok/s within the run-to-run band. Any ID divergence fails the whole
 capture - a kernel defect, not a slower one.
 
 Usage (on the RX 9070 host, inside the GPU window):
-  python3 scripts/coopmat16_ab_bench.py \
+  python3 scripts/sdpa16_ab_bench.py \
       --model mlx-community/Qwen3-4B-Instruct-2507-4bit \
       --pairs 5 --prefill-tokens 512 --decode-tokens 64 \
-      --out /tmp/coopmat16-abba
+      --out /tmp/sdpa16-abba
 
 Requires: the wheel under test installed in this interpreter together
 with mlx-lm. Prints provenance first (wheel stamp + provenance helper
@@ -78,14 +78,17 @@ for r in stream_generate(model, tok, prompt, max_tokens=1):
 prefill_s = (time.monotonic_ns() - t0) / 1e9
 prompt_tokens = getattr(first, "prompt_tokens", None)
 
-# decode: greedy pinned length
+# decode: greedy pinned length; the clock starts on the first yielded
+# token so prefill never counts toward decode tok/s
 ids = []
-t0 = time.monotonic_ns()
+t0 = None
 last = None
 for r in stream_generate(model, tok, prompt, max_tokens=args.decode_tokens):
+    if t0 is None:
+        t0 = time.monotonic_ns()
     ids.append(r.token)
     last = r
-times_done = time.monotonic_ns() - t0
+times_done = time.monotonic_ns() - t0 if t0 is not None else 0
 decode_tps = (len(ids) - 1) / (times_done / 1e9) if len(ids) > 1 else None
 
 # last-token logits over prompt + generated ids
