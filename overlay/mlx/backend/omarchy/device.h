@@ -160,8 +160,8 @@ struct CapabilityReport {
   // Honeykrisp advertises this behind AGX_SIMDMAT; llvmpipe does not.
   bool cooperative_matrix_f32_8{false};
   // Same extension and feature, plus an 8x8x8 subgroup shape with fp16
-  // A/B and an fp32 accumulator. The extension is enabled only with
-  // cooperative_matrix_f32_8, so users gate on both.
+  // A/B and an fp32 accumulator. The extension is enabled whenever the
+  // shape list is non-empty, so users gate on this bit.
   bool cooperative_matrix_f16_8{false};
   // VK_KHR_shader_bfloat16 with shaderBFloat16Type and
   // shaderBFloat16CooperativeMatrix on, plus an 8x8x8 subgroup shape with
@@ -249,6 +249,12 @@ struct CapabilityReport {
   // hardware report only; gate on hardware_capabilities(), never the
   // simulated profile.
   bool subgroup_size_16_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 32 for a 128-lane
+  // compute workgroup (the CMAT16 dense matmul builds, whose geometry
+  // assumes 32-lane subgroups). Lets drivers with a native 16- or
+  // 64-lane subgroup (ANV, RADV) run the same route NVIDIA runs
+  // natively. Derived from the hardware report only.
+  bool subgroup_size_32_admitted{false};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride
