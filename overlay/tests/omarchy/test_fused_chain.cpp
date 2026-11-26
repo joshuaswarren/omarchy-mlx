@@ -2117,14 +2117,17 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   for (size_t i = 0; i < saved.size(); ++i) {
@@ -2193,17 +2196,21 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
     CHECK_EQ(omarchy::fused_route_enabled(var, m4), m4_unset);
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "1", 1);
+    omarchy::env_note_eval();
     CHECK(omarchy::fused_route_enabled(var, m4));
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     setenv(var, "1", 1);
     setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     unsetenv("MLX_OMARCHY_FUSED_CHAIN");
     unsetenv(var);
+    omarchy::env_note_eval();
   }
   // The trio gate does not depend on the GEMV gate, set or unset.
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
