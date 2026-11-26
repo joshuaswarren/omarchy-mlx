@@ -15996,7 +15996,7 @@ void GreedyQuantizedArgmax::eval_gpu(
     };
     uint32_t chunks = (n + 4095u) / 4096u;
     uint32_t cand_cap = n < 32768u ? n : 32768u;
-    array logits = scratch(float32, static_cast<int>(n));
+    array logits = scratch(bfloat16, static_cast<int>(n));
     array partials = scratch(float32, static_cast<int>(chunks) * 2);
     array partial_ext = scratch(uint32, static_cast<int>(chunks) * 2);
     array candidates = scratch(uint32, static_cast<int>(cand_cap) * 2);
@@ -16025,14 +16025,51 @@ void GreedyQuantizedArgmax::eval_gpu(
         binding(logits)};
     encoder.fill_buffer(
         binding(gstate).buffer, 0u, gstate.nbytes(), 0);
-    // Op 0 mirrors the plain word column's workgroup grid: one row per
-    // 32-lane slot, COLUMNS_PER_GROUP = 8 rows per workgroup.
-    params.operation = 0u;
+    // The logits GEMV dispatches the same vec kernel the composed
+    // QuantizedMatmul picks for this contract — geometry.word on
+    // subgroup parts, the plain word column elsewhere — so the logits
+    // row is bit- and speed-identical; only the binding's output moves
+    // to the scratch.
+    omarchy::ComputeKernel gemv_kernel =
+        omarchy::ComputeKernel::QmmVecQ4WordBF16;
+    uint32_t gemv_groups = (n + 7u) / 8u;
+    if (subgroup_ready) {
+      const auto& geometry = qmm_geometry();
+      // Same fallback the QMM applies: the w2 word builds need an
+      // even rhs_offset (params.shape[1] is 0 for 2D w).
+      if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u)) {
+        gemv_kernel = geometry.word;
+        gemv_groups = (n + geometry.columns - 1u) / geometry.columns;
+      } else {
+        gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;
+      }
+    }
+    omarchy::ComputeParams gemv_params;
+    gemv_params.count = n;
+    gemv_params.operation = 4u;    // bits: the vec kernels read it there
+    gemv_params.reduce_size = 64u; // group size
+    gemv_params.output_size = n;
+    gemv_params.lhs_offset = params.lhs_offset;
+    gemv_params.rhs_offset = params.rhs_offset;
+    gemv_params.aux_offset = params.aux_offset;
+    gemv_params.aux_size = params.aux_size;
+    gemv_params.matrix_m = 1u;
+    gemv_params.matrix_n = n;
+    gemv_params.matrix_k = params.matrix_k;
+    gemv_params.shape[0] = 1u;
+    // 2D operands broadcast across the batch: shape[1]/shape[2] stay 0;
+    // flags bit 0 stays clear for the transposed weight.
+    std::array<omarchy::ComputeBinding, 5> gemv_bindings{
+        binding(x_d),
+        binding(w_d),
+        binding(scales_d),
+        binding(biases_d),
+        binding(logits)};
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
-        bindings,
-        params,
-        (n + 7u) / 8u,
+        gemv_kernel,
+        gemv_bindings,
+        gemv_params,
+        gemv_groups,
         1u,
         1u);
     params.operation = 1u;
