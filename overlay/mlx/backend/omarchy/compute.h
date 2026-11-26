@@ -1313,6 +1313,7 @@ enum class ComputeKernel : uint16_t {
   // K+V loads, zero scratch/atomics). Appended to keep profile kernel ids
   // stable.
   SdpaDecodeOnlineSg32BF16Hd128,
+  SdpaDecodeOnlineSg32BF16Hd256,
   Count,
 };
 
