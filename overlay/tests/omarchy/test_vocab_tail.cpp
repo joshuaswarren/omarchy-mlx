@@ -539,8 +539,8 @@ TEST_CASE("vocab tail default: bf16 logits preserve serial parity") {
 // fast::greedy_quantized_argmax answers argmax(logits -
 // logsumexp(logits)) for the tied 4-bit/group-64 lm_head. Where
 // QuantizedMatmul picks the non-subgroup QmmVecQ4Word column the
-// primitive answers in two dispatches (shaders/qmm_vec.comp
-// QMM_VEC_GREEDY_WORD) and never writes the logits row; these cases pin
+// primitive answers in three dispatches (shaders/qmm_vec.comp
+// QMM_VEC_GREEDY_WORD); these cases pin
 // the token to the composed expression's, including argreduce's
 // first-index and first-NaN rules.
 
@@ -840,7 +840,7 @@ TEST_CASE("fused greedy word head: all -inf logits pick index 0") {
   }
 }
 
-TEST_CASE("fused greedy word head: two dispatches on the word route") {
+TEST_CASE("fused greedy word head: three dispatches on the word route") {
   if (!compute_available()) {
     return;
   }
@@ -849,7 +849,7 @@ TEST_CASE("fused greedy word head: two dispatches on the word route") {
       12289, 0xdec51, kScales, kBiases, {}, {}, false, stream);
   auto run = fused_argmax(in, stream);
   if (word_route_taken(kGreedyK)) {
-    CHECK(run.launched == 2u);
+    CHECK(run.launched == 3u);
     CHECK(
         omarchy::trace::counters().last_dispatched_kernel.load() ==
         static_cast<int64_t>(
@@ -871,7 +871,7 @@ TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
         n, 0xdec52 + n, kScales, kBiases, {}, {}, false, stream, 2560);
     auto run = fused_argmax(in, stream);
     if (word_route_taken(2560)) {
-      CHECK(run.launched == 2u);
+      CHECK(run.launched == 3u);
       CHECK(
           omarchy::trace::counters().last_dispatched_kernel.load() ==
           static_cast<int64_t>(

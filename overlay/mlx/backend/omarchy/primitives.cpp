@@ -15958,10 +15958,11 @@ void GreedyQuantizedArgmax::eval_gpu(
   }
   if (!subgroup_ok) {
     // DEC-46: the non-subgroup word column gets the same fused answer in
-    // two dispatches (shaders/qmm_vec.comp QMM_VEC_GREEDY_WORD): op 0
-    // runs one workgroup per 4096-element vocab chunk — per-row dots by
-    // the exact single-row chain, a logsumexp_chunk-identical (m, s)
-    // partial, an edge partial, and near-max candidates; op 1 merges the
+    // three dispatches (shaders/qmm_vec.comp QMM_VEC_GREEDY_WORD): op 0
+    // is the lm_head GEMV itself (one row per 32-lane slot, the exact
+    // single-row chain, bf16 logits to scratch); op 1 runs one workgroup
+    // per 4096-element vocab chunk — a logsumexp_chunk-identical (m, s)
+    // partial, an edge partial, and near-max candidates; op 2 merges the
     // partials (logsumexp_combine verbatim) and picks the lowest index
     // normalizing to bf16(max - lse). The 0xFFFFFFFF token sentinel is
     // for candidate-buffer overflow; the python head composes then.
@@ -15995,6 +15996,7 @@ void GreedyQuantizedArgmax::eval_gpu(
     };
     uint32_t chunks = (n + 4095u) / 4096u;
     uint32_t cand_cap = n < 32768u ? n : 32768u;
+    array logits = scratch(float32, static_cast<int>(n));
     array partials = scratch(float32, static_cast<int>(chunks) * 2);
     array partial_ext = scratch(uint32, static_cast<int>(chunks) * 2);
     array candidates = scratch(uint32, static_cast<int>(cand_cap) * 2);
@@ -16009,7 +16011,7 @@ void GreedyQuantizedArgmax::eval_gpu(
         checked_item_offset(scales_d, scales_d.size(), tag, token);
     params.aux_size =
         checked_item_offset(biases_d, biases_d.size(), tag, token);
-    std::array<omarchy::ComputeBinding, 10> bindings{
+    std::array<omarchy::ComputeBinding, 11> bindings{
         binding(x_d),
         binding(w_d),
         binding(scales_d),
@@ -16019,10 +16021,21 @@ void GreedyQuantizedArgmax::eval_gpu(
         binding(candidates),
         binding(gstate),
         binding(token),
-        binding(stats)};
+        binding(stats),
+        binding(logits)};
     encoder.fill_buffer(
         binding(gstate).buffer, 0u, gstate.nbytes(), 0);
+    // Op 0 mirrors the plain word column's workgroup grid: one row per
+    // 32-lane slot, COLUMNS_PER_GROUP = 8 rows per workgroup.
     params.operation = 0u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        (n + 7u) / 8u,
+        1u,
+        1u);
+    params.operation = 1u;
     encoder.dispatch_compute(
         omarchy::ComputeKernel::QmmVecGreedyWordBF16,
         bindings,
@@ -16030,7 +16043,7 @@ void GreedyQuantizedArgmax::eval_gpu(
         chunks,
         1u,
         1u);
-    params.operation = 1u;
+    params.operation = 2u;
     encoder.dispatch_compute(
         omarchy::ComputeKernel::QmmVecGreedyWordBF16,
         bindings,

@@ -390,15 +390,19 @@ layout(set = 0, binding = 10, std430) writeonly buffer Stats {
   uint values[];
 } stats;
 #elif defined(QMM_VEC_GREEDY_WORD)
-// Fused greedy head on the non-subgroup Q4 word column (DEC-46): no
-// logits buffer, two dispatches. Op 0: one workgroup per 4096-element
-// vocab chunk computes every row's bf16 logit (the exact single-row Q4
-// word chain), emits the logsumexp_chunk-identical (m, s) partial, a
-// per-chunk (min-index-at-max, min-NaN-index) edge partial, and the
-// rows within 0.5 of the chunk max as argmax candidates. Op 1: one
-// workgroup merges partials (logsumexp_combine verbatim), forms the
-// normalized threshold T = bf16(max - lse), and takes the lowest
-// candidate index normalizing to T — argreduce's first-index rule.
+// Fused greedy head on the non-subgroup Q4 word column (DEC-46), three
+// dispatches. Op 0: the lm_head GEMV — one workgroup per
+// COLUMNS_PER_GROUP rows, each 32-lane slot computing its row's dot by
+// the exact single-row Q4 word chain and shared-tree reduction, writing
+// the bf16-rounded logit to scratch. Op 1: one workgroup per
+// 4096-element vocab chunk reads the scratch logits and emits the
+// logsumexp_chunk-identical (m, s) partial, a per-chunk
+// (min-index-at-max, min-NaN-index) edge partial, and the rows within
+// 0.5 of the chunk max as argmax candidates. Op 2: one workgroup merges
+// partials (logsumexp_combine verbatim), forms the normalized threshold
+// T = bf16(max - lse), and takes the lowest candidate index normalizing
+// to T — argreduce's first-index rule. The logits scratch is internal
+// only; the composed tail's subtract write and argreduce read are gone.
 layout(set = 0, binding = 4, std430) buffer Partials {
   vec2 values[];
 } partials;
@@ -417,6 +421,9 @@ layout(set = 0, binding = 8, std430) writeonly buffer GToken {
 layout(set = 0, binding = 9, std430) writeonly buffer GStats {
   uint values[];
 } gstats;
+layout(set = 0, binding = 10, std430) buffer Logits {
+  float values[];
+} logits;
 #else
 layout(set = 0, binding = 4, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
@@ -2849,25 +2856,25 @@ void main() {
 // composed tail (QmmVecQ4Word -> LogSumExp -> Subtract -> ArgReduce)
 // materializes a 307-496 KB logit row across four dispatches; this head
 // answers the same expression — argmax(logits - logsumexp(logits)) with
-// argreduce's first-index tie-break — in two dispatches that never write
-// the logits row. Operation 0 (one workgroup per 4096-element vocab
-// chunk, the logsumexp_chunk partition): each 32-lane slot computes its
-// rows' dots by the exact single-row Q4 word chain and shared-tree
-// reduction, bf16-rounds them into shared, then the workgroup runs the
-// chunk kernel verbatim on the shared row — identical (m, s) partial —
-// and emits the argmax edge partial (lowest index at the chunk maximum,
-// lowest NaN index) plus every row within 0.5 of the chunk maximum as a
-// candidate (index, f32 bits). A row qualifies for the token only when
-// bf16(x - lse) reaches T = bf16(max - lse), i.e. x >= max - ulp(T);
-// |T| <= log(n) keeps ulp(T) <= 0.125 for every vocab this gate serves,
-// so the 0.5 window covers every qualifier. Operation 1 (one workgroup)
-// merges the partials exactly as logsumexp_combine, then picks the
-// lowest candidate index whose normalized value equals T, replicating
+// argreduce's first-index tie-break — in three dispatches. Operation 0
+// is the lm_head GEMV itself: one workgroup per COLUMNS_PER_GROUP rows,
+// each 32-lane slot computing its row's dot by the exact single-row Q4
+// word chain and shared-tree reduction, bf16-rounding into a scratch
+// logits row. Operation 1 (one workgroup per 4096-element vocab chunk,
+// the logsumexp_chunk partition) runs the chunk kernel verbatim on the
+// scratch row — identical (m, s) partial — and emits the argmax edge
+// partial (lowest index at the chunk maximum, lowest NaN index) plus
+// every row within 0.5 of the chunk maximum as a candidate (index, f32
+// bits). A row qualifies for the token only when bf16(x - lse) reaches
+// T = bf16(max - lse), i.e. x >= max - ulp(T); |T| <= log(n) keeps
+// ulp(T) <= 0.125 for every vocab this gate serves, so the 0.5 window
+// covers every qualifier. Operation 2 (one workgroup) merges the
+// partials exactly as logsumexp_combine, then picks the lowest
+// candidate index whose normalized value equals T, replicating
 // argreduce's first-index rule over normalized bf16 values; NaN and
 // infinite row maxima take the composed path's edge answers. An
 // overflow of the bounded candidate buffer writes the 0xFFFFFFFF
 // sentinel so the host can fall back to the composed expression.
-shared float g_logits[4096];
 shared uint g_reduce_u[256];
 
 #define GREEDY_CHUNK 4096u
@@ -2887,57 +2894,58 @@ void main() {
   uint groups_per_row = params.matrix_k / 64u;
   uint x_row = params.lhs_offset;
   if (params.operation == 0u) {
-    uint chunk = gl_WorkGroupID.x;
-    uint begin = chunk * GREEDY_CHUNK;
-    uint end = min(begin + GREEDY_CHUNK, n);
-    // Phase A: every row of this chunk, the exact single-row chain.
-    for (uint t = 0u; t < GREEDY_CHUNK / 8u; ++t) {
-      uint row = begin + t * 8u + column_slot;
-      precise float accumulator = 0.0;
-      if (row < n) {
-        uint w_base = params.rhs_offset + row * words_per_row;
-        uint scale_base = params.aux_offset + row * groups_per_row;
-        uint bias_base = params.aux_size + row * groups_per_row;
-        if (params.matrix_k % 512u == 0u && n % 8u == 0u) {
-          for (uint w = lane_in_slot * 2u; w < words_per_row;
-               w += LANES * 2u) {
-            precise float dot = 0.0;
-            precise float input_sum = 0.0;
-            Q4_WORD(WLOAD(input_w, w_base + w), x_row + w * 8u)
-            Q4_WORD(WLOAD(input_w, w_base + w + 1u), x_row + w * 8u + 8u)
-            Q4_BLOCK_FINISH(w, scales, biases)
-          }
-        } else {
-          for (uint w = lane_in_slot; w < words_per_row; w += LANES) {
-            precise float dot = 0.0;
-            precise float input_sum = 0.0;
-            Q4_WORD(WLOAD(input_w, w_base + w), x_row + w * 8u)
-            Q4_BLOCK_FINISH(w, scales, biases)
-          }
+    // Op 0: the lm_head GEMV, one row per 32-lane slot — the exact
+    // single-row Q4 word chain; bf16 logits land in scratch.
+    uint row = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+    precise float accumulator = 0.0;
+    if (row < n) {
+      uint w_base = params.rhs_offset + row * words_per_row;
+      uint scale_base = params.aux_offset + row * groups_per_row;
+      uint bias_base = params.aux_size + row * groups_per_row;
+      if (params.matrix_k % 512u == 0u && n % 8u == 0u) {
+        for (uint w = lane_in_slot * 2u; w < words_per_row;
+             w += LANES * 2u) {
+          precise float dot = 0.0;
+          precise float input_sum = 0.0;
+          Q4_WORD(WLOAD(input_w, w_base + w), x_row + w * 8u)
+          Q4_WORD(WLOAD(input_w, w_base + w + 1u), x_row + w * 8u + 8u)
+          Q4_BLOCK_FINISH(w, scales, biases)
+        }
+      } else {
+        for (uint w = lane_in_slot; w < words_per_row; w += LANES) {
+          precise float dot = 0.0;
+          precise float input_sum = 0.0;
+          Q4_WORD(WLOAD(input_w, w_base + w), x_row + w * 8u)
+          Q4_BLOCK_FINISH(w, scales, biases)
         }
       }
-      // Uniform barriers: every lane reduces, active slot or not —
-      // the single-row main's shared tree verbatim.
-      reduce_scratch[lane] = accumulator;
-      barrier();
-      for (uint offset = 1u; offset < LANES; offset <<= 1u) {
-        if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
-          reduce_scratch[lane] += reduce_scratch[lane + offset];
-        }
-        barrier();
-      }
-      if (row < n && lane_in_slot == 0u) {
-        g_logits[t * 8u + column_slot] = uintBitsToFloat(
-            uint(STORE_VALUE(reduce_scratch[lane])) << 16u);
+    }
+    // Uniform barriers: every lane reduces, active slot or not —
+    // the single-row main's shared tree verbatim.
+    reduce_scratch[lane] = accumulator;
+    barrier();
+    for (uint offset = 1u; offset < LANES; offset <<= 1u) {
+      if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
+        reduce_scratch[lane] += reduce_scratch[lane + offset];
       }
       barrier();
     }
-    // Phase B: logsumexp_chunk verbatim on the shared row.
+    if (row < n && lane_in_slot == 0u) {
+      logits.values[row] = uintBitsToFloat(
+          uint(STORE_VALUE(reduce_scratch[lane])) << 16u);
+    }
+    return;
+  }
+  if (params.operation == 1u) {
+    uint chunk = gl_WorkGroupID.x;
+    uint begin = chunk * GREEDY_CHUNK;
+    uint end = min(begin + GREEDY_CHUNK, n);
+    // Phase B: logsumexp_chunk verbatim on the scratch logits.
     float v[16];
     float local_max = NEG_INF;
     for (uint k = 0u; k < 16u; ++k) {
       uint index = lane + k * 256u;
-      v[k] = (begin + index < end) ? g_logits[index] : NEG_INF;
+      v[k] = (begin + index < end) ? logits.values[begin + index] : NEG_INF;
       local_max = nan_max(local_max, v[k]);
     }
     reduce_scratch[lane] = local_max;
@@ -3004,7 +3012,7 @@ void main() {
       partial_ext.values[chunk] = uvec2(g_reduce_u[0], g_reduce_u[1]);
     }
   } else {
-    // Operation 1: logsumexp_combine verbatim, then the argmax select.
+    // Operation 2: logsumexp_combine verbatim, then the argmax select.
     uint chunks = (n + GREEDY_CHUNK - 1u) / GREEDY_CHUNK;
     vec2 pair = vec2(NEG_INF, 0.0);
     uvec2 ext = uvec2(0xFFFFFFFFu, 0xFFFFFFFFu);
