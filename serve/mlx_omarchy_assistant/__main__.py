@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
+import functools
 import http.client
 import json
 import os
+import secrets
 import signal
+import stat
 import sys
 import threading
 import time
@@ -111,17 +115,28 @@ def terminal(runtime, prompt=None, once=False, maximum=None):
 STOP_BUDGET = 4.0
 
 
-def stop_server(server, runtime_file):
+def _remove_runtime_file(path):
+    try:
+        if stat.S_ISREG(os.lstat(path).st_mode):
+            path.unlink()
+    except OSError:
+        pass
+
+
+def stop_server(server, runtime_file, *, serving=True):
     """Stop the server within STOP_BUDGET seconds, whatever stage hangs.
 
     Past the budget the voice workers are killed and the process leaves at
-    once: the stop never outlasts the caller's SIGKILL fallback.
+    once: the stop never outlasts the caller's SIGKILL fallback. A
+    runtime_file of None means this process never owned one; serving=False
+    skips shutdown(), which blocks forever when serve_forever() never ran.
     """
     failures = []
 
     def run():
         try:
-            server.shutdown()
+            if serving:
+                server.shutdown()
             server.server_close()
         except BaseException as error:
             failures.append(error)
@@ -129,7 +144,8 @@ def stop_server(server, runtime_file):
     stopper = threading.Thread(target=run, daemon=True)
     stopper.start()
     stopper.join(STOP_BUDGET)
-    runtime_file.unlink(missing_ok=True)
+    if runtime_file is not None:
+        _remove_runtime_file(runtime_file)
     if stopper.is_alive():
         from .synthesis import kill_workers
 
@@ -139,6 +155,99 @@ def stop_server(server, runtime_file):
         os._exit(0)
     if failures:
         raise failures[0]
+
+
+RUNTIME_MAX_BYTES = 64 * 1024
+PRIVATE_RUNTIME = "Application runtime file must be private to this user"
+
+
+def open_lock(path):
+    """Open the single-instance lock: created 0o600, never through a
+    symlink, never blocking on a FIFO, and only ever a regular file."""
+    try:
+        lock = open(
+            path,
+            "ab",
+            buffering=0,
+            opener=lambda name, flags: os.open(
+                name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+            ),
+        )
+    except OSError as error:
+        raise RuntimeError(f"Application lock {path} is unusable ({error.strerror})") from error
+    try:
+        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+            raise RuntimeError(f"Application lock {path} is not a regular file")
+    except BaseException:
+        lock.close()
+        raise
+    return lock
+
+
+def read_runtime(path):
+    """Read the running instance's runtime file from one descriptor: a
+    regular file this user owns, private, at most RUNTIME_MAX_BYTES."""
+    try:
+        stream = open(
+            path,
+            "rb",
+            buffering=0,
+            opener=lambda name, flags: os.open(
+                name, flags | os.O_NOFOLLOW | os.O_NONBLOCK
+            ),
+        )
+    except IsADirectoryError as error:
+        raise RuntimeError(PRIVATE_RUNTIME) from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise RuntimeError(PRIVATE_RUNTIME) from error
+        raise
+    with stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+            raise RuntimeError(PRIVATE_RUNTIME)
+        if info.st_size > RUNTIME_MAX_BYTES:
+            raise RuntimeError(f"Application runtime file exceeds {RUNTIME_MAX_BYTES} bytes")
+        data = bytearray()
+        while len(data) <= RUNTIME_MAX_BYTES:
+            chunk = stream.read(RUNTIME_MAX_BYTES + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+    if len(data) > RUNTIME_MAX_BYTES:
+        raise RuntimeError(f"Application runtime file exceeds {RUNTIME_MAX_BYTES} bytes")
+    return json.loads(data)
+
+
+def write_runtime(path, runtime):
+    """Publish the runtime file whole: exclusively create an unguessable
+    private 0o600 temporary file with open(..., "x") and a C-level
+    functools.partial(os.open, mode=0o600) opener inside the cleanup
+    guard so FileIO takes ownership of the descriptor with no Python
+    bytecode between os.open() and the file object, then rename it over
+    the path. A reader never sees a partial file, an older looser file
+    is replaced rather than reused, a signal at any point after opening
+    closes and removes the temporary file without leaking a descriptor,
+    and any existing name (including a symlink) is left alone on
+    FileExistsError."""
+    temporary = path.with_name(f"{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        with open(
+            temporary,
+            "x",
+            encoding="utf-8",
+            opener=functools.partial(os.open, mode=0o600),
+        ) as stream:
+            json.dump(runtime, stream)
+        os.replace(temporary, path)
+    except FileExistsError:
+        raise  # O_EXCL refused a path this call did not create; leave it alone
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def build_parser():
@@ -192,39 +301,40 @@ def main(argv=None):
         faulthandler.register(signal.SIGUSR1, file=sys.stderr)
     validate_args(parser, args)
     directory = args.home / "assistant"
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = (directory / "application.lock").open("a")
     runtime_file = directory / "application.json"
+    lock = None
     server = None
+    published = None
+    thread = None
+    stopping = False
     try:
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock = open_lock(directory / "application.lock")
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if runtime_file.is_symlink() or runtime_file.stat().st_mode & 0o077:
-                raise RuntimeError("Application runtime file must be private to this user")
-            runtime = json.loads(runtime_file.read_text())
+            runtime = read_runtime(runtime_file)
             request(runtime, "GET", "/api/session")
         else:
             server = AssistantServer(("127.0.0.1", args.port), args.home)
-            runtime = {"port": server.server_port, "cookie": f"{server.cookie_name}={server.session}", "csrf": server.csrf}
-            fd = os.open(runtime_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                json.dump(runtime, stream)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            if args.wake_word:
-                server.start_wake_word(args.wake_word, args.wake_threshold)
-            stopping = threading.Event()
 
             def interrupt(_signal, _frame):
+                nonlocal stopping
                 # The first stop signal unwinds main() into the orderly stop;
                 # repeats arrive during that stop and must not abort it.
-                if not stopping.is_set():
-                    stopping.set()
+                if not stopping:
+                    stopping = True
                     raise KeyboardInterrupt
 
             for signum in (signal.SIGTERM, signal.SIGINT):
                 signal.signal(signum, interrupt)
+            runtime = {"port": server.server_port, "cookie": f"{server.cookie_name}={server.session}", "csrf": server.csrf}
+            published = runtime_file
+            write_runtime(runtime_file, runtime)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            if args.wake_word:
+                server.start_wake_word(args.wake_word, args.wake_threshold)
         if args.pair:
             request(runtime, "POST", "/api/setup", {"pair_id": args.pair, "approve_download": args.yes})
             deadline = time.monotonic() + 1200
@@ -269,12 +379,15 @@ def main(argv=None):
     except KeyboardInterrupt:
         return 0
     except (OSError, ValueError, RuntimeError) as error:
+        stopping = True
         print(f"MLX Chat: {error}", file=sys.stderr)
         return 1
     finally:
+        stopping = True
         if server:
-            stop_server(server, runtime_file)
-        lock.close()
+            stop_server(server, published, serving=thread is not None and thread.ident is not None)
+        if lock is not None:
+            lock.close()
 
 
 if __name__ == "__main__":
