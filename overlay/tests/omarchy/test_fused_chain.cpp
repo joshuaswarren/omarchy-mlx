@@ -2309,25 +2309,25 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
       random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
       bfloat16, stream);
   array values_init = astype(
-      random::normal(Shape{1, 2, 8, 4}, float32, std::nullopt, stream),
+      random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
       float16, stream);
   // The values member of the producer-direct pair: a 4-bit decode GEMV
   // row plus its Add epilogue, reshaped into the cache append row, as
   // in the kv_ops window cases.
-  std::vector<uint32_t> words(64, 0xA5A5A5A5u);
-  array vw(words.data(), {8, 8}, uint32);
-  std::vector<float> vscale_float(8, 0.25f);
-  std::vector<float> vbias_float(8, -0.5f);
+  std::vector<uint32_t> words(1024, 0xA5A5A5A5u);
+  array vw(words.data(), {128, 8}, uint32);
+  std::vector<float> vscale_float(128, 0.25f);
+  std::vector<float> vbias_float(128, -0.5f);
   std::vector<float> xv_float(64, 0.125f);
-  std::vector<float> vadd_float(8, -0.25f);
+  std::vector<float> vadd_float(128, -0.25f);
   array vscales =
-      astype(array(vscale_float.data(), {8, 1}, float32), float16, stream);
+      astype(array(vscale_float.data(), {128, 1}, float32), float16, stream);
   array vbiases =
-      astype(array(vbias_float.data(), {8, 1}, float32), float16, stream);
+      astype(array(vbias_float.data(), {128, 1}, float32), float16, stream);
   array xv =
       astype(array(xv_float.data(), {1, 64}, float32), float16, stream);
   array vadd =
-      astype(array(vadd_float.data(), {8}, float32), float16, stream);
+      astype(array(vadd_float.data(), {128}, float32), float16, stream);
   const int64_t norm_pair_a = static_cast<int64_t>(
       omarchy::ComputeKernel::FastRopeNormPairBF16);
   const int64_t norm_pair_b = static_cast<int64_t>(
@@ -2381,7 +2381,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
     array vproj = quantized_matmul(
         xv, vw, vscales, vbiases, true, 64, 4, "affine", stream);
     array vsum = add(vproj, vadd, stream);
-    array vrow = reshape(vsum, Shape{1, 2, 1, 4}, stream);
+    array vrow = reshape(vsum, Shape{1, 2, 1, D}, stream);
     array qr = fast::rope_rms_norm(
         xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
     array kr = fast::rope_rms_norm(
@@ -2389,7 +2389,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
     array keys_out = slice_update(
         keys_cache, kr, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
     array values_out = slice_update(
-        values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
+        values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
     eval({values_out, keys_out, qr});
     sync_stream(stream);
     return std::make_tuple(
