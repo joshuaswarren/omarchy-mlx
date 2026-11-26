@@ -34,6 +34,8 @@ PREWARM_RETRY_SECONDS = 5.0
 # While a turn runs and produces no event, the events stream sends an SSE
 # comment line this often so proxies and browsers see a live connection.
 EVENTS_KEEPALIVE_SECONDS = 5.0
+# Matches coordinator._SHUTTING_DOWN (copied; coordinator is imported lazily).
+SHUTTING_DOWN = "The assistant is shutting down"
 
 
 
@@ -125,6 +127,7 @@ class AssistantServer(ThreadingHTTPServer):
         self.transfer_state = {"state": "idle"}
         self._prewarm_started = False
         self._prewarm_cancel = threading.Event()
+        self._closing = threading.Event()  # set by server_close(); refuses new setup and pair starts
         self.audio_kind: str | None = None
         self.audio_identity: tuple[str, str] | None = None
         self.audio_cancel = threading.Event()
@@ -286,11 +289,12 @@ class AssistantServer(ThreadingHTTPServer):
             if key in body and not isinstance(body[key], bool):
                 raise ValueError(f"{key} must be a boolean")
         with self.mutex:
+            if self._closing.is_set():
+                raise RuntimeError(SHUTTING_DOWN)
             if self.setup_thread and self.setup_thread.is_alive():
                 raise BusyError("Model setup is already active")
             if not self.coordinator.gpu.acquire(blocking=False):
                 raise BusyError("Stop the current model operation before changing the model pair")
-            self.setup_state = {"state": "preparing"}
 
             def progress(stage, **detail):
                 with self.mutex:
@@ -316,7 +320,7 @@ class AssistantServer(ThreadingHTTPServer):
                         speech = self.recognition.prepare(approve_download=body.get("approve_download", False))
                         if not speech.get("verified"):
                             raise ValueError(speech.get("reason") or "Approve the speech recognition download")
-                    result = self.manager.start()
+                    result = self._start_pair()
                     state = {"state": "complete", "ready_offline": result.get("ready_offline", False)}
                 except Exception as error:
                     state = {"state": "error", "message": str(error)[:1000]}
@@ -328,23 +332,39 @@ class AssistantServer(ThreadingHTTPServer):
                     with self.mutex:
                         self.setup_state = state
 
-            self.setup_thread = threading.Thread(target=run, daemon=True)
-            self.setup_thread.start()
+            self._launch_setup(run, {"state": "preparing"})
+
+    def _launch_setup(self, run, state):
+        """Start run() as the setup thread; the caller holds the mutex and the GPU lock."""
+        try:
+            thread = threading.Thread(target=run, daemon=True)
+            thread.start()
+        except BaseException:
+            self.coordinator.gpu.release()
+            raise
+        self.setup_state = state
+        self.setup_thread = thread
+
+    def _start_pair(self):
+        if self._closing.is_set():
+            raise RuntimeError(SHUTTING_DOWN)
+        return self.manager.start()
 
     def resume(self):
         """Start the saved pair without a download. No saved pair is absent, not an error."""
         with self.mutex:
+            if self._closing.is_set():
+                raise RuntimeError(SHUTTING_DOWN)
             if self.setup_thread and self.setup_thread.is_alive():
                 raise BusyError("Model setup is already active")
             if not self.coordinator.gpu.acquire(blocking=False):
                 raise BusyError("Stop the current model operation before changing the model pair")
-            self.setup_state = {"state": "preparing", "stage": "Resume saved pair"}
 
             def run():
                 state = None
                 try:
                     self.manager.adopt_saved()
-                    result = self.manager.start()
+                    result = self._start_pair()
                     state = {"state": "complete",
                              "ready_offline": result.get("ready_offline", False)}
                 except Exception as error:
@@ -359,8 +379,8 @@ class AssistantServer(ThreadingHTTPServer):
                     with self.mutex:
                         self.setup_state = state
 
-            self.setup_thread = threading.Thread(target=run, daemon=True)
-            self.setup_thread.start()
+            self._launch_setup(run, {"state": "preparing", "stage": "Resume saved pair"})
+
     def transfer(self, body):
         from .transfer import run_transfer_request
         allowed = {"action", "bundle", "output", "pair_ids", "approved_licenses", "voice", "wheel_caches"}
@@ -408,6 +428,8 @@ class AssistantServer(ThreadingHTTPServer):
             self.transfer_thread.start()
 
     def server_close(self):
+        with self.mutex:
+            self._closing.set()
         self.audio_cancel.set()
         self._prewarm_cancel.set()
         if self._synthesis:
@@ -419,7 +441,12 @@ class AssistantServer(ThreadingHTTPServer):
         if self._manager:
             self._manager.cancel()
         if self.setup_thread and self.setup_thread.is_alive():
-            self.setup_thread.join(timeout=10)
+            # PairManager.setup() and start() clear the cancel flag on entry,
+            # so keep cancelling until setup lets go.
+            deadline = time.monotonic() + 10
+            while self.setup_thread.is_alive() and time.monotonic() < deadline:
+                self._manager.cancel()
+                self.setup_thread.join(timeout=0.1)
             if self.setup_thread.is_alive():
                 raise RuntimeError("Model setup has not stopped; its process must remain owned")
         if self._recognition:
