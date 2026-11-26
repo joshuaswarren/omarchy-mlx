@@ -1190,12 +1190,20 @@ inline bool sdpa_split_merge_default(const std::string& device_name, uint32_t k_
 // bit-identical greedy ids) at ctx 128, 256, 512, 1024 and 2048 (k_len up to
 // ~2112), and turns negative at ctx 4096 (-7.25%) once redundant KV reads
 // spill SLC; 2304 covers ctx 2048 + 256 generated tokens cleanly while leaving
-// ctx 4096 on split-K. Other parts stay 0 until measured.
+// ctx 4096 on split-K.
+// G13G (Apple M1, 8 GPU cores): Qwen3-4B 4-bit decode interleaved ABBA against
+// shipped split-K wins +4.67% at ctx 256 (3/3), +2.88% at ctx 512 (5/5),
+// +3.12% at ctx 1024 (2/3), and +2.68% at ctx 2048 (3/3) with bit-identical
+// greedy token IDs; capped at 2304 keys to leave ctx 4096 on split-K.
+// Other parts stay 0 until measured.
 inline uint32_t sdpa_online_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_ONLINE_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  if (device_name.find("G13C") != std::string::npos) return 2304u;
+  if (device_name.find("G13C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos) {
+    return 2304u;
+  }
   return 0u;
 }
 
