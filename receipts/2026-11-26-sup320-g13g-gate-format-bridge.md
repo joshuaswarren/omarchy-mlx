@@ -11,12 +11,19 @@ lines to each cell, and every value slot marked PENDING. When SUP-300's
 wheel lands and the sweep runs, the numbers drop in and the gate decision
 reads off the last row.
 
-## Sweep output contract (sweep.py, verified on jwm1)
+## Sweep output contract (sweep.py, verified on jwm1 against the source)
 
-Per leg: `{"cell": [model, ctx], "arm": "A"|"B", ...decode/tps fields...}`
-Per cell: `{"model": ..., "ctx": ..., "verdict": "IDS-IDENTICAL"|"IDS-DIVERGE",
-"delta_pct": <(med(B)-med(A))/med(A)*100>, ...}` where arm A =
-`MLX_OMARCHY_SDPA_ONLINE=0` (live default), arm B = `=1` (forced online).
+Per arm leg: `{"model": ..., "ctx": ..., "arm": "A"|"B", "version": ...,
+"ids_sha": ..., "decode_tps": ..., "pair": ...}` - model/ctx are top-level
+on every leg line; there is no cell pair on legs.
+Per cell summary: `{"cell": [model, ctx], "wheels": [...],
+"verdict": "IDS-IDENTICAL"|"IDS-DIVERGE", "A_median_tps": ...,
+"B_median_tps": ..., "delta_pct": ...}` - the [model, ctx] pair and the
+medians exist ONLY on this line. Arm A = `MLX_OMARCHY_SDPA_ONLINE=0`
+(live default), arm B = `=1` (forced online).
+(Correction per w8G's review of this receipt: the first commit documented
+the leg lines with a cell pair and the jq below read `.tps`/`.[0].cell`,
+neither of which exists.)
 
 ## The formatted table (values PENDING until the sweep runs)
 
@@ -35,12 +42,14 @@ Grid per SUP-266 plan: models {2b SiddhJagani/Qwen3.8-2B-mlx-4Bit @0867d98b,
 
 ## The mechanical mapping (jq, runs on out/sweep-<utc>.jsonl)
 
-Cell medians:
-`jq -s 'map(select(.model)) | group_by([.model,.ctx]) | map({cell: .[0].cell, a: ([.[] | select(.arm=="A") | .tps] | sort | .[length/2|floor]), b: ([.[] | select(.arm=="B") | .tps] | sort | .[length/2|floor])})'`
-(the tps field name is whatever sweep.py's leg line carries; verify against
-the first leg line before the sweep - one-line check, no code change).
+Cell medians, verdicts and delta_pct come straight off the cell summary
+lines - the sweep already computes them:
+`jq -c 'select(.cell) | {cell, verdict, A_median_tps, B_median_tps, delta_pct}' out/sweep-<utc>.jsonl`
+Per-leg medians (only if a cell line is missing):
+`jq -s 'map(select(.arm)) | group_by([.model,.ctx,.arm]) | map({key: .[0].model + "/" + (.[0].ctx|tostring) + "/" + .[0].arm, med: ([.[].decode_tps] | sort | .[length/2|floor])})' out/sweep-<utc>.jsonl`
 
-Cell verdicts + delta_pct: take the LAST cell line per (model, ctx).
+Gate decision: read `verdict` and `delta_pct` from each cell line (last
+cell line per (model, ctx) if the sweep re-runs a cell).
 
 ## Gate decision rule (SUP-266 plan, restated for the table reader)
 
