@@ -63,6 +63,39 @@ class BearerComparisonIsConstantTime(unittest.TestCase):
                 self.assertNotIn('== f"Bearer {self.api_key}"', text)
 
 
+class ApiKeyDefaultDoesNotRequireAmbientOsImport(unittest.TestCase):
+    def test_both_series_import_os_locally_and_parse_env_without_module_os(self):
+        # mlx-lm 0.31.3's mlx_lm/server.py does not import `os` at module level
+        # (unlike 0.32 after mlx-lm-server-skip-logprob-read.patch). Referencing
+        # bare `os.environ.get(...)` in main() crashed every packaged chat worker
+        # with NameError: name 'os' is not defined on startup.
+        import argparse
+        import os
+        import textwrap
+        from unittest import mock
+
+        for pf in PATCH_FILES:
+            with self.subTest(patch=str(pf.relative_to(REPO))):
+                text = pf.read_text()
+                self.assertNotIn("default=os.environ.get(", text)
+                hunk = text.rsplit("@@", 1)[1]
+                added = "\n".join(
+                    line[1:]
+                    for line in hunk.splitlines()
+                    if line.startswith("+") and not line.startswith("+++")
+                )
+                code = textwrap.dedent(added)
+                parser = argparse.ArgumentParser()
+                # Deliberately omit `os` from the execution namespace to mirror
+                # unpatched mlx_lm/server.py in mlx-lm 0.31.3.
+                ns = {"parser": parser}
+                with mock.patch.dict(os.environ, {"MLX_API_KEY": "secret-123"}, clear=False):
+                    exec(compile(code, str(pf), "exec"), ns)
+                parsed = parser.parse_args(["--alias", "compact"])
+                self.assertEqual(parsed.alias, "compact")
+                self.assertEqual(parsed.api_key, "secret-123")
+
+
 def _quiet_rmtree(root, ignore):
     import shutil
 
