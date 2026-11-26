@@ -23,7 +23,7 @@ class TdtChainWg128RoutingTest(unittest.TestCase):
 
     def test_auto_selects_wg128_on_g18g_and_m6(self):
         for name in ("Apple M6 (G18G B1)", "Apple M6", "apple g18g"):
-            with mock.patch.dict("os.environ", {}, clear=False):
+            with mock.patch.dict("os.environ", {}, clear=True):
                 with mock.patch.object(
                     vulkan_tdt_chain, "_mx", return_value=self._fake_mx(name)
                 ):
@@ -36,7 +36,7 @@ class TdtChainWg128RoutingTest(unittest.TestCase):
             "Apple M5 Max (G17X)",
             "",
         ):
-            with mock.patch.dict("os.environ", {}, clear=False):
+            with mock.patch.dict("os.environ", {}, clear=True):
                 with mock.patch.object(
                     vulkan_tdt_chain, "_mx", return_value=self._fake_mx(name)
                 ):
