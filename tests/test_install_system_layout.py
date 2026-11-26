@@ -258,6 +258,14 @@ class BuildVenvTest(unittest.TestCase):
         self.assertFalse((self.tmp / "venv-x" / "bin" / "python").exists())
 
 
+def _repo_head_token() -> str:
+    res = subprocess.run(
+        ["git", "-C", str(REPO), "rev-parse", "--short=10", "HEAD"],
+        capture_output=True, text=True,
+    )
+    return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else "fake"
+
+
 class SystemStageTest(unittest.TestCase):
     """install.sh --system stages the whole /usr tree offline."""
 
@@ -267,7 +275,8 @@ class SystemStageTest(unittest.TestCase):
         cls.addClassCleanup(cls._tmp.cleanup)
         cls.tmp = Path(cls._tmp.name)
         cls.vendor = cls.tmp / "vendor"
-        make_vendor_wheels(cls.vendor)
+        cls.head_token = _repo_head_token()
+        make_vendor_wheels(cls.vendor, mlx_version=f"0.0.0.dev0+{cls.head_token}")
         cls.lock = cls.tmp / "lock.txt"
         cls.lock.write_text(
             subprocess.run(
@@ -432,7 +441,7 @@ class SystemStageTest(unittest.TestCase):
         self.assertTrue(stamp_path.is_file(), ".build-commit missing")
         stamp = stamp_path.read_text().strip()
         self.assertNotEqual(stamp, "unknown")
-        self.assertEqual(stamp, "fake")
+        self.assertEqual(stamp, self.head_token)
         env = {k: v for k, v in os.environ.items()
                if k not in ("MLX_OMARCHY_ALLOW_SERVE_DRIFT", "PYTHONPATH")}
         result = subprocess.run(
@@ -459,9 +468,37 @@ class SystemStageTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 4, result.stderr)
             self.assertIn("deadbeef00", result.stderr)
-            self.assertIn("fake", result.stderr)
+            self.assertIn(self.head_token, result.stderr)
         finally:
             stamp_path.write_text(original)
+
+    def test_checkout_stage_fails_closed_when_wheel_commit_differs(self):
+        """Staging from a git checkout against a wheel built from a different
+        commit must fail closed during install.sh --system rather than stamping
+        the mismatched serve sources with the wheel's commit."""
+        vendor = self.tmp / "vendor-mismatch"
+        make_vendor_wheels(vendor, mlx_version="0.0.0.dev0+deadbeef00")
+        lock = self.tmp / "lock-mismatch.txt"
+        lock.write_text(
+            subprocess.run(
+                ["bash", str(PACKAGING / "gen-vendor-lock.sh"), str(vendor)],
+                check=True, capture_output=True, text=True,
+            ).stdout
+        )
+        stage = self.tmp / "stage-mismatch"
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("MLX_OMARCHY_VERSION", "MLX_OMARCHY_ALLOW_SERVE_DRIFT", "PYTHONPATH")}
+        result = subprocess.run(
+            ["bash", str(INSTALL), "--system",
+             "--dest-root", str(stage),
+             "--vendor", str(vendor),
+             "--lock", str(lock),
+             "--python", sys.executable],
+            env=env, capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0, "expected staging to fail on commit mismatch")
+        self.assertIn("deadbeef00", result.stderr)
+        self.assertIn(self.head_token, result.stderr)
 
     def test_tarball_install_without_git_stamps_wheel_commit_not_unknown(self):
         """A PKGBUILD tarball has no .git directory and no MLX_OMARCHY_VERSION.

@@ -238,15 +238,23 @@ install_system() {
     cp -a "$serve_src/$pkg/." "$site_dir/$pkg/"
   done
   cp "$ROOT/serve/mlx_omarchy_paths.py" "$site_dir/mlx_omarchy_paths.py"
-  # Stamp the serve copies with the installed mlx-omarchy wheel's build token
-  # so _mlxlm_server can refuse a mismatched wheel after a wheel-only upgrade.
-  # Reading the staged wheel directly keeps tarball/PKGBUILD builds (no .git,
-  # unset MLX_OMARCHY_VERSION) and wheels without a +commit suffix aligned with
-  # _mlxlm_server.check_build_stamp(), instead of writing 'unknown' and making
-  # every chat worker exit 4 at startup.
+  # Stamp the serve copies so _mlxlm_server can refuse a mismatched wheel both
+  # at staging time and after a later wheel-only upgrade:
+  # - From a git checkout: use git HEAD (so staging a checkout against a wheel
+  #   from a different commit fails closed below).
+  # - With explicit MLX_OMARCHY_VERSION: use that release version (fails closed
+  #   below if it disagrees with the wheel).
+  # - From a source tarball / PKGBUILD (no .git, no MLX_OMARCHY_VERSION): read
+  #   the staged wheel's build token instead of writing 'unknown' (which makes
+  #   every packaged chat worker exit 4 at startup).
   local stamp="$site_dir/mlx_omarchy_serve/.build-commit"
-  local wheel_token=""
-  wheel_token=$(env -u PYTHONPATH "$venv/bin/python" -c '
+  local build_stamp=""
+  if commit=$(git -C "$ROOT" rev-parse --short=10 HEAD 2>/dev/null); then
+    build_stamp="$commit"
+  elif [[ -n "${MLX_OMARCHY_VERSION:-}" ]]; then
+    build_stamp="${MLX_OMARCHY_VERSION#v}"
+  else
+    build_stamp=$(env -u PYTHONPATH "$venv/bin/python" -c '
 import importlib.metadata as md
 from mlx_omarchy_serve import _mlxlm_server as shim
 try:
@@ -255,15 +263,9 @@ except md.PackageNotFoundError:
     ver = None
 print(shim._wheel_commit(ver) or "")
 ') || die "failed to read installed mlx-omarchy wheel version from $venv"
-  if [[ -n "$wheel_token" ]]; then
-    printf '%s\n' "$wheel_token" > "$stamp"
-  elif commit=$(git -C "$ROOT" rev-parse --short=10 HEAD 2>/dev/null); then
-    printf '%s\n' "$commit" > "$stamp"
-  elif [[ -n "${MLX_OMARCHY_VERSION:-}" ]]; then
-    printf '%s\n' "${MLX_OMARCHY_VERSION#v}" > "$stamp"
-  else
-    die "cannot determine serve build stamp: installed mlx-omarchy wheel has no version token and neither git HEAD nor MLX_OMARCHY_VERSION is available"
+    [[ -n "$build_stamp" ]] || die "cannot determine serve build stamp: installed mlx-omarchy wheel has no version token and neither git HEAD nor MLX_OMARCHY_VERSION is available"
   fi
+  printf '%s\n' "$build_stamp" > "$stamp"
   # Fail staging immediately if the recorded stamp disagrees with the installed
   # wheel (with drift override stripped); shipping a package whose chat workers
   # all exit 4 is a release fault.
