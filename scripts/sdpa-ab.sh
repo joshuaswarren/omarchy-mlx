@@ -97,6 +97,7 @@ Q4=~/models/Qwen2.5-0.5B-Instruct-4bit-mlx
 BF=~/models/Qwen2.5-0.5B-Instruct-bf16-mlx
 [ -d "$TEMPLATE" ] || { echo "template venv $TEMPLATE missing" >&2; exit 2; }
 ulimit -c 0
+export MLX_OMARCHY_DEFER_TOKENS="${MLX_OMARCHY_DEFER_TOKENS:-0}"
 
 build() { # sha -> preserved wheel filename on stdout (run in a subshell
           # so the caller's cwd never moves)

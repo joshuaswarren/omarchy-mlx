@@ -34,13 +34,20 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import defer_tokens_guard  # noqa: E402
+
 
 DECODE_DRIVER = """
 import os, sys, time, argparse, hashlib, json
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+sys.path.insert(0, os.environ["OMARCHY_SCRIPTS_DIR"])
+import defer_tokens_guard
 import mlx.core as mx
 from mlx_lm import load
 from mlx_lm.generate import stream_generate
+
+defer_tokens = defer_tokens_guard.require_defer_tokens("subcap_ab_bench")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
@@ -73,6 +80,7 @@ if args.mode == "decode":
     # arms, so the medians stay comparable.
     tps = (len(ids) - 1) / (t1 - t0)
     print(json.dumps({"mode": "decode", "tps": tps, "n": len(ids),
+                      "defer_tokens": defer_tokens,
                       "ids_sha256_16": ids_digest(ids),
                       "mx_version": mx.__version__}))
 else:
@@ -85,6 +93,7 @@ else:
         pass
     t1 = time.monotonic()
     print(json.dumps({"mode": "prefill", "prompt_tokens": n_tok,
+                      "defer_tokens": defer_tokens,
                       "wall_s": t1 - t0, "tps": n_tok / (t1 - t0),
                       "mx_version": mx.__version__}))
 """
@@ -122,6 +131,8 @@ def run_pass(python, model, prompt, tokens, prefill_tokens, mode):
     # baked default; QUEUE_PRIORITY from the arm's setting.
     env.pop("MLX_OMARCHY_BATCH_WORK", None)
     env.pop("MLX_OMARCHY_GPU_PROFILE", None)
+    defer_tokens_guard.pin_defer_tokens(env)
+    env["OMARCHY_SCRIPTS_DIR"] = str(Path(__file__).resolve().parent)
     out = subprocess.run(
         [python, str(script),
          "--model", model,

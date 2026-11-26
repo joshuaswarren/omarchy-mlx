@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 os.environ.setdefault("MLX_DISABLE_COMPILE", "1")
+os.environ.setdefault("MLX_OMARCHY_DEFER_TOKENS", "0")
 
 HARNESS_VERSION = 2
 REPO_ROOT = Path(os.environ.get("BENCH_REPO_ROOT", str(Path(__file__).resolve().parents[2])))
@@ -143,6 +144,8 @@ def synthetic_prompt(tok, n: int) -> list[int]:
 
 
 def perf_phase(bench: Bench, args) -> dict:
+    import defer_tokens_guard
+    defer_tokens = defer_tokens_guard.require_defer_tokens("chat_model_bench")
     mx = bench.mx
     card_system = SYSTEM_PREFIX
     ttft_prompt = bench.encode_chat(card_system, TTFT_USER)
@@ -163,6 +166,7 @@ def perf_phase(bench: Bench, args) -> dict:
     p512, d512 = prefill_decode(512, args.perf_n)
     p2048, d2048 = prefill_decode(2048, args.prefill2048_n)
     return {
+        "defer_tokens": defer_tokens,
         "ttft_card_prompt_s": stats(ttft), "ttft_prompt_tokens": len(ttft_prompt),
         "prefill_512_s": stats(p512), "prefill_512_tok_s": 512 / statistics.median(p512),
         "prefill_2048_s": stats(p2048),

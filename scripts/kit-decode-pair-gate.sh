@@ -83,10 +83,11 @@ else
 
   REMOTE=/tmp/kit-decode-pair-$KIT_TAG
   ssh "$KIT_GATE_HOST_SSH" "mkdir -p $REMOTE"
-  # bench_decode imports caps_sim_guard and mlx_provenance from its own
-  # directory; both are repo scripts, not part of the packaged install.
+  # bench_decode imports caps_sim_guard, defer_tokens_guard and mlx_provenance
+  # from its own directory; all are repo scripts, not part of the packaged install.
   scp -q "$SCRIPTS_DIR/bench_decode.py" "$SCRIPTS_DIR/caps_sim_guard.py" \
-    "$SCRIPTS_DIR/mlx_provenance.py" "$KIT_GATE_HOST_SSH:$REMOTE/"
+    "$SCRIPTS_DIR/defer_tokens_guard.py" "$SCRIPTS_DIR/mlx_provenance.py" \
+    "$KIT_GATE_HOST_SSH:$REMOTE/"
   KIT_CMD="cd $KIT_DIR && python3 qualify.py --benchmark-only --machine-id dec0de00dec0de00 --model-dir $MODEL_DIR --out $REMOTE/kit.json && cat $REMOTE/kit.json"
   PKG_CMD="$PACKAGED_PYTHON $REMOTE/bench_decode.py --model $MODEL_DIR --tokens $KIT_TOKENS"
   kit_out="$(ssh "$KIT_GATE_HOST_SSH" "$GUARD_WRAP \"$KIT_CMD\"")"
