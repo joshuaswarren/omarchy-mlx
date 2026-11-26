@@ -132,8 +132,9 @@ inline bool supports_qmm_2x16(const QmmWideCaps& caps) {
 }
 
 // Default Qmm decode geometry selection when MLX_OMARCHY_QMM_GEOM is unset.
-// Preserves Apple defaults (G13G/G13C -> 2x16; other Apple chips -> 2x4 until
-// calibrated) and enables 2x16 on discrete GPUs with VRAM activations
+// Apple parts route through select_qmm_apple_2x8w2 (G13G/G13C/G14C -> 2x8w2;
+// other Apple chips -> 2x4 until calibrated), so this probe only ever sees
+// non-Apple names; it enables 2x16 on discrete GPUs with VRAM activations
 // whenever the device advertises support for 512-thread 32-wide subgroup WGs.
 inline bool select_qmm_wide_2x16(
     std::string_view device_name,
