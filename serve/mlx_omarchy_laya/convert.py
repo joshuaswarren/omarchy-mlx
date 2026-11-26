@@ -330,6 +330,17 @@ def _read_manifest(model_dir: Path) -> dict | None:
     return data
 
 
+def _probe_path(path: Path) -> tuple[bool, str | None]:
+    """Return (present, error) for path via os.stat(), following symlinks."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False, None
+    except OSError as exc:
+        return False, exc.strerror or type(exc).__name__
+    return True, None
+
+
 def checkpoint_state(path: Path) -> tuple:
     """Classify a directory for the serve preflight (CLI-owner helper).
 
@@ -339,14 +350,18 @@ def checkpoint_state(path: Path) -> tuple:
       "raw"        — a plain upstream/HF snapshot (model.safetensors +
                      rl_agent_config.json present, no manifest): needs
                      `python -m mlx_omarchy_laya.convert --from-local <dir>`
-      "invalid"    — neither, or manifest.json is unreadable, not a regular
-                     file, not a JSON object, or has missing or mistyped
-                     required fields
+      "invalid"    — neither, a required path cannot be checked, or
+                     manifest.json is unreadable, not a regular file, not a
+                     JSON object, or has missing or mistyped required fields
     """
     path = Path(path)
-    missing_files = [f for f in ["model.safetensors", "rl_agent_config.json",
-                                 "encoder/config.json", "tokenizer/tokenizer.json",
-                                 "tokenizer/tokenizer_config.json"] if not (path / f).exists()]
+    missing_files = []
+    for name in FILES:
+        present, err = _probe_path(path / name)
+        if err is not None:
+            return "invalid", {"unreadable_file": "%s is unreadable: %s" % (name, err)}
+        if not present:
+            missing_files.append(name)
     if missing_files:
         return "invalid", {"missing_files": missing_files}
     try:
@@ -400,7 +415,12 @@ def main(argv=None):
         if subpath:
             source = source / subpath.rstrip("/")
         repo, revision = SOURCE_REPO, args.revision
-        if not (source / "model.safetensors").exists():
+        present, err = _probe_path(source / "model.safetensors")
+        if err is not None:
+            raise SystemExit(
+                "convert: cannot read model.safetensors in %s (%s)" % (source, err)
+            )
+        if not present:
             raise SystemExit("convert: %s does not hold model.safetensors" % source)
     else:
         if not args.yes:
