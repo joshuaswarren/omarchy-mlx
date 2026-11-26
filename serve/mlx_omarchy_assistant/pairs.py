@@ -23,6 +23,7 @@ never promote an unqualified pair.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import json
 import os
@@ -471,26 +472,94 @@ def load_pair_lock(home: Path, pair_id: str) -> dict | None:
     return lock
 
 
-def _sha256_file(path: Path) -> str:
+# O_NONBLOCK: a FIFO swapped in after the type check opens without a writer
+# and is refused by the fstat() check instead of blocking the open or read.
+_ARTIFACT_OPEN = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC
+
+
+def _sha256_fd(fd: int) -> tuple[str, int]:
+    """sha256 and byte count of what one read of fd returns, so the two
+    always describe the same bytes."""
     digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    size = 0
+    while chunk := os.read(fd, 1 << 20):
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
 
 
 def artifact_files(path: Path) -> list[dict]:
     """Every regular file under an artifact dir: relative posix name, size,
-    sha256. The offline transfer's hashing helper."""
+    sha256. The offline transfer's hashing helper.
+
+    Symlinks are skipped, never followed. A directory or file that cannot
+    be listed or read, or any other non-regular entry, is a PairError: the
+    manifest is never silently incomplete. The walk opens each entry
+    relative to its parent directory's descriptor, so paths past PATH_MAX
+    still hash, and a directory swapped for a symlink mid-walk is refused.
+    It holds one open descriptor per directory level, so a tree deeper than
+    the open-file limit is a PairError."""
     path = Path(path)
-    if not path.is_dir():
-        raise PairError(f"artifact path {path} does not exist")
+    try:  # a symlinked root is followed, as before
+        root = os.open(path, _ARTIFACT_OPEN | os.O_DIRECTORY)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:  # ValueError: NUL
+        raise PairError(f"artifact path {path} does not exist") from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PairError(f"artifact path {path} does not exist") from exc
+        raise PairError(f"artifact path {path} is unreadable: {exc}") from exc
+    stack = []
     out = []
-    for item in sorted(path.rglob("*")):
-        if item.is_file() and not item.is_symlink():
-            out.append({"name": item.relative_to(path).as_posix(),
-                        "bytes": item.stat().st_size,
-                        "sha256": _sha256_file(item)})
+
+    def push(dir_fd: int, rel: str) -> None:
+        stack.append((dir_fd, rel, iter(())))
+        try:
+            with os.scandir(dir_fd) as entries:
+                # per-level name order then depth first is sorted(Path.rglob()) order
+                listed = sorted(entries, key=lambda entry: entry.name)
+        except OSError as exc:
+            raise PairError(f"artifact path {path / rel} is unreadable: {exc}") from exc
+        stack[-1] = (dir_fd, rel, iter(listed))
+
+    try:
+        push(root, "")
+        while stack:
+            dir_fd, rel, entries = stack[-1]
+            entry = next(entries, None)
+            if entry is None:
+                stack.pop()
+                os.close(dir_fd)
+                continue
+            name = rel + entry.name
+            try:
+                if entry.is_symlink():
+                    continue
+                is_dir = entry.is_dir(follow_symlinks=False)
+                if not is_dir and not entry.is_file(follow_symlinks=False):
+                    # on DT_UNKNOWN, a vanished entry returns False above; stat() -> ENOENT
+                    entry.stat(follow_symlinks=False)
+                    raise PairError(f"artifact entry {path / name} is not a regular file")
+                flags = _ARTIFACT_OPEN | os.O_NOFOLLOW | (os.O_DIRECTORY if is_dir else 0)
+                fd = os.open(entry.name, flags, dir_fd=dir_fd)
+            except FileNotFoundError:  # vanished mid-walk
+                continue
+            except OSError as exc:
+                raise PairError(f"artifact path {path / name} is unreadable: {exc}") from exc
+            if is_dir:
+                push(fd, name + "/")
+                continue
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise PairError(f"artifact entry {path / name} is not a regular file")
+                digest, size = _sha256_fd(fd)
+            except OSError as exc:
+                raise PairError(f"artifact path {path / name} is unreadable: {exc}") from exc
+            finally:
+                os.close(fd)
+            out.append({"name": name, "bytes": size, "sha256": digest})
+    finally:
+        while stack:
+            os.close(stack.pop()[0])
     return out
 
 
