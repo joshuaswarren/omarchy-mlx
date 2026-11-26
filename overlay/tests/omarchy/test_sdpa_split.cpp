@@ -767,7 +767,14 @@ TEST_CASE("split-K P1KV: float64 accuracy gate and two-dispatch count across HD=
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
 
-TEST_CASE("online-softmax 1-dispatch SDPA: float64 accuracy gate and single-dispatch count for SG=16 and SG=32") {
+TEST_CASE("online-softmax 1-dispatch SDPA: default gating, float64 accuracy, and single-dispatch count") {
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE_MAX_KEYS");
+  CHECK(omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 512u));
+  CHECK(omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 2304u));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 2305u));
+  CHECK(!omarchy::sdpa_online_default("Apple M2 Max (G14C C0)", 512u));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 (G13G B1)", 512u));
+
   if (!compute_available()) {
     return;
   }
@@ -775,7 +782,10 @@ TEST_CASE("online-softmax 1-dispatch SDPA: float64 accuracy gate and single-disp
   constexpr VkSubgroupFeatureFlags kOnlineFeatures =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-  const bool online_base_ready = caps.subgroup_size == 32u &&
+  const bool online_ready = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u &&
+      caps.max_compute_shared_memory_size >= 16640u &&
       (caps.subgroup_operations & kOnlineFeatures) == kOnlineFeatures;
   struct ShapeCase {
     int heads, kv_heads, keys;
@@ -784,14 +794,13 @@ TEST_CASE("online-softmax 1-dispatch SDPA: float64 accuracy gate and single-disp
   for (const ShapeCase& sc : {
            ShapeCase{32, 8, 1, false},
            ShapeCase{32, 8, 15, false},
-           ShapeCase{32, 8, 16, false},
-           ShapeCase{32, 8, 17, false},
            ShapeCase{32, 8, 31, false},
            ShapeCase{32, 8, 32, false},
            ShapeCase{32, 8, 33, false},
            ShapeCase{32, 8, 65, true},
            ShapeCase{32, 8, 513, false},
            ShapeCase{32, 8, 544, false},
+           ShapeCase{32, 8, 2048, false},
        }) {
     Stream stream = gpu_stream();
     Stored q = make_bf16(
@@ -814,30 +823,23 @@ TEST_CASE("online-softmax 1-dispatch SDPA: float64 accuracy gate and single-disp
     const float scale = 1.0f / std::sqrt(128.0f);
     std::vector<double> ref = reference(
         q.values, k.values, v.values, sc.heads, sc.kv_heads, sc.keys, sc.keys, 0, 128, scale);
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "0", 1);
     Run baseline = run_attention(q.x, k.x, v.x, scale, "0", stream);
     Errors e_base = error_against(baseline.out, ref);
     double rounding = 0.0;
     for (double r : ref) {
       rounding = std::max(rounding, std::fabs(r) * std::ldexp(1.0, -8));
     }
-    for (const char* sg : {"16", "32"}) {
-      const uint32_t need_threads = std::strcmp(sg, "32") == 0 ? 1024u : 512u;
-      const uint32_t need_shmem = std::strcmp(sg, "32") == 0 ? 16640u : 8320u;
-      const bool sg_ready = online_base_ready &&
-          caps.max_compute_work_group_invocations >= need_threads &&
-          caps.max_compute_work_group_size[0] >= need_threads &&
-          caps.max_compute_shared_memory_size >= need_shmem;
-      setenv("MLX_OMARCHY_SDPA_ONLINE", sg, 1);
-      Run online = run_attention(q.x, k.x, v.x, scale, "1", stream);
-      unsetenv("MLX_OMARCHY_SDPA_ONLINE");
-      Errors e_online = error_against(online.out, ref);
-      INFO("keys=" << sc.keys << " sg=" << sg);
-      CHECK(e_online.max <= e_base.max + 2.0 * rounding + 1e-6);
-      CHECK(e_online.mean <= e_base.mean + 0.25 * rounding + 1e-7);
-      CHECK(e_online.max <= 3.0 * rounding + 1e-5);
-      if (sg_ready) {
-        CHECK(online.launched == 1);
-      }
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "1", 1);
+    Run online = run_attention(q.x, k.x, v.x, scale, "1", stream);
+    unsetenv("MLX_OMARCHY_SDPA_ONLINE");
+    Errors e_online = error_against(online.out, ref);
+    INFO("keys=" << sc.keys);
+    CHECK(e_online.max <= e_base.max + 2.0 * rounding + 1e-6);
+    CHECK(e_online.mean <= e_base.mean + 0.25 * rounding + 1e-7);
+    CHECK(e_online.max <= 3.0 * rounding + 1e-5);
+    if (online_ready) {
+      CHECK(online.launched == 1);
     }
   }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");

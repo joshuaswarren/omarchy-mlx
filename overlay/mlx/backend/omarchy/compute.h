@@ -1309,9 +1309,9 @@ enum class ComputeKernel : uint16_t {
   FastRopeNormPairBF16,
   FastRopeNormPairAppleBF16,
   // Single-dispatch online-softmax bf16 decode SDPA for head width 128
-  // (16 or 32 subgroups per query-head workgroup, coalesced uvec2 K+V loads,
-  // zero scratch/atomics). Appended to keep profile kernel ids stable.
-  SdpaDecodeOnlineSg16BF16Hd128,
+  // (32 subgroups / 1024 threads per query-head workgroup, coalesced uvec2
+  // K+V loads, zero scratch/atomics). Appended to keep profile kernel ids
+  // stable.
   SdpaDecodeOnlineSg32BF16Hd128,
   Count,
 };

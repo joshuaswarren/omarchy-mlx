@@ -1179,6 +1179,31 @@ inline bool sdpa_split_merge_default(const std::string& device_name, uint32_t k_
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// Single-dispatch online-softmax bf16 decode SDPA for head width 128
+// (shaders/sdpa_decode_online.comp -DSUBGROUPS=32, 1024 threads per query-head
+// workgroup, coalesced 256-byte uvec2 K+V loads, zero scratch/atomics/pass-2).
+// Largest cache length, in keys, up to which the one-dispatch route is the
+// default on a part. 0 keeps the existing native/split-K routes.
+//
+// G13C (Apple M1 Max, 32 GPU cores, 48 MB SLC): Qwen3-4B 4-bit decode ABBA
+// against shipped defaults wins +8.68% to +11.32% (-0.95 to -1.35 ms/tok,
+// bit-identical greedy ids) at ctx 128, 256, 512, 1024 and 2048 (k_len up to
+// ~2112), and turns negative at ctx 4096 (-7.25%) once redundant KV reads
+// spill SLC; 2304 covers ctx 2048 + 256 generated tokens cleanly while leaving
+// ctx 4096 on split-K. Other parts stay 0 until measured.
+inline uint32_t sdpa_online_max_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_ONLINE_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
+  if (device_name.find("G13C") != std::string::npos) return 2304u;
+  return 0u;
+}
+
+inline bool sdpa_online_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_online_max_keys(device_name);
+  return max_keys != 0u && k_len <= max_keys;
+}
+
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
