@@ -9,8 +9,9 @@ inputs and the same inputs scaled by 8:
 1. Elementwise. swiglu(gate, up) is the compiled function in mlx_lm/models/activations.py, def swiglu(gate, x): nn.silu(gate) * x.
    gate * sigmoid(gate) * up is the eager expression. Equal bits are required for every element.
 2. The whole MLP with real 4-bit group-64 projections. Reference: down_proj(swiglu(gate_proj(x), up_proj(x))). Candidate: the
-   patched Qwen3NextMLP.__call__, which for decode rows (<= 8 tokens) runs the eager product and lets the backend fold it into the
-   gate/up dispatch. Equal bits are required for every output element, for batch {1,3} x seq {1,4}, over many random inputs.
+   patched Qwen3NextMLP.__call__, which runs the eager product for rows <= MLX_OMARCHY_EAGER_SWIGLU_ROWS and lets the backend
+   fold it into the gate/up dispatch. This checker opts into 8 rows so seq>1 cases exercise the eager product; equal bits are
+   required for every output element, for batch {1,3} x seq {1,4}, over many random inputs.
 
 `--only compiled` or `--only eager` evaluates one path once and exits, so a dispatch trace can count the kernels of that path.
 Exit status 0 only when every comparison is bit-identical.
@@ -18,7 +19,12 @@ Usage: check_eager_swiglu_bits.py [--draws 64] [--only compiled|eager] [--family
 (--family qwen3 needs patch-mlx-lm-qwen3-eager-swiglu.py applied; the default family needs the Qwen3-Next patcher.)
 """
 import argparse
+import os
 import sys
+
+# Opt into the multi-token row gate before the patched module reads it at
+# import: rows 2..8 then exercise the eager product in the MLP check.
+os.environ.setdefault("MLX_OMARCHY_EAGER_SWIGLU_ROWS", "8")
 
 import mlx.core as mx
 import mlx.nn as nn
