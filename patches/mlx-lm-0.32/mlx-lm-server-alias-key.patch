@@ -2,7 +2,7 @@
 # mlx-lm is MIT licensed; this patch changes no upstream license or notice.
 --- a/mlx_lm/server.py	2026-11-25 13:11:36.719051727 -0600
 +++ b/mlx_lm/server.py	2026-11-25 13:10:50.127440728 -0600
-@@ -1143,6 +1143,8 @@
+@@ -1143,6 +1144,8 @@
          response_generator: ResponseGenerator,
          *args,
          system_fingerprint: Optional[str] = None,
@@ -11,7 +11,7 @@
          **kwargs,
      ):
          """
-@@ -1151,6 +1153,8 @@
+@@ -1151,6 +1154,8 @@
          self.created = int(time.time())
          self.response_generator = response_generator
          self.system_fingerprint = system_fingerprint or get_system_fingerprint()
@@ -20,7 +20,7 @@
          super().__init__(*args, **kwargs)
  
      def _set_cors_headers(self):
-@@ -1183,6 +1187,12 @@
+@@ -1183,6 +1188,12 @@
          """
          Respond to a POST request from a client.
          """
@@ -33,7 +33,7 @@
          request_factories = {
              "/v1/completions": self.handle_text_completions,
              "/v1/chat/completions": self.handle_chat_completions,
-@@ -1751,6 +1761,12 @@
+@@ -1751,6 +1762,12 @@
          """
          Respond to a GET request from a client.
          """
@@ -46,7 +46,7 @@
          if self.path.startswith("/v1/models"):
              self.handle_models_request()
          elif self.path == "/health":
-@@ -1760,6 +1776,17 @@
+@@ -1760,6 +1777,17 @@
              self.end_headers()
              self.wfile.write(b"Not Found")
  
@@ -64,7 +64,7 @@
      def handle_health_check(self):
          """
          Handle a GET request for the /health endpoint.
-@@ -1781,6 +1808,12 @@
+@@ -1781,6 +1809,12 @@
          self._set_completion_headers(200)
          self.end_headers()
  
@@ -77,7 +77,7 @@
          files = ["config.json", "model.safetensors.index.json", "tokenizer_config.json"]
  
          parts = self.path.split("/")
-@@ -1839,6 +1872,8 @@
+@@ -1839,6 +1873,8 @@
      response_generator,
      server_class=ThreadingHTTPServer,
      handler_class=APIHandler,
@@ -86,7 +86,7 @@
  ):
      server_address = (host, port)
      infos = socket.getaddrinfo(
-@@ -1850,6 +1885,8 @@
+@@ -1850,6 +1886,8 @@
          lambda *args, **kwargs: handler_class(
              response_generator,
              system_fingerprint=get_system_fingerprint(),
@@ -95,7 +95,7 @@
              *args,
              **kwargs,
          ),
-@@ -1877,7 +1914,13 @@
+@@ -1877,7 +1915,13 @@
      prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
      response_generator = ResponseGenerator(model_provider, prompt_cache)
      if group.rank() == 0:
@@ -110,7 +110,7 @@
      else:
          response_generator.join()
  
-@@ -2039,6 +2082,18 @@
+@@ -2039,6 +2083,18 @@
          action="store_true",
          help="Use pipelining instead of tensor parallelism",
      )
