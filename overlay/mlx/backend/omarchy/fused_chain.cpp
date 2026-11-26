@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -722,7 +723,18 @@ struct EagerRole {
 // outputs) or failed (both nodes take the ordinary RoPE path).
 struct RopePair {
   std::array<array, 2> nodes;
-  enum class State : uint8_t { pending, done, failed } state{State::pending};
+  // Indices into rope_norms for norm-carrying members (the fold the
+  // pair dispatch absorbs); -1 means the plain 2-input form.
+  std::array<int, 2> norm_folds{-1, -1};
+  // dispatching marks a pair whose dispatch is on the stack: a nested
+  // eval reaching either member must not re-fire dispatch_rope_pair
+  // (its chain settle walks ancestors that include pair members, so a
+  // re-entrant pair dispatch would recurse forever). The re-entrant
+  // eval falls through to the fold arm or the ordinary path instead,
+  // which materializes the node; the in-flight pair kernel then writes
+  // bit-identical data over it.
+  enum class State : uint8_t { pending, dispatching, done, failed } state{
+      State::pending};
 };
 
 // A planned RMSNorm -> RoPE fold: the norm's only consumer is a plain
@@ -792,6 +804,10 @@ struct GemvGroup {
   // Trailing fast::RMSNorm epilogue over the single member's Add sum.
   std::optional<ResNormPlan> res_norm;
   bool res_norm_done{false};
+  // Fused RMSNorm+RoPE q/k epilogue over two member outputs; the keys
+  // side stores through the pair's producer-direct window.
+  std::optional<RopeEpiPlan> rope_epi;
+  bool rope_epi_done{false};
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -825,12 +841,30 @@ struct SliceUpdatePair {
   bool values_committed{false};
 };
 
+// Decode-rows SDPA out-transpose fold: the verify route's (1,H,S,D)
+// output feeds a single-consumer Transpose(0,2,1,3) whose view a
+// materializing Reshape copies into (1,S,H*D). The rows kernel can
+// write the transposed layout straight into the reshape's buffer
+// (out_strides[1] head stride D, out_strides[2] row stride H*D),
+// deleting the copy dispatch. reshape is the Reshape node; chain
+// holds the view nodes between it and the attention so their evals
+// skip once the fold fires.
+struct SdpaTransposeFold {
+  array reshape;
+  std::vector<array> chain;
+  bool fired{false};
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
   TapeIndex<size_t> gemv_roles;
   std::vector<GemvGroup> gemv_groups;
   TapeIndex<size_t> res_norm_skip_roles;
+  std::vector<SdpaTransposeFold> sdpa_transpose_folds;
+  // attention out array id -> fold index; reshape/view ids -> fold index
+  std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_plans;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_skip_roles;
   TapeIndex<size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
   TapeIndex<size_t> slice_update_roles;
@@ -872,10 +906,15 @@ struct EagerFusionState {
     rope_pairs.clear();
     rope_norms.clear();
     prologue_folds.clear();
+    sdpa_transpose_folds.clear();
+    sdpa_transpose_plans.clear();
+    sdpa_transpose_skip_roles.clear();
   }
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
+thread_local double eager_dispatch_us = 0.0;
+thread_local size_t eager_dispatch_calls = 0;
 
 // One spare state per live scope, depth-capped: a decode eval builds the
 // same ~10 role tables every step, and unordered_map pays a node
@@ -891,6 +930,32 @@ std::vector<std::unique_ptr<EagerFusionState>>& fusion_state_pool() {
 
 bool is_op(const array* node, const std::type_info& op) {
   return node && node->has_primitive() && typeid(node->primitive()) == op;
+}
+
+// Structural signature of an eval tape: op type, dtype, shape, and input
+// arity per node, folded in tape order. Decode steps re-issue the same
+// graph, so identical signatures mean the fold plan transfers by tape
+// position. Prim state (axes, eps, quant bits) is deliberately out of the
+// key: replay revalidates every fold's gates against the new nodes and
+// declines on any mismatch, so a colliding-but-different tape costs one
+// revalidation pass, never a wrong plan.
+uint64_t tape_signature(const std::deque<array>& tape) {
+  uint64_t h = tape.size() * 0x9e3779b97f4a7c15ull;
+  auto mix = [&h](uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+  };
+  for (const auto& node : tape) {
+    mix(node.has_primitive()
+            ? static_cast<uint64_t>(typeid(node.primitive()).hash_code())
+            : 0xfeedfaceull);
+    mix(static_cast<uint64_t>(node.dtype().val()));
+    mix(static_cast<uint64_t>(node.ndim()));
+    for (const auto dim : node.shape()) {
+      mix(static_cast<uint64_t>(dim));
+    }
+    mix(static_cast<uint64_t>(node.inputs().size()));
+  }
+  return h;
 }
 // Two RoPE offset inputs can share one buffer binding when they are the
 // same node, or when both are host-constant int scalars with an equal
@@ -1023,9 +1088,22 @@ std::optional<DirectGeometry> direct_window_geometry(const array& member) {
 // base handle, which would count as a second holder.
 // MLX_OMARCHY_KV_INPLACE=0 forces the copy.
 bool kv_window_in_place(const array& member) {
-  return (omarchy::env_str("MLX_OMARCHY_KV_INPLACE") == nullptr ||
-          env_flag("MLX_OMARCHY_KV_INPLACE")) &&
-      member.inputs()[0].is_donatable();
+  const bool env_on = omarchy::env_str("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+      env_flag("MLX_OMARCHY_KV_INPLACE");
+  const array& base = member.inputs()[0];
+  const bool donatable = base.is_donatable();
+  // MLX_OMARCHY_KV_TRACE: donation is the in-place gate; a refusal that
+  // only shows up as a missing alias names no cause without the split.
+  if (omarchy::env_str("MLX_OMARCHY_KV_TRACE") != nullptr) {
+    auto data = base.data_shared_ptr();
+    std::fprintf(
+        stderr,
+        "[kv-inplace] env=%d donatable=%d data_uses=%ld\n",
+        static_cast<int>(env_on),
+        static_cast<int>(donatable),
+        data ? static_cast<long>(data.use_count()) : -1L);
+  }
+  return env_on && donatable;
 }
 
 // Keys: the RoPE kernel writes (matrix, time, feature) output strides,
@@ -1170,7 +1248,8 @@ DirectPlan plan_values_window(
   const auto& base = member.inputs()[0];
   const auto& upd = member.inputs()[1];
   if (upd.ndim() != 4 || upd.shape(0) != 1 || base.shape(0) != 1 ||
-      static_cast<size_t>(upd.shape(1)) * upd.shape(3) != sum->size()) {
+      static_cast<size_t>(upd.shape(1)) * upd.shape(2) * upd.shape(3) !=
+          sum->size()) {
     return plan;
   }
   auto geometry = direct_window_geometry(member);
@@ -1226,8 +1305,15 @@ DirectPlan plan_values_window(
       map_strides = contiguous_strides(map_shape);
     }
   }
+  // The seq axis must map onto contiguous sum rows: element (head, m,
+  // dim) of the update reads the sum buffer at m * n_kv*head_dim +
+  // head * head_dim + dim, which is the multi-token window store the
+  // rows kernel emits.
   if (map_shape != upd.shape() || map_strides[3] != 1 ||
-      map_strides[1] != static_cast<ptrdiff_t>(head_dim)) {
+      map_strides[1] != static_cast<ptrdiff_t>(head_dim) ||
+      map_strides[2] !=
+          static_cast<ptrdiff_t>(
+              static_cast<uint64_t>(upd.shape(1)) * head_dim)) {
     return plan;
   }
   for (const array* view : chain) {
@@ -1295,13 +1381,21 @@ bool node_trio_enabled(const array& node) {
 
 } // namespace
 
+double* eval_phase_slots() {
+  static thread_local double slots[8];
+  return slots;
+}
+
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
-    : previous_(eager_state) {
+    : previous_(eager_state), t0_(std::chrono::steady_clock::now()) {
   eager_state = nullptr;
   env_note_eval();
   if (!fused_chain_enabled()) {
     return;
   }
+  static const bool fold_timing =
+      std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
+  const auto plan_t0 = std::chrono::steady_clock::now();
 
   // Prescan gate: every pass below needs an anchor primitive
   // (QuantizedMatmul or Matmul for GEMV groups, SliceUpdate for cache
@@ -1371,6 +1465,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     array out;
   };
   std::vector<SwigluPlan> swiglu_plans;
+  const bool swiglu_scan_trace =
+      std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
   for (const auto& tail : tape) {
     if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
         claimed.count(tail.id())) {
@@ -1380,6 +1476,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const array* right = lookup(tail.inputs()[1]);
     const array* inner = is_op(left, typeid(Multiply)) ? left :
         (is_op(right, typeid(Multiply)) ? right : nullptr);
+    if (swiglu_scan_trace) {
+      const char* ln = left && left->has_primitive()
+          ? left->primitive().name()
+          : "<none>";
+      const char* rn = right && right->has_primitive()
+          ? right->primitive().name()
+          : "<none>";
+      std::fprintf(
+          stderr,
+          "[swiglu-scan] mul in0=%s in1=%s inner=%s uses_i=%zu\n",
+          ln,
+          rn,
+          inner ? "mul" : "none",
+          inner ? uses[inner->id()] : 0ul);
+    }
     if (!inner || inner->inputs().size() != 2 || uses[inner->id()] != 1) {
       continue;
     }
@@ -1387,6 +1498,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const array* inner_right = lookup(inner->inputs()[1]);
     const array* sigmoid = is_op(inner_left, typeid(Sigmoid)) ? inner_left :
         (is_op(inner_right, typeid(Sigmoid)) ? inner_right : nullptr);
+    if (swiglu_scan_trace) {
+      const char* iln = inner_left && inner_left->has_primitive()
+          ? inner_left->primitive().name()
+          : "<none>";
+      const char* irn = inner_right && inner_right->has_primitive()
+          ? inner_right->primitive().name()
+          : "<none>";
+      std::fprintf(
+          stderr,
+          "[swiglu-scan]   inner in0=%s in1=%s sig=%s uses_s=%zu\n",
+          iln,
+          irn,
+          sigmoid ? "sig" : "none",
+          sigmoid ? uses[sigmoid->id()] : 0ul);
+    }
     if (!sigmoid || sigmoid->inputs().size() != 1 ||
         uses[sigmoid->id()] != 1) {
       continue;
@@ -1569,8 +1695,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           if (fold_ok && is_op(add, typeid(Add)) &&
               add->inputs().size() == 2 &&
               add->dtype() == node.dtype() &&
-              add->size() ==
-                  static_cast<size_t>(x_rows) * node.size() &&
+              add->size() == node.size() &&
               add->primitive().stream() == node.primitive().stream() &&
               !claimed.count(add->id())) {
             const array* other = add->inputs()[0].id() == node.id()
@@ -1584,9 +1709,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             // itself.
             if (is_op(other_node, typeid(Broadcast)) &&
                 other_node->inputs().size() == 1 &&
-                other_node->inputs()[0].size() == node.size() &&
-                other_node->size() ==
-                    static_cast<size_t>(x_rows) * node.size() &&
+                other_node->inputs()[0].size() *
+                        static_cast<size_t>(x_rows) ==
+                    node.size() &&
+                other_node->size() == node.size() &&
                 other_node->inputs()[0].dtype() == other_node->dtype()) {
               other = &other_node->inputs()[0];
               other_node = lookup(*other);
@@ -1753,6 +1879,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // member's eval fires the one dispatch and the standalone swiglu
   // dispatch never exists. Any runtime contract failure un-plans the
   // whole group onto the per-node path.
+  if (std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr) {
+    std::fprintf(
+        stderr,
+        "[swiglu-attach] plans=%zu groups=%zu\n",
+        swiglu_plans.size(),
+        state->gemv_groups.size());
+  }
   if (!swiglu_plans.empty()) {
     // Readers of a leaf, collected on demand only for the ~2 ids per
     // plan: a whole-tape consumer map costs a node+vector allocation per
@@ -1775,8 +1908,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       std::sort(want.begin(), want.end());
       return got == want;
     };
+    const bool swiglu_trace =
+        std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
     for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
       auto& group = state->gemv_groups[gi];
+      if (swiglu_trace) {
+        std::fprintf(
+            stderr,
+            "[swiglu-attach] group %zu members=%zu ep0=%d ep1=%d f32=%d\n",
+            gi,
+            group.members.size(),
+            static_cast<int>(group.members[0].epilogue.has_value()),
+            group.members.size() > 1
+                ? static_cast<int>(group.members[1].epilogue.has_value())
+                : -1,
+            static_cast<int>(
+                group.members[0].node.dtype() == float32));
+      }
       if (group.members.size() != 2 || group.members[0].epilogue ||
           group.members[1].epilogue ||
           group.members[0].node.dtype() == float32) {
@@ -1786,6 +1934,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const std::uintptr_t up_id = group.members[1].node.id();
       if (group.members[0].node.inputs()[1].shape(0) !=
           group.members[1].node.inputs()[1].shape(0)) {
+        if (swiglu_trace) {
+          std::fprintf(stderr, "[swiglu-attach] group %zu n-mismatch\n", gi);
+        }
         continue;
       }
       for (const auto& plan : swiglu_plans) {
@@ -1796,9 +1947,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         // plain multi-weight path.
         bool straight = plan.gate_id == gate_id && plan.up_id == up_id;
         bool swapped = plan.gate_id == up_id && plan.up_id == gate_id;
-        if ((!straight && !swapped) ||
-            !only_readers(plan.gate_id, {plan.sigmoid_id, plan.inner_id}) ||
-            !only_readers(plan.up_id, {plan.out.id()})) {
+        bool gate_ok =
+            only_readers(plan.gate_id, {plan.sigmoid_id, plan.inner_id});
+        bool up_ok = only_readers(plan.up_id, {plan.out.id()});
+        if (swiglu_trace && (straight || swapped)) {
+          std::fprintf(
+              stderr,
+              "[swiglu-attach] group %zu id-match straight=%d swapped=%d "
+              "gate_readers=%d up_readers=%d\n",
+              gi,
+              static_cast<int>(straight),
+              static_cast<int>(swapped),
+              static_cast<int>(gate_ok),
+              static_cast<int>(up_ok));
+        }
+        if ((!straight && !swapped) || !gate_ok || !up_ok) {
           continue;
         }
         if (swapped) {
@@ -1997,8 +2160,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         const array& qmm = group.members[0].node;
         const array& add = *group.members[0].epilogue;
+        // Rows 1 folds on the single-row resnorm kernel; rows 2..4 on
+        // the token4+resnorm variant (dispatch re-verifies the full
+        // contract and falls back eager when it cannot run).
         if (qmm.dtype() != bfloat16 || qmm.inputs()[0].ndim() < 2 ||
-            qmm.inputs()[0].shape(-2) != 1) {
+            qmm.inputs()[0].shape(-2) > 4) {
           continue;
         }
         auto it = res_norms_by_in.find(add.id());
@@ -2027,139 +2193,392 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
   }
-  // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
-  // scalar offset input, one stream, float16 storage, identical rope
-  // state (dims, traditional, base, scale, forward; no freqs), and no
-  // passthrough tail (dims == last-axis extent) fuse into ONE
-  // FastTrioRopePairF16 rope-pair dispatch when the first member evaluates.
-  // The keys side keeps any planned producer-direct KV window; the
-  // query side must not be one. Any runtime refusal un-plans the pair
-  // and both nodes take the ordinary RoPE path unchanged.
-  // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
-  // not by this f16-only rope-pair plan.)
-  // Per node: MLX_OMARCHY_FUSED_TRIO for the device that executes it,
-  // independent of MLX_OMARCHY_FUSED_GEMV.
-  {
-    RopePairScanTrace trace;
-    // The RoPE nodes of one decode step are NOT tape-adjacent: each
-    // rope call materializes its scalar offset between them and the
-    // cache write views interleave, so collect the rope subsequence in
-    // tape order and pair consecutive members (query, key).
-    std::vector<const array*> rope_nodes;
+  // Fused RMSNorm+RoPE q/k epilogue fold (MLX_OMARCHY_ROPE_EPI): a
+  // decode group's member outputs feed the two norm-fused fast::RoPE
+  // nodes (query, keys) of one attention head set through
+  // single-consumer view chains. The group's Token4 dispatch runs
+  // both norms and rotations in its last finishing workgroup: the
+  // query rows store into the rope node's own buffer, the keys rows
+  // store through the slice pair's producer-direct window. The rope
+  // nodes and their view chains are deleted, so every contract item
+  // is decided here; a group of at most three members keeps the six
+  // epilogue bindings inside the free weight slots.
+  if (rope_epi_enabled() && !state->gemv_groups.empty()) {
+    auto use_count = [&](const array& value) {
+      auto* it = uses.find(value.id());
+      return it == nullptr ? size_t{0} : *it;
+    };
+    // member node id -> (group index, member index); only groups that
+    // can host the epilogue are indexed.
+    std::unordered_map<std::uintptr_t, std::pair<size_t, size_t>>
+        member_of;
+    for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+      auto& group = state->gemv_groups[gi];
+      if (group.members.size() > 3 || group.swiglu_out || group.outgate ||
+          group.res_norm) {
+        continue;
+      }
+      for (size_t mi = 0; mi < group.members.size(); ++mi) {
+        member_of.try_emplace(
+            group.members[mi].node.id(), std::make_pair(gi, mi));
+      }
+    }
+    // group index -> rope candidates; each entry carries the node and
+    // the resolved view chain + member index.
+    struct RopeCand {
+      const array* node;
+      std::vector<array> chain;
+      size_t member_index;
+    };
+    // Compose the chain's logical strides over the member storage. A
+    // lazily-created view node's desc holds contiguous strides until
+    // its own eval writes the real view strides via
+    // copy_shared_buffer — and the skip-role'd chain never evals, so
+    // the desc at plan/dispatch time cannot be trusted. Composing
+    // Reshape (contiguous strides for the new shape) and Transpose
+    // (strides permuted by axes) from the member's contiguous rows
+    // yields the view geometry the epilogue must read.
+    const auto compose_view = [](const array& member,
+                                 const std::vector<array>& chain) {
+      Shape shape(member.shape());
+      Strides strides(shape.size(), 1);
+      for (int d = static_cast<int>(shape.size()) - 2; d >= 0; --d) {
+        strides[d] = strides[d + 1] * shape[d + 1];
+      }
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const auto& prim = it->primitive();
+        if (typeid(prim) == typeid(Transpose)) {
+          const auto& axes = static_cast<const Transpose&>(prim).state();
+          Shape tshape(axes.size());
+          Strides tstrides(axes.size());
+          for (size_t i = 0; i < axes.size(); ++i) {
+            tshape[i] = shape[axes[i]];
+            tstrides[i] = strides[axes[i]];
+          }
+          shape = std::move(tshape);
+          strides = std::move(tstrides);
+        } else {
+          shape = Shape(it->shape());
+          strides = Strides(shape.size(), 1);
+          for (int d = static_cast<int>(shape.size()) - 2; d >= 0; --d) {
+            strides[d] = strides[d + 1] * shape[d + 1];
+          }
+        }
+      }
+      return std::make_pair(std::move(shape), std::move(strides));
+    };
+    std::unordered_map<size_t, std::vector<RopeCand>> cands;
+    const bool epi_trace =
+        std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr;
+    int tr_rope = 0, tr_shape = 0, tr_member = 0;
     for (const auto& node : tape) {
-      if (!is_op(&node, typeid(fast::RoPE)) || !node_trio_enabled(node)) {
+      if (!is_op(&node, typeid(fast::RoPE)) || claimed.count(node.id()) ||
+          node.dtype() != bfloat16) {
         continue;
       }
-      if (node.inputs().size() != 2) {
-        trace.rej_node_inputs += 1;
+      const auto& rp =
+          static_cast<const fast::RoPE&>(node.primitive());
+      const auto& st = rp.state();
+      // Norm-fused ropes ride three inputs (x, offset, weight); the
+      // fused-norm kernel route only covers forward non-traditional.
+      if (!rp.has_norm() || node.inputs().size() != 3 ||
+          !std::get<5>(st) || std::get<2>(st) ||
+          node.inputs()[1].size() != 1 ||
+          node.inputs()[2].dtype() != bfloat16) {
+        if (epi_trace) {
+          ++tr_rope;
+        }
         continue;
       }
-      if (node.inputs()[1].size() != 1) {
-        trace.rej_node_offset += 1;
+      std::vector<array> chain;
+      const array* cur = &node.inputs()[0];
+      bool ok = cur->dtype() == bfloat16;
+      while (ok &&
+             (is_op(cur, typeid(Reshape)) ||
+              is_op(cur, typeid(Transpose)))) {
+        if (use_count(*cur) != 1 || claimed.count(cur->id())) {
+          ok = false;
+          break;
+        }
+        chain.push_back(*cur);
+        cur = &cur->inputs()[0];
+      }
+      if (!ok || cur->dtype() != bfloat16) {
+        if (epi_trace) {
+          ++tr_shape;
+        }
         continue;
       }
-      if (node.dtype() != float16) {
-        trace.rej_node_dtype += 1;
+      auto mit = member_of.find(cur->id());
+      if (mit == member_of.end()) {
+        if (epi_trace) {
+          ++tr_member;
+        }
         continue;
       }
-      if (!std::get<5>(
-              static_cast<const fast::RoPE&>(node.primitive()).state())) {
-        trace.rej_node_notforward += 1;
+      if (cur->primitive().stream() != node.primitive().stream()) {
         continue;
       }
-      if (trace.rope_shapes.size() < 6) {
-        trace.rope_shapes.push_back(
-            "idx" + std::to_string(static_cast<long>(&node - &tape.front())) +
-            ":" + std::to_string(node.shape(-2)) + "x" +
-            std::to_string(node.shape(-1)) + ":f" +
-            std::to_string(std::get<1>(
-                static_cast<const fast::RoPE&>(node.primitive()).state())) +
-            ":off" +
-            std::to_string(node.inputs()[1].status() ==
-                           array::Status::available));
-      }
-      rope_nodes.push_back(&node);
+      cands[mit->second.first].push_back(
+          RopeCand{&node, std::move(chain), mit->second.second});
     }
-    trace.rope_nodes = rope_nodes.size();
-    // Greedy sliding pairing: a stray unpairable rope node (47 vs 48 in
-    // one measured plan) shifts fixed-parity pairs onto cross-layer
-    // neighbors the runtime would have to refuse, so slide by one on a
-    // failed pair instead.
-    size_t i = 1;
-    while (i < rope_nodes.size()) {
-      const array& first = *rope_nodes[i - 1];
-      const array& second = *rope_nodes[i];
-      const auto& rope_first =
-          static_cast<const fast::RoPE&>(first.primitive());
-      const auto& rope_second =
-          static_cast<const fast::RoPE&>(second.primitive());
-      if (rope_second.state() != rope_first.state() ||
-          std::get<1>(rope_first.state()) % 2 != 0 ||
-          first.primitive().stream() != second.primitive().stream()) {
-        trace.rej_state += 2;
-        i += 1;
-        continue;
-      }
-      if (!rope_offset_shared(first.inputs()[1], second.inputs()[1])) {
-        trace.rej_offset += 2;
-        i += 1;
-        continue;
-      }
-      if (first.shape().size() != second.shape().size() ||
-          first.shape(-1) != second.shape(-1) ||
-          first.shape(-2) != second.shape(-2) ||
-          first.shape(-1) != std::get<1>(rope_first.state())) {
-        trace.rej_shape += 2;
-        i += 1;
-        continue;
-      }
-      if (claimed.count(first.id()) || claimed.count(second.id())) {
-        trace.rej_claimed += 2;
-        i += 1;
-        continue;
-      }
-      if (state->rope_redirect_roles.count(first.id())) {
-        trace.rej_redirect += 2;
-        i += 1;
-        continue;
-      }
-      const size_t index = state->rope_pairs.size();
-      state->rope_pair_roles.put_if_absent(first.id(), index);
-      state->rope_pair_roles.put_if_absent(second.id(), index);
-      state->rope_pairs.push_back(RopePair{{first, second}});
-      claimed.put_if_absent(first.id(), 1);
-      claimed.put_if_absent(second.id(), 1);
-      trace.pairs += 1;
-      i += 2;
-    }
-    static int trio_trace_plans = 0;
-    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
-        trace.rope_nodes > 0 && trio_trace_plans < 3) {
-      ++trio_trace_plans;
+    if (epi_trace) {
       std::fprintf(
           stderr,
-          "[trio-plan] rope_nodes=%zu rope_forward_scalar=%zu "
-          "rej_node_inputs=%zu rej_node_offset=%zu rej_node_dtype=%zu "
-          "rej_node_notforward=%zu rej_state=%zu rej_offset=%zu "
-          "rej_shape=%zu rej_claimed=%zu rej_redirect=%zu "
-          "pairs_planned=%zu rope_neighbor_after=%s rope_shapes=%s\n",
-          trace.rope_nodes,
-          trace.rope_forward_scalar,
-          trace.rej_node_inputs,
-          trace.rej_node_offset,
-          trace.rej_node_dtype,
-          trace.rej_node_notforward,
-          trace.rej_state,
-          trace.rej_offset,
-          trace.rej_shape,
-          trace.rej_claimed,
-          trace.rej_redirect,
-          trace.pairs,
-          joined_rope_neighbors(trace.rope_neighbor_after).c_str(),
-          joined_rope_neighbors(trace.rope_shapes).c_str());
+          "[rope-epi] scan: ropes=%d shape_rej=%d member_rej=%d cand_groups=%zu\n",
+          tr_rope,
+          tr_shape,
+          tr_member,
+          cands.size());
+      for (auto& e : cands) {
+        std::fprintf(stderr, "[rope-epi]   group %zu sides=%zu\n", e.first, e.second.size());
+      }
+    }
+    for (auto& entry : cands) {
+      const size_t gi = entry.first;
+      auto& sides = entry.second;
+      if (sides.size() != 2) {
+        continue;
+      }
+      // The keys side is the rope the slice pair redirect claimed;
+      // the query side is the other. Exactly one of each.
+      const RopeCand* qc = nullptr;
+      const RopeCand* kc = nullptr;
+      for (const auto& side : sides) {
+        if (state->rope_redirect_roles.count(side.node->id())) {
+          if (kc != nullptr) {
+            qc = nullptr;
+            break;
+          }
+          kc = &side;
+        } else {
+          qc = &side;
+        }
+      }
+      if (qc == nullptr || kc == nullptr ||
+          qc->member_index == kc->member_index ||
+          // The keys rope's only consumer is the deleted slice update;
+          // a second consumer would read an unmaterialized buffer.
+          use_count(*kc->node) != 1) {
+        if (epi_trace) {
+          std::fprintf(
+              stderr,
+              "[rope-epi] group %zu: sides=%zu q=%d k=%d same_mi=%d same_off=%d k_use=%zu\n",
+              gi,
+              sides.size(),
+              qc != nullptr,
+              kc != nullptr,
+              qc != nullptr && kc != nullptr &&
+                  qc->member_index == kc->member_index,
+              qc != nullptr && kc != nullptr &&
+                  qc->node->inputs()[1].id() == kc->node->inputs()[1].id(),
+              kc ? use_count(*kc->node) : 0);
+        }
+        continue;
+      }
+      // The keys window must already be planned producer-direct on
+      // the pair that claimed the rope's output.
+      const size_t pair_index =
+          *state->rope_redirect_roles.find(kc->node->id());
+      const auto& pair = state->slice_update_pairs[pair_index];
+      if (!pair.direct || !pair.windows[0]) {
+        if (epi_trace) {
+          std::fprintf(
+              stderr,
+              "[rope-epi] group %zu: pair %zu direct=%d window=%d\n",
+              gi,
+              pair_index,
+              pair.direct,
+              pair.windows[0].has_value());
+        }
+        continue;
+      }
+      // The plan stores the query rope's state and the dispatch
+      // applies it to both sides, so the keys rope must carry the
+      // same parameters: dims, base, scale, and the norm epsilon.
+      // Forward/non-traditional is already required per candidate.
+      const auto& q_state =
+          static_cast<const fast::RoPE&>(qc->node->primitive()).state();
+      const auto& k_state =
+          static_cast<const fast::RoPE&>(kc->node->primitive()).state();
+      if (std::get<1>(q_state) != std::get<1>(k_state) ||
+          std::get<3>(q_state) != std::get<3>(k_state) ||
+          std::get<4>(q_state) != std::get<4>(k_state) ||
+          static_cast<const fast::RoPE&>(qc->node->primitive())
+                  .norm_eps() !=
+              static_cast<const fast::RoPE&>(kc->node->primitive())
+                  .norm_eps()) {
+        if (epi_trace) {
+          std::fprintf(
+              stderr,
+              "[rope-epi] group %zu: q/k rope state differs "
+              "(dims %d/%d base %g/%g scale %g/%g)\n",
+              gi,
+              std::get<1>(q_state),
+              std::get<1>(k_state),
+              std::get<3>(q_state),
+              std::get<3>(k_state),
+              std::get<4>(q_state),
+              std::get<4>(k_state));
+        }
+        continue;
+      }
+      const auto& st = q_state;
+      auto& group = state->gemv_groups[gi];
+      const auto q_layout = compose_view(
+          group.members[qc->member_index].node, qc->chain);
+      const auto k_layout = compose_view(
+          group.members[kc->member_index].node, kc->chain);
+      group.rope_epi = RopeEpiPlan{
+          RopeEpiSide{
+              *qc->node,
+              qc->member_index,
+              qc->chain,
+              q_layout.first,
+              q_layout.second,
+              0,
+              std::nullopt,
+              pair_index},
+          RopeEpiSide{
+              *kc->node,
+              kc->member_index,
+              kc->chain,
+              k_layout.first,
+              k_layout.second,
+              0,
+              pair.windows[0],
+              pair_index},
+          std::get<1>(st),
+          std::get<2>(st),
+          std::get<3>(st),
+          std::get<4>(st),
+          static_cast<const fast::RoPE&>(qc->node->primitive())
+              .norm_eps()};
+      for (const auto* side : {qc, kc}) {
+        state->roles.emplace(
+            side->node->id(), EagerRole{gi, EagerStep::skip});
+        claimed.put_if_absent(side->node->id(), 1);
+        for (const auto& view : side->chain) {
+          state->roles.emplace(view.id(), EagerRole{gi, EagerStep::skip});
+          claimed.put_if_absent(view.id(), 1);
+        }
+      }
     }
   }
-
+  // Decode-rows SDPA out-transpose fold: a materializing Reshape whose
+  // single-consumer view chain bottoms out at a bf16
+  // ScaledDotProductAttention is exactly the (1,H,S,D) -> (1,S,H*D)
+  // transpose-copy the verify route's consumers build. The rows kernel
+  // can store the transposed layout directly, deleting the copy. The
+  // dispatch re-verifies the shape contract and falls back eager when
+  // it cannot run.
+  {
+    auto use_count = [&](const array& value) {
+      auto* it = uses.find(value.id());
+      return it == nullptr ? size_t{0} : *it;
+    };
+    auto contiguous_strides = [](const Shape& shape) {
+      Strides strides(shape.size(), 0);
+      strides.back() = 1;
+      for (int ax = static_cast<int>(shape.size()) - 2; ax >= 0; --ax) {
+        strides[ax] = strides[ax + 1] * shape[ax + 1];
+      }
+      return strides;
+    };
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(Reshape)) || node.dtype() != bfloat16 ||
+          claimed.count(node.id()) || node.ndim() != 3 ||
+          node.shape(0) != 1 || node.inputs().empty()) {
+        continue;
+      }
+      std::vector<const array*> chain;
+      const array* cur = &node.inputs()[0];
+      bool ok = true;
+      while (is_op(cur, typeid(Transpose)) || is_op(cur, typeid(Reshape))) {
+        if (use_count(*cur) != 1) {
+          ok = false;
+          break;
+        }
+        chain.push_back(cur);
+        cur = &cur->inputs()[0];
+      }
+      if (!ok || chain.empty() ||
+          !is_op(cur, typeid(fast::ScaledDotProductAttention)) ||
+          cur->dtype() != bfloat16 || cur->ndim() != 4 ||
+          cur->shape(0) != 1 || use_count(*cur) != 1 ||
+          claimed.count(cur->id())) {
+        continue;
+      }
+      const array& sdpa = *cur;
+      // Compose the view map from the contiguous (1,H,S,D) out through
+      // the chain, sdpa-side first: Transpose always composes; a
+      // Reshape composes only off a contiguous map.
+      Shape map_shape(sdpa.shape());
+      Strides map_strides = contiguous_strides(map_shape);
+      bool composes = true;
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const array& view = **it;
+        if (is_op(&view, typeid(Transpose))) {
+          const auto& axes =
+              static_cast<const Transpose&>(view.primitive()).state();
+          if (axes.size() != map_shape.size()) {
+            composes = false;
+            break;
+          }
+          Shape next_shape(map_shape.size());
+          Strides next_strides(map_shape.size());
+          bool axes_ok = true;
+          for (size_t ax = 0; ax < axes.size(); ++ax) {
+            if (axes[ax] < 0 ||
+                static_cast<size_t>(axes[ax]) >= map_shape.size()) {
+              axes_ok = false;
+              break;
+            }
+            next_shape[ax] = map_shape[axes[ax]];
+            next_strides[ax] = map_strides[axes[ax]];
+          }
+          if (!axes_ok) {
+            composes = false;
+            break;
+          }
+          map_shape = std::move(next_shape);
+          map_strides = std::move(next_strides);
+        } else {
+          if (map_strides != contiguous_strides(map_shape)) {
+            composes = false;
+            break;
+          }
+          map_shape = view.shape();
+          map_strides = contiguous_strides(map_shape);
+        }
+      }
+      // The chain's result must be exactly the (1,S,H,D) transposed
+      // view of the out: strides (S*H*D, D, S*D, 1). The Reshape then
+      // merges H*D contiguously, so node.shape is (1,S,H*D).
+      if (!composes || map_shape.size() != 4 || map_shape[0] != 1 ||
+          map_strides[0] != static_cast<ptrdiff_t>(
+                                map_shape[1] * map_shape[2] * map_shape[3]) ||
+          map_strides[1] != static_cast<ptrdiff_t>(map_shape[3]) ||
+          map_strides[2] != static_cast<ptrdiff_t>(
+                                map_shape[1] * map_shape[3]) ||
+          map_strides[3] != 1 ||
+          node.shape() !=
+              Shape{1, map_shape[1], map_shape[2] * map_shape[3]}) {
+        continue;
+      }
+      const size_t index = state->sdpa_transpose_folds.size();
+      state->sdpa_transpose_folds.push_back(SdpaTransposeFold{node, {}, false});
+      auto& fold = state->sdpa_transpose_folds.back();
+      for (const array* view : chain) {
+        fold.chain.push_back(*view);
+        state->sdpa_transpose_skip_roles.emplace(view->id(), index);
+        claimed.put_if_absent(view->id(), 1);
+      }
+      state->sdpa_transpose_plans.emplace(sdpa.id(), index);
+      state->sdpa_transpose_skip_roles.emplace(node.id(), index);
+      claimed.put_if_absent(node.id(), 1);
+    }
+  }
   // RMSNorm -> RoPE fold: a plain two-input fast::RoPE whose input is a
   // single-use fast::RMSNorm output gets the norm computed inside the
   // rope dispatch (the FastRopeNorm build; bf16 only). The claimed norm
@@ -2280,6 +2699,202 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           "[rope-norm] planned=%zu cand=%zu\n",
           state->rope_norms.size(),
           cand);
+    }
+  }
+  // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
+  // scalar offset input, one stream, float16 storage, identical rope
+  // state (dims, traditional, base, scale, forward; no freqs), and no
+  // passthrough tail (dims == last-axis extent) fuse into ONE
+  // FastTrioRopePairF16 rope-pair dispatch when the first member evaluates.
+  // The keys side keeps any planned producer-direct KV window; the
+  // query side must not be one. Any runtime refusal un-plans the pair
+  // and both nodes take the ordinary RoPE path unchanged.
+  // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
+  // not by this f16-only rope-pair plan.)
+  // Per node: MLX_OMARCHY_FUSED_TRIO for the device that executes it,
+  // independent of MLX_OMARCHY_FUSED_GEMV.
+  {
+    RopePairScanTrace trace;
+    // The RoPE nodes of one decode step are NOT tape-adjacent: each
+    // rope call materializes its scalar offset between them and the
+    // cache write views interleave, so collect the rope subsequence in
+    // tape order and pair consecutive members (query, key).
+    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr) {
+      size_t rope_ops = 0;
+      size_t trio_ok = 0;
+      for (const auto& node : tape) {
+        if (is_op(&node, typeid(fast::RoPE))) {
+          rope_ops += 1;
+          trio_ok += node_trio_enabled(node) ? 1 : 0;
+        }
+      }
+      std::fprintf(
+          stderr,
+          "[trio-scan] tape=%zu rope_ops=%zu trio_ok=%zu\n",
+          tape.size(),
+          rope_ops,
+          trio_ok);
+    }
+    std::vector<const array*> rope_nodes;
+    // The bf16 norm pair is opt-in while the pair kernel trails the
+    // solo dispatches it replaces (MLX_OMARCHY_ROPE_NORM_PAIR=1); off,
+    // norm ropes keep their solo paths and the scan pairs f16 ropes.
+    const bool norm_pair_on = rope_norm_pair_enabled();
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::RoPE)) || !node_trio_enabled(node)) {
+        continue;
+      }
+      const auto& node_rope =
+          static_cast<const fast::RoPE&>(node.primitive());
+      // A bf16 rope the RMSNorm->RoPE fold claimed (or a 3-input
+      // rope_rms_norm carrying its weight) pairs through the
+      // FastRopeNormPair kernels; the pair absorbs the fold so its
+      // claimed norm nodes stay skipped. Plain ropes keep the 2-input
+      // f16 contract.
+      const bool norm_rope =
+          norm_pair_on &&
+          (state->rope_norm_roles.count(node.id()) ||
+           (node.inputs().size() == 3 && node_rope.has_norm()));
+      if (node.inputs().size() != 2 && !norm_rope) {
+        trace.rej_node_inputs += 1;
+        continue;
+      }
+      if (node.inputs()[1].size() != 1) {
+        trace.rej_node_offset += 1;
+        continue;
+      }
+      if (node.dtype() != float16 &&
+          !(norm_rope && node.dtype() == bfloat16)) {
+        trace.rej_node_dtype += 1;
+        continue;
+      }
+      if (!std::get<5>(
+              static_cast<const fast::RoPE&>(node.primitive()).state())) {
+        trace.rej_node_notforward += 1;
+        continue;
+      }
+      if (trace.rope_shapes.size() < 6) {
+        trace.rope_shapes.push_back(
+            "idx" + std::to_string(static_cast<long>(&node - &tape.front())) +
+            ":" + std::to_string(node.shape(-2)) + "x" +
+            std::to_string(node.shape(-1)) + ":f" +
+            std::to_string(std::get<1>(
+                static_cast<const fast::RoPE&>(node.primitive()).state())) +
+            ":off" +
+            std::to_string(node.inputs()[1].status() ==
+                           array::Status::available));
+      }
+      rope_nodes.push_back(&node);
+    }
+    trace.rope_nodes = rope_nodes.size();
+    // Greedy sliding pairing: a stray unpairable rope node (47 vs 48 in
+    // one measured plan) shifts fixed-parity pairs onto cross-layer
+    // neighbors the runtime would have to refuse, so slide by one on a
+    // failed pair instead.
+    size_t i = 1;
+    while (i < rope_nodes.size()) {
+      const array& first = *rope_nodes[i - 1];
+      const array& second = *rope_nodes[i];
+      const auto& rope_first =
+          static_cast<const fast::RoPE&>(first.primitive());
+      const auto& rope_second =
+          static_cast<const fast::RoPE&>(second.primitive());
+      auto fold_index_of = [&](const array& n) -> int {
+        auto it = state->rope_norm_roles.find(n.id());
+        return it ? static_cast<int>(*it) : -1;
+      };
+      const int fold_first = fold_index_of(first);
+      const int fold_second = fold_index_of(second);
+      // Both sides take the same form: two plain ropes, two fold-claimed
+      // ropes with one eps, or two 3-input rope_rms_norm ropes. A
+      // fold/3-input mix is exotic enough to leave to the ordinary
+      // paths.
+      const bool first_3in =
+          first.inputs().size() == 3 && rope_first.has_norm();
+      const bool second_3in =
+          second.inputs().size() == 3 && rope_second.has_norm();
+      const bool fold_pair = fold_first >= 0 && fold_second >= 0;
+      const bool prim_pair = first_3in && second_3in;
+      if (rope_second.state() != rope_first.state() ||
+          (fold_first >= 0) != (fold_second >= 0) ||
+          first_3in != second_3in || (!fold_pair && !prim_pair &&
+          (fold_first >= 0 || first_3in)) ||
+          (fold_pair &&
+           (state->rope_norms[fold_first].eps !=
+            state->rope_norms[fold_second].eps)) ||
+          (prim_pair && rope_first.norm_eps() != rope_second.norm_eps()) ||
+          std::get<1>(rope_first.state()) % 2 != 0 ||
+          first.primitive().stream() != second.primitive().stream()) {
+        trace.rej_state += 2;
+        i += 1;
+        continue;
+      }
+      if (!rope_offset_shared(first.inputs()[1], second.inputs()[1])) {
+        trace.rej_offset += 2;
+        i += 1;
+        continue;
+      }
+      if (first.shape().size() != second.shape().size() ||
+          first.shape(-1) != second.shape(-1) ||
+          first.shape(-2) != second.shape(-2) ||
+          first.shape(-1) != std::get<1>(rope_first.state())) {
+        trace.rej_shape += 2;
+        i += 1;
+        continue;
+      }
+      // A fold-claimed rope's only claim is the fold the pair absorbs
+      // (the fold itself refuses already-claimed ropes), so its claim
+      // does not block pairing; any other claim does.
+      auto non_fold_claim = [&](const array& n) {
+        return claimed.count(n.id()) &&
+            !state->rope_norm_roles.count(n.id());
+      };
+      if (non_fold_claim(first) || non_fold_claim(second)) {
+        trace.rej_claimed += 2;
+        i += 1;
+        continue;
+      }
+      if (state->rope_redirect_roles.count(first.id())) {
+        trace.rej_redirect += 2;
+        i += 1;
+        continue;
+      }
+      const size_t index = state->rope_pairs.size();
+      state->rope_pair_roles.put_if_absent(first.id(), index);
+      state->rope_pair_roles.put_if_absent(second.id(), index);
+      RopePair new_pair{{first, second}};
+      new_pair.norm_folds = {fold_first, fold_second};
+      state->rope_pairs.push_back(std::move(new_pair));
+      claimed.put_if_absent(first.id(), 1);
+      claimed.put_if_absent(second.id(), 1);
+      trace.pairs += 1;
+      i += 2;
+    }
+    static int trio_trace_plans = 0;
+    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+        trace.rope_nodes > 0 && trio_trace_plans < 3) {
+      ++trio_trace_plans;
+      std::fprintf(
+          stderr,
+          "[trio-plan] rope_nodes=%zu rope_forward_scalar=%zu "
+          "rej_node_inputs=%zu rej_node_offset=%zu rej_node_dtype=%zu "
+          "rej_node_notforward=%zu rej_state=%zu rej_offset=%zu "
+          "rej_shape=%zu rej_claimed=%zu rej_redirect=%zu "
+          "pairs_planned=%zu rope_neighbor_after=%s rope_shapes=%s\n",
+          trace.rope_nodes,
+          trace.rope_forward_scalar,
+          trace.rej_node_inputs,
+          trace.rej_node_offset,
+          trace.rej_node_dtype,
+          trace.rej_node_notforward,
+          trace.rej_state,
+          trace.rej_offset,
+          trace.rej_shape,
+          trace.rej_claimed,
+          trace.rej_redirect,
+          trace.pairs,
+          joined_rope_neighbors(trace.rope_neighbor_after).c_str(),
+          joined_rope_neighbors(trace.rope_shapes).c_str());
     }
   }
 
@@ -2412,9 +3027,60 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         nrows,
         PrologueFold::State::pending});
   }
+  if (fold_timing) {
+    const double plan_us =
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - plan_t0)
+            .count();
+    std::fprintf(
+        stderr,
+        "[fold-time] plan tape=%zu us=%.0f gemv=%zu dense=%zu swiglu-roles=%zu "
+        "rope-pairs=%zu rope-norms=%zu prologues=%zu slice-pairs=%zu "
+        "sdpa-folds=%zu rope-epis=%zu\n",
+        tape.size(),
+        plan_us,
+        state->gemv_groups.size(),
+        state->dense_gemv_groups.size(),
+        state->roles.size(),
+        state->rope_pairs.size(),
+        state->rope_norms.size(),
+        state->prologue_folds.size(),
+        state->slice_update_pairs.size(),
+        state->sdpa_transpose_folds.size(),
+        std::count_if(
+            state->gemv_groups.begin(),
+            state->gemv_groups.end(),
+            [](const auto& g) { return g.rope_epi.has_value(); }));
+  }
 }
 
 EagerFusionScope::~EagerFusionScope() {
+  static const bool fold_timing =
+      std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
+  if (fold_timing) {
+    double* ph = eval_phase_slots();
+    std::fprintf(
+        stderr,
+        "[fold-time] span us=%.0f | dispatch us=%.0f n=%zu | eval us=%.0f "
+        "n=%.0f dispatch-blk us=%.0f bookkeeping us=%.0f commit us=%.0f "
+        "finalize us=%.0f\n",
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - t0_)
+            .count(),
+        eager_dispatch_us,
+        eager_dispatch_calls,
+        ph[0],
+        ph[5],
+        ph[1],
+        ph[2],
+        ph[3],
+        ph[4]);
+    for (int i = 0; i < 8; ++i) {
+      ph[i] = 0.0;
+    }
+  }
+  eager_dispatch_us = 0.0;
+  eager_dispatch_calls = 0;
   if (eager_state != nullptr) {
     eager_state->reset();
     auto& pool = fusion_state_pool();
@@ -2523,10 +3189,22 @@ bool kv_direct_enabled() {
        env_flag("MLX_OMARCHY_KV_DIRECT"));
 }
 
+bool rope_epi_enabled() {
+  return fused_chain_enabled() &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI") != nullptr &&
+      env_flag("MLX_OMARCHY_ROPE_EPI");
+}
+
 bool rope_norm_fold_enabled() {
   return fused_chain_enabled() &&
       (omarchy::env_str("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
        env_flag("MLX_OMARCHY_ROPE_NORM_FOLD"));
+}
+
+bool rope_norm_pair_enabled() {
+  const char* env = omarchy::env_str("MLX_OMARCHY_ROPE_NORM_PAIR");
+  return fused_chain_enabled() && env != nullptr && env[0] != '\0' &&
+      std::strcmp(env, "0") != 0;
 }
 
 KvDirectWindow* find_rope_kv_redirect(const array& out) {
@@ -2579,6 +3257,28 @@ void commit_values_kv_write(const array& sum_node) {
       pair.values_committed = true;
       return;
     }
+  }
+}
+
+const array* find_sdpa_transpose_out(const array& out) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->sdpa_transpose_plans.find(out.id());
+  if (it == eager_state->sdpa_transpose_plans.end()) {
+    return nullptr;
+  }
+  auto& fold = eager_state->sdpa_transpose_folds[it->second];
+  return fold.fired ? nullptr : &fold.reshape;
+}
+
+void commit_sdpa_transpose_out(const array& out) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->sdpa_transpose_plans.find(out.id());
+  if (it != eager_state->sdpa_transpose_plans.end()) {
+    eager_state->sdpa_transpose_folds[it->second].fired = true;
   }
 }
 
@@ -2815,12 +3515,35 @@ bool dispatch_prologue_fold(
 }
 
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
+  static const bool fold_timing =
+      std::getenv("MLX_OMARCHY_FOLD_TIMING") != nullptr;
+  struct DispatchTimer {
+    bool on;
+    std::chrono::steady_clock::time_point t0;
+    explicit DispatchTimer(bool enabled)
+        : on(enabled),
+          t0(enabled ? std::chrono::steady_clock::now()
+                     : std::chrono::steady_clock::time_point{}) {}
+    ~DispatchTimer() {
+      if (on) {
+        eager_dispatch_us +=
+            std::chrono::duration<double, std::micro>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+        ++eager_dispatch_calls;
+      }
+    }
+  } dispatch_timer(fold_timing);
   if (!eager_state) {
     return false;
   }
   if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
       skip != nullptr) {
     return eager_state->gemv_groups[*skip].res_norm_done;
+  }
+  if (auto skip = eager_state->sdpa_transpose_skip_roles.find(node.id());
+      skip != eager_state->sdpa_transpose_skip_roles.end()) {
+    return eager_state->sdpa_transpose_folds[skip->second].fired;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
       skip != nullptr) {
@@ -2872,6 +3595,66 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
   }
+  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
+      rope_pair != nullptr) {
+    auto& pair = eager_state->rope_pairs[*rope_pair];
+    if (pair.state == RopePair::State::done) {
+      return true;
+    }
+    if (pair.state == RopePair::State::pending) {
+      if (pair.nodes[0].status() == array::Status::evaluated &&
+          pair.nodes[1].status() == array::Status::evaluated) {
+        // A settle pass already evaluated both members: the pair can
+        // pop inside a nested settle scope before the outer tape
+        // reaches it, and each scope plans the same pairs. One
+        // dispatch wrote both outputs; re-firing only rewrites them.
+        pair.state = RopePair::State::done;
+        return true;
+      }
+      // A fold-carrying pair passes each side's stashed pre-norm input,
+      // weight and eps; a successful dispatch owns the fold's norm
+      // math, so the folds are consumed (their claimed norms stay
+      // skipped).
+      std::optional<RopePairNorm> pair_norms[2];
+      std::array<const RopePairNorm*, 2> norm_ptrs{nullptr, nullptr};
+      for (int s = 0; s < 2; ++s) {
+        if (pair.norm_folds[s] >= 0) {
+          const auto& f = eager_state->rope_norms[pair.norm_folds[s]];
+          pair_norms[s].emplace(
+              RopePairNorm{f.x, f.w, f.eps, f.view, f.view_prim});
+          norm_ptrs[s] = &*pair_norms[s];
+        }
+      }
+      pair.state = RopePair::State::dispatching;
+      bool fired = dispatch_rope_pair(pair.nodes, norm_ptrs, stream);
+      pair.state = fired ? RopePair::State::done : RopePair::State::failed;
+      if (fired) {
+        for (int s = 0; s < 2; ++s) {
+          if (pair.norm_folds[s] >= 0) {
+            eager_state->rope_norms[pair.norm_folds[s]].state =
+                RopeNormFold::State::done;
+          }
+        }
+        return true;
+      }
+      static int trio_run_trace = 0;
+      if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+          trio_run_trace < 3) {
+        ++trio_run_trace;
+        std::fprintf(
+            stderr,
+            "[trio-run] pair un-planned: runtime contract refused\n");
+      }
+    }
+    // The pair is failed (refused now or on the other member's eval) or
+    // dispatching (a nested eval reached a member mid-dispatch). A
+    // fold-claimed rope still has its fold below: it replays the
+    // claimed norm and view so the ordinary rope eval reads settled
+    // inputs. A plain rope has no second coverage, so refuse it.
+    if (eager_state->rope_norm_roles.find(node.id()) == nullptr) {
+      return false;
+    }
+  }
   if (auto fold_it = eager_state->rope_norm_roles.find(node.id());
       fold_it != nullptr) {
     auto& fold = eager_state->rope_norms[*fold_it];
@@ -2904,35 +3687,6 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       return false;
     }
     return true;
-  }
-  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
-      rope_pair != nullptr) {
-    auto& pair = eager_state->rope_pairs[*rope_pair];
-    if (pair.state == RopePair::State::done) {
-      return true;
-    }
-    if (pair.state == RopePair::State::failed) {
-      return false;
-    }
-    if (pair.nodes[0].status() == array::Status::evaluated &&
-        pair.nodes[1].status() == array::Status::evaluated) {
-      // A settle pass already evaluated both members: the pair can pop
-      // inside a nested settle scope before the outer tape reaches it,
-      // and each scope plans the same pairs. One dispatch wrote both
-      // outputs; re-firing would only rewrite them.
-      pair.state = RopePair::State::done;
-      return true;
-    }
-    bool fired = dispatch_rope_pair(pair.nodes, stream);
-    pair.state = fired ? RopePair::State::done : RopePair::State::failed;
-    static int trio_run_trace = 0;
-    if (!fired && omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
-        trio_run_trace < 3) {
-      ++trio_run_trace;
-      std::fprintf(
-          stderr, "[trio-run] pair un-planned: runtime contract refused\n");
-    }
-    return pair.state == RopePair::State::done;
   }
   if (auto update = eager_state->slice_update_roles.find(node.id());
       update != nullptr) {
@@ -3035,7 +3789,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         stream,
                         group.outgate ? &*group.outgate : nullptr,
                         group.res_norm ? &*group.res_norm : nullptr,
-                        &group.res_norm_done)
+                        &group.res_norm_done,
+                        group.rope_epi ? &*group.rope_epi : nullptr,
+                        &group.rope_epi_done)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
       if (group.state == GemvGroup::State::failed && group.outgate) {

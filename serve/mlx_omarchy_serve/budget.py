@@ -614,10 +614,13 @@ def pair_records(pair_id: str, home: Path | None = None) -> dict[str, dict]:
 
 
 def admit_and_reserve_batch(items, *, pair_id: str, home: Path | None = None,
-                            available_bytes: int | None = None) -> list[dict]:
+                            available_bytes: int | None = None,
+                            gpu_client_cap_bytes: int | None = None) -> list[dict]:
     """One locked transaction for a whole model pair: the COMBINED
-    requirement is fit-checked, then one pending record per child is written
-    with a distinct owner token (which doubles as that child's claim token).
+    requirement is fit-checked against host memory, each child is fit-checked
+    against the per-client GPU cap (each child runs in its own worker process
+    / DRM client), then one pending record per child is written with a
+    distinct owner token (which doubles as that child's claim token).
     Records share pair_id — the cleanup group; the parent never adds its own
     byte-counted reservation. Refusal writes nothing, not even the part
     that would have fit on its own."""
@@ -657,13 +660,18 @@ def admit_and_reserve_batch(items, *, pair_id: str, home: Path | None = None,
         if headroom < 0:
             raise BudgetError(
                 "pair does not fit: " + "; ".join(lines) + " — refusing concurrent overcommit")
-        cap = gpu_client_cap()  # batch has no test override; sysfs only
-        if cap is not None and total > cap:
-            raise BudgetError(
-                f"pair does not fit: gpu per-client cap {cap / GiB:.2f} GiB < "
-                f"pair requirement {total / GiB:.2f} GiB — lower --context "
-                "or use a smaller model"
-            )
+        cap = gpu_client_cap_bytes if gpu_client_cap_bytes is not None \
+            else gpu_client_cap()
+        if cap is not None:
+            over = [(name, byte_count) for name, byte_count, _note in items
+                    if byte_count > cap]
+            if over:
+                name, byte_count = max(over, key=lambda item: item[1])
+                raise BudgetError(
+                    f"pair does not fit: gpu per-client cap {cap / GiB:.2f} GiB < "
+                    f"child {name!r} requirement {byte_count / GiB:.2f} GiB — "
+                    "lower --context or use a smaller model"
+                )
         out = []
         for name, byte_count, note in items:
             owner = generate_owner()
@@ -735,7 +743,8 @@ def claim_reservation(name: str, claim_token: str, *, expected_bytes: int,
 
 def resize_reservation(name: str, byte_count: int, *, owner: str,
                        home: Path | None = None,
-                       available_bytes: int | None = None) -> dict:
+                       available_bytes: int | None = None,
+                       gpu_client_cap_bytes: int | None = None) -> dict:
     """Atomically revise an owned reservation: the fresh fit check for the
     NEW total and the write happen under one lock. This is the only way a
     claimed allocation may change. On refusal the prior bytes stay."""
@@ -755,6 +764,13 @@ def resize_reservation(name: str, byte_count: int, *, owner: str,
         if headroom < 0:
             raise BudgetError(
                 f"resize of {name!r} to {byte_count} bytes does not fit; "
+                f"retaining the prior {entry['bytes']} bytes")
+        cap = gpu_client_cap_bytes if gpu_client_cap_bytes is not None \
+            else gpu_client_cap()
+        if cap is not None and byte_count > cap:
+            raise BudgetError(
+                f"resize of {name!r} to {byte_count / GiB:.2f} GiB exceeds "
+                f"gpu per-client cap {cap / GiB:.2f} GiB; "
                 f"retaining the prior {entry['bytes']} bytes")
         entry["bytes"] = int(byte_count)
         return {"name": name, "bytes": int(byte_count)}

@@ -24,11 +24,13 @@ mlx_omarchy_serve.budget when that module is importable.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import shutil
 import stat
+import struct
 import sys
 import urllib.request
 from pathlib import Path
@@ -38,6 +40,10 @@ PINNED_REVISION = "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
 WORKSPACE_HEADROOM_BYTES = 512 * 1024 * 1024
 # A converted manifest is about 1 KiB; cap reads to bound corrupt or hostile files.
 _MANIFEST_MAX_BYTES = 1 << 20
+# A Laya config is a few KiB; cap reads to bound corrupt or hostile files.
+_CONFIG_MAX_BYTES = 1 << 20
+# The safetensors format's own header size limit.
+_SAFETENSORS_HEADER_MAX_BYTES = 100_000_000
 _MANIFEST_FIELD_TYPES = (
     ("catalog_id", str),
     ("source_revision", str),
@@ -57,9 +63,31 @@ FILES = ["model.safetensors", "rl_agent_config.json", "encoder/config.json",
          "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]
 
 
-def _sha256(path: Path) -> str:
+@contextlib.contextmanager
+def _open_source(path: Path, name: str):
+    try:
+        with open(path, "rb", opener=lambda p, flags: os.open(p, flags | os.O_NONBLOCK)) as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise SystemExit("convert: %s in source snapshot is not a regular file" % name)
+            yield f
+    except OSError as exc:
+        raise SystemExit(
+            "convert: cannot read %s in source snapshot (%s)"
+            % (name, exc.strerror or type(exc).__name__)
+        ) from None
+
+
+def _read_config(path: Path, name: str) -> dict:
+    with _open_source(path, name) as f:
+        raw = f.read(_CONFIG_MAX_BYTES + 1)
+    if len(raw) > _CONFIG_MAX_BYTES:
+        raise SystemExit("convert: %s exceeds %d bytes" % (name, _CONFIG_MAX_BYTES))
+    return _parse_json_object(raw, name)
+
+
+def _sha256(path: Path, name: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with _open_source(path, name) as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -78,20 +106,60 @@ def _apply_aliases(header: dict) -> dict:
     return {_canonical_key(k): v for k, v in header.items()}
 
 
+def _parse_json_object(raw: bytes, name: str) -> dict:
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        raise SystemExit("convert: %s is not valid JSON (%s)" % (name, type(exc).__name__)) from None
+    if not isinstance(data, dict):
+        raise SystemExit("convert: %s is not a JSON object" % name)
+    return data
+
+
+def _positive_int(cfg: dict, key: str, name: str) -> int:
+    val = cfg.get(key)
+    if isinstance(val, int) and not isinstance(val, bool) and 0 < val < (1 << 63):
+        return val
+    raise SystemExit("convert: %s %s must be a positive integer below 2**63" % (name, key))
+
+
 def _validate_weights(path: Path, enc_cfg_json: dict, head_layers: int):
     """Validate the safetensors header: expected key set and shapes, no surprises."""
-    import struct
+    hidden, inter, layers, vocab = (
+        _positive_int(enc_cfg_json, k, "encoder/config.json")
+        for k in ("hidden_size", "intermediate_size", "num_hidden_layers", "vocab_size"))
 
-    with open(path, "rb") as f:
-        n = struct.unpack("<Q", f.read(8))[0]
-        header = json.loads(f.read(n))
+    with _open_source(path, "model.safetensors") as f:
+        prefix = f.read(8)
+        if len(prefix) < 8:
+            raise SystemExit("convert: model.safetensors is too short to hold a safetensors header")
+        n = struct.unpack("<Q", prefix)[0]
+        if n > _SAFETENSORS_HEADER_MAX_BYTES:
+            raise SystemExit(
+                "convert: model.safetensors header length %d exceeds the %d-byte safetensors limit"
+                % (n, _SAFETENSORS_HEADER_MAX_BYTES)
+            )
+        if 8 + n > os.fstat(f.fileno()).st_size:
+            raise SystemExit("convert: model.safetensors is truncated (header length %d)" % n)
+        raw = f.read(n)
+        if len(raw) != n:
+            raise SystemExit("convert: model.safetensors is truncated (header length %d)" % n)
+    header = _parse_json_object(raw, "model.safetensors header")
     header.pop("__metadata__", None)
+    for key, entry in header.items():
+        if (not isinstance(entry, dict) or not isinstance(entry.get("dtype"), str)
+                or not isinstance(entry.get("shape"), list)
+                or not all(isinstance(d, int) and not isinstance(d, bool) and d >= 0
+                           for d in entry["shape"])):
+            raise SystemExit("convert: tensor %r has malformed metadata" % key[:80])
     header = _apply_aliases(header)
-    hidden = enc_cfg_json["hidden_size"]
-    inter = enc_cfg_json["intermediate_size"]
-    layers = enc_cfg_json["num_hidden_layers"]
+    if 5 * layers + 12 * head_layers > len(header):
+        raise SystemExit(
+            "convert: checkpoint is missing expected tensors: %d encoder and %d head layers "
+            "need more tensors than the header's %d" % (layers, head_layers, len(header))
+        )
     expected = {
-        "encoder.embeddings.tok_embeddings.weight": (enc_cfg_json["vocab_size"], hidden),
+        "encoder.embeddings.tok_embeddings.weight": (vocab, hidden),
         "encoder.embeddings.norm.weight": (hidden,),
         "encoder.final_norm.weight": (hidden,),
         "type_emb.weight": (3, hidden),
@@ -172,29 +240,33 @@ def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) 
     import mlx.core  # noqa: F401  (fail fast outside a mlx environment)
 
     out.mkdir(parents=True, exist_ok=True)
-    hashes = {}
-    for name in FILES:
-        src = source / name
-        if not src.exists():
-            raise SystemExit("convert: missing %s in source snapshot" % name)
-        hashes[name] = _sha256(src)
-    with open(source / "encoder/config.json") as f:
-        enc_cfg_json = json.load(f)
-    with open(source / "rl_agent_config.json") as f:
-        agent_cfg = json.load(f)
-    if enc_cfg_json.get("model_type") != "modernbert":
-        raise SystemExit(
-            "convert: encoder model_type %r is not modernbert; this adapter implements only "
-            "the ModernBERT-large checkpoints (the multilingual checkpoint uses mmBERT and "
-            "is intentionally unsupported)" % enc_cfg_json.get("model_type")
+    enc_cfg_json = _read_config(source / "encoder/config.json", "encoder/config.json")
+    agent_cfg = _read_config(source / "rl_agent_config.json", "rl_agent_config.json")
+    model_type = enc_cfg_json.get("model_type")
+    if model_type != "modernbert":
+        shown = (
+            repr(model_type[:80]) if isinstance(model_type, str)
+            else "None" if model_type is None
+            else type(model_type).__name__
         )
-    header = _validate_weights(source / "model.safetensors", enc_cfg_json, int(agent_cfg["head_layers"]))
+        raise SystemExit(
+            "convert: encoder model_type %s is not modernbert; this adapter implements only "
+            "the ModernBERT-large checkpoints (the multilingual checkpoint uses mmBERT and "
+            "is intentionally unsupported)" % shown
+        )
+    head_layers, max_len, head_max_len = (
+        _positive_int(agent_cfg, k, "rl_agent_config.json")
+        for k in ("head_layers", "max_len", "head_max_len"))
+    header = _validate_weights(source / "model.safetensors", enc_cfg_json, head_layers)
+    hashes = {name: _sha256(source / name, name) for name in FILES}
 
     weights_bytes = (source / "model.safetensors").stat().st_size
     aliases_applied, out_sha = _emit_weights(source / "model.safetensors", out / "model.safetensors")
     import math
 
     param_elements = sum(math.prod(v["shape"]) for v in header.values())
+    archs = enc_cfg_json.get("architectures")
+    arch0 = archs[0] if isinstance(archs, list) and archs else None
     manifest = {
         "catalog_id": catalog_id,
         "source_repo": repo,
@@ -202,11 +274,13 @@ def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) 
         "source_files_sha256": hashes,
         "weights_sha256": out_sha,
         "key_aliases_applied": aliases_applied,
-        "encoder_architecture": enc_cfg_json.get("architectures", [None])[0],
+        "encoder_architecture": (
+            arch0 if isinstance(arch0, str) and len(arch0) <= 256 else None
+        ),
         "weights_header": {"tensor_count": len(header), "weight_bytes": weights_bytes,
                            "param_elements": param_elements},
-        "context_max_tokens": int(agent_cfg["max_len"]),
-        "head_max_tokens": int(agent_cfg["head_max_len"]),
+        "context_max_tokens": max_len,
+        "head_max_tokens": head_max_len,
         "estimated_bytes": weights_bytes + WORKSPACE_HEADROOM_BYTES,
     }
     with open(out / "manifest.json", "w") as f:

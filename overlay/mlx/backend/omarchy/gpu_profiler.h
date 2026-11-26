@@ -751,6 +751,7 @@ class GpuProfiler {
     va_start(args, fmt);
     std::vfprintf(out_, fmt, args);
     va_end(args);
+    std::fflush(out_);
   }
 
   std::unordered_map<const void*, std::unique_ptr<Ctx>> contexts_;

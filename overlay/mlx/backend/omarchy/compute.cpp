@@ -133,6 +133,7 @@
 #include "copy_general_bf16.h"
 #include "copy_general_f16.h"
 #include "slice_update_pair_f16.h"
+#include "slice_update_pair_bf16.h"
 #include "copy_general_f32.h"
 #include "copy_general_u32.h"
 #include "copy_general_bool.h"
@@ -265,6 +266,8 @@
 #include "fast_rope_freqs_bf16.h"
 #include "fast_rope_norm_bf16.h"
 #include "fast_rope_norm_apple_bf16.h"
+#include "fast_rope_norm_pair_bf16.h"
+#include "fast_rope_norm_pair_apple_bf16.h"
 #include "fast_rope_freqs_f16.h"
 #include "fast_rope_freqs_f32.h"
 #include "scan_f16.h"
@@ -304,6 +307,7 @@
 #include "qmm_vec_q4_word_subgroup_bf16_g128.h"
 #include "qmm_vec_q4_word_subgroup_batch4_bf16.h"
 #include "qmm_vec_q4_word_subgroup_rows8_bf16.h"
+#include "qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16.h"
 #include "qmm_vec_q4_word_subgroup_batch8_bf16.h"
 #include "qmm_vec_q4_word_subgroup_f16.h"
 #include "qmm_vec_q4_word_subgroup_f32.h"
@@ -331,6 +335,8 @@
 #include "qmm_vec_q4_multi_token16_bf16.h"
 #include "qmm_vec_q4_multi_token8_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token8_bf16.h"
+#include "qmm_vec_q4_multi_token4_resnorm_subgroup_bf16.h"
+#include "qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_subgroup_f16.h"
 #include "qmm_vec_q4_multi_subgroup_f32.h"
 #include "sdpa_decode_native_f16.h"
@@ -379,6 +385,7 @@
 #include "sdpa_decode_split_p1kv_hd256_bk128_g4.h"
 #include "sdpa_decode_split_p2_hd256_bk32.h"
 #include "sdpa_decode_split_p2_hd256_bk64.h"
+#include "sdpa_decode_online_sg32_bf16_hd128.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -762,6 +769,8 @@
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
 #include "qmm_intel_bf16.h"
+#include "matmul_bf16_coopmat_xe16.h"
+#include "qmm_coopmat16_xe.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -1106,6 +1115,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {copy_general_f16, copy_general_f16_size};
     case ComputeKernel::SliceUpdatePairF16:
       return {slice_update_pair_f16, slice_update_pair_f16_size};
+    case ComputeKernel::SliceUpdatePairBF16:
+      return {slice_update_pair_bf16, slice_update_pair_bf16_size};
     case ComputeKernel::CopyGeneralBF16:
       return {copy_general_bf16, copy_general_bf16_size};
     case ComputeKernel::CopyGeneralU32:
@@ -1426,6 +1437,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rope_norm_bf16, fast_rope_norm_bf16_size};
     case ComputeKernel::FastRopeNormAppleBF16:
       return {fast_rope_norm_apple_bf16, fast_rope_norm_apple_bf16_size};
+    case ComputeKernel::FastRopeNormPairBF16:
+      return {fast_rope_norm_pair_bf16, fast_rope_norm_pair_bf16_size};
+    case ComputeKernel::FastRopeNormPairAppleBF16:
+      return {fast_rope_norm_pair_apple_bf16,
+              fast_rope_norm_pair_apple_bf16_size};
+    case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128:
+      return {sdpa_decode_online_sg32_bf16_hd128,
+              sdpa_decode_online_sg32_bf16_hd128_size};
     case ComputeKernel::CrossEntropyBF16:
       return {fast_cross_entropy_bf16, fast_cross_entropy_bf16_size};
     case ComputeKernel::Fp8ToF32:
@@ -1976,6 +1995,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           qmm_vec_q4_multi_token8_subgroup_bf16_size};
     case ComputeKernel::QmmVecQ4MultiToken8BF16:
       return {qmm_vec_q4_multi_token8_bf16, qmm_vec_q4_multi_token8_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16,
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16,
+          qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16_size};
     case ComputeKernel::SdpaDecodeNativeF16:
       return {sdpa_decode_native_f16, sdpa_decode_native_f16_size};
     case ComputeKernel::SdpaDecodeNativeBF16:
@@ -2203,6 +2230,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2_size};
     case ComputeKernel::QmmPrefillIntelBF16:
       return {qmm_intel_bf16, qmm_intel_bf16_size};
+    case ComputeKernel::MatmulBF16CoopmatXe16:
+      return {matmul_bf16_coopmat_xe16, matmul_bf16_coopmat_xe16_size};
+    case ComputeKernel::QmmPrefillCoopmat16XeBF16:
+      return {qmm_coopmat16_xe, qmm_coopmat16_xe_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -2218,6 +2249,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2:
     case ComputeKernel::QmmPrefillIntelBF16:
+    case ComputeKernel::MatmulBF16CoopmatXe16:
+    case ComputeKernel::QmmPrefillCoopmat16XeBF16:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
@@ -2228,6 +2261,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_rows8_bf16,
           qmm_vec_q4_word_subgroup_rows8_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16:
+      return {
+          qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16,
+          qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16:
       return {
           qmm_vec_q4_word_subgroup_batch8_bf16,
