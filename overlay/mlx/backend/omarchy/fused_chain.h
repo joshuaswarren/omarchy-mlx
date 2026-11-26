@@ -337,9 +337,12 @@ bool rope_epi_enabled();
 bool rope_norm_pair_enabled();
 
 // MLX_OMARCHY_SDPA_ONLINE_ROPE=1 opts the fused Q/K RMSNorm+RoPE+KV-write+
-// online-softmax BF16 decode SDPA (HD=128) scan in.
+// online-softmax BF16 decode SDPA (HD=128 or HD=256) scan in.
 struct CapabilityReport;
-bool sdpa_online_rope_enabled(const CapabilityReport& caps, uint32_t k_len);
+bool sdpa_online_rope_enabled(
+    const CapabilityReport& caps,
+    uint32_t k_len,
+    int head_dim = 128);
 
 struct SdpaOnlineRopeCtx {
   const array* q_raw{nullptr};
@@ -354,6 +357,7 @@ struct SdpaOnlineRopeCtx {
   float norm_eps{0.0f};
   float rope_base{0.0f};
   float rope_scale{1.0f};
+  int rope_dims{128};
 };
 
 // Returns the planned fused Q/K RopeNorm+KV-write+SDPA context when the SDPA

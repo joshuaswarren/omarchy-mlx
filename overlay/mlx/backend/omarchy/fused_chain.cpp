@@ -3018,25 +3018,30 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
   }
   // Fused Q/K RMSNorm+RoPE+KV-cache-write+online-softmax BF16 decode SDPA
-  // (HD=128, batch 1, q_len 1; MLX_OMARCHY_SDPA_ONLINE_ROPE=1). Collapses
-  // FastRopeNormBF16(Q) + FastRopeNormBF16(K -> k_cache) + SdpaDecodeOnline
-  // into a single 1024-thread dispatch per attention layer.
+  // (HD=128 or HD=256, batch 1, q_len 1; MLX_OMARCHY_SDPA_ONLINE_ROPE=1).
+  // Collapses FastRopeNormBF16(Q) + FastRopeNormBF16(K -> k_cache) +
+  // SdpaDecodeOnline (plus optional SdpaOutgate epilogue) into a single
+  // 1024-thread dispatch per attention layer.
   if (fused_chain_enabled()) {
     for (const array& sdpa : tape) {
       if (!is_op(&sdpa, typeid(fast::ScaledDotProductAttention)) ||
           sdpa.dtype() != bfloat16 || sdpa.ndim() != 4 || sdpa.shape(0) != 1 ||
-          sdpa.shape(2) != 1 || sdpa.shape(3) != 128 ||
-          sdpa.inputs().size() != 3 || claimed.count(sdpa.id())) {
+          sdpa.shape(2) != 1 ||
+          (sdpa.shape(3) != 128 && sdpa.shape(3) != 256) ||
+          sdpa.inputs().size() != 3 ||
+          (claimed.count(sdpa.id()) &&
+           !state->sdpa_outgate_plans.count(sdpa.id()))) {
         continue;
       }
+      const int head_dim = sdpa.shape(3);
       const array* q_rope = lookup(sdpa.inputs()[0]);
       const array* k_in = lookup(sdpa.inputs()[1]);
       const array& v_in = sdpa.inputs()[2];
       if (q_rope == nullptr || k_in == nullptr ||
           q_rope->dtype() != bfloat16 || k_in->dtype() != bfloat16 ||
           v_in.dtype() != bfloat16 || k_in->ndim() != 4 || v_in.ndim() != 4 ||
-          k_in->shape(0) != 1 || k_in->shape(3) != 128 ||
-          v_in.shape(0) != 1 || v_in.shape(3) != 128 ||
+          k_in->shape(0) != 1 || k_in->shape(3) != head_dim ||
+          v_in.shape(0) != 1 || v_in.shape(3) != head_dim ||
           k_in->shape(2) <= 0 || k_in->shape(1) <= 0 ||
           sdpa.shape(1) % k_in->shape(1) != 0) {
         continue;
@@ -3045,7 +3050,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       if (sdpa_dev == nullptr ||
           !sdpa_online_rope_enabled(
               sdpa_dev->capabilities(),
-              static_cast<uint32_t>(k_in->shape(2)))) {
+              static_cast<uint32_t>(k_in->shape(2)),
+              head_dim)) {
         continue;
       }
       if (!is_op(q_rope, typeid(fast::RoPE)) || uses[q_rope->id()] != 1 ||
@@ -3094,11 +3100,17 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const auto& kr = static_cast<const fast::RoPE&>(k_rope->primitive());
       const auto& qst = qr.state();
       const auto& kst = kr.state();
-      // Forward, non-traditional, dims == 128, matching base/scale, shared
-      // scalar offset (same node or equal host-constant int32 scalars).
+      // Forward, non-traditional, matching rotary dims (128 for HD=128; any
+      // even 2..256 for HD=256), matching base/scale, shared scalar offset.
+      const int rope_dims = std::get<1>(qst);
+      const bool dims_ok = rope_dims == std::get<1>(kst) &&
+          (head_dim == 128
+               ? rope_dims == 128
+               : (rope_dims > 0 && (rope_dims % 2) == 0 &&
+                  rope_dims <= head_dim));
       if (!std::get<5>(qst) || !std::get<5>(kst) || std::get<2>(qst) ||
-          std::get<2>(kst) || std::get<1>(qst) != 128 ||
-          std::get<1>(kst) != 128 || std::get<3>(qst) != std::get<3>(kst) ||
+          std::get<2>(kst) || !dims_ok ||
+          std::get<3>(qst) != std::get<3>(kst) ||
           std::get<4>(qst) != std::get<4>(kst) ||
           q_rope->inputs().size() < 2 || k_rope->inputs().size() < 2 ||
           q_rope->inputs()[1].size() != 1 ||
@@ -3132,8 +3144,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         if (qr.norm_eps() != kr.norm_eps() ||
             q_rope->inputs()[2].dtype() != bfloat16 ||
             k_rope->inputs()[2].dtype() != bfloat16 ||
-            q_rope->inputs()[2].size() != 128 ||
-            k_rope->inputs()[2].size() != 128) {
+            q_rope->inputs()[2].size() != static_cast<size_t>(head_dim) ||
+            k_rope->inputs()[2].size() != static_cast<size_t>(head_dim)) {
           continue;
         }
         has_norm = true;
@@ -3143,7 +3155,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       } else if (q_folded_norm && k_folded_norm) {
         const auto& qf = state->rope_norms[*q_fold_ptr];
         const auto& kf = state->rope_norms[*k_fold_ptr];
-        if (qf.eps != kf.eps || qf.w.size() != 128 || kf.w.size() != 128) {
+        if (qf.eps != kf.eps ||
+            qf.w.size() != static_cast<size_t>(head_dim) ||
+            kf.w.size() != static_cast<size_t>(head_dim)) {
           continue;
         }
         has_norm = true;
@@ -3191,7 +3205,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           eps,
           std::get<3>(qst),
           std::get<4>(qst),
-          128,
+          rope_dims,
           SdpaOnlineRopeCtx{},
           false,
           false,
@@ -3749,28 +3763,33 @@ bool rope_norm_pair_enabled() {
       std::strcmp(env, "0") != 0;
 }
 
-bool sdpa_online_rope_enabled(const CapabilityReport& caps, uint32_t k_len) {
-  if (!fused_chain_enabled()) {
+bool sdpa_online_rope_enabled(
+    const CapabilityReport& caps,
+    uint32_t k_len,
+    int head_dim) {
+  if (!fused_chain_enabled() || (head_dim != 128 && head_dim != 256)) {
     return false;
   }
+  const uint32_t min_shared = head_dim == 256 ? 17152u : 16896u;
+  constexpr VkSubgroupFeatureFlags kOnlineRopeSubgroupFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  const bool device_ok = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u &&
+      caps.max_compute_shared_memory_size >= min_shared &&
+      (caps.subgroup_operations & kOnlineRopeSubgroupFeatures) ==
+          kOnlineRopeSubgroupFeatures;
   const char* env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE_ROPE");
   if (env != nullptr && env[0] != '\0') {
-    return std::strcmp(env, "0") != 0;
+    return std::strcmp(env, "0") != 0 && device_ok;
   }
   const char* online_env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE");
   if (online_env != nullptr && std::strcmp(online_env, "0") == 0) {
     return false;
   }
-  constexpr VkSubgroupFeatureFlags kOnlineRopeSubgroupFeatures =
-      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
-      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-  if (caps.subgroup_size != 32u ||
-      caps.max_compute_work_group_invocations < 1024u ||
-      caps.max_compute_work_group_size[0] < 1024u ||
-      caps.max_compute_shared_memory_size < 16896u ||
-      (caps.subgroup_operations & kOnlineRopeSubgroupFeatures) !=
-          kOnlineRopeSubgroupFeatures) {
+  if (!device_ok || head_dim != 128) {
     return false;
   }
   return sdpa_online_rope_default(caps.device_name, k_len);
@@ -3781,6 +3800,7 @@ static bool resolve_sdpa_rope_head_stride(
     const std::optional<array>& view,
     const std::shared_ptr<Primitive>& view_prim,
     int expected_heads,
+    int expected_head_dim,
     uint32_t& head_stride_out) {
   if (raw.data_shared_ptr() == nullptr || raw.dtype() != bfloat16 ||
       raw.offset() % raw.itemsize() != 0) {
@@ -3797,18 +3817,20 @@ static bool resolve_sdpa_rope_head_stride(
   Strides strides;
   Shape shape;
   if (view.has_value()) {
-    if (!raw.flags().row_contiguous ||
-        view->offset() % view->itemsize() != 0 ||
+    if (view->offset() % view->itemsize() != 0 ||
         view->shape(-1) != raw.shape(-1)) {
       return false;
     }
     shape = view->shape();
-    Strides parent = contiguous_strides(raw.shape());
     if (view_prim && typeid(*view_prim) == typeid(Transpose)) {
       const auto& axes = static_cast<const Transpose&>(*view_prim).state();
-      if (axes.size() != static_cast<size_t>(view->ndim())) {
+      if (axes.size() != static_cast<size_t>(view->ndim()) ||
+          raw.ndim() != static_cast<int>(axes.size()) ||
+          raw.strides().back() != 1 ||
+          axes.back() != static_cast<int>(axes.size()) - 1) {
         return false;
       }
+      const Strides& parent = raw.strides();
       strides = Strides(axes.size(), 0);
       for (size_t ax = 0; ax < axes.size(); ++ax) {
         if (axes[ax] < 0 || static_cast<size_t>(axes[ax]) >= parent.size()) {
@@ -3817,6 +3839,9 @@ static bool resolve_sdpa_rope_head_stride(
         strides[ax] = parent[axes[ax]];
       }
     } else {
+      if (!raw.flags().row_contiguous) {
+        return false;
+      }
       strides = contiguous_strides(view->shape());
     }
   } else {
@@ -3824,7 +3849,8 @@ static bool resolve_sdpa_rope_head_stride(
     strides = raw.strides();
   }
   if (shape.size() != 4 || shape[0] != 1 || shape[1] != expected_heads ||
-      shape[2] != 1 || shape[3] != 128 || strides[3] != 1 || strides[1] < 0) {
+      shape[2] != 1 || shape[3] != expected_head_dim || strides[3] != 1 ||
+      strides[1] < 0) {
     return false;
   }
   head_stride_out = static_cast<uint32_t>(strides[1]);
@@ -3890,16 +3916,23 @@ const SdpaOnlineRopeCtx* find_sdpa_online_rope(
        plan.k_weight->offset() % plan.k_weight->itemsize() == 0);
   const bool off_ok = plan.offset.data_shared_ptr() != nullptr &&
       plan.offset.offset() % plan.offset.itemsize() == 0;
+  const int expected_hd = plan.sdpa.shape(3);
   if (!pair.windows[0].has_value() ||
       pair.windows[0]->node.data_shared_ptr() == nullptr || !weights_ok ||
       !off_ok ||
       !resolve_sdpa_rope_head_stride(
-          plan.q_raw, plan.q_view, plan.q_view_prim, plan.sdpa.shape(1), q_hs) ||
+          plan.q_raw,
+          plan.q_view,
+          plan.q_view_prim,
+          plan.sdpa.shape(1),
+          expected_hd,
+          q_hs) ||
       !resolve_sdpa_rope_head_stride(
           plan.k_raw,
           plan.k_view,
           plan.k_view_prim,
           plan.k_rope.shape(1),
+          expected_hd,
           k_hs)) {
     abort_sdpa_online_rope(out, stream);
     return nullptr;
@@ -3916,7 +3949,8 @@ const SdpaOnlineRopeCtx* find_sdpa_online_rope(
       plan.has_norm,
       plan.eps,
       plan.base,
-      plan.scale};
+      plan.scale,
+      plan.dims};
   return &plan.ctx;
 }
 
