@@ -20486,7 +20486,10 @@ void ScaledDotProductAttention::eval_gpu(
         cf16_caps.cooperative_matrix_shapes,
         omarchy::sdpa_causal_flash_coopmat16_bf16_shape());
     const bool cf16_on = omarchy::sdpa_causal_flash_coopmat16_enabled(
-        cf16_env, cf16_shape, q_len, q_len % 16 == 0);
+        cf16_env, cf16_shape, q_len, q_len % 16 == 0,
+        (cf16_caps.subgroup_operations &
+         VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u,
+        cf16_caps.vulkan_memory_model);
     // One 64-lane subgroup per workgroup: admit when wave64 is native and
     // unpinned-or-64-pinned, or when a requiredSubgroupSize=64 pin is legal.
     const bool cf16_wave64 =
@@ -20529,6 +20532,8 @@ void ScaledDotProductAttention::eval_gpu(
           omarchy::cooperative_matrix_advertises(
               hw.cooperative_matrix_shapes,
               omarchy::sdpa_causal_flash_coopmat16_bf16_shape()) &&
+          (hw.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u &&
+          hw.vulkan_memory_model &&
           ((hw.subgroup_size_64_admitted ||
             (hw.subgroup_size == 64u &&
              (hw.required_subgroup_size == 0u ||

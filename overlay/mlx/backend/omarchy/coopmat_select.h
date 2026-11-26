@@ -136,11 +136,17 @@ CoopmatShape sdpa_causal_flash_coopmat16_bf16_shape();
 // on a device without the shape still falls back, and |full_query_tiles|
 // (q_len % 16 == 0 at the call site) is mandatory because the shader
 // backs the last workgroup up a tile and overlapping stores are not
-// synchronized.
+// synchronized. |subgroup_shuffle| (VK_SUBGROUP_FEATURE_SHUFFLE_BIT in
+// supportedOperations) and |vulkan_memory_model| (the Vulkan 1.2 feature
+// the shader's OpCapability VulkanMemoryModel needs enabled) are the
+// same kind of mandatory hardware term: the generated module and the
+// device feature chain must agree, force-on or not.
 bool sdpa_causal_flash_coopmat16_enabled(
     const char* env,
     bool shape_advertised,
     int q_len,
-    bool full_query_tiles);
+    bool full_query_tiles,
+    bool subgroup_shuffle,
+    bool vulkan_memory_model);
 
 } // namespace mlx::core::omarchy

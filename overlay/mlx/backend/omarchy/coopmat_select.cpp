@@ -37,11 +37,14 @@ bool sdpa_causal_flash_coopmat16_enabled(
     const char* env,
     bool shape_advertised,
     int q_len,
-    bool full_query_tiles) {
+    bool full_query_tiles,
+    bool subgroup_shuffle,
+    bool vulkan_memory_model) {
   if (env != nullptr && env[0] == '0') {
     return false;
   }
-  if (!shape_advertised || !full_query_tiles) {
+  if (!shape_advertised || !full_query_tiles || !subgroup_shuffle ||
+      !vulkan_memory_model) {
     return false;
   }
   return q_len >= 64 || (env != nullptr && env[0] == '1');

@@ -33,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -120,8 +121,52 @@ print(json.dumps({
 """
 
 
+def target_kernel_id():
+    """Numeric ComputeKernel id of SdpaCausalFlashCoopmat16BF16, resolved
+    from this repo's compute.h so an enum reorder cannot silently retarget
+    the census guard. Fails loudly when the name is not found."""
+    header = (Path(__file__).resolve().parent.parent /
+              "overlay/mlx/backend/omarchy/compute.h")
+    text = header.read_text(encoding="utf-8")
+    body = text.split("enum class ComputeKernel", 1)[1].split("};", 1)[0]
+    kid = -1
+    for raw in body.splitlines():
+        line = raw.split("//", 1)[0].strip()
+        if not line:
+            continue
+        name, eq, num = line.partition("=")
+        name = name.strip().rstrip(",")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            continue
+        if eq:
+            kid = int(num.strip().rstrip(","))
+        else:
+            kid += 1
+        if name == "SdpaCausalFlashCoopmat16BF16":
+            return kid
+    raise SystemExit(
+        f"SdpaCausalFlashCoopmat16BF16 not found in {header}")
+
+
+def target_dispatch_counts(results, target_kid):
+    """(arm A target count, arm B target count) over the traced legs."""
+    a = b = 0
+    for r in results:
+        count = r.get("dispatch_census", {}).get(str(target_kid), 0)
+        if r["arm"] == "A":
+            a += count
+        else:
+            b += count
+    return a, b
+
+
 def run_leg(driver, env_extra, args, logits_path, trace):
     env = dict(os.environ)
+    # Arm A is "switch unset": an inherited MLX_OMARCHY_SDPA_CAUSAL_FLASH
+    # from the caller's shell would leak into the child and silently turn
+    # a fallback-vs-fallback run into a pass. Strip it before the per-arm
+    # override so each leg's env is exactly what the arm declares.
+    env.pop("MLX_OMARCHY_SDPA_CAUSAL_FLASH", None)
     env.update(env_extra)
     env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     if trace:
@@ -180,6 +225,7 @@ def main():
 
     results = []
     order = ["A", "B", "B", "A"]
+    target_kid = target_kernel_id()
     for pair in range(1, args.pairs + 1):
         for idx, arm in enumerate(order):
             env_extra = {} if arm == "A" else {"MLX_OMARCHY_SDPA_CAUSAL_FLASH": "0"}
@@ -239,6 +285,15 @@ def main():
         raise SystemExit("FAIL: greedy token IDs diverged across arms")
     if not arg_same:
         raise SystemExit("FAIL: last-token argmax diverged across arms")
+    a_count, b_count = target_dispatch_counts(results, target_kid)
+    if a_count == 0:
+        raise SystemExit(
+            f"FAIL: target kernel {target_kid} never dispatched on arm A "
+            "- the capture measured fallback vs fallback")
+    if b_count != 0:
+        raise SystemExit(
+            f"FAIL: target kernel {target_kid} dispatched {b_count}x on "
+            "arm B - the kill switch did not isolate the arms")
 
 
 if __name__ == "__main__":

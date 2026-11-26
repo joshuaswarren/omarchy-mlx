@@ -143,6 +143,10 @@ struct CapabilityReport {
   uint32_t queue_count{0};
   bool unified_memory{false};
   bool timeline_semaphore{false};
+  // VkPhysicalDeviceVulkan12Features::vulkanMemoryModel support. The
+  // 16x16x16 coopmat shaders emit OpCapability VulkanMemoryModel, so the
+  // route requires both the supported bit and the device enable.
+  bool vulkan_memory_model{false};
   bool shader_float16{false};
   bool shader_int16{false};
   bool shader_int64{false};

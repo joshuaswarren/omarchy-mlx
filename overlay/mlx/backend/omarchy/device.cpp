@@ -580,6 +580,7 @@ CapabilityReport collect_capabilities(
   caps.total_memory = host_visible_heap > 0 ? host_visible_heap : device_local;
 
   caps.timeline_semaphore = f12.timelineSemaphore == VK_TRUE;
+  caps.vulkan_memory_model = f12.vulkanMemoryModel == VK_TRUE;
   caps.shader_float16 = f12.shaderFloat16 == VK_TRUE;
   caps.shader_int16 = feats2.features.shaderInt16 == VK_TRUE;
   caps.shader_int64 = feats2.features.shaderInt64 == VK_TRUE;
@@ -1620,6 +1621,10 @@ Device::Device(uint32_t physical_device_index) {
   VkPhysicalDeviceVulkan12Features enabled12{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
   enabled12.timelineSemaphore = VK_TRUE;
+  // The coopmat16 shaders declare OpCapability VulkanMemoryModel; enable
+  // the feature exactly where the hardware supports it so the generated
+  // module and the device feature chain agree.
+  enabled12.vulkanMemoryModel = hw.vulkan_memory_model ? VK_TRUE : VK_FALSE;
   enabled12.shaderFloat16 = hw.shader_float16 ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceVulkan13Features enabled13{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};

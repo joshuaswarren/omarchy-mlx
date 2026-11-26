@@ -225,29 +225,45 @@ TEST_CASE("the 16x16x16 causal flash gate keeps capability mandatory under force
   // Unset defaults on where the shape is advertised and the q_len floor
   // and full-tile alignment hold.
   CHECK(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      nullptr, true, 512, true));
+      nullptr, true, 512, true, true, true));
   // Kill switch wins over everything.
   CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      "0", true, 512, true));
+      "0", true, 512, true, true, true));
   // Force-on cannot conjure the hardware requirement: no advertised
   // shape, no dispatch, env=1 or not.
   CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      "1", false, 512, true));
+      "1", false, 512, true, true, true));
   CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      nullptr, false, 512, true));
+      nullptr, false, 512, true, true, true));
   // Ragged query tails overlap the last two workgroups' stores; the
   // route requires full 16-row tiles even when forced.
   CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      nullptr, true, 512, false));
+      nullptr, true, 512, false, true, true));
   CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      "1", true, 512, false));
+      "1", true, 512, false, true, true));
   // Below the q_len floor the route stays off unless explicitly forced.
   CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      nullptr, true, 32, true));
+      nullptr, true, 32, true, true, true));
   CHECK(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      "1", true, 32, true));
+      "1", true, 32, true, true, true));
   CHECK(omarchy::sdpa_causal_flash_coopmat16_enabled(
-      nullptr, true, 64, true));
+      nullptr, true, 64, true, true, true));
+}
+
+TEST_CASE("the 16x16x16 causal flash gate refuses a required feature missing") {
+  // A matching advertised matrix shape is not enough on its own: the
+  // shader emits OpGroupNonUniformShuffleXor (needs
+  // VK_SUBGROUP_FEATURE_SHUFFLE_BIT) and OpCapability VulkanMemoryModel
+  // (needs the Vulkan 1.2 feature). Each missing term refuses, force-on
+  // or not, so an uncapable device keeps the fallback.
+  for (const char* env : {(const char*)nullptr, "1"}) {
+    CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+        env, true, 512, true, false, true));
+    CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+        env, true, 512, true, true, false));
+    CHECK_FALSE(omarchy::sdpa_causal_flash_coopmat16_enabled(
+        env, true, 512, true, false, false));
+  }
 }
 
 TEST_CASE("the match is exact in every field") {
