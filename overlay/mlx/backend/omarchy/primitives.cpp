@@ -9307,7 +9307,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     const int bf16w_env = decode_path_override("MLX_OMARCHY_QMM_BF16W");
     if (bf16w_env > 0 ||
         (bf16w_env < 0 &&
-            omarchy::qmm_bf16w_default_part(coopmat_caps.device_name))) {
+            omarchy::qmm_bf16w_default_part(coopmat_caps))) {
       array deq(Shape{n, k}, bfloat16, nullptr, {});
       dispatch_affine_dequantize(
           tag, w_d, scales_d, biases_d, deq, bits_, group_size_, stream());
@@ -9853,7 +9853,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       uint32_t coopmat_rows = omarchy::coopmat_tile_rows(
           params.matrix_m,
           n_groups,
-          encoder.device().hardware_capabilities().device_name,
+          coopmat_caps,
           omarchy::qmm_prefill_allow_rows64(q4_g64_transpose, full_n) &&
               g4_pad_eligible,
           allow_rows128);
@@ -10022,12 +10022,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               : pad_bytes;
           // STEP_K=32 doubles the B-tile (32 x 36 f32); still well
           // under typical max shared. CHUNK stays the 32-row path only.
-          const std::string qmm_dev_name =
-              encoder.device().hardware_capabilities().device_name;
           const bool use_sg4 =
-              omarchy::qmm_coopmat_sg4_requested(qmm_dev_name);
+              omarchy::qmm_coopmat_sg4_requested(coopmat_caps);
           const uint32_t step_k = omarchy::qmm_coopmat_stepk_requested(
-              qmm_dev_name, coopmat_rows, use_sg4);
+              coopmat_caps, coopmat_rows, use_sg4);
           const uint32_t ratio_bytes =
               (step_k * 36u + (step_k == 64u ? 64u : 0u)) * 4u;
           const uint32_t need_ratio =
@@ -10208,7 +10206,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           ? omarchy::coopmat_tile_rows(
                 params.matrix_m,
                 n_groups,
-                encoder.device().hardware_capabilities().device_name)
+                coopmat_caps)
           : 32u;
       uint32_t m_groups =
           (params.matrix_m + coopmat_rows - 1u) / coopmat_rows;

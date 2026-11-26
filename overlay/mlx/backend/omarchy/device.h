@@ -886,7 +886,7 @@ inline bool sdpa_decode_f16_without_coopmat_part(
 // product is what the Metal backend does (its quantized loader stores T tiles for the MMA).
 //   G16S (Apple M4 Pro, cooperative-matrix driver), Qwen3-8B-4bit prefill: receipts/2026-11-15-m4-pro-g16s-qmm-bf16w.
 // Pure.
-inline bool qmm_bf16w_default_part(const std::string& device_name) {
+inline bool qmm_bf16w_default_part(const CapabilityReport& caps) {
   if (const char* env = std::getenv("MLX_OMARCHY_QMM_BF16W")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
@@ -896,13 +896,31 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   // path on 4B/9B prefill512 while keeping fp32 weight dequantization and
   // zero temporary dequant buffers. G13G measured: 4B 210.27 vs 98.00
   // tok/s (2.15x), 9B 101.64 vs 49.52 (2.05x), token ids identical
-  // (5-pair ABBA on main 1f854b9b85, PR #935).
+  // (5-pair ABBA on main 1f854b9b85, PR #935). G16S stays on the
+  // two-pass route its receipt was produced through.
+  const std::string& device_name = caps.device_name;
   if (device_name.find("G13G") != std::string::npos ||
       device_name.find("G13C") != std::string::npos ||
       device_name.find("G14C") != std::string::npos) {
     return false;
   }
-  return true;
+  if (device_name.find("G16S") != std::string::npos) {
+    return true;
+  }
+  // Capability default for unlisted parts (DEC-17): a part that can
+  // dispatch a single-kernel coopmat qmm prefill route prefers it,
+  // because that route is the measured winner on every part that has
+  // one. A single-kernel route exists for the fp32 8x8x8 shape
+  // (QmmPrefillCoopmat*), the bf16 8x16x16 XMX shape Intel ANV parts
+  // advertise (QmmPrefillIntelBF16), and the f16 16x16x16 shape NVIDIA
+  // advertises (the CMAT16 builds) - the booleans and the verbatim
+  // shape list cover all three. A part with none of them gets the
+  // two-pass route, which is inert anyway: the bf16w gate above also
+  // requires the fp32 coopmat route to be reachable.
+  return !(caps.cooperative_matrix_f32_8 || caps.cooperative_matrix_bf16 ||
+           omarchy::cooperative_matrix_advertises(
+               caps.cooperative_matrix_shapes,
+               omarchy::qmm_prefill_coopmat_shape_f16x16()));
 }
 
 // Intel-shaped bf16 cooperative-matrix prefill (MLX_OMARCHY_QMM_INTEL
