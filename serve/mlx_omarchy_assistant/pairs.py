@@ -26,6 +26,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -1229,11 +1230,28 @@ class PairManager:
             return self.status()
 
     def _newest_lock_pair_id(self) -> str | None:
+        """The newest regular *.json lock file. Absent dir: None; a dir that
+        cannot be listed or searched: PairError, never "no saved pair lock"."""
         directory = pair_lock_path(self.home, "unused").parent
-        if not directory.is_dir():
+        candidates = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".json"):
+                        continue
+                    try:
+                        info = entry.stat()
+                    except OSError:  # vanished mid-scan, dangling or looping link
+                        continue
+                    if stat.S_ISREG(info.st_mode):  # never a dir or FIFO
+                        candidates.append((info.st_mtime_ns, entry.name))
+            # still searchable, so a failed entry stat was that entry's own
+            os.stat(os.path.join(directory, "."))
+        except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: unencodable path
             return None
-        candidates = sorted(directory.glob("*.json"), key=lambda path: path.stat().st_mtime)
-        return candidates[-1].stem if candidates else None
+        except OSError as exc:
+            raise PairError(f"pair lock directory {directory} is unreadable: {exc}") from exc
+        return Path(max(candidates)[1]).stem if candidates else None
 
     def start(self, pair_id: str | None = None) -> dict:
         with self._op_lock:
