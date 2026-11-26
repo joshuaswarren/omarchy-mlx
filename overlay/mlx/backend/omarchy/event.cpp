@@ -369,7 +369,7 @@ void Event::signal(Stream s) {
           event.gpu->semaphore,
           signal_value,
           event_,
-          [impl, signal_value](uint64_t completion) {
+          [impl, signal_value, keepalive = event_](uint64_t completion) {
             impl->publish_signal(signal_value, completion);
           });
       // Deferred commits: the signal rides the open batch to its next

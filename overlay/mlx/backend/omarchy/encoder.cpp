@@ -315,18 +315,25 @@ CommandEncoder::~CommandEncoder() {
 // ordered), so they can legally be begun again, and host reads see the
 // submissions' final bytes.
 void CommandEncoder::join_last_completion(const char* reason) {
+  // Read the join target under op_mutex_: a foreign deferred-signal
+  // commit can publish a newer completion while this thread sleeps in
+  // the wait below, and the zero afterwards must not clobber it.
+  uint64_t value;
+  {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+    value = last_completion_;
+  }
   if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr, "[rtmod] JOIN tid=%lu reason=%s last=%lu\n", (unsigned long)syscall(SYS_gettid), reason,
-            (unsigned long)last_completion_);
+            (unsigned long)value);
   }
-  if (last_completion_ == 0) {
+  if (value == 0) {
     return;
   }
   // A queued deferred signal may be the only producer left that can
   // satisfy submissions this join (or a wait inside one of them) blocks
   // on; flush before blocking so the host wait always terminates.
   flush_deferred_signal_encoders();
-  uint64_t value = last_completion_;
   timeline::ScopedEvent tl_join(
       timeline::Kind::Readback,
       timeline::SubKind::SyncJoin,
@@ -335,7 +342,12 @@ void CommandEncoder::join_last_completion(const char* reason) {
   uint64_t join_t0 = prof::get().profiling() ? prof::host_ns() : 0;
   device_.completions().wait(value);
   uint64_t wait_t1 = prof::get().profiling() ? prof::host_ns() : 0;
-  last_completion_ = 0;
+  {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+    if (last_completion_ == value) {
+      last_completion_ = 0;
+    }
+  }
   {
     timeline::ScopedEvent tl_inv(
         timeline::Kind::Readback,
@@ -1911,6 +1923,17 @@ void CommandEncoder::submit() {
       device_.completions().retain_for_resubmit(
           completion_value, std::move(batch));
     }
+    // Publish the carrying completion value to every queued signal's
+    // owner: deferred signals (defer_commits_enabled) could not name it at
+    // queue time. Runs before the keepalive list moves into the
+    // dispatcher — on a fire-and-forget Event the queued keepalive can
+    // be the last reference, and a completion thread draining it first
+    // would free the publish target under the hook.
+    for (auto& pending : signal_semaphores_) {
+      if (pending.on_submit) {
+        pending.on_submit(completion_value);
+      }
+    }
     device_.completions().enqueue(
         completion_value,
         std::move(keepalive),
@@ -1918,14 +1941,6 @@ void CommandEncoder::submit() {
         was_recording ? slots_[current_slot_].started : VK_NULL_HANDLE);
     last_completion_ = completion_value;
     submitted = completion_value;
-    // Publish the carrying completion value to every queued signal's
-    // owner: deferred signals (defer_commits_enabled) could not name it at
-    // queue time.
-    for (auto& pending : signal_semaphores_) {
-      if (pending.on_submit) {
-        pending.on_submit(completion_value);
-      }
-    }
     if (resnorm_ticket_slot_ >= 0) {
       resnorm_ticket_in_flight_[resnorm_ticket_slot_] = completion_value;
       resnorm_ticket_slot_ = -1;

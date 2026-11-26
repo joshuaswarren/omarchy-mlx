@@ -377,6 +377,7 @@ class MLX_API CommandEncoder
   }
 
   bool needs_commit() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return node_count_ > 0;
   }
 
@@ -402,12 +403,14 @@ class MLX_API CommandEncoder
   // kBatchNodeBudget so a long graph cannot pin unbounded temporaries
   // behind one open command buffer.
   int nodes() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return node_count_;
   }
 
   // Summed dispatch work-group counts of the open batch: the bounded
   // GPU-time proxy the work budget flushes on (batch_work_budget).
   uint64_t batch_work() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return batch_work_;
   }
 
@@ -420,6 +423,7 @@ class MLX_API CommandEncoder
   // still owes a batch flush takes the queued path, which submits and
   // releases.
   bool idle() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return !recording_ && pending_.empty() && wait_semaphores_.empty() &&
         signal_semaphores_.empty() && completed_handlers_.empty() &&
         batch_buffers_.empty();
@@ -525,6 +529,7 @@ class MLX_API CommandEncoder
   // and its handlers have run, and no batch is open with un-submitted
   // work. Host reads of input bytes are then sound.
   bool synchronized() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return node_count_ == 0 &&
         (last_completion_ == 0 ||
          device_.completions().drained_value() >= last_completion_);
@@ -539,6 +544,7 @@ class MLX_API CommandEncoder
   }
 
   uint64_t last_submitted_completion() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return last_completion_;
   }
 
@@ -551,6 +557,7 @@ class MLX_API CommandEncoder
   // by many dispatches counts once (pre-binding), so this stays small on
   // weight/KV-heavy graphs.
   size_t open_batch_buffer_count() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return batch_buffers_.size();
   }
 
@@ -725,8 +732,9 @@ class MLX_API CommandEncoder
   // is only legal when recording, queueing, and submit() cannot overlap
   // (Vulkan's external-synchronization rule). Recursive because public
   // entry points nest (synchronize -> commit -> submit, dispatch ->
-  // emit_pending). Readers stay lock-free.
-  std::recursive_mutex op_mutex_;
+  // emit_pending). Readers lock too: a foreign submit() clears the STL
+  // containers these methods walk.
+  mutable std::recursive_mutex op_mutex_;
   // Guards the pending semaphore lists: deferred signals let a waiter on
   // another thread commit this encoder, so queueing and submit()'s
   // snapshot must serialize against each other.
