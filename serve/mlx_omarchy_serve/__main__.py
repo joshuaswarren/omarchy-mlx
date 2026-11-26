@@ -32,6 +32,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePosixPath
 
 from . import budget, catalog
@@ -1123,6 +1124,27 @@ def host_nonlocal(host: str) -> bool:
     return host not in ("127.0.0.1", "localhost", "::1")
 
 
+def cache_status(path: Path) -> tuple[str, bool]:
+    """The `catalog status` cache line, and whether load_catalog() serves the cache."""
+    try:
+        info = path.stat()  # one stat: no is_file()/stat() race
+        if not stat.S_ISREG(info.st_mode):
+            return f"none at {path}", False
+        # load_catalog() serves the cache only when it validates; say the same.
+        catalog.validate_file(path)
+    except catalog.CatalogError:  # before ValueError: CatalogError subclasses it
+        note = ", invalid"
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError, ValueError):
+        # removed or replaced mid-check; ValueError: a name the filesystem encoding cannot hold
+        return f"none at {path}", False
+    except OSError as exc:  # an untraversable directory or an unreadable file
+        return f"unreadable at {path} ({exc.strerror or exc})", False
+    else:
+        note = ""
+    age_h = (time.time() - info.st_mtime) / 3600.0
+    return f"{path} ({age_h:.1f}h old{note})", not note
+
+
 def cmd_catalog(args, _cat, home) -> int:
     if args.catalog_command == "list":
         cat = catalog.load_catalog(home)
@@ -1135,19 +1157,8 @@ def cmd_catalog(args, _cat, home) -> int:
                   f" {e['memory']['weights_bytes'] / GiB:>7.2f}")
         return 0
     if args.catalog_command == "status":
-        path = catalog.cache_path(home)
-        cache_ok = False
-        if path.is_file():
-            age_h = 0.0
-            import time
-
-            age_h = (time.time() - path.stat().st_mtime) / 3600.0
-            # load_catalog() serves the cache only when it validates; say the same.
-            cache_ok = catalog._is_valid(path)
-            note = "" if cache_ok else ", invalid"
-            print(f"cache:  {path} ({age_h:.1f}h old{note})")
-        else:
-            print(f"cache:  none at {path}")
+        line, cache_ok = cache_status(catalog.cache_path(home))
+        print(f"cache:  {line}")
         print(f"bundled: {catalog.bundled_path()}")
         print(f"url:    {os.environ.get('MLX_OMARCHY_CATALOG_URL') or catalog.DEFAULT_CATALOG_URL}")
         print(f"live:   {'cache' if cache_ok else 'bundled fallback'}")
