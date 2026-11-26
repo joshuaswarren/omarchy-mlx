@@ -408,6 +408,11 @@ def select_pair(pair_records, model_entries, *, preference: str,
 
 # ------------------------------------------------------------------ locks
 
+# A written lock is a few KiB at most; the cap bounds a damaged or hostile one
+# before it reaches memory or the JSON parser.
+PAIR_LOCK_MAX_BYTES = 1 << 20
+
+
 def pair_lock_path(home: Path, pair_id: str) -> Path:
     return Path(home) / "assistant" / "pair-locks" / f"{pair_id}.json"
 
@@ -432,7 +437,24 @@ def write_pair_lock(home: Path, pair_id: str, lock: dict) -> Path:
 def load_pair_lock(home: Path, pair_id: str) -> dict | None:
     path = pair_lock_path(home, pair_id)
     try:
-        lock = json.loads(path.read_text(encoding="utf-8"))
+        # O_NONBLOCK: a FIFO at the lock path opens without a writer and is
+        # refused below instead of blocking the open or the read.
+        with open(path, "rb", buffering=0,  # a buffered read would read ahead past the cap
+                  opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("not a regular file")
+            if info.st_size > PAIR_LOCK_MAX_BYTES:
+                raise ValueError(f"exceeds {PAIR_LOCK_MAX_BYTES} bytes")
+            raw = bytearray()
+            while len(raw) <= PAIR_LOCK_MAX_BYTES:  # a short read is not EOF; stop at cap + 1
+                chunk = stream.read(PAIR_LOCK_MAX_BYTES + 1 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        if len(raw) > PAIR_LOCK_MAX_BYTES:
+            raise ValueError(f"exceeds {PAIR_LOCK_MAX_BYTES} bytes")
+        lock = json.loads(raw.decode("utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, ValueError, RecursionError) as exc:
