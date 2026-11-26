@@ -1296,7 +1296,7 @@ enum class ComputeKernel : uint16_t {
   // without the fp32 8x8x8 shape the staged coopmat routes require.
   // Appended to keep profile kernel ids stable.
   MatmulBF16CoopmatXe16,
-  // fp16-operand 8x16x16 build of the QMM prefill coopmat16 kernel for
+  // bf16-operand 8x16x16 build of the QMM prefill coopmat16 kernel for
   // Intel/ANV, whose coopmat list carries no M16 entry
   // (shaders/qmm_coopmat16_xe.comp): staged x_s tile, so ragged
   // matrix_m is covered where QmmPrefillIntelBF16's m%16 gate is not.

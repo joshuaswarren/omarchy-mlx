@@ -9,7 +9,7 @@ so the outputs are not bit-identical; the check is that the intel
 route's error against the f32 dequantize-matmul reference is no worse
 than the shipped route's.
 
-DEC-19 adds QmmPrefillCoopmat16XeBF16 (fp16 operands on the same ANV
+DEC-19 adds QmmPrefillCoopmat16XeBF16 (bf16 operands on the same ANV
 8x16x16 family, staged x so ragged matrix_m works): arms here pin
 MLX_OMARCHY_NO_QMM_XE16=1 to keep the Intel-vs-FMA contract, and
 test_xe16_covers_ragged_m covers the ragged-m shapes it newly takes.
@@ -90,10 +90,10 @@ class QmmIntelParity(unittest.TestCase):
         np.testing.assert_allclose(intel_y, ctl_y, rtol=1e-3, atol=1e-3)
 
     def test_xe16_covers_ragged_m(self):
-        # QmmPrefillCoopmat16XeBF16 (fp16 operands on the ANV 8x16x16
+        # QmmPrefillCoopmat16XeBF16 (bf16 operands on the ANV 8x16x16
         # shape) stages x through shared, so a ragged matrix_m tile
         # zero-fills: the m=20 call the intel route declines lands on
-        # it. fp16 operand rounding puts it in the same error class as
+        # it. bf16 operand rounding puts it in the same error class as
         # the intel route, not the FMA route's bit-level agreement.
         ctl_y, ref = self.run_arm(False, m_rows=20)
         xe_y, _ = self.run_arm(False, m_rows=20, no_xe16=False)

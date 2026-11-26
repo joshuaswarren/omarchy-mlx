@@ -1063,6 +1063,8 @@ void dispatch_matmul(
       kernel == omarchy::ComputeKernel::MatmulBF16 &&
       caps.cooperative_matrix_bf16 && xe16_shape_advertised &&
       caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 64u &&
+      caps.max_compute_work_group_size[0] >= 64u &&
       !coopmat_disabled && params.matrix_m > 1u && params.matrix_k > 0u &&
       kMatmulXe16SharedBytes <= caps.max_compute_shared_memory_size;
   if (xe16) {
@@ -1079,7 +1081,13 @@ void dispatch_matmul(
                     .hardware_capabilities()
                     .cooperative_matrix_shapes,
                 omarchy::matmul_xe16_bf16_shape()) &&
-            encoder.device().hardware_capabilities().subgroup_size == 32u);
+            encoder.device().hardware_capabilities().subgroup_size == 32u &&
+            encoder.device()
+                    .hardware_capabilities()
+                    .max_compute_work_group_invocations >= 64u &&
+            encoder.device()
+                    .hardware_capabilities()
+                    .max_compute_work_group_size[0] >= 64u);
   }
   bf16_fma = bf16_fma && !xe16;
 #else
@@ -9273,11 +9281,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
       kQmmCoopmat16SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
   // Intel/ANV-shaped coopmat16 twin (shaders/qmm_coopmat16_xe.comp):
-  // same fp16-operand contract on the 8x16x16 fp16 x fp16 -> f32 shape
-  // ANV advertises on Xe2 (BMG). x stages through shared, so unlike
-  // QmmPrefillIntelBF16 the tile height needs no m alignment - this
-  // variant covers the matrix_m shapes the Intel gate rejects, on top
-  // of being the literal "QmmPrefillCoopmat16" route for a driver whose
+  // same bf16-operand contract as QmmPrefillIntelBF16 on the 8x16x16
+  // bf16 x bf16 -> f32 shape ANV advertises on Xe2 (BMG). x stages
+  // through shared, so unlike QmmPrefillIntelBF16 the tile height needs
+  // no m alignment - this variant covers the matrix_m shapes the Intel
+  // gate rejects, on top of being the literal "QmmPrefillCoopmat16"
+  // route for a driver whose
   // shape list has no M16 entry. Ordered after both the Intel direct
   // route (returns above) and the NVIDIA CMAT16 route so parts
   // advertising more than one 16-family shape keep the measured pick.
@@ -9299,7 +9308,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       x.ndim() >= 2 && x.shape(-2) > 1 &&
       x.shape(-1) % 64 == 0 &&
       coopmat_caps.cooperative_matrix_bf16 && qmm_xe16_shape_advertised &&
-      coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
+      coopmat_caps.subgroup_size == 32u &&
+      coopmat_caps.max_compute_work_group_invocations >= 64u &&
+      coopmat_caps.max_compute_work_group_size[0] >= 64u &&
+      !coopmat_disabled &&
       kQmmCoopmat16XeSharedBytes <=
           coopmat_caps.max_compute_shared_memory_size;
 #endif
@@ -9933,10 +9945,14 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           coopmat_caps,
           qmm_xe16_reachable,
           "QmmPrefillCoopmat16XeBF16",
-          "cooperative_matrix_bf16_8x16x16",
-          omarchy::cooperative_matrix_advertises(
-              xe16_hw.cooperative_matrix_shapes,
-              omarchy::qmm_prefill_coopmat16_xe_shape()));
+          "cooperative_matrix_bf16+cooperative_matrix_bf16_8x16x16+subgroup_size==32",
+          xe16_hw.cooperative_matrix_bf16 &&
+              omarchy::cooperative_matrix_advertises(
+                  xe16_hw.cooperative_matrix_shapes,
+                  omarchy::qmm_prefill_coopmat16_xe_shape()) &&
+              xe16_hw.subgroup_size == 32u &&
+              xe16_hw.max_compute_work_group_invocations >= 64u &&
+              xe16_hw.max_compute_work_group_size[0] >= 64u);
       dispatch_qmm_out_rows(
           encoder,
           out,

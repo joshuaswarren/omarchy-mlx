@@ -8,9 +8,13 @@ Intel Xe2 where the M16 and 8x8x8 shape lists are empty.
 ## Environment
 
 - Source commits: `cc3756a39` (implementation), `45f9937a7` + `df89dbce2`
-  (test coverage). Wheels: base `0.32.4.dev…+diag.cc74e7a`
-  (origin/main), prop `0.32.4.dev…+diag.45f9937`.
-- Kernel: `7.1.12-2-20261103.2-lab-ARCH`. Mesa (ANV): 26.2.6.
+  (test coverage), `1c43b95ad` (review: gate capability + shared-memory
+  bound), `ac4d2554e` (review: qmm Xe16 emits bf16 operands, matching
+  `qmm_intel_bf16`'s contract; earlier cells ran the fp16-operand
+  build). Wheels: base `0.32.4.dev…+diag.cc74e7a` (origin/main), prop
+  `0.32.4.dev…+diag.45f9937`; post-review cells re-run on prop
+  `+diag.ac4d255` where marked.
+- Kernel: `7.1.12-2`. Mesa (ANV): 26.2.6.
 - Device: `Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)`, eGPU over USB4,
   driver `xe`, subgroupSize 32 (pinned via requiredSubgroupSize).
   `VK_KHR_cooperative_matrix` shapes advertised: M8xN16 K16
