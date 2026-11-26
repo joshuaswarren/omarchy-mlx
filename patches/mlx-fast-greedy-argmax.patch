@@ -1,7 +1,7 @@
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
-@@ -119,6 +119,26 @@
-     const array& weight,
+@@ -160,6 +160,26 @@
+     float qk_eps = 0.0f,
      StreamOrDevice s = {});
  
 +// Greedy token of a transposed affine-quantized projection: the index
@@ -29,8 +29,8 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1477,6 +1477,61 @@
-       /* inputs */ std::vector<array>{state, x, weight});
+@@ -1782,6 +1782,62 @@
+   return returned_vjps;
  }
  
 +std::vector<array> greedy_quantized_argmax(
@@ -94,7 +94,7 @@
    return (
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -436,7 +436,6 @@
+@@ -450,7 +450,6 @@
  
    void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
        override;
@@ -102,7 +102,7 @@
    const char* name() const override {
      if (to_fp8_) {
        return "ToFP8";
-@@ -447,13 +446,44 @@
+@@ -461,13 +460,44 @@
    bool state() const {
      return to_fp8_;
    };
@@ -152,16 +152,16 @@
 --- a/mlx/backend/no_gpu/primitives.cpp
 +++ b/mlx/backend/no_gpu/primitives.cpp
 @@ -190,6 +190,7 @@
- NO_GPU_MULTI(ScaledDotProductAttention)
- NO_GPU_MULTI(ScaledDotProductAttentionVJP)
- NO_GPU_MULTI(GatedDeltaUpdate)
+ NO_GPU(MaskedScatter)
+ 
+ namespace fast {
 +NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
- NO_GPU_MULTI(ConvertFP8)
- NO_GPU_MULTI(Quantize)
- NO_GPU_MULTI(CustomKernel)
+ NO_GPU_USE_FALLBACK(CrossEntropy)
+ NO_GPU_MULTI(CrossEntropyVJP)
+ NO_GPU_USE_FALLBACK(LayerNorm)
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
-@@ -499,6 +499,38 @@
+@@ -549,6 +549,38 @@
              Returns:
                  Tuple of (output [B, 1, Hv, Dv], final_state [B, Hv, Dv, Dk])
          )");
