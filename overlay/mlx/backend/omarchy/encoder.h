@@ -558,6 +558,12 @@ class MLX_API CommandEncoder
   // without overlapping in-flight batches or competing encoders.
   ComputeBinding resnorm_ticket_binding();
 
+  // Return a 2048-byte zero-initialized ticket+partial-sum slice for the
+  // current open batch so Dv-split GatedDeltaDecodeConvNorm can elect the
+  // last finishing workgroup per head without spin-waits or overlapping
+  // in-flight batches.
+  ComputeBinding gdn_ticket_binding();
+
   // Distinct buffers bound to the open batch. A persistent buffer bound
   // by many dispatches counts once (pre-binding), so this stays small on
   // weight/KV-heavy graphs.
@@ -722,6 +728,10 @@ class MLX_API CommandEncoder
   mlx::core::allocator::Buffer resnorm_ticket_buf_{nullptr};
   std::array<uint64_t, kInFlightCommandBuffers> resnorm_ticket_in_flight_{};
   int resnorm_ticket_slot_{-1};
+  static constexpr VkDeviceSize kGdnTicketStride = 2048;
+  mlx::core::allocator::Buffer gdn_ticket_buf_{nullptr};
+  std::array<uint64_t, kInFlightCommandBuffers> gdn_ticket_in_flight_{};
+  int gdn_ticket_slot_{-1};
   // Compute pipeline bound on cmd_ this recording. Reset at command
   // buffer begin; lets emit skip a redundant CmdBindPipeline when a run
   // of dispatches reuses one pipeline.

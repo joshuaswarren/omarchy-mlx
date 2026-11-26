@@ -17824,6 +17824,49 @@ void GdnConvDeltaUpdate::eval_gpu(
     params.output_size = checked_item_offset(norm_weight, norm_weight.size(), tag, out);
     params.alpha = norm_eps();
   }
+  const char* regtile_env = omarchy::env_str("MLX_OMARCHY_GDN_REGTILE");
+  if (regtile_env != nullptr && regtile_env[0] == '0' && regtile_env[1] == '\0') {
+    params.flags |= 1024u;
+  }
+  uint32_t dv_split = 1u;
+  if (with_norm && pf_wide && equal_heads && dk == 128u &&
+      static_cast<size_t>(B) * static_cast<size_t>(Hv) <= 64u &&
+      encoder.device().compute().binding_limit() >= 14u) {
+    const char* split_env = omarchy::env_str("MLX_OMARCHY_GDN_DV_SPLIT");
+    if (split_env != nullptr && split_env[0] == '2' && split_env[1] == '\0') {
+      dv_split = 2u;
+    } else if (split_env != nullptr && split_env[0] == '4' && split_env[1] == '\0') {
+      dv_split = 4u;
+    }
+  }
+  if (dv_split > 1u) {
+    std::array<omarchy::ComputeBinding, 14> bindings14{
+        binding(in_state),
+        binding(in_x),
+        binding(in_w),
+        binding(a_in),
+        binding(b_in),
+        binding(h0),
+        binding(out),
+        binding(hf),
+        binding(A_log),
+        binding(dt_bias),
+        binding(conv_state_out),
+        binding(norm_gate),
+        binding(norm_weight),
+        encoder.gdn_ticket_binding()};
+    const omarchy::ComputeKernel split_kernel = dv_split == 2u
+        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfWideSplit2
+        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfWideSplit4;
+    encoder.dispatch_compute(
+        split_kernel,
+        std::span<const omarchy::ComputeBinding>(bindings14.data(), 14u),
+        params,
+        static_cast<uint32_t>(B * Hv) * dv_split,
+        1,
+        1);
+    return;
+  }
   std::array<omarchy::ComputeBinding, 13> bindings{
       binding(in_state),
       binding(in_x),

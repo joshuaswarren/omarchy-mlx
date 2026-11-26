@@ -1802,6 +1802,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           }
           balanced_qkv = group.members.size() == 3 &&
               gemv_balanced_qkv_widths_ok(widths);
+          if (!balanced_qkv && group.members.size() == 4 &&
+              omarchy::env_flag("MLX_OMARCHY_G14C_GDN_INPROJ4") &&
+              gemv_balanced_pair_widths_ok(widths[0], widths[1]) &&
+              gemv_balanced_pair_widths_ok(widths[2], widths[3])) {
+            balanced_qkv = true;
+          }
           if (!balanced_qkv) {
             // Split-pair admission: each consecutive member pair whose
             // widths sit within a 4:1 ratio plans as its own dispatch,
@@ -3402,11 +3408,23 @@ bool fused_gemv_enabled(const Device& device) {
 }
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue off
-// (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
+// (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default where
+// general fused GEMV is on. On parts where general fused GEMV defaults off
+// (G14C) but balanced 2-member pairs (MLP gate+up) are admitted, allow an
+// explicit MLX_OMARCHY_FUSED_GEMV_SWIGLU=1 to attach the dedicated 1-pass
+// SwiGLU epilogue unless MLX_OMARCHY_FUSED_GEMV is explicitly 0.
 bool fused_gemv_swiglu_enabled(const Device& device) {
-  return fused_gemv_enabled(device) &&
-      (omarchy::env_str("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
-       env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
+  const char* env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
+  if (fused_gemv_enabled(device)) {
+    return env == nullptr || env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
+  }
+  const char* fg_env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV");
+  const bool explicit_gemv_off =
+      fg_env != nullptr && fg_env[0] != '\0' &&
+      !env_flag("MLX_OMARCHY_FUSED_GEMV");
+  return !explicit_gemv_off &&
+      gemv_balanced_qkv_part(device.capabilities().device_name) &&
+      env != nullptr && env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
 }
 
 // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1 opts the grouped GEMV planner into

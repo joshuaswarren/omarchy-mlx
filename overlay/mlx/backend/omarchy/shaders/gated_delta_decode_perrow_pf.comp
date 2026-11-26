@@ -53,8 +53,20 @@
 #if defined(GDN_NORM_FUSED) && !defined(GDN_CONV_FUSED)
 #error GDN_NORM_FUSED extends GDN_CONV_FUSED
 #endif
-
+#if defined(GDN_DV_SPLIT)
+#if !defined(GDN_NORM_FUSED) || !defined(GDN_PF_WIDE) || defined(GDN_COMPOSED_ORDER) || defined(GDN_NATIVE_GQA_INDEX)
+#error GDN_DV_SPLIT extends GDN_PF_WIDE + GDN_CONV_FUSED + GDN_NORM_FUSED (equal heads, default order)
+#endif
+#if GDN_DV_SPLIT != 2 && GDN_DV_SPLIT != 4
+#error GDN_DV_SPLIT must be 2 or 4
+#endif
+const uint kDvSplit = uint(GDN_DV_SPLIT);
+const uint kLocalSize = 128u / uint(GDN_DV_SPLIT);
+layout(local_size_x = 128 / GDN_DV_SPLIT, local_size_y = 1, local_size_z = 1) in;
+#else
+const uint kLocalSize = 128u;
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#endif
 
 #ifndef GDN_CONV_FUSED
 layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
@@ -72,6 +84,11 @@ layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; }
 // Gated-norm epilogue (rms_norm_gated over each head's 128 outputs): 11 gate z [B, 1, Hv, 128], 12 norm weight [128].
 layout(set = 0, binding = 11, std430) readonly buffer NormGate   { uint16_t v[]; } norm_gate;
 layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#ifdef GDN_DV_SPLIT
+// Per-head ticket + partial sum-of-squares scratch (8 uints per head: 0..3 partials, 4 arrival counter).
+layout(set = 0, binding = 13, std430) coherent buffer GdnTicket { uint values[]; } gdn_ticket;
+shared uint s_gdn_is_last;
+#endif /* GDN_DV_SPLIT */
 #endif /* GDN_NORM_FUSED */
 #endif /* GDN_CONV_FUSED */
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
@@ -81,7 +98,11 @@ layout(set = 0, binding = 5, std430) readonly buffer SIn   { u16vec4  v[]; } s_i
 #else
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { vec4     v[]; } s_in;
 #endif
+#if defined(GDN_DV_SPLIT) && defined(GDN_NORM_FUSED)
+layout(set = 0, binding = 6, std430) coherent buffer YBuf { uint16_t v[]; } y_buf;
+#else
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+#endif
 #ifdef STATE_BF16
 layout(set = 0, binding = 7, std430) buffer         SOut  { u16vec4  v[]; } s_out;
 #else
@@ -603,6 +624,54 @@ void gdn_conv_state_out(uint channel) {
 // Replaces the q, k and v reads: this thread owns the q, k and v channel of its value row (head
 // dim 128). With GDN_NATIVE_GQA_INDEX the q and k channels index by the key head khead (equal
 // heads: khead = head). Fills sq[row] and sk[row]; returns the value element.
+#ifdef GDN_DV_SPLIT
+float gdn_conv_prologue(uint head, uint khead, uint tid, uint part, uint row) {
+  const uint key_dim = params.rhs_size;
+  uint16_t q_act_arr[GDN_DV_SPLIT];
+  uint16_t k_act_arr[GDN_DV_SPLIT];
+  for (uint s = 0u; s < kDvSplit; ++s) {
+    uint c = tid + s * kLocalSize;
+    uint16_t qa = gdn_conv_channel(khead * 128u + c);
+    uint16_t ka = gdn_conv_channel(key_dim + khead * 128u + c);
+    q_act_arr[s] = qa;
+    k_act_arr[s] = ka;
+    float qv = bf16_load(qa);
+    float kv = bf16_load(ka);
+    gdn_norm_block[c] = qv * qv;
+    gdn_norm_block[128u + c] = kv * kv;
+  }
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    for (uint idx = tid; idx < stride; idx += kLocalSize) {
+      gdn_norm_block[idx] += gdn_norm_block[idx + stride];
+      gdn_norm_block[128u + idx] += gdn_norm_block[128u + idx + stride];
+    }
+    barrier();
+  }
+  for (uint s = 0u; s < kDvSplit; ++s) {
+    uint c = tid + s * kLocalSize;
+    sq[c] = bf16_load(gdn_conv_qk_norm(q_act_arr[s], gdn_norm_block[0], params.out_strides[2]));
+    sk[c] = bf16_load(gdn_conv_qk_norm(k_act_arr[s], gdn_norm_block[128], params.out_strides[3]));
+  }
+  if (part == 0u) {
+    bool lead = true;
+    if (params.in_strides[3] != 0u) {
+      lead = (head % params.in_strides[2]) % (params.in_strides[2] / params.in_strides[3]) == 0u;
+    }
+    if (lead) {
+      for (uint s = 0u; s < kDvSplit; ++s) {
+        uint c = tid + s * kLocalSize;
+        gdn_conv_state_out(khead * 128u + c);
+        gdn_conv_state_out(key_dim + khead * 128u + c);
+      }
+    }
+  }
+  const uint v_channel = 2u * key_dim + head * params.matrix_n + row;
+  uint16_t v_act = gdn_conv_channel(v_channel);
+  gdn_conv_state_out(v_channel);
+  return bf16_load(v_act);
+}
+#else /* GDN_DV_SPLIT */
 float gdn_conv_prologue(uint head, uint khead, uint row) {
   const uint key_dim = params.rhs_size;
   const uint q_channel = khead * 128u + row;
@@ -638,6 +707,7 @@ float gdn_conv_prologue(uint head, uint khead, uint row) {
   gdn_conv_state_out(v_channel);
   return bf16_load(v_act);
 }
+#endif /* GDN_DV_SPLIT */
 #ifdef GDN_NORM_FUSED
 // Epilogue: rms_norm_gated (fast_norm_gated.comp mode 0, the default non-APPLE row reduction, which
 // serves 128-wide rows) over this head's 128 outputs, replacing the y store. Statements are that
@@ -646,6 +716,71 @@ float gdn_conv_prologue(uint head, uint khead, uint row) {
 // (it only ever adds the +0.0 of the 128 idle slots).
 shared float gdn_out_block[128];
 
+#ifdef GDN_DV_SPLIT
+// Lock-free last-arriver Dv-split norm epilogue: each WG owns strided rows
+// `row = tid * kDvSplit + part`, so its local reduction produces the exact bit-for-bit
+// partial subtree `T[part]` of the unsplit 128-wide binary reduction tree. The last
+// arriving WG per head combines T[0..kDvSplit-1], resets its arrival counter to 0,
+// and finishes the gated norm over all 128 rows without spin-waiting.
+void gdn_norm_epilogue_split(uint head, uint tid, uint part, uint row, float o_acc) {
+  uint16_t y_raw = bf16_store(o_acc);
+  float value = bf16_load(y_raw);
+  y_buf.v[params.output_offset + head * params.matrix_n + row] = y_raw;
+  float local_sq = 0.0;
+  local_sq += value * value;
+  gdn_out_block[tid] = local_sq;
+  barrier();
+  for (uint stride = kLocalSize >> 1u; stride > 0u; stride >>= 1u) {
+    if (tid < stride) {
+      gdn_out_block[tid] += gdn_out_block[tid + stride];
+    }
+    barrier();
+  }
+  if (tid == 0u) {
+    uint base = head * 8u;
+    gdn_ticket.values[base + part] = floatBitsToUint(gdn_out_block[0]);
+    memoryBarrierBuffer();
+    uint prev = atomicAdd(gdn_ticket.values[base + 4u], 1u);
+    s_gdn_is_last = (prev == (kDvSplit - 1u)) ? 1u : 0u;
+  }
+  barrier();
+  if (s_gdn_is_last == 0u) {
+    return;
+  }
+  memoryBarrierBuffer();
+  if (tid == 0u) {
+    uint base = head * 8u;
+#if GDN_DV_SPLIT == 2
+    float t0 = uintBitsToFloat(gdn_ticket.values[base + 0u]);
+    float t1 = uintBitsToFloat(gdn_ticket.values[base + 1u]);
+    gdn_out_block[0] = t0 + t1;
+#elif GDN_DV_SPLIT == 4
+    float t0 = uintBitsToFloat(gdn_ticket.values[base + 0u]);
+    float t1 = uintBitsToFloat(gdn_ticket.values[base + 1u]);
+    float t2 = uintBitsToFloat(gdn_ticket.values[base + 2u]);
+    float t3 = uintBitsToFloat(gdn_ticket.values[base + 3u]);
+    gdn_out_block[0] = (t0 + t2) + (t1 + t3);
+#endif
+    gdn_ticket.values[base + 4u] = 0u;
+  }
+  barrier();
+  float mean_square = gdn_out_block[0] / 128.0;
+  float norm = inversesqrt(mean_square + params.alpha);
+  for (uint s = 0u; s < kDvSplit; ++s) {
+    uint r = tid * kDvSplit + s;
+    float v = bf16_load(y_buf.v[params.output_offset + head * params.matrix_n + r]);
+    float weight = bf16_load(norm_w.v[params.output_size + r]);
+    precise float norm_weight = norm * weight;
+    precise float result = v * norm_weight;
+    float normed = bf16_load(gdn_conv_bf16_store(result));
+    float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + r]);
+    float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    y_buf.v[params.output_offset + head * params.matrix_n + r] = gdn_conv_bf16_store(prod);
+  }
+}
+#else /* GDN_DV_SPLIT */
 void gdn_norm_epilogue(uint head, uint row, float o_acc) {
   // the delta kernel's own bf16 store of y, then the widen the norm kernel's input read performs
   float value = bf16_load(bf16_store(o_acc));
@@ -672,6 +807,7 @@ void gdn_norm_epilogue(uint head, uint row, float o_acc) {
   precise float prod = silu * normed;
   y_buf.v[params.output_offset + head * params.matrix_n + row] = gdn_conv_bf16_store(prod);
 }
+#endif /* GDN_DV_SPLIT */
 #endif /* GDN_NORM_FUSED */
 #define GDN_V_ELEM gdn_v_elem
 #else /* GDN_CONV_FUSED */
@@ -682,8 +818,16 @@ void main() {
   uint dk = params.matrix_m;
   uint dv = params.matrix_n;
   uint hv = params.matrix_k;
+#ifdef GDN_DV_SPLIT
+  uint head = gl_WorkGroupID.x / kDvSplit;
+  uint part = gl_WorkGroupID.x % kDvSplit;
+  uint tid = gl_LocalInvocationID.x;
+  uint row = tid * kDvSplit + part;
+#else
   uint head = gl_WorkGroupID.x;
-  uint row = gl_LocalInvocationID.x;   // one dv row per thread
+  uint tid = gl_LocalInvocationID.x;
+  uint row = tid;   // one dv row per thread
+#endif
 
   if (head >= hv) {
     return;
@@ -702,7 +846,9 @@ void main() {
 #else
   uint khead = head;
 #endif
-#ifdef GDN_CONV_FUSED
+#ifdef GDN_DV_SPLIT
+  const float gdn_v_elem = gdn_conv_prologue(head, khead, tid, part, row);
+#elif defined(GDN_CONV_FUSED)
   const float gdn_v_elem = gdn_conv_prologue(head, khead, row);
 #elif defined(GDN_NATIVE_GQA_INDEX)
   for (uint i = row; i < dk; i += 128u) {
@@ -803,13 +949,13 @@ void main() {
   }
   uint head_base = head * dv * dk;
   uint row_base = head_base + row * dk;
-  for (uint i = row; i < dk; i += 128u) {
+  for (uint i = tid; i < dk; i += kLocalSize) {
     skg[i] = sk[i] * g;
   }
   barrier();
 
 #if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
-  if (dk == 128u) {
+  if (dk == 128u && (params.flags & 1024u) == 0u) {
     // Register-tile route (DEC-30): the row's state words load ONCE into registers and
     // serve both walks; the old update walk re-loaded from global what the kv walk had
     // just read. Same element-for-element chains (ascending i, same fma contraction,
@@ -1304,7 +1450,11 @@ void main() {
       o_acc = fma(n7, sq[127u], o_acc);
     }
 #ifdef GDN_NORM_FUSED
+#ifdef GDN_DV_SPLIT
+    gdn_norm_epilogue_split(head, tid, part, row, o_acc);
+#else
     gdn_norm_epilogue(head, row, o_acc);
+#endif
 #else /* GDN_NORM_FUSED */
     y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 #endif /* GDN_NORM_FUSED */
@@ -1330,7 +1480,11 @@ void main() {
                                 (params.flags & 512u) != 0u);
 #endif /* GDN_COMPOSED_ORDER */
 #ifdef GDN_NORM_FUSED
+#ifdef GDN_DV_SPLIT
+  gdn_norm_epilogue_split(head, tid, part, row, o_acc);
+#else
   gdn_norm_epilogue(head, row, o_acc);
+#endif
 #else /* GDN_NORM_FUSED */
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 #endif /* GDN_NORM_FUSED */

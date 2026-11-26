@@ -431,3 +431,62 @@ TEST_CASE("GdnConvUpdate reads offset-carrying inputs, not flat bindings") {
     }
   }
 }
+
+TEST_CASE("Dv-split GDN conv+delta+norm (split 2 and 4, regtile on/off) matches production bytes across consecutive calls") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  struct EnvGuard {
+    const char* name;
+    std::string old_val;
+    bool had{false};
+    explicit EnvGuard(const char* n) : name(n) {
+      if (const char* v = std::getenv(n)) {
+        had = true;
+        old_val = v;
+      }
+    }
+    ~EnvGuard() {
+      if (had) {
+        setenv(name, old_val.c_str(), 1);
+      } else {
+        unsetenv(name);
+      }
+    }
+  };
+  EnvGuard g_conv("MLX_OMARCHY_GDN_CONV_DELTA");
+  EnvGuard g_tile("MLX_OMARCHY_GDN_DECODE_TILE");
+  EnvGuard g_wide("MLX_OMARCHY_GDN_PF_WIDE");
+  EnvGuard g_split("MLX_OMARCHY_GDN_DV_SPLIT");
+  EnvGuard g_reg("MLX_OMARCHY_GDN_REGTILE");
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
+  setenv("MLX_OMARCHY_GDN_DECODE_TILE", "0", 1);
+  setenv("MLX_OMARCHY_GDN_PF_WIDE", "1", 1);
+
+  for (const char* split_str : {"2", "4"}) {
+    setenv("MLX_OMARCHY_GDN_DV_SPLIT", split_str, 1);
+    for (const char* reg_str : {"1", "0"}) {
+      setenv("MLX_OMARCHY_GDN_REGTILE", reg_str, 1);
+      for (uint32_t seed : {10u, 20u, 30u}) {
+        Inputs in = make_inputs(seed, 0.5f, s);
+        unsetenv("MLX_OMARCHY_GDN_DV_SPLIT");
+        unsetenv("MLX_OMARCHY_GDN_REGTILE");
+        Run want = production_pair(in, s, true);
+        setenv("MLX_OMARCHY_GDN_DV_SPLIT", split_str, 1);
+        setenv("MLX_OMARCHY_GDN_REGTILE", reg_str, 1);
+        // Run twice back-to-back to verify the self-resetting ticket counter.
+        Run got1 = fused(in, s, true);
+        Run got2 = fused(in, s, true);
+        CHECK_MESSAGE(got1.dispatches == 1, "split=", split_str, " regtile=", reg_str, " must be 1 dispatch");
+        CHECK_MESSAGE(got2.dispatches == 1, "split=", split_str, " regtile=", reg_str, " repeat must be 1 dispatch");
+        for (int i = 0; i < 3; ++i) {
+          CHECK_MESSAGE(
+              array_equal(got1.out[i], want.out[i], s).item<bool>(),
+              "split=", split_str, " regtile=", reg_str, " seed=", seed, " out=", i, " call 1 mismatch");
+          CHECK_MESSAGE(
+              array_equal(got2.out[i], want.out[i], s).item<bool>(),
+              "split=", split_str, " regtile=", reg_str, " seed=", seed, " out=", i, " call 2 mismatch");
+        }
+      }
+    }
+  }
+}

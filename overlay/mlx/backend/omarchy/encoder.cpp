@@ -306,6 +306,10 @@ CommandEncoder::~CommandEncoder() {
       omarchy::allocator().free(resnorm_ticket_buf_);
       resnorm_ticket_buf_ = mlx::core::allocator::Buffer{nullptr};
     }
+    if (gdn_ticket_buf_.ptr()) {
+      omarchy::allocator().free(gdn_ticket_buf_);
+      gdn_ticket_buf_ = mlx::core::allocator::Buffer{nullptr};
+    }
   } catch (const std::exception&) {
   }
 }
@@ -682,6 +686,48 @@ ComputeBinding CommandEncoder::resnorm_ticket_binding() {
       vb->buffer,
       static_cast<VkDeviceSize>(resnorm_ticket_slot_) * kResNormTicketStride,
       kResNormTicketStride,
+      vb};
+}
+
+ComputeBinding CommandEncoder::gdn_ticket_binding() {
+  std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
+  if (!gdn_ticket_buf_.ptr()) {
+    gdn_ticket_buf_ = omarchy::allocator().malloc(
+        kInFlightCommandBuffers * kGdnTicketStride);
+    auto* vb = static_cast<VulkanBuffer*>(gdn_ticket_buf_.ptr());
+    fill_buffer(
+        vb->buffer, 0u, kInFlightCommandBuffers * kGdnTicketStride, 0u);
+  }
+  auto* vb = static_cast<VulkanBuffer*>(gdn_ticket_buf_.ptr());
+  if (gdn_ticket_slot_ < 0) {
+    auto& completions = device_.completions();
+    int chosen = -1;
+    uint64_t oldest_value = UINT64_MAX;
+    int oldest = 0;
+    for (int i = 0; i < kInFlightCommandBuffers; ++i) {
+      uint64_t value = gdn_ticket_in_flight_[i];
+      if (value == 0 || completions.drained_value() >= value) {
+        gdn_ticket_in_flight_[i] = 0;
+        chosen = i;
+        break;
+      }
+      if (value < oldest_value) {
+        oldest_value = value;
+        oldest = i;
+      }
+    }
+    if (chosen < 0) {
+      completions.wait(oldest_value);
+      gdn_ticket_in_flight_[oldest] = 0;
+      chosen = oldest;
+    }
+    gdn_ticket_slot_ = chosen;
+  }
+  return ComputeBinding{
+      vb->buffer,
+      static_cast<VkDeviceSize>(gdn_ticket_slot_) * kGdnTicketStride,
+      kGdnTicketStride,
       vb};
 }
 
@@ -1913,6 +1959,7 @@ void CommandEncoder::submit() {
       dep_records_.clear();
       recording_ = false;
       resnorm_ticket_slot_ = -1;
+      gdn_ticket_slot_ = -1;
       node_count_ = 0;
       batch_work_ = 0;
       wait_semaphores_.clear();
@@ -1965,6 +2012,10 @@ void CommandEncoder::submit() {
     if (resnorm_ticket_slot_ >= 0) {
       resnorm_ticket_in_flight_[resnorm_ticket_slot_] = completion_value;
       resnorm_ticket_slot_ = -1;
+    }
+    if (gdn_ticket_slot_ >= 0) {
+      gdn_ticket_in_flight_[gdn_ticket_slot_] = completion_value;
+      gdn_ticket_slot_ = -1;
     }
     if (was_recording) {
       slots_[current_slot_].in_flight = completion_value;

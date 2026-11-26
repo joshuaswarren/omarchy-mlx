@@ -387,6 +387,8 @@
 #include "sdpa_decode_split_p2_hd256_bk64.h"
 #include "sdpa_decode_online_sg32_bf16_hd128.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd128.h"
+#include "gated_delta_decode_perrow_pfw_conv_norm_s2_bf16.h"
+#include "gated_delta_decode_perrow_pfw_conv_norm_s4_bf16.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -1449,6 +1451,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128:
       return {sdpa_decode_online_rope_sg32_bf16_hd128,
               sdpa_decode_online_rope_sg32_bf16_hd128_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16PfWideSplit2:
+      return {gated_delta_decode_perrow_pfw_conv_norm_s2_bf16,
+              gated_delta_decode_perrow_pfw_conv_norm_s2_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16PfWideSplit4:
+      return {gated_delta_decode_perrow_pfw_conv_norm_s4_bf16,
+              gated_delta_decode_perrow_pfw_conv_norm_s4_bf16_size};
     case ComputeKernel::CrossEntropyBF16:
       return {fast_cross_entropy_bf16, fast_cross_entropy_bf16_size};
     case ComputeKernel::Fp8ToF32:

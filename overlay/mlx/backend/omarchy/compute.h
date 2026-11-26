@@ -1314,6 +1314,11 @@ enum class ComputeKernel : uint16_t {
   // stable.
   SdpaDecodeOnlineSg32BF16Hd128,
   SdpaDecodeOnlineRopeSg32BF16Hd128,
+  // Dv-split workgroup builds of GatedDeltaDecodeConvNormBF16PfWide
+  // (2 or 4 WGs per value head, lock-free last-arriver gated-norm epilogue).
+  // Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvNormBF16PfWideSplit2,
+  GatedDeltaDecodeConvNormBF16PfWideSplit4,
   Count,
 };
 
