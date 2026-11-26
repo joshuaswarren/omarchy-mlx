@@ -1057,12 +1057,14 @@ void dispatch_matmul(
       omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_XE16");
   const bool xe16_shape_advertised = omarchy::cooperative_matrix_advertises(
       caps.cooperative_matrix_shapes, omarchy::matmul_xe16_bf16_shape());
+  constexpr uint32_t kMatmulXe16SharedBytes =
+      (32u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u;
   const bool xe16 = !matmul_xe16_disabled && !sdpa && !coopmat && !use_c &&
       kernel == omarchy::ComputeKernel::MatmulBF16 &&
-      xe16_shape_advertised && caps.subgroup_size == 32u &&
+      caps.cooperative_matrix_bf16 && xe16_shape_advertised &&
+      caps.subgroup_size == 32u &&
       !coopmat_disabled && params.matrix_m > 1u && params.matrix_k > 0u &&
-      (32u * 16u + 16u * 32u) * 2u <=
-          caps.max_compute_shared_memory_size;
+      kMatmulXe16SharedBytes <= caps.max_compute_shared_memory_size;
   if (xe16) {
     kernel = omarchy::ComputeKernel::MatmulBF16CoopmatXe16;
     omarchy::capsim::require_backed(
@@ -1070,12 +1072,13 @@ void dispatch_matmul(
         caps,
         xe16,
         "MatmulBF16CoopmatXe16",
-        "cooperative_matrix_bf16_8x16x16+subgroup_size==32",
-        omarchy::cooperative_matrix_advertises(
-            encoder.device()
-                .hardware_capabilities()
-                .cooperative_matrix_shapes,
-            omarchy::matmul_xe16_bf16_shape()) &&
+        "cooperative_matrix_bf16+cooperative_matrix_bf16_8x16x16+subgroup_size==32",
+        encoder.device().hardware_capabilities().cooperative_matrix_bf16 &&
+            omarchy::cooperative_matrix_advertises(
+                encoder.device()
+                    .hardware_capabilities()
+                    .cooperative_matrix_shapes,
+                omarchy::matmul_xe16_bf16_shape()) &&
             encoder.device().hardware_capabilities().subgroup_size == 32u);
   }
   bf16_fma = bf16_fma && !xe16;

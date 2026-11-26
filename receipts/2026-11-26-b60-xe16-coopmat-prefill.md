@@ -33,7 +33,7 @@ Intel Xe2 where the M16 and 8x8x8 shape lists are empty.
 
 ### 5-pair ABBA + propoff (greedy, temp 0, 128-token decode)
 
-Commands (per cell): `flock /tmp/jw16-usb4-egpu.lock env CELLS=<cell>
+Commands (per cell): `flock <host-egpu-lockfile> env CELLS=<cell>
 nice -n 10 bash run-abba.sh` — interleaved A-B-B-A blocks, plus 3
 prop-off runs (prop wheel + `MLX_OMARCHY_NO_MATMUL_XE16=1
 MLX_OMARCHY_NO_QMM_XE16=1`).
