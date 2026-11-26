@@ -326,6 +326,13 @@ bool rope_norm_fold_enabled();
 // the group's Token4 dispatch (off by default until measured).
 bool rope_epi_enabled();
 
+// MLX_OMARCHY_ROPE_NORM_PAIR=1 opts the bf16 norm-rope pair scan in
+// (off by default: the default-on route measured -0.81% decode
+// against the solo FastRopeNorm dispatches it replaces). The f16
+// trio pairs are unaffected; the MLX_OMARCHY_FUSED_CHAIN and
+// MLX_OMARCHY_FUSED_TRIO gates still cover the whole scan.
+bool rope_norm_pair_enabled();
+
 // find_sdpa_transpose_out returns the materializing Reshape node a
 // decode-rows SDPA should store into directly (the planned
 // (1,H,S,D) -> (1,S,H*D) out-transpose fold), or nullptr when the
@@ -403,5 +410,23 @@ bool fused_trio_enabled(const Device& device);
 // nothing when anything refuses; both nodes then take the ordinary
 // RoPE path unchanged. Defined in primitives.cpp beside
 // dispatch_quantized_gemv_group.
-bool dispatch_rope_pair(std::array<array, 2>& nodes, const Stream& stream);
+
+// Norm payload for one side of a norm-carrying rope pair: the pre-norm
+// input and the RMSNorm weight the FastRopeNormPair kernels fold in,
+// plus the norm's eps. A null entry means the plain 2-input pair form.
+// The optional view (Transpose/Reshape between the norm output and the
+// rope) replays over x's contiguous buffer the way
+// dispatch_rope_norm_fold composes it.
+struct RopePairNorm {
+  array x;
+  array w;
+  float eps;
+  std::optional<array> view;
+  std::shared_ptr<Primitive> view_prim;
+};
+
+bool dispatch_rope_pair(
+    std::array<array, 2>& nodes,
+    const std::array<const RopePairNorm*, 2>& norms,
+    const Stream& stream);
 } // namespace mlx::core::omarchy

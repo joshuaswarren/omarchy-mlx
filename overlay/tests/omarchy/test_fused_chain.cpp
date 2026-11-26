@@ -2144,14 +2144,17 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   for (size_t i = 0; i < saved.size(); ++i) {
@@ -2161,6 +2164,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 TEST_CASE("greedy prune default: the part rule and overrides") {
@@ -2212,6 +2216,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
   }
   const std::string m4 = "Apple M4 (G16G B1)";
   const std::string m1 = "Apple M1 (G13G B1)";
+  omarchy::env_note_eval();
   for (const char* var : {"MLX_OMARCHY_FUSED_GEMV", "MLX_OMARCHY_FUSED_TRIO"}) {
     INFO(var);
     const bool m4_unset = std::strcmp(var, "MLX_OMARCHY_FUSED_TRIO") == 0;
@@ -2220,22 +2225,28 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
     CHECK_EQ(omarchy::fused_route_enabled(var, m4), m4_unset);
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "1", 1);
+    omarchy::env_note_eval();
     CHECK(omarchy::fused_route_enabled(var, m4));
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     setenv(var, "1", 1);
     setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     unsetenv("MLX_OMARCHY_FUSED_CHAIN");
     unsetenv(var);
+    omarchy::env_note_eval();
   }
   // The trio gate does not depend on the GEMV gate, set or unset.
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {
@@ -2244,6 +2255,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 // MLX_OMARCHY_FUSED_TRIO=1 reaches the RoPE-pair planner with the GEMV
@@ -2292,6 +2304,157 @@ TEST_CASE("fused trio override plans the rope pair with the gemv route off") {
       static_cast<int64_t>(omarchy::ComputeKernel::FastTrioRopePairF16));
   expect_bit_exact(q_solo, q_pair, stream);
   expect_bit_exact(k_solo, k_pair, stream);
+}
+
+// FastRopeNormPair*: one dispatch rotates the bf16 rope_rms_norm pair of
+// one decode step when the two calls share state but differ in head
+// count (8 q heads, 2 kv heads). Phase A evals only the pair so the
+// kernel id and the 2->1 dispatch merge are observable; phase B places
+// the k output behind a producer-direct KV window into the keys cache
+// (with a dense-GEMV values member) and requires bit-exact agreement
+// with the unpaired run.
+TEST_CASE("rope norm pair covers unequal heads and the kv window") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int D = 64;
+  array xq = astype(
+      random::normal(Shape{1, 8, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xk = astype(
+      random::normal(Shape{1, 2, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wq = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array wk = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array offset = array(17, int32);
+  array keys_init = astype(
+      random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array values_init = astype(
+      random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  // The values member of the producer-direct pair: a dense bf16 decode
+  // GEMV row reshaped into the cache append row. Dense groups only
+  // form with at least two matmuls on a shared input, so a sibling
+  // projection on the same x stands in for the second member; the
+  // slice_update pair contract also needs identical dtype and shapes
+  // on both caches.
+  std::vector<float> xv_float(64, 0.125f);
+  array xv =
+      astype(array(xv_float.data(), {1, 64}, float32), bfloat16, stream);
+  array wv = astype(
+      random::normal(Shape{64, 128}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wv2 = astype(
+      random::normal(Shape{64, 128}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  const int64_t norm_pair_a = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairBF16);
+  const int64_t norm_pair_b = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairAppleBF16);
+  auto pair_kernel_seen = [&](int64_t last) {
+    return last == norm_pair_a || last == norm_pair_b;
+  };
+  // Phase A: only the two rope outputs on the tape. The pair collapses
+  // two rope dispatches into one and leaves its kernel id as the most
+  // recent dispatch.
+  auto run_pair = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", trio, 1);
+    array qr = fast::rope_rms_norm(
+        xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({qr, kr});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, kr, counters().vk_compute_dispatches.load() - before,
+        counters().last_dispatched_kernel.load());
+  };
+  eval({xq, xk, wq, wk, offset, keys_init, values_init, xv, wv, wv2});
+  sync_stream(stream);
+  auto [q_pair, k_pair, n_pair, last_pair] = run_pair("1");
+  auto [q_solo, k_solo, n_solo, last_solo] = run_pair("0");
+  CHECK_EQ(n_pair, 1);
+  CHECK(pair_kernel_seen(last_pair));
+  CHECK_EQ(n_solo, 2);
+  CHECK_FALSE(pair_kernel_seen(last_solo));
+  expect_bit_exact(q_solo, q_pair, stream);
+  expect_bit_exact(k_solo, k_pair, stream);
+  // Phase B: the k rope output feeds slice_update into the keys cache
+  // while a dense GEMV values row feeds the values cache — the
+  // producer-direct window pair. Both arms write the same result
+  // whether or not the planner arms the direct write.
+  std::vector<float> keys_host(1 * 2 * 8 * D);
+  std::vector<float> values_host(1 * 2 * 8 * D);
+  {
+    array keys_f32 = astype(keys_init, float32, stream);
+    array values_f32 = astype(values_init, float32, stream);
+    eval({keys_f32, values_f32});
+    sync_stream(stream);
+    std::memcpy(
+        keys_host.data(), keys_f32.data<float>(), keys_host.size() * 4);
+    std::memcpy(
+        values_host.data(),
+        values_f32.data<float>(),
+        values_host.size() * 4);
+  }
+  auto run_window = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", trio, 1);
+    // Each arm's cache comes straight from host data through astype so
+    // its buffer has one owner: a copy() of the evaluated cache can
+    // share the source buffer, which blocks the donation the in-place
+    // window checks for.
+    array keys_cache = astype(
+        array(keys_host.data(), {1, 2, 8, D}, float32), bfloat16,
+        stream);
+    array values_cache = astype(
+        array(values_host.data(), {1, 2, 8, D}, float32), bfloat16,
+        stream);
+    eval({keys_cache, values_cache});
+    sync_stream(stream);
+    const void* keys_before = keys_cache.data<void>();
+    array vproj = matmul(xv, wv, stream);
+    array vrest = matmul(xv, wv2, stream);
+    array vrow = reshape(vproj, Shape{1, 2, 1, D}, stream);
+    array qr = fast::rope_rms_norm(
+        xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array keys_out = slice_update(
+        keys_cache, kr, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
+    array values_out = slice_update(
+        values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
+    // The in-place arm needs the cache buffers donatable, which means
+    // the slice_update edge must be the last handle — drop the locals
+    // before eval as the kv_ops window cases do.
+    keys_cache = array(0.0f);
+    values_cache = array(0.0f);
+    eval({keys_out, values_out, qr, vrest});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, keys_out, values_out, keys_out.data<void>() == keys_before);
+  };
+  auto [wq_pair, keys_pair, values_pair, in_place_pair] = run_window("1");
+  auto [wq_solo, keys_solo, values_solo, in_place_solo] = run_window("0");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
+  CHECK(in_place_pair);
+  expect_bit_exact(wq_solo, wq_pair, stream);
+  expect_bit_exact(keys_solo, keys_pair, stream);
+  expect_bit_exact(values_solo, values_pair, stream);
 }
 
 // The planner decides per node from the node's own stream: in one eval
@@ -2369,8 +2532,10 @@ TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
       "llvmpipe (LLVM 19.1.7, 256 bits)"));
 
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::outgate_fold_enabled());
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::outgate_fold_enabled());
 }
 
