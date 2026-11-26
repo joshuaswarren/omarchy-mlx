@@ -1,6 +1,6 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -304,6 +304,83 @@
+@@ -304,6 +304,90 @@
              prompt_cache[e] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
  
  

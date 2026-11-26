@@ -15941,10 +15941,20 @@ void GreedyQuantizedArgmax::eval_gpu(
   // The subgroup stage's lane-per-group mapping is K = 2048-specific;
   // the non-subgroup word chain is K-generic over 64-wide groups, so
   // the word route also serves K != 2048 on subgroup-capable devices.
-  bool subgroup_ok = subgroup_ready && k_dim == 2048u;
+  // Both routes bind w and high_bits whole; where a device reports the
+  // Vulkan-minimum maxStorageBufferRange a large vocab does not fit one
+  // binding and the encoder would refuse the dispatch, so compose then
+  // (a 128 MiB range serves n <= 104857 rows at K = 2560).
+  const VkDeviceSize range_limit = caps.max_storage_buffer_range;
+  const uint64_t w_bytes = static_cast<uint64_t>(n) * k_dim / 8u * 4u;
+  const uint64_t plane_bytes = static_cast<uint64_t>(n) * k_dim * 3u / 32u * 4u;
+  const bool bindings_fit =
+      range_limit == 0u ||
+      (w_bytes <= range_limit && plane_bytes <= range_limit);
+  bool subgroup_ok = subgroup_ready && k_dim == 2048u && bindings_fit;
   bool word_ok = omarchy::q4_word_enabled() &&
       caps.storage_buffer_16bit_access && caps.shader_int16 &&
-      k_dim % 64u == 0u &&
+      k_dim % 64u == 0u && bindings_fit &&
       // The single-workgroup merge reads at most 256 logsumexp
       // partials, the same bound the chunked route serves.
       n <= 4096u * 256u;

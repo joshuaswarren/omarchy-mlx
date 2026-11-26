@@ -686,10 +686,20 @@ bool subgroup_ready() {
 }
 
 // True when eval_gpu takes the non-subgroup QMM_VEC_GREEDY_WORD route
-// for this K: the staged QMM_VEC_GREEDY route claims K = 2048 on
-// subgroup devices; every other K takes the word route.
-bool word_route_taken(int k) {
-  return word_caps() && !(subgroup_ready() && k == kGreedyK);
+// for this K and row count: the staged QMM_VEC_GREEDY route claims
+// K = 2048 on subgroup devices; every other K takes the word route.
+// Both routes bind w and high_bits whole, so a device at the Vulkan
+// minimum maxStorageBufferRange composes on vocab-scale inputs.
+bool word_route_taken(int k, int n) {
+  const auto& caps = omarchy::device(0).capabilities();
+  const uint64_t w_bytes = static_cast<uint64_t>(n) * k / 8u * 4u;
+  const uint64_t plane_bytes = static_cast<uint64_t>(n) * k * 3u / 32u * 4u;
+  const bool bindings_fit =
+      caps.max_storage_buffer_range == 0u ||
+      (w_bytes <= caps.max_storage_buffer_range &&
+       plane_bytes <= caps.max_storage_buffer_range);
+  return word_caps() && bindings_fit &&
+      !(subgroup_ready() && k == kGreedyK && bindings_fit);
 }
 
 const std::vector<float> kScales{0.5f, 0.75f, 1.0f, 1.25f, 0.875f};
@@ -712,7 +722,7 @@ TEST_CASE("fused greedy word head: token matches the composed argmax") {
       CHECK(run.token < static_cast<uint32_t>(n));
       // stats[0] = rows evaluated exactly, stats[1] = overflow flag on
       // the word route; the staged route reports its own stats.
-      if (word_route_taken(k)) {
+      if (word_route_taken(k, n)) {
         CHECK(run.stats[0] == static_cast<uint32_t>(n));
         CHECK(run.stats[1] == 0u);
       }
@@ -790,7 +800,7 @@ TEST_CASE("fused greedy word head: +inf rows pick the first") {
   // separately — so this test exercises legs where the word route
   // actually fires (K = 2560 always; K = 2048 only without subgroup).
   for (int k : {kGreedyK, 2560}) {
-    if (!word_route_taken(k)) {
+    if (!word_route_taken(k, 8192)) {
       continue;
     }
     const int n = 8192;
@@ -848,7 +858,7 @@ TEST_CASE("fused greedy word head: three dispatches on the word route") {
   auto in = make_greedy_inputs(
       12289, 0xdec51, kScales, kBiases, {}, {}, false, stream);
   auto run = fused_argmax(in, stream);
-  if (word_route_taken(kGreedyK)) {
+  if (word_route_taken(kGreedyK, 12289)) {
     CHECK(run.launched == 3u);
     CHECK(
         omarchy::trace::counters().last_dispatched_kernel.load() ==
@@ -870,7 +880,7 @@ TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
     auto in = make_greedy_inputs(
         n, 0xdec52 + n, kScales, kBiases, {}, {}, false, stream, 2560);
     auto run = fused_argmax(in, stream);
-    if (word_route_taken(2560)) {
+    if (word_route_taken(2560, n)) {
       CHECK(run.launched == 3u);
       CHECK(
           omarchy::trace::counters().last_dispatched_kernel.load() ==
