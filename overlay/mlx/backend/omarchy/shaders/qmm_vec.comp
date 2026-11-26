@@ -189,7 +189,13 @@ uint16_t bf16_store(float value) {
 #define WLOAD_PAIR(W, I, A, B) { (A) = WLOAD(W, I); (B) = WLOAD(W, (I) + 1u); }
 #endif
 
-// K-contiguous: lane owns one contiguous chunk of words instead of pairs.
+// K-contiguous (experimental only, NOT bit-identical to the strided path at
+// K >= 1024 and excluded from every default selection): each lane owns one
+// contiguous chunk of words instead of strided pairs, which changes the FP32
+// per-lane accumulation order before subgroupAdd (+/-1 bf16 ULP at
+// Q4_FAST_ITERS >= 2). Preserving strided summation order from a contiguous
+// per-lane walk would require buffering/transposing terms across lanes (offset
+// 64 words = 512 elements between strided terms), erasing the memory gain.
 #ifdef QMM_KCONT
 #define Q4_FAST_ITERS(wpr) ((wpr) / (LANES * 2u))
 #define Q4_FAST_W(it, wpr) (lane_in_slot * ((wpr) / LANES) + (it) * 2u)

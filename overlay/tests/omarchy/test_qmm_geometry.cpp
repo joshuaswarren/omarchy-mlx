@@ -1,13 +1,21 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// MLX_OMARCHY_QMM_GEOM: the decode Qmm column geometry. Every geometry runs
-// the same per-lane chain per column, so the bytes must be identical to the
-// base 2x4 kernels; only the columns and threads per workgroup change. The
-// geometry kernels need a 32-lane arithmetic subgroup, so on a device with
-// smaller subgroups every scenario takes the base kernels and the byte
-// checks pass trivially; on qualifying devices (the M1-class parts) they
-// exercise the real variants. An unknown value must refuse loudly.
+// MLX_OMARCHY_QMM_GEOM: the decode Qmm column geometry. Every default-eligible
+// geometry (2x4, 2x4w2, 2x8w2, 2x16, 2x16w2) runs the same strided per-lane
+// chain per column, so the bytes must be identical to the base 2x4 kernels;
+// only the columns and threads per workgroup change.
+//
+// Experimental 2x16kcont / 2x16kcs16 assign contiguous K-chunks per lane
+// (qmm_vec.comp QMM_KCONT), which reassociates FP32 per-lane sums at K >= 1024
+// (+/-1 bf16 ULP, flipping exact greedy ties on Qwen3.5-9B). They are marked
+// not bit-identical and excluded from every default selection.
+//
+// The geometry kernels need a 32-lane arithmetic subgroup, so on a device with
+// smaller subgroups every scenario takes the base kernels and the byte checks
+// pass trivially; on qualifying devices (e.g. Apple G13/G14/G18, discrete
+// 32-lane Vulkan parts) they exercise the real variants. An unknown value must
+// refuse loudly.
 //
 // The flag is read once per process, so each scenario runs in a child
 // process (this binary re-execs itself) and the parent compares the bytes.
@@ -120,6 +128,17 @@ int scenario(const std::string& name, const std::string& out) {
     eval(act, d);
     outs.push_back(act);
     outs.push_back(d);
+  } else if (name == "k512" || name == "k768" || name == "k1024") {
+    const int k = (name == "k512") ? 512 : ((name == "k768") ? 768 : 1024);
+    auto x = make_x(k, rng);
+    auto a = make_lin(4096, k, rng);
+    auto b = make_lin(1024, k, rng);
+    eval(x, a.w, a.s, a.b, b.w, b.s, b.b);
+    auto oa = qmm(x, a);
+    auto ob = qmm(x, b);
+    eval(oa, ob);
+    outs.push_back(oa);
+    outs.push_back(ob);
   } else if (name == "name") {
     std::ofstream f(out);
     f << mlx::core::omarchy::qmm_geometry_name();
@@ -137,6 +156,47 @@ int scenario(const std::string& name, const std::string& out) {
         static_cast<std::streamsize>(bits.size() * sizeof(uint32_t)));
   }
   return 0;
+}
+
+struct Bf16Diff {
+  size_t count{0};
+  int32_t max_ulp{0};
+};
+
+int32_t bf16_ordered(uint16_t u) {
+  int32_t v = static_cast<int32_t>(u);
+  return (v & 0x8000) != 0 ? (0x8000 - (v & 0x7fff)) : (0x8000 + v);
+}
+
+Bf16Diff diff_u32_bf16_files(const std::string& path_a, const std::string& path_b) {
+  std::ifstream fa(path_a, std::ios::binary);
+  std::ifstream fb(path_b, std::ios::binary);
+  std::vector<uint32_t> a, b;
+  uint32_t v = 0;
+  while (fa.read(reinterpret_cast<char*>(&v), sizeof(v))) {
+    a.push_back(v);
+  }
+  while (fb.read(reinterpret_cast<char*>(&v), sizeof(v))) {
+    b.push_back(v);
+  }
+  Bf16Diff d;
+  if (a.size() != b.size()) {
+    d.count = a.size() > b.size() ? a.size() - b.size() : b.size() - a.size();
+    d.max_ulp = INT32_MAX;
+    return d;
+  }
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i] != b[i]) {
+      ++d.count;
+      int32_t ulp = std::abs(
+          bf16_ordered(static_cast<uint16_t>(a[i])) -
+          bf16_ordered(static_cast<uint16_t>(b[i])));
+      if (ulp > d.max_ulp) {
+        d.max_ulp = ulp;
+      }
+    }
+  }
+  return d;
 }
 
 uint64_t fnv(const std::string& path) {
@@ -221,20 +281,8 @@ int main(int argc, char** argv) {
         caps_ref.max_compute_work_group_invocations,
         caps_ref.max_compute_work_group_size[0]};
     const bool vram = mlx::core::omarchy::device_local_activations_enabled();
-    std::string want = "2x4";
-    if (mlx::core::omarchy::select_qmm_2x8w2(
-            dev, dev_obj.physical_type(), probe_caps, vram)) {
-      want = "2x8w2";
-    } else if (mlx::core::omarchy::select_qmm_wide_2x16(
-                   dev, dev_obj.physical_type(), probe_caps, vram)) {
-      if (dev.find("BMG") != std::string::npos) {
-        want = dev_obj.hardware_capabilities().subgroup_size_16_admitted
-            ? "2x16kcs16"
-            : "2x16kcont";
-      } else {
-        want = "2x16";
-      }
-    }
+    std::string want = mlx::core::omarchy::select_default_qmm_geometry_name(
+        dev, dev_obj.physical_type(), probe_caps, vram);
     int rc = run_child("name", "/tmp/w7p-geom-name.bin");
     std::ifstream f("/tmp/w7p-geom-name.bin");
     std::string got;
@@ -244,10 +292,15 @@ int main(int argc, char** argv) {
                 << want << " (rc " << rc << ")\n";
       ++failures;
     }
+    if (got == "2x16kcont" || got == "2x16kcs16") {
+      std::cout << "FAIL: non-bit-identical kcont geometry selected by default: "
+                << got << "\n";
+      ++failures;
+    }
   }
-  // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x8w2", "2x16", "2x4w2", "2x4"}) {
-    for (const char* name : {"single", "group", "swiglu"}) {
+  // Every default-eligible geometry must produce the exact 2x4 bytes.
+  for (const char* geometry : {"2x8w2", "2x16", "2x16w2", "2x4w2", "2x4"}) {
+    for (const char* name : {"single", "group", "swiglu", "k512", "k768", "k1024"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";
       setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
@@ -268,6 +321,43 @@ int main(int argc, char** argv) {
       } else {
         std::cout << "ok: " << geometry << " " << name << " identical\n";
       }
+    }
+  }
+  // Experimental 2x16kcont is NOT bit-identical to 2x4 for K >= 1024
+  // (FP32 lane-chunk reassociation -> +/-1 bf16 ULP), and is excluded from
+  // default selection above. Verify it remains exact at K=512 (Q4_FAST_ITERS=1)
+  // and K=768 (Q4_KCONT_OK=0 fallback), and stays within 1 bf16 ULP at K=1024.
+  for (const char* name : {"k512", "k768", "k1024"}) {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+    int rc = run_child(name, base.c_str());
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x16kcont", 1);
+    int rc2 = run_child(name, other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    if (rc != 0 || rc2 != 0) {
+      std::cout << "FAIL: 2x16kcont " << name << " child rc "
+                << rc << "/" << rc2 << "\n";
+      ++failures;
+      continue;
+    }
+    const Bf16Diff d = diff_u32_bf16_files(base, other);
+    if (std::strcmp(name, "k1024") != 0) {
+      if (d.count != 0) {
+        std::cout << "FAIL: 2x16kcont " << name
+                  << " differed from 2x4 where strided/fallback must match (diffs="
+                  << d.count << " max_ulp=" << d.max_ulp << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: 2x16kcont " << name << " identical\n";
+      }
+    } else if (d.max_ulp > 1) {
+      std::cout << "FAIL: 2x16kcont k1024 exceeded 1 bf16 ULP reassociation bound (diffs="
+                << d.count << " max_ulp=" << d.max_ulp << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: 2x16kcont k1024 marked non-bit-identical (diffs="
+                << d.count << " max_ulp=" << d.max_ulp << ")\n";
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")

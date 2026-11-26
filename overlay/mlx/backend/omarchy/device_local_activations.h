@@ -183,8 +183,8 @@ inline bool select_qmm_apple_2x8w2(std::string_view device_name) {
 // probe gates every part; the Apple list stays as the measured exception
 // table for integrated parts (any other integrated part waits for its own
 // A/B). Discrete GPUs qualify by capability: VRAM activations plus the
-// 256-thread 32-wide-subgroup probe. BMG keeps its measured 2x16kcont /
-// 2x16kcs16 route in the next check instead.
+// 256-thread 32-wide-subgroup probe. BMG keeps its measured bit-identical
+// 2x16w2 route in the next check instead.
 inline bool select_qmm_2x8w2(
     std::string_view device_name,
     VkPhysicalDeviceType physical_type,
@@ -201,6 +201,30 @@ inline bool select_qmm_2x8w2(
   }
   return physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
       vram_activations_enabled;
+}
+
+// Default decode QMM geometry name when MLX_OMARCHY_QMM_GEOM is unset.
+// Every default-eligible geometry keeps the strided per-lane summation order
+// so outputs are bit-identical to 2x4. 2x16kcont and 2x16kcs16 change
+// per-lane FP32 reduction order at K >= 1024 (+/-1 bf16 ULP, flipping exact
+// greedy ties on Qwen3.5-9B) and are excluded from every default path.
+inline const char* select_default_qmm_geometry_name(
+    std::string_view device_name,
+    VkPhysicalDeviceType physical_type,
+    const QmmWideCaps& caps,
+    bool vram_activations_enabled) {
+  if (select_qmm_2x8w2(
+          device_name, physical_type, caps, vram_activations_enabled)) {
+    return "2x8w2";
+  }
+  if (select_qmm_wide_2x16(
+          device_name, physical_type, caps, vram_activations_enabled)) {
+    if (device_name.find("BMG") != std::string_view::npos) {
+      return "2x16w2";
+    }
+    return "2x16";
+  }
+  return "2x4";
 }
 
 // Dispatch-only hazards take a COMPUTE_SHADER to COMPUTE_SHADER barrier

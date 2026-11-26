@@ -157,14 +157,17 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 
 // Decode Qmm column geometry (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>, read
 // once): the bf16 subgroup Q4 word and multi kernels run <rows> columns per
-// slot and <slots> 32-lane slots per workgroup. Every column keeps the same
-// per-lane chain, so the bytes are identical in every geometry; only the
-// columns and threads per workgroup change. Unset: 2x8w2 on G13G, G13C and
-// G14C and on discrete GPUs that meet the capability probe (DEC-18), 2x16 on
-// other discrete parts that pass the 512-thread probe with VRAM activations
-// (BMG takes its 2x16kcont/kcs16 variants), and 2x4 on every other chip
-// until its paired A/B lands.
-// The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
+// slot and <slots> 32-lane slots per workgroup. Every default-eligible
+// geometry (2x4, 2x4w2, 2x8w2, 2x16, 2x16w2) keeps the same strided per-lane
+// chain, so outputs are bit-identical to 2x4; only the columns and threads per
+// workgroup change. Unset: 2x8w2 on G13G, G13C and G14C and on non-BMG
+// discrete GPUs that meet the capability probe (DEC-18), 2x16w2 on BMG, 2x16
+// on other parts that pass the 512-thread probe, and 2x4 elsewhere.
+// Experimental overrides 2x16kcont and 2x16kcs16 are NOT bit-identical to 2x4
+// at K >= 1024 (per-lane FP32 reassociation -> +/-1 bf16 ULP) and are excluded
+// from every default path.
+// The accepted overrides are 2x4, 2x4w2, 2x8w2, 2x16, 2x16w2, 2x16kcont, and
+// 2x16kcs16.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -208,34 +211,20 @@ const QmmGeometry& qmm_geometry() {
           caps.subgroup_operations,
           caps.max_compute_work_group_invocations,
           caps.max_compute_work_group_size[0]};
-      if (omarchy::select_qmm_2x8w2(
-              caps.device_name,
-              dev.physical_type(),
-              wide_caps,
-              omarchy::device_local_activations_enabled())) {
+      const std::string_view chosen = omarchy::select_default_qmm_geometry_name(
+          caps.device_name,
+          dev.physical_type(),
+          wide_caps,
+          omarchy::device_local_activations_enabled());
+      if (chosen == "2x8w2") {
         return make_2x8w2();
       }
-      if (omarchy::select_qmm_wide_2x16(
-              caps.device_name,
-              dev.physical_type(),
-              wide_caps,
-              omarchy::device_local_activations_enabled())) {
-        // BMG defaults to the K-contiguous fast-tile load: +3.8% over
-        // the uvec2 route at ctx 512 (2 clean interleaved pairs, ids
-        // identical; also +3.4% in the first window). On drivers whose
-        // subgroup size-control range admits 16 the 16-lane build runs
-        // instead: -5.5% median kernel time on the B60 (5/5 interleaved
-        // pairs, PRED_SHA identical).
-        if (caps.device_name.find("BMG") != std::string::npos) {
-          if (dev.hardware_capabilities().subgroup_size_16_admitted) {
-            return QmmGeometry{
-                32u, K::QmmVecQ4WordSubgroupBF16R2S16,
-                K::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16, "2x16kcs16"};
-          }
-          return QmmGeometry{
-              32u, K::QmmVecQ4WordSubgroupBF16R2S16,
-              K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
-        }
+      if (chosen == "2x16w2") {
+        return QmmGeometry{
+            32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+            K::QmmVecQ4MultiSubgroupBF16R2S16W2, "2x16w2"};
+      }
+      if (chosen == "2x16") {
         return QmmGeometry{
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
@@ -253,19 +242,22 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
     }
     if (v == "2x16w2") {
-      // Experimental: uvec2 weight loads in the R2S16 fast tile.
+      // Bit-identical strided uvec2 weight loads in the R2S16 fast tile.
       return QmmGeometry{
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16W2, "2x16w2"};
     }
     if (v == "2x16kcont") {
-      // Experimental: contiguous K-chunk per lane in the R2S16 fast tile.
+      // Experimental opt-in only (excluded from every default path):
+      // contiguous K-chunk per lane reassociates FP32 sums at K >= 1024
+      // (+/-1 bf16 ULP vs 2x4; NOT bit-identical).
       return QmmGeometry{
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
     }
     if (v == "2x16kcs16") {
-      // 16-lane subgroups (16 slots of 16, still 32 columns). Only on
+      // Experimental opt-in only (excluded from every default path):
+      // 16-lane kcont build (NOT bit-identical to 2x4 at K >= 1024). Only on
       // hardware that can legally pin requiredSubgroupSize = 16 for a
       // 256-lane workgroup; elsewhere the kcont route stands. Hardware
       // truth, not the (possibly simulated) dispatch report.
