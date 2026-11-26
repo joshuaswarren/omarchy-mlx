@@ -817,6 +817,30 @@ int main(int argc, char** argv) {
   }
     }
   }
+  // The dedicated SwiGLU dispatch (2x8w2's paired epilogue) sends one
+  // workgroup per gate column pair: the permute's bijection must key on
+  // that grid (groups0), not the members' group sum, which doubled it and
+  // left the top half of the rows unwritten.
+  {
+    std::string base = "/tmp/w7p-geom-order-sw-base.bin";
+    std::string other = "/tmp/w7p-geom-order-sw-stride.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    int rc = run_child("swiglu", base.c_str());
+    setenv("MLX_OMARCHY_QMM_ORDER", "stride", 1);
+    int rc2 = run_child("swiglu", other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_ORDER");
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    if (rc != 0 || rc2 != 0) {
+      std::cout << "FAIL: order swiglu-2x8w2 child rc " << rc << "/" << rc2
+                << "\n";
+      ++failures;
+    } else if (fnv(base) != fnv(other)) {
+      std::cout << "FAIL: order swiglu-2x8w2 bytes differ\n";
+      ++failures;
+    } else {
+      std::cout << "ok: order swiglu-2x8w2 identical\n";
+    }
+  }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
             << " failures " << failures << "\n";
   return failures == 0 ? 0 : 1;
