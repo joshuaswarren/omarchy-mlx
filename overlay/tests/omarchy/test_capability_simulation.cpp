@@ -700,10 +700,20 @@ TEST_CASE("cmat16 dense matmul routes per the profile") {
       continue;
     }
     REQUIRE(error.empty());
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t kernel =
+        omarchy::trace::counters().last_dispatched_kernel.load();
     expect_close(readback_f32(stream, matmul(a, b, stream)),
         expected,
         1e-5,
         1e-6);
+    if (!omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT")) {
+      CHECK_EQ(
+          kernel,
+          static_cast<int64_t>(
+              bf16 ? omarchy::ComputeKernel::MatmulDirectBF16C16Nn
+                   : omarchy::ComputeKernel::MatmulDirectF16C16Nn));
+    }
     std::cout << "[capsim cmat16-dense] profile=" << g_profile
               << (bf16 ? " bf16" : " f16") << " -> MatmulDirectC16\n";
   }
@@ -817,6 +827,26 @@ TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
       expect_simulated_refusal(error, "QmmPrefillCoopmatBF16");
       continue;
     }
+    // 16x16x16 fp16-operand twin (dispatch's coopmat16_reachable mirror):
+    // the q4 g64 transposed cell here is exactly that route's shape, so
+    // on a device advertising it the claim lands before the FMA arm.
+    const bool coopmat16_arm = !rb && !coopmat_reachable &&
+        !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+        c.cooperative_matrix_bf16 &&
+        omarchy::cooperative_matrix_advertises(
+            c.cooperative_matrix_shapes,
+            omarchy::qmm_prefill_coopmat_shape_f16x16()) &&
+        c.subgroup_size == 32u &&
+        (32u * 16u + 16u * 32u) * 2u + 2u * 16u * 16u * 4u <=
+            c.max_compute_shared_memory_size;
+    if (coopmat16_arm &&
+        !omarchy::cooperative_matrix_advertises(
+            hw().cooperative_matrix_shapes,
+            omarchy::qmm_prefill_coopmat_shape_f16x16())) {
+      expect_simulated_refusal(
+          error, "QmmPrefillCoopmat16BF16", "cooperative_matrix_fp16_16x16x16");
+      continue;
+    }
     REQUIRE_MESSAGE(error.empty(), error);
     omarchy::get_command_encoder(stream).synchronize();
     const int64_t kernel =
@@ -835,7 +865,11 @@ TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
       CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaPreciseBF16));
       CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmTileBF16));
     } else {
-      CHECK_EQ(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaBF16));
+      CHECK_EQ(
+          kernel,
+          id(coopmat16_arm
+                 ? omarchy::ComputeKernel::QmmPrefillCoopmat16BF16
+                 : omarchy::ComputeKernel::QmmPrefillFmaBF16));
     }
     // The tile kernel's derived bound (matmul family qmm tile case): k-step
     // f32 rounding plus one bf16 storage rounding of the output.
