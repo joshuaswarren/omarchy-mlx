@@ -9788,7 +9788,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           out,
           bindings,
           params,
-          [c16_kernel, c16_rows](
+          [&, c16_kernel, c16_rows](
               std::span<const omarchy::ComputeBinding> cb,
               const omarchy::ComputeParams& cp) {
             encoder.dispatch_compute(
