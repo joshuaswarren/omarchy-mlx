@@ -343,7 +343,19 @@ def _transaction(mutate, home: Path | None, available_bytes: int | None = None):
     path = reservations_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with open(lock_path, "w") as lock_fh:
+    try:
+        lock_fh = open(  # "ab": create without truncating; never follow a symlink
+            lock_path,
+            "ab",
+            buffering=0,
+            opener=lambda name, flags: os.open(
+                name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600),
+        )
+    except OSError as exc:
+        raise BudgetError(f"reservations lock unusable ({exc}); refusing to lock") from exc
+    with lock_fh:
+        if not stat.S_ISREG(os.fstat(lock_fh.fileno()).st_mode):
+            raise BudgetError("reservations lock is not a regular file; refusing to lock")
         fcntl.flock(lock_fh, fcntl.LOCK_EX)
         data = _load_reservations_file(path)
         available = available_bytes if available_bytes is not None else mem_available()
