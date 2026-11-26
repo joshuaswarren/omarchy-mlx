@@ -2390,10 +2390,10 @@ bool gemv_wide_route_enabled(const std::string& device_name) {
     return false;
   }
   const char* env = std::getenv("MLX_OMARCHY_QMM_WIDE_GEMV");
-  if (env != nullptr && env[0] != '\0') {
-    return std::strcmp(env, "0") != 0;
+  if (env == nullptr || env[0] == '\0') {
+    return false;  // opt-in only on every part: every measured leg is net-negative
   }
-  return gemv_epilogue_only_part(device_name);
+  return std::strcmp(env, "0") != 0;
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {

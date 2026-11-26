@@ -145,6 +145,43 @@ TEST_CASE("the fused conv + delta step returns the production pair's bytes") {
   }
 }
 
+TEST_CASE("the fused step reads offset-carrying inputs, not flat bindings") {
+  // gdn_conv_decode.comp declared but ignored every input buffer offset:
+  // an input arrived as a nonzero-offset view (split, slice) and the shader
+  // read the buffer head instead. Reproduce with every input carried on a
+  // sliced tail view and require the dense run's bytes.
+  if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);
+  Stream s = gpu_stream();
+  const int PAD = 8;
+  auto offset_view = [&](const array& a) {
+    Shape ps = a.shape();
+    ps.back() = PAD;
+    array big = concatenate({zeros(ps, a.dtype(), s), a}, -1, s);
+    Shape begin(ps.size(), 0), end = a.shape();
+    begin.back() = PAD;
+    array v = slice(big, begin, end, s);
+    v.eval();
+    return v;
+  };
+  for (uint32_t seed : {10u, 20u}) {
+    Inputs in = make_inputs(seed, 0.05f, s);
+    Run want = fused(in, s);
+    Inputs shifted{
+        offset_view(in.conv_state), offset_view(in.qkv), offset_view(in.weight),
+        offset_view(in.a), offset_view(in.b), offset_view(in.a_log),
+        offset_view(in.dt_bias), offset_view(in.delta_state), offset_view(in.gate),
+        offset_view(in.norm_w)};
+    Run got = fused(shifted, s);
+    REQUIRE(got.out.size() == want.out.size());
+    for (size_t i = 0; i < got.out.size(); ++i) {
+      CHECK_MESSAGE(
+          array_equal(got.out[i], want.out[i], s).item<bool>(),
+          "output ", i, " read a flat binding instead of the offset view (seed ", seed, ")");
+    }
+  }
+}
+
 TEST_CASE("the fused conv + delta step is one dispatch where the pair is two") {
   if (!have_gpu()) return;
   setenv("MLX_OMARCHY_GDN_CONV_DELTA", "1", 1);

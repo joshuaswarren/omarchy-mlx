@@ -10219,6 +10219,11 @@ struct QmmWideWeights {
   array w;
   array scales;
   array biases;
+  // The pin, not spare data: the cache keys on array ids, and a live
+  // reference here is what keeps a freed weight's id from recycling onto
+  // a reloaded array and aliasing this entry's concat. Dropping it let a
+  // stale key serve the wrong weights (w7R, comment 7183680698).
+  std::vector<array> sources;
 };
 
 std::mutex qmm_wide_mutex;
@@ -10889,7 +10894,8 @@ bool dispatch_quantized_gemv_wide(
     QmmWideWeights built{
         array({static_cast<int>(total_n), k / 8}, uint32, nullptr, {}),
         array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {}),
-        array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {})};
+        array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {}),
+        {}};
     built.w.set_data(allocate_omarchy(built.w.nbytes()));
     built.scales.set_data(allocate_omarchy(built.scales.nbytes()));
     built.biases.set_data(allocate_omarchy(built.biases.nbytes()));
@@ -10925,6 +10931,9 @@ bool dispatch_quantized_gemv_wide(
           aux_dst);
       w_dst += w.nbytes();
       aux_dst += scales.nbytes();
+      built.sources.push_back(member.node.inputs()[1]);
+      built.sources.push_back(member.node.inputs()[2]);
+      built.sources.push_back(member.node.inputs()[3]);
     }
     it = qmm_wide_cache.emplace(std::move(key), std::move(built)).first;
   }

@@ -2072,9 +2072,9 @@ TEST_CASE("gemv wide route: the part rule and overrides") {
   const std::string g13g = "Apple M1 (G13G B1)";
   const std::string g14c = "Apple M2 Max (G14C B1)";
   const std::string g16g = "Apple M4 (G16G B1)";
-  // Unset: on only where the multi-weight fold defaults off but the
-  // residual-norm epilogue defaults on (G14C today).
-  CHECK(omarchy::gemv_wide_route_enabled(g14c));
+  // Unset: opt-in only on every part — every measured leg is
+  // net-negative, so nothing defaults the route on.
+  CHECK_FALSE(omarchy::gemv_wide_route_enabled(g14c));
   CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13c));
   CHECK_FALSE(omarchy::gemv_wide_route_enabled(g13g));
   CHECK_FALSE(omarchy::gemv_wide_route_enabled(g16g));

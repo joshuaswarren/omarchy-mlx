@@ -1186,8 +1186,8 @@ size_t set_cache_limit(size_t limit) {
   return omarchy::allocator().set_cache_limit(limit);
 }
 void clear_cache() {
+  omarchy::qmm_wide_weights_clear();  // first: its arrays join the free pool the sweep then reclaims
   omarchy::allocator().clear_cache();
-  omarchy::qmm_wide_weights_clear();
 }
 
 // Omarchy is unified memory: there is no GPU-private RAM to wire and
